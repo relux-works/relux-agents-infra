@@ -1,0 +1,6 @@
+{
+  "mode": "local",
+  "local": {
+    "board_dir": ".task-board"
+  }
+}
