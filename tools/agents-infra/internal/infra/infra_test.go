@@ -136,8 +136,33 @@ func TestDoctor(t *testing.T) {
 	}
 
 	report := Doctor(layout)
-	if !report.AgentsGitFree || !report.ClaudeLinked || report.CodexLinked || !report.CodexRendered || !report.CodexProjectRendered || !report.HelpersLinked || !report.InfraSkillLink {
+	if !report.AgentsGitFree || !report.ClaudeLinked || report.CodexLinked || !report.CodexRendered || !report.CodexProjectRendered || report.CodexConfigPresent || report.CodexConfigLinked || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" || !report.HelpersLinked || !report.InfraSkillLink {
 		t.Fatalf("unexpected doctor report: %+v", report)
+	}
+}
+
+func TestDoctorDetectsProjectLocalCodexConfigShadowing(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	mustMkdir(t, filepath.Join(project, ".codex"))
+	mustWrite(t, filepath.Join(project, ".codex", "config.toml"), "model = \"gpt-5.4\"\n")
+
+	report := Doctor(layout)
+	if !report.CodexConfigPresent {
+		t.Fatalf("expected local Codex config to be present: %+v", report)
+	}
+	if !report.CodexConfigShadowsGlobal {
+		t.Fatalf("expected local Codex config to shadow global config: %+v", report)
+	}
+	if report.CodexConfigLinked {
+		t.Fatalf("custom local Codex config should not be reported as linked: %+v", report)
+	}
+	if report.CodexConfigEffective != "project-local" {
+		t.Fatalf("CodexConfigEffective = %q, want project-local", report.CodexConfigEffective)
 	}
 }
 
@@ -200,7 +225,9 @@ func TestSetupReplacesManagedPathsWithoutBackups(t *testing.T) {
 	mustMkdir(t, filepath.Join(project, ".local", "bin"))
 
 	mustWrite(t, filepath.Join(project, ".claude", "settings.json"), "custom")
-	mustWrite(t, filepath.Join(project, ".codex", "config.toml"), "custom")
+	if err := os.Symlink(filepath.Join(project, ".agents", ".configs", "codex-config.toml"), filepath.Join(project, ".codex", "config.toml")); err != nil {
+		t.Fatalf("Symlink(project codex config): %v", err)
+	}
 	mustWrite(t, filepath.Join(project, ".codex", "rules", "default.rules"), "custom")
 	mustWrite(t, filepath.Join(project, ".local", "bin", "agents-infra"), "#!/bin/sh\nexit 0\n")
 
@@ -212,6 +239,84 @@ func TestSetupReplacesManagedPathsWithoutBackups(t *testing.T) {
 	assertNoPath(t, filepath.Join(project, ".codex", "config.toml"))
 	assertSymlink(t, filepath.Join(project, ".codex", "rules", "default.rules"), filepath.Join(project, ".agents", ".rules", "default.rules"))
 	assertNoGeneratedArtifacts(t, project)
+}
+
+func TestSetupLocalPreservesCustomProjectCodexConfig(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	mustMkdir(t, filepath.Join(project, ".codex"))
+	mustWrite(t, filepath.Join(project, ".codex", "config.toml"), "model = \"gpt-5.4\"\n")
+
+	if err := Setup(Options{Layout: layout}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "gpt-5.4")
+	report := Doctor(layout)
+	if !report.CodexConfigPresent || !report.CodexConfigShadowsGlobal {
+		t.Fatalf("custom project Codex config should be preserved and reported as shadowing: %+v", report)
+	}
+}
+
+func TestSetupLocalGlobalCodexConfigModeRemovesCustomProjectCodexConfig(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	mustMkdir(t, filepath.Join(project, ".codex"))
+	mustWrite(t, filepath.Join(project, ".codex", "config.toml"), "model = \"gpt-5.4\"\n")
+
+	if err := Setup(Options{Layout: layout, CodexConfigMode: CodexConfigModeGlobal}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	assertNoPath(t, filepath.Join(project, ".codex", "config.toml"))
+	report := Doctor(layout)
+	if report.CodexConfigPresent || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
+		t.Fatalf("global Codex config mode should leave global config authoritative: %+v", report)
+	}
+}
+
+func TestSetupLocalLocalCodexConfigModeLinksProjectCodexConfig(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+
+	if err := Setup(Options{Layout: layout, CodexConfigMode: CodexConfigModeLocal}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	assertSymlink(t, filepath.Join(project, ".codex", "config.toml"), filepath.Join(project, ".agents", ".configs", "codex-config.toml"))
+	report := Doctor(layout)
+	if !report.CodexConfigPresent || !report.CodexConfigLinked || !report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "project-local" {
+		t.Fatalf("local Codex config mode should install project-local config: %+v", report)
+	}
+}
+
+func TestSetupRejectsUnknownCodexConfigMode(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+
+	err = Setup(Options{Layout: layout, CodexConfigMode: CodexConfigMode("bogus")})
+	if err == nil {
+		t.Fatal("expected unknown Codex config mode to fail")
+	}
+	if !strings.Contains(err.Error(), "unknown Codex config mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestSetupGlobalLinksCodexConfig(t *testing.T) {
@@ -227,6 +332,10 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
 	}
 
 	assertSymlink(t, filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".agents", ".configs", "codex-config.toml"))
+	report := Doctor(layout)
+	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
+		t.Fatalf("unexpected global Codex config doctor report: %+v", report)
+	}
 }
 
 func TestSetupPreservesExistingPublicSkillsRegistryEntries(t *testing.T) {

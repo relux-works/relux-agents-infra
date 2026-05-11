@@ -58,6 +58,36 @@ That creates a local runtime layout under the project root:
 - `.codex/` — thin Codex shim that points into `.agents`
 - `.local/bin/` — helper CLIs for the local setup, including `agents-infra`
 
+Project-local setup intentionally does not create `.codex/config.toml`. Codex
+model, reasoning effort, service tier, trusted projects, and TUI notices are
+owned by the global `~/.codex/config.toml` link by default. This prevents stale
+project-local configs from silently overriding the current global model.
+
+During local setup, agents-infra removes only the legacy project-local
+`.codex/config.toml` symlink it used to create. A custom project-local config is
+left in place because project-specific model/reasoning overrides must be
+explicit and intentional, not silently destroyed.
+
+Use `--codex-config` when local setup should make an explicit decision:
+
+- `--codex-config=preserve` keeps custom project-local config files and removes
+  only the old managed symlink. This is the default.
+- `--codex-config=global` removes `.codex/config.toml`, making the global
+  `~/.codex/config.toml` authoritative for the project.
+- `--codex-config=local` links `.codex/config.toml` to the installed project
+  runtime at `.agents/.configs/codex-config.toml`, making model/reasoning
+  settings project-local by explicit choice.
+
+If a Codex session starts with the wrong model, run:
+
+```bash
+agents-infra doctor local /abs/path/to/project
+```
+
+`codex_config_shadowing_global: true` means the project still has a local
+`.codex/config.toml` that overrides the global config. Remove it if unintended,
+or keep it as an explicit project-local override.
+
 ## Structure
 
 ```
@@ -229,6 +259,10 @@ Reference config with:
 - Project docs byte limit: `131072`
 - Trusted projects list
 - Global setup owns `~/.codex/config.toml`; project-local setup deliberately does not create `.codex/config.toml` so the global model/settings remain authoritative.
+- Local setup removes legacy managed project-local config symlinks but preserves custom `.codex/config.toml` files.
+- Explicit project-local config is available with `agents-infra setup local /path/to/project --codex-config=local`.
+- Enforce global config with `agents-infra setup local /path/to/project --codex-config=global`.
+- `agents-infra doctor local` reports `codex_config_shadowing_global: true` when a project-local `.codex/config.toml` is overriding the global config.
 
 ## Attachments
 

@@ -64,6 +64,47 @@ For project-local setup, install into the target repo so that:
 - `.claude/` and `.codex/` are just thin shims/symlinks into `.agents`
 - `.local/bin/` exposes helper CLIs for that local setup, including `agents-infra`
 
+## Codex config modes
+
+Keep local agent runtime setup separate from Codex model/reasoning config.
+
+Default project-local setup should not create `.codex/config.toml`:
+
+```bash
+agents-infra setup local /path/to/project
+# same as:
+agents-infra setup local /path/to/project --codex-config=preserve
+```
+
+Use the explicit modes when the user asks about Codex config/model drift:
+
+```bash
+# Remove any project-local Codex config so ~/.codex/config.toml is authoritative.
+agents-infra setup local /path/to/project --codex-config=global
+
+# Intentionally make Codex model/reasoning settings project-local.
+agents-infra setup local /path/to/project --codex-config=local
+```
+
+Mode semantics:
+
+- `preserve` (default) preserves custom `.codex/config.toml` files, but removes the old managed symlink `.codex/config.toml -> .agents/.configs/codex-config.toml`.
+- `global` removes `.codex/config.toml`; use this when a local config unintentionally shadows the global model/settings.
+- `local` links `.codex/config.toml` to `.agents/.configs/codex-config.toml`; use only when project-local model/reasoning config is intentional.
+
+Diagnose effective state with:
+
+```bash
+agents-infra doctor local /path/to/project
+```
+
+Key fields:
+
+- `codex_config_effective: global` means Codex uses the global `~/.codex/config.toml`.
+- `codex_config_effective: project-local` means `.codex/config.toml` is active for that project.
+- `codex_config_shadowing_global: true` means project-local config overrides the global config; remove it with `--codex-config=global` if unintended.
+- `codex_config_linked: true` means the project-local config is the managed agents-infra symlink, not a custom file.
+
 ## Attachments Contract
 
 Incoming user files are modeled as a generic manifest, not as board-specific state.

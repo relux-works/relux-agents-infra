@@ -54,6 +54,7 @@ func runSetup(args []string) error {
 	noSync := fs.Bool("no-sync", false, "skip repo sync")
 	homeDir := fs.String("home-dir", "", "home directory for global setup")
 	projectDir := fs.String("project-dir", "", "project directory for local setup")
+	codexConfigMode := fs.String("codex-config", string(infra.CodexConfigModePreserve), "Codex config handling for local setup: preserve, global, or local")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -63,9 +64,10 @@ func runSetup(args []string) error {
 		return err
 	}
 	return infra.Setup(infra.Options{
-		Layout: layout,
-		NoSync: *noSync,
-		Stdout: os.Stdout,
+		Layout:          layout,
+		NoSync:          *noSync,
+		CodexConfigMode: infra.CodexConfigMode(*codexConfigMode),
+		Stdout:          os.Stdout,
 	})
 }
 
@@ -77,6 +79,7 @@ func runRefreshLinks(args []string) error {
 	codexDir := fs.String("codex-dir", "", "codex directory")
 	binDir := fs.String("bin-dir", "", "helper bin directory")
 	mode := fs.String("mode", string(infra.ModeGlobal), "layout mode: global or local")
+	codexConfigMode := fs.String("codex-config", string(infra.CodexConfigModePreserve), "Codex config handling for local refresh: preserve, global, or local")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -90,7 +93,11 @@ func runRefreshLinks(args []string) error {
 		CodexDir:  *codexDir,
 		BinDir:    *binDir,
 	}
-	return infra.RefreshLinks(infra.Options{Layout: layout, Stdout: os.Stdout})
+	return infra.RefreshLinks(infra.Options{
+		Layout:          layout,
+		CodexConfigMode: infra.CodexConfigMode(*codexConfigMode),
+		Stdout:          os.Stdout,
+	})
 }
 
 func runDoctor(args []string) error {
@@ -121,6 +128,19 @@ func runDoctor(args []string) error {
 	fmt.Fprintf(os.Stdout, "codex_rendered: %t\n", report.CodexRendered)
 	if report.Layout.Mode == infra.ModeLocal {
 		fmt.Fprintf(os.Stdout, "codex_project_rendered: %t\n", report.CodexProjectRendered)
+	}
+	fmt.Fprintf(os.Stdout, "codex_config_present: %t\n", report.CodexConfigPresent)
+	fmt.Fprintf(os.Stdout, "codex_config_linked: %t\n", report.CodexConfigLinked)
+	fmt.Fprintf(os.Stdout, "codex_config_effective: %s\n", report.CodexConfigEffective)
+	if report.Layout.Mode == infra.ModeLocal {
+		fmt.Fprintf(os.Stdout, "codex_config_shadowing_global: %t\n", report.CodexConfigShadowsGlobal)
+		if report.CodexConfigShadowsGlobal {
+			if report.CodexConfigLinked {
+				fmt.Fprintf(os.Stdout, "codex_config_action: managed project-local .codex/config.toml is active; use --codex-config=global to remove it if unintended\n")
+			} else {
+				fmt.Fprintf(os.Stdout, "codex_config_action: custom project-local .codex/config.toml overrides global Codex config; remove it if unintended\n")
+			}
+		}
 	}
 	fmt.Fprintf(os.Stdout, "helpers_linked: %t\n", report.HelpersLinked)
 	fmt.Fprintf(os.Stdout, "infra_skill_link: %t\n", report.InfraSkillLink)
@@ -174,8 +194,8 @@ func usageText() string {
 	return `Usage:
   agents-infra version
   agents-infra setup global [--source-dir DIR] [--home-dir DIR] [--no-sync]
-  agents-infra setup local [PROJECT_DIR] [--source-dir DIR] [--project-dir DIR] [--no-sync]
-  agents-infra refresh-links --agents-dir DIR --claude-dir DIR --codex-dir DIR --bin-dir DIR [--mode global|local]
+  agents-infra setup local [PROJECT_DIR] [--source-dir DIR] [--project-dir DIR] [--no-sync] [--codex-config preserve|global|local]
+  agents-infra refresh-links --agents-dir DIR --claude-dir DIR --codex-dir DIR --bin-dir DIR [--mode global|local] [--codex-config preserve|global|local]
   agents-infra doctor global [--home-dir DIR]
   agents-infra doctor local [PROJECT_DIR] [--project-dir DIR]`
 }
