@@ -38,6 +38,7 @@
 * **All research must go through the repo's established task/documentation flow.** Never keep research only in conversation context.
 * If the active repo or skill defines an artifact location, store research findings there and link them from the relevant task/doc/worklog.
 * If no project-specific convention exists — store in `.temp/` with descriptive names (`research-auth-flow.md`, `analysis-performance.md`).
+* For `/Users/alexis/src/x-platform-airdrop` Tap2Cash BLE pairing/messaging performance work, record durable findings and fixes in `docs/tap2cash-ble-messaging-kb.md` and link the relevant `.task-board/...` outcome artifact. Raw role-swap logs stay in `.temp/`.
 * **Why:** Context windows collapse. If research lives only in the conversation, it's lost forever when the session resets. Files persist.
 * Sub-agents doing research/analysis **must** write their findings to files before finishing.
 * Reference research artifacts from the relevant task/doc/worklog so the next session can find them quickly.

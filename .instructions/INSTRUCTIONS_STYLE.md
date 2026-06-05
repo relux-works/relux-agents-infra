@@ -8,6 +8,26 @@
 
 ---
 
+## Metric Comparisons
+
+When comparing performance metrics, timings, counts, resource usage, prices, or other numeric indicators across runs, versions, devices, or options, prefer a compact Markdown table when it makes the result easier to scan.
+
+Good default columns:
+
+| Metric | Before | After | Delta | Notes |
+| --- | ---: | ---: | ---: | --- |
+| Example startup | 1.20s | 0.45s | -0.75s | Same device/run mode |
+
+Rules:
+
+* Keep units in the value (`352ms`, `0.611s`, `4 frames`) and align numeric columns right.
+* Put paired-direction or multi-device results in one cell with a separator, for example `0.611s / 0.616s`.
+* Include baseline/run identifiers nearby when they matter.
+* Add a short conclusion after the table only when the table does not speak for itself.
+* Avoid tables for one or two isolated numbers where a sentence is clearer.
+
+---
+
 ## Armenian Forms of Address
 
 Warm Armenian greetings — the base layer:
