@@ -40,6 +40,40 @@ func TestRunCodexPrintConfigUsesCallerCWDEnv(t *testing.T) {
 	}
 }
 
+func TestRunCodexPrintConfigEmitsSafariMCPCommandAndArgs(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	appDir := filepath.Join(project, "apps", "web")
+	safariCommand := "/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver"
+	mustMkdir(t, appDir)
+	mustMkdir(t, filepath.Join(appDir, ".agents", ".configs"))
+	mustWrite(t, filepath.Join(appDir, ".agents", ".configs", "project-config.toml"), "[codex.mcp]\nenabled_servers = [\"safari\"]\n")
+	mustWrite(t, filepath.Join(appDir, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.safari]\ncommand = \""+safariCommand+"\"\nargs = [\"--mcp\"]\n")
+
+	t.Setenv("HOME", home)
+	t.Setenv(callerCWDEnv, appDir)
+
+	output := captureStdout(t, func() {
+		if err := runCodex([]string{"--print-config"}); err != nil {
+			t.Fatalf("runCodex: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"cwd: " + appDir,
+		"enabled_mcp=safari",
+		"enabled_mcp:\n  - safari",
+		"command: " + safariCommand,
+		"args: [\"--mcp\"]",
+		"mcp_servers.safari.command=\\\"/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver\\\"",
+		"mcp_servers.safari.args=[\\\"--mcp\\\"]",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("print-config missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	original := os.Stdout

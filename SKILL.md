@@ -117,7 +117,7 @@ defaults.
 
 Use this pattern:
 
-- Keep known MCP endpoint definitions in the agents-infra source registry:
+- Keep known MCP server definitions in the agents-infra source registry:
   `.configs/codex-mcp-servers.toml`.
 - Enable MCP servers per project through:
   `.agents/.configs/project-config.toml`.
@@ -144,6 +144,34 @@ Example project config:
 [codex.mcp]
 enabled_servers = ["figma"]
 ```
+
+Definitions may be streamable HTTP servers with `url` or stdio servers with
+`command` and optional `args`. `lldb` is available as an opt-in stdio definition
+using `command = "lldb-mcp"`. On macOS, `./setup.sh` installs Homebrew `llvm`
+when needed and writes an `lldb-mcp` wrapper into the Homebrew bin directory.
+The wrapper execs Homebrew's helper without overriding `LLDB_EXE_PATH`, so the
+helper uses the `lldb` binary next to itself by default, and it prunes dead-PID
+`~/.lldb/lldb-mcp-*.json` discovery files before launch. Set
+`AGENTS_INFRA_SKIP_LLDB_MCP=1` to skip that bootstrap. Projects may override the
+registry locally with an absolute helper path when needed.
+
+`safari` is available as an opt-in stdio definition using Safari Technology
+Preview's `safaridriver`:
+
+```toml
+[servers.safari]
+command = "/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver"
+args = ["--mcp"]
+```
+
+Safari prerequisites:
+
+- Install Safari Technology Preview 247 or newer.
+- Enable `Safari Settings > Advanced > Show features for web developers`.
+- Enable `Safari Settings > Developer > Enable remote automation and external agents`.
+
+Projects opt in with `enabled_servers = ["safari"]`. Safari is not enabled
+globally by agents-infra.
 
 Expected behavior:
 

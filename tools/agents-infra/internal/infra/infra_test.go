@@ -325,6 +325,24 @@ func TestSetupLocalProjectMCPOptInInstallsCodexLocalLauncher(t *testing.T) {
 	}
 }
 
+func TestSetupSyncsSafariMCPRegistryDefinition(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+
+	if err := Setup(Options{Layout: layout}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	registryPath := filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml")
+	assertFileContains(t, registryPath, "[servers.safari]")
+	assertFileContains(t, registryPath, "command = \"/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver\"")
+	assertFileContains(t, registryPath, "args = [\"--mcp\"]")
+}
+
 func TestSetupLocalRemovesGeneratedCodexConfigAndLauncherWhenMCPOptInRemoved(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
@@ -555,7 +573,16 @@ func seedSourceRepo(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_PLATFORM.md"), "platform instructions\n")
 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"")
-	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), "[servers.figma]\nurl = \"https://mcp.figma.com/mcp\"\n")
+	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
+url = "https://mcp.figma.com/mcp"
+
+[servers.lldb]
+command = "lldb-mcp"
+
+[servers.safari]
+command = "/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver"
+args = ["--mcp"]
+`)
 	mustWrite(t, filepath.Join(root, ".rules", "default.rules"), "allow")
 	mustWrite(t, filepath.Join(root, ".scripts", "agents-attachments"), "#!/bin/sh\nexit 0\n")
 	mustWrite(t, filepath.Join(root, ".skills", "skill-creator", "SKILL.md"), "creator")

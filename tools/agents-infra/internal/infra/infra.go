@@ -529,6 +529,8 @@ func setupCodex(layout Layout, codexConfigMode CodexConfigMode, out io.Writer) e
 type codexMCPServer struct {
 	URL               string
 	BearerTokenEnvVar string
+	Command           string
+	Args              []string
 }
 
 func projectEnabledMCPServers(layout Layout) ([]string, error) {
@@ -626,16 +628,34 @@ func parseCodexMCPRegistry(data []byte, path string) (map[string]codexMCPServer,
 		if !ok {
 			return nil, fmt.Errorf("%s:%d: expected key = value", path, lineNo+1)
 		}
-		parsed, err := parseTOMLString(strings.TrimSpace(value))
-		if err != nil {
-			return nil, fmt.Errorf("%s:%d: parse %s: %w", path, lineNo+1, strings.TrimSpace(key), err)
-		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
 		server := servers[current]
-		switch strings.TrimSpace(key) {
+		switch key {
 		case "url":
+			parsed, err := parseTOMLString(value)
+			if err != nil {
+				return nil, fmt.Errorf("%s:%d: parse %s: %w", path, lineNo+1, key, err)
+			}
 			server.URL = parsed
 		case "bearer_token_env_var":
+			parsed, err := parseTOMLString(value)
+			if err != nil {
+				return nil, fmt.Errorf("%s:%d: parse %s: %w", path, lineNo+1, key, err)
+			}
 			server.BearerTokenEnvVar = parsed
+		case "command":
+			parsed, err := parseTOMLString(value)
+			if err != nil {
+				return nil, fmt.Errorf("%s:%d: parse %s: %w", path, lineNo+1, key, err)
+			}
+			server.Command = parsed
+		case "args":
+			parsed, err := parseTOMLStringArray(value)
+			if err != nil {
+				return nil, fmt.Errorf("%s:%d: parse %s: %w", path, lineNo+1, key, err)
+			}
+			server.Args = parsed
 		}
 		servers[current] = server
 	}

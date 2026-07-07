@@ -28,6 +28,32 @@ Agent may use these tools freely.
 
 ---
 
+## Project-Local MCP Servers
+
+Agents-infra managed MCP servers are project-local opt-in only. Do not enable
+them globally by default.
+
+Supported shared MCP server definitions:
+
+| Server | Use | Enablement |
+|--------|-----|------------|
+| `figma` | Figma Dev Mode / design context | Add `figma` to `.agents/.configs/project-config.toml` |
+| `lldb` | LLDB debugging through `lldb-mcp` stdio bridge | Add `lldb` to `.agents/.configs/project-config.toml`; macOS `./setup.sh` installs Homebrew `llvm` and an `lldb-mcp` wrapper when needed |
+| `safari` | Safari Technology Preview web inspection through `safaridriver --mcp` | Add `safari` to `.agents/.configs/project-config.toml`; requires Safari Technology Preview with web developer features, remote automation, and external agents enabled |
+
+Project opt-in example:
+
+```toml
+[codex.mcp]
+enabled_servers = ["figma", "lldb", "safari"]
+```
+
+Start Codex through `agents-infra codex` from inside the project tree so the
+project-local MCP registry and enablement are composed into Codex `-c`
+overrides.
+
+---
+
 ## Installing additional CLI tools
 
 * If the agent identifies a **strong, justified need** for additional CLI tools, it may:

@@ -91,6 +91,99 @@ func TestBuildCodexLaunchPlanIgnoresHomeAgentsProjectConfigWithoutProjectOptIn(t
 	}
 }
 
+func TestBuildCodexLaunchPlanSupportsStdioMCPServers(t *testing.T) {
+	home := t.TempDir()
+	start := t.TempDir()
+	mustMkdir(t, filepath.Join(home, ".agents", ".configs"))
+	mustWrite(t, filepath.Join(home, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.lldb]\ncommand = \"lldb-mcp\"\nargs = [\"--socket\", \"auto\"]\n")
+	mustMkdir(t, filepath.Join(start, ".agents", ".configs"))
+	mustWrite(t, filepath.Join(start, ".agents", ".configs", "project-config.toml"), "[codex.mcp]\nenabled_servers = [\"lldb\"]\n")
+
+	plan, err := BuildCodexLaunchPlan(start, home, nil)
+	if err != nil {
+		t.Fatalf("BuildCodexLaunchPlan: %v", err)
+	}
+
+	if len(plan.MCPServers) != 1 {
+		t.Fatalf("MCPServers = %#v, want 1 entry", plan.MCPServers)
+	}
+	server := plan.MCPServers[0]
+	if server.Name != "lldb" || server.Command != "lldb-mcp" || !reflect.DeepEqual(server.Args, []string{"--socket", "auto"}) {
+		t.Fatalf("lldb server = %#v", server)
+	}
+
+	wantArgs := []string{
+		"-c", "mcp_servers.lldb.command=\"lldb-mcp\"",
+		"-c", "mcp_servers.lldb.args=[\"--socket\", \"auto\"]",
+	}
+	if !reflect.DeepEqual(plan.Args, wantArgs) {
+		t.Fatalf("Args = %#v, want %#v", plan.Args, wantArgs)
+	}
+
+	rendered := RenderCodexLaunchPlan(plan)
+	for _, want := range []string{
+		"enabled_mcp:\n  - lldb",
+		"command: lldb-mcp",
+		"args: [\"--socket\", \"auto\"]",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered plan missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestBuildCodexLaunchPlanSupportsSafariMCPOptIn(t *testing.T) {
+	home := t.TempDir()
+	start := t.TempDir()
+	safariCommand := "/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver"
+	mustMkdir(t, filepath.Join(home, ".agents", ".configs"))
+	mustWrite(t, filepath.Join(home, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.safari]\ncommand = \""+safariCommand+"\"\nargs = [\"--mcp\"]\n")
+
+	plainPlan, err := BuildCodexLaunchPlan(start, home, nil)
+	if err != nil {
+		t.Fatalf("BuildCodexLaunchPlan without opt-in: %v", err)
+	}
+	if len(plainPlan.MCPServers) != 0 {
+		t.Fatalf("Safari should not be enabled from registry alone: %#v", plainPlan.MCPServers)
+	}
+
+	mustMkdir(t, filepath.Join(start, ".agents", ".configs"))
+	mustWrite(t, filepath.Join(start, ".agents", ".configs", "project-config.toml"), "[codex.mcp]\nenabled_servers = [\"safari\"]\n")
+
+	plan, err := BuildCodexLaunchPlan(start, home, nil)
+	if err != nil {
+		t.Fatalf("BuildCodexLaunchPlan: %v", err)
+	}
+	if len(plan.MCPServers) != 1 {
+		t.Fatalf("MCPServers = %#v, want 1 entry", plan.MCPServers)
+	}
+	server := plan.MCPServers[0]
+	if server.Name != "safari" || server.Command != safariCommand || !reflect.DeepEqual(server.Args, []string{"--mcp"}) {
+		t.Fatalf("safari server = %#v", server)
+	}
+
+	wantArgs := []string{
+		"-c", "mcp_servers.safari.command=\"/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver\"",
+		"-c", "mcp_servers.safari.args=[\"--mcp\"]",
+	}
+	if !reflect.DeepEqual(plan.Args, wantArgs) {
+		t.Fatalf("Args = %#v, want %#v", plan.Args, wantArgs)
+	}
+
+	rendered := RenderCodexLaunchPlan(plan)
+	for _, want := range []string{
+		"enabled_mcp:\n  - safari",
+		"command: " + safariCommand,
+		"args: [\"--mcp\"]",
+		"mcp_servers.safari.command=\\\"/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver\\\"",
+		"mcp_servers.safari.args=[\\\"--mcp\\\"]",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered plan missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestBuildCodexLaunchPlanPrintConfigStopsWrapperParsingAfterSeparator(t *testing.T) {
 	home := t.TempDir()
 	start := t.TempDir()

@@ -41,6 +41,8 @@ type CodexMCPLaunchServer struct {
 	Name              string
 	URL               string
 	BearerTokenEnvVar string
+	Command           string
+	Args              []string
 	DefinitionSource  string
 	EnabledBy         []string
 }
@@ -110,24 +112,57 @@ func BuildCodexLaunchPlan(startDir, homeDir string, args []string) (CodexLaunchP
 		if !ok {
 			return CodexLaunchPlan{}, fmt.Errorf("MCP server %q is enabled by %s but no definition was found in codex-mcp-servers.toml registries", name, strings.Join(enabledBy[name], ", "))
 		}
-		if def.Server.URL == "" {
-			return CodexLaunchPlan{}, fmt.Errorf("MCP server %q is defined by %s but is missing url", name, def.Source)
+		if err := validateCodexMCPDefinition(name, def); err != nil {
+			return CodexLaunchPlan{}, err
 		}
 		server := CodexMCPLaunchServer{
 			Name:              name,
 			URL:               def.Server.URL,
 			BearerTokenEnvVar: def.Server.BearerTokenEnvVar,
+			Command:           def.Server.Command,
+			Args:              append([]string(nil), def.Server.Args...),
 			DefinitionSource:  def.Source,
 			EnabledBy:         append([]string(nil), enabledBy[name]...),
 		}
 		plan.MCPServers = append(plan.MCPServers, server)
-		plan.ConfigArgs = append(plan.ConfigArgs, "-c", fmt.Sprintf("mcp_servers.%s.url=%q", name, server.URL))
-		if server.BearerTokenEnvVar != "" {
-			plan.ConfigArgs = append(plan.ConfigArgs, "-c", fmt.Sprintf("mcp_servers.%s.bearer_token_env_var=%q", name, server.BearerTokenEnvVar))
-		}
+		plan.ConfigArgs = append(plan.ConfigArgs, codexMCPConfigArgs(server)...)
 	}
 	plan.Args = append(append([]string(nil), plan.ConfigArgs...), plan.UserArgs...)
 	return plan, nil
+}
+
+func validateCodexMCPDefinition(name string, def codexMCPDefinition) error {
+	hasURL := def.Server.URL != ""
+	hasCommand := def.Server.Command != ""
+	switch {
+	case !hasURL && !hasCommand:
+		return fmt.Errorf("MCP server %q is defined by %s but is missing url or command", name, def.Source)
+	case hasURL && hasCommand:
+		return fmt.Errorf("MCP server %q is defined by %s with both url and command", name, def.Source)
+	}
+	if !hasURL && def.Server.BearerTokenEnvVar != "" {
+		return fmt.Errorf("MCP server %q is defined by %s with bearer_token_env_var but no url", name, def.Source)
+	}
+	if !hasCommand && len(def.Server.Args) > 0 {
+		return fmt.Errorf("MCP server %q is defined by %s with args but no command", name, def.Source)
+	}
+	return nil
+}
+
+func codexMCPConfigArgs(server CodexMCPLaunchServer) []string {
+	if server.URL != "" {
+		args := []string{"-c", fmt.Sprintf("mcp_servers.%s.url=%q", server.Name, server.URL)}
+		if server.BearerTokenEnvVar != "" {
+			args = append(args, "-c", fmt.Sprintf("mcp_servers.%s.bearer_token_env_var=%q", server.Name, server.BearerTokenEnvVar))
+		}
+		return args
+	}
+
+	args := []string{"-c", fmt.Sprintf("mcp_servers.%s.command=%q", server.Name, server.Command)}
+	if len(server.Args) > 0 {
+		args = append(args, "-c", fmt.Sprintf("mcp_servers.%s.args=%s", server.Name, formatTOMLStringArray(server.Args)))
+	}
+	return args
 }
 
 func RenderCodexLaunchPlan(plan CodexLaunchPlan) string {
@@ -174,9 +209,16 @@ func RenderCodexLaunchPlan(plan CodexLaunchPlan) string {
 			fmt.Fprintf(&out, "  - %s\n", server.Name)
 			fmt.Fprintf(&out, "    enabled_by: %s\n", strings.Join(server.EnabledBy, ", "))
 			fmt.Fprintf(&out, "    definition: %s\n", server.DefinitionSource)
-			fmt.Fprintf(&out, "    url: %s\n", server.URL)
-			if server.BearerTokenEnvVar != "" {
-				fmt.Fprintf(&out, "    bearer_token_env_var: %s\n", server.BearerTokenEnvVar)
+			if server.URL != "" {
+				fmt.Fprintf(&out, "    url: %s\n", server.URL)
+				if server.BearerTokenEnvVar != "" {
+					fmt.Fprintf(&out, "    bearer_token_env_var: %s\n", server.BearerTokenEnvVar)
+				}
+			} else {
+				fmt.Fprintf(&out, "    command: %s\n", server.Command)
+				if len(server.Args) > 0 {
+					fmt.Fprintf(&out, "    args: %s\n", formatTOMLStringArray(server.Args))
+				}
 			}
 		}
 	}
@@ -198,6 +240,19 @@ func RenderCodexLaunchPlan(plan CodexLaunchPlan) string {
 			fmt.Fprintf(&out, "  - %s\n", strconv.Quote(arg))
 		}
 	}
+	return out.String()
+}
+
+func formatTOMLStringArray(values []string) string {
+	var out strings.Builder
+	out.WriteString("[")
+	for i, value := range values {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(strconv.Quote(value))
+	}
+	out.WriteString("]")
 	return out.String()
 }
 

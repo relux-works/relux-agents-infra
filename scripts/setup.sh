@@ -13,6 +13,7 @@ BUILD_VERSION="dev"
 BUILD_COMMIT="unknown"
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 BUILD_LDFLAGS=""
+LLDB_MCP_WRAPPER_MARKER="agents-infra managed lldb-mcp wrapper"
 
 green() { print -P "%F{green}$1%f"; }
 yellow() { print -P "%F{yellow}$1%f"; }
@@ -30,6 +31,9 @@ Options:
   --bin-dir PATH       Install the agents-infra binary into PATH (default: $HOME/.local/bin)
   --with-pdf-tools     Install optional PDF toolchain (pandoc, weasyprint, poppler)
   --help, -h           Show this help
+
+Environment:
+  AGENTS_INFRA_SKIP_LLDB_MCP=1  Skip macOS Homebrew llvm/lldb-mcp setup
 EOF
 }
 
@@ -82,6 +86,86 @@ install_go() {
   red "Go is missing and automatic install is unavailable on this platform."
   red "Install Go manually and rerun setup."
   exit 1
+}
+
+install_lldb_mcp() {
+  if [[ "${AGENTS_INFRA_SKIP_LLDB_MCP:-0}" == "1" ]]; then
+    yellow "Skipping lldb-mcp setup because AGENTS_INFRA_SKIP_LLDB_MCP=1"
+    return
+  fi
+
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return
+  fi
+
+  if ! command -v brew >/dev/null 2>&1; then
+    yellow "Homebrew not found; skipping lldb-mcp setup."
+    yellow "Install Homebrew or provide lldb-mcp on PATH for LLDB MCP support."
+    return
+  fi
+
+  local brew_prefix wrapper existing
+  brew_prefix="$(brew --prefix)"
+  wrapper="$brew_prefix/bin/lldb-mcp"
+  existing="$(command -v lldb-mcp 2>/dev/null || true)"
+
+  if [[ -n "$existing" && "$existing" != "$wrapper" ]]; then
+    green "lldb-mcp already installed: $existing"
+    return
+  fi
+
+  yellow "Ensuring Homebrew llvm and lldb-mcp wrapper for LLDB MCP support..."
+  brew install llvm
+
+  local llvm_prefix helper
+  llvm_prefix="$(brew --prefix llvm)"
+  helper="$llvm_prefix/bin/lldb-mcp"
+  if [[ ! -x "$helper" ]]; then
+    red "Homebrew llvm did not provide expected helper: $helper"
+    exit 1
+  fi
+
+  if [[ ! -x "$llvm_prefix/bin/lldb" ]]; then
+    red "Homebrew llvm did not provide expected lldb: $llvm_prefix/bin/lldb"
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$wrapper")"
+  if [[ -e "$wrapper" && ! -L "$wrapper" ]]; then
+    local backup="$wrapper.agents-infra.bak"
+    if [[ ! -e "$backup" ]]; then
+      cp "$wrapper" "$backup"
+      yellow "Backed up existing lldb-mcp at $wrapper to $backup"
+    else
+      yellow "Existing lldb-mcp backup already present: $backup"
+    fi
+  fi
+  rm -f "$wrapper"
+cat > "$wrapper" <<EOF
+#!/bin/sh
+# $LLDB_MCP_WRAPPER_MARKER.
+set -eu
+
+state_dir="\${HOME:-}/.lldb"
+if [ -n "\${HOME:-}" ] && [ -d "\$state_dir" ]; then
+  for state_file in "\$state_dir"/lldb-mcp-*.json; do
+    [ -e "\$state_file" ] || continue
+    state_name=\${state_file##*/}
+    state_pid=\${state_name#lldb-mcp-}
+    state_pid=\${state_pid%.json}
+    case "\$state_pid" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    if ! kill -0 "\$state_pid" 2>/dev/null; then
+      rm -f "\$state_file"
+    fi
+  done
+fi
+
+exec "$helper" "\$@"
+EOF
+  chmod +x "$wrapper"
+  green "Installed lldb-mcp wrapper: $wrapper"
 }
 
 compute_ldflags() {
@@ -157,6 +241,7 @@ print ""
 green "=== alexis-agents-infra setup ==="
 print ""
 install_go
+install_lldb_mcp
 compute_ldflags
 build_cli
 install_binary

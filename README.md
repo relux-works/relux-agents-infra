@@ -89,6 +89,16 @@ agents-infra doctor local /abs/path/to/project
 `.codex/config.toml` that overrides the global config. Remove it if unintended,
 or keep it as an explicit project-local override.
 
+## Tooling
+
+| Tool | Purpose | Command | Outputs |
+|------|---------|---------|---------|
+| `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
+| `agents-infra` | Set up or inspect global/project-local agent runtimes and launch Codex with project-local MCP opt-ins | `agents-infra setup global`, `agents-infra setup local /path/to/project`, `agents-infra doctor local /path/to/project`, `agents-infra codex --print-config` | Runtime directories under the target root; printed diagnostics on stdout |
+| `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
+| `task-board` | Track project work, checklist state, and outcome resources | `task-board q --format compact 'get(TASK-ID) { full }'`, `task-board m 'set_status(TASK-ID, status=development)'` | `.task-board/` and `.task-board/.resources/` |
+| `git` | Inspect repo state and validate diff hygiene | `git status --short`, `git diff --check` | No repo artifact; task-scoped command logs should be written under `.temp/` |
+
 ## Structure
 
 ```
@@ -142,7 +152,7 @@ or keep it as an explicit project-local override.
 ├── .configs/               # Tool configurations
 │   ├── claude-settings.json    # Claude Code settings (reference)
 │   ├── codex-config.toml       # Codex CLI config
-│   └── codex-mcp-servers.toml  # Known Codex MCP endpoint definitions
+│   └── codex-mcp-servers.toml  # Known Codex MCP server definitions
 │
 ├── tools/
 │   └── agents-infra/       # Go CLI source
@@ -279,11 +289,13 @@ enabled_servers = ["figma"]
 ```
 
 Known MCP server definitions live in `.configs/codex-mcp-servers.toml` and are
-synced into project runtimes. Start Codex through `agents-infra codex` from
-inside the project tree. The launcher walks upward from the current directory,
-composes every discovered `.agents/.configs/project-config.toml`, resolves
-enabled MCP definitions from project registries plus the global registry, logs
-where each part came from, then starts Codex with the resulting `-c` overrides.
+synced into project runtimes. Definitions can describe streamable HTTP servers
+with `url` or stdio servers with `command` and optional `args`. Start Codex
+through `agents-infra codex` from inside the project tree. The launcher walks
+upward from the current directory, composes every discovered
+`.agents/.configs/project-config.toml`, resolves enabled MCP definitions from
+project registries plus the global registry, logs where each part came from,
+then starts Codex with the resulting `-c` overrides.
 
 ```bash
 agents-infra codex
@@ -291,6 +303,55 @@ agents-infra codex -d -
 agents-infra codex exec "check the Figma node"
 agents-infra codex --print-config
 ```
+
+LLDB MCP is available as an opt-in stdio server:
+
+```toml
+[codex.mcp]
+enabled_servers = ["lldb"]
+```
+
+LLDB's MCP integration uses `lldb-mcp`, which bridges stdio to the LLDB MCP
+server socket. On macOS, `./setup.sh` installs Homebrew `llvm` when `lldb-mcp`
+is missing and writes a narrow `$(brew --prefix)/bin/lldb-mcp` wrapper that
+execs Homebrew's helper without overriding `LLDB_EXE_PATH`. This lets
+`lldb-mcp` use the `lldb` binary next to itself by default, matching LLDB's
+documented behavior. The wrapper also prunes dead-PID
+`~/.lldb/lldb-mcp-*.json` discovery files before launch so stale sockets do not
+break the MCP initialize handshake. Set `AGENTS_INFRA_SKIP_LLDB_MCP=1` to skip
+that bootstrap. If a project uses an LLDB build with the helper elsewhere,
+override the definition in the project-local
+`.agents/.configs/codex-mcp-servers.toml`:
+
+```toml
+[servers.lldb]
+command = "/path/to/lldb-mcp"
+```
+
+Safari MCP is available as an opt-in stdio server backed by Safari Technology
+Preview's `safaridriver`:
+
+```toml
+[codex.mcp]
+enabled_servers = ["safari"]
+```
+
+The shared definition launches:
+
+```toml
+[servers.safari]
+command = "/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver"
+args = ["--mcp"]
+```
+
+Prerequisites:
+
+- Install Safari Technology Preview 247 or newer.
+- Enable `Safari Settings > Advanced > Show features for web developers`.
+- Enable `Safari Settings > Developer > Enable remote automation and external agents`.
+
+Safari remains project-local opt-in only. Do not add it to a global Codex MCP
+config unless the user explicitly wants a user-managed global server.
 
 `-d` expands to Codex `--dangerously-bypass-approvals-and-sandbox`. During
 `agents-infra setup local`, a non-empty `enabled_servers` list also installs

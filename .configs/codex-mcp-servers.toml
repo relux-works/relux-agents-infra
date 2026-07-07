@@ -1,2 +1,13 @@
 [servers.figma]
 url = "https://mcp.figma.com/mcp"
+
+# Requires an LLDB distribution that ships `lldb-mcp` on PATH. Projects can
+# override this definition with an absolute command path in their local registry.
+[servers.lldb]
+command = "lldb-mcp"
+
+# Requires Safari Technology Preview 247+ with Web Developer features and
+# remote automation/external agents enabled.
+[servers.safari]
+command = "/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver"
+args = ["--mcp"]
