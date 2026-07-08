@@ -99,6 +99,7 @@ or keep it as an explicit project-local override.
 | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
 | `task-board` | Track project work, checklist state, and outcome resources | `task-board q --format compact 'get(TASK-ID) { full }'`, `task-board m 'set_status(TASK-ID, status=development)'` | `.task-board/` and `.task-board/.resources/` |
 | `git` | Inspect repo state and validate diff hygiene | `git status --short`, `git diff --check` | No repo artifact; task-scoped command logs should be written under `.temp/` |
+| `ssh` / `scp` / `tar` | Validate and document host-agnostic remote agent worker handoff patterns | `ssh "$REMOTE_SSH" 'hostname'`, `scp prompt.md "$REMOTE_SSH:/tmp/run/prompt.md"`, `tar -czf source.tgz .` | Remote task copies and local scratch artifacts under `.temp/remote-agent/` |
 
 ## Structure
 
@@ -109,6 +110,7 @@ or keep it as an explicit project-local override.
 │   ├── AGENTS.md           # Entry point for Codex CLI
 │   ├── INSTRUCTIONS_ATTACHMENTS.md
 │   ├── INSTRUCTIONS_BROWSER_AUTOMATION.md
+│   ├── INSTRUCTIONS_REMOTE_AGENTS.md
 │   ├── INSTRUCTIONS_PLATFORM.md
 │   ├── INSTRUCTIONS_STRUCTURE.md
 │   ├── INSTRUCTIONS_TOOLS.md
@@ -173,6 +175,7 @@ Modular instruction files in `.instructions/`:
 | `INSTRUCTIONS_PLATFORM.md` | Target platform preferences (iOS > macOS) |
 | `INSTRUCTIONS_STRUCTURE.md` | Project structure conventions |
 | `INSTRUCTIONS_BROWSER_AUTOMATION.md` | No-focus browser scripting and authenticated browser-session rules |
+| `INSTRUCTIONS_REMOTE_AGENTS.md` | Host-agnostic workflow for using remote Claude/agent workers through isolated project copies and patch handoff |
 | `INSTRUCTIONS_TOOLS.md` | Allowed CLI tools |
 | `INSTRUCTIONS_SKILLS.md` | Skills system usage |
 | `INSTRUCTIONS_DIAGRAMS.md` | C4/PlantUML diagram rules |
