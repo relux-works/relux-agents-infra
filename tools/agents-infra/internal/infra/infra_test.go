@@ -8,6 +8,10 @@ import (
 	"testing"
 )
 
+const (
+	forcedFitPolicyFixture = "do not fake an impossible platform model with flags, stubs, or mocks"
+)
+
 func TestLocalLayout(t *testing.T) {
 	layout, err := LocalLayout("/src/repo", "/tmp/project")
 	if err != nil {
@@ -76,6 +80,9 @@ func TestSetupLocalCreatesInstalledRuntime(t *testing.T) {
 	assertSymlink(t, filepath.Join(project, ".claude", "skills", "pdf"), filepath.Join(project, ".agents", "skills", "pdf"))
 	assertRenderedInstructions(t, filepath.Join(project, ".codex", "AGENTS.md"))
 	assertRenderedInstructions(t, filepath.Join(project, "AGENTS.md"))
+	assertFileContains(t, filepath.Join(project, ".codex", "AGENTS.md"), forcedFitPolicyFixture)
+	assertFileContains(t, filepath.Join(project, "AGENTS.md"), forcedFitPolicyFixture)
+	assertFileContains(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), forcedFitPolicyFixture)
 	assertSymlink(t, filepath.Join(project, ".codex", "skills", "pdf"), filepath.Join(project, ".agents", "skills", "pdf"))
 	assertSymlink(t, filepath.Join(project, ".local", "bin", "agents-attachments"), filepath.Join(project, ".agents", ".scripts", "agents-attachments"))
 
@@ -602,9 +609,10 @@ func seedSourceRepo(t *testing.T) string {
 	mustMkdir(t, filepath.Join(root, ".task-board"))
 	mustMkdir(t, filepath.Join(root, ".git"))
 
-	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS.md"), "# Global Instructions\n\n@~/.agents/.instructions/INSTRUCTIONS_PLATFORM.md\n")
-	mustWrite(t, filepath.Join(root, ".instructions", "AGENTS.md"), "# Global Instructions\n\n@~/.agents/.instructions/INSTRUCTIONS_PLATFORM.md\n")
+	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS.md"), "# Global Instructions\n\n@~/.agents/.instructions/INSTRUCTIONS_PLATFORM.md\n@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md\n")
+	mustWrite(t, filepath.Join(root, ".instructions", "AGENTS.md"), "# Global Instructions\n\n@~/.agents/.instructions/INSTRUCTIONS_PLATFORM.md\n@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_PLATFORM.md"), "platform instructions\n")
+	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), forcedFitPolicyFixture+"\n")
 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
