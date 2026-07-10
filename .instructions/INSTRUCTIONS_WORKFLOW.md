@@ -7,6 +7,16 @@
 * The workflow is: **trigger → skill → task tracking → implement → review → reopen or close.** Never jump straight to implementation because it feels faster.
 * Speed is a side effect of good process, not a substitute for it. A change done fast but untracked is worse than a change done properly.
 
+## Model Availability and Fallback
+
+* Treat temporary model unavailability as an operational condition, not as a decision to hand back to the human.
+* Do not ask the human whether to keep waiting for the preferred or top-tier model or switch to a faster, cheaper, or less capable model.
+* Keep the requested or preferred model and retry it at least three times with a reasonable delay or backoff when the runtime or orchestration tool supports retries. Avoid parallel retry storms.
+* If the preferred model remains unavailable after those retries, autonomously choose the best viable execution path for the task: the next-best available model at the highest appropriate reasoning level, another configured agent or provider, or local/inline execution when permitted.
+* Preserve the task scope and quality gates when falling back. Record the fallback and its evidence in the task tracker or final handoff, but do not request permission merely to continue.
+* Escalate only when no viable execution path remains, or when progress requires human-only authentication, access, approval, or a genuine product/architecture decision. State the exact blocker and the retries or alternatives already attempted.
+* This fallback policy does not permit bypassing safety, usage, access, or approval controls.
+
 ## Stop-The-Line: No Forced Fits
 
 * Autonomous completion is the default. Work through difficult, slow, or uncertain implementation problems without escalating merely because they require more investigation, retries, or engineering effort.

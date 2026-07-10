@@ -180,7 +180,7 @@ Modular instruction files in `.instructions/`:
 | `INSTRUCTIONS_SKILLS.md` | Skills system usage |
 | `INSTRUCTIONS_DIAGRAMS.md` | C4/PlantUML diagram rules |
 | `INSTRUCTIONS_TESTING.md` | Swift Testing, refactoring workflow |
-| `INSTRUCTIONS_WORKFLOW.md` | Task tracking, forced-fit escalation, Git, and logging |
+| `INSTRUCTIONS_WORKFLOW.md` | Task tracking, model fallback, autonomous completion, forced-fit escalation, Git, and logging |
 | `INSTRUCTIONS_DOCS.md` | Documentation requirements |
 | `INSTRUCTIONS_STYLE.md` | Communication style |
 
@@ -275,6 +275,9 @@ Reference config with:
 - Model: `gpt-5.5`
 - Reasoning effort: `xhigh`
 - Project docs byte limit: `131072`
+- The approaching-rate-limit model switch reminder is suppressed with `[notice].hide_rate_limit_model_nudge = true` so Codex does not ask to move to a lower-credit model.
+- As of the audited Codex CLI `0.144.1`, the separate safety-buffering chooser (`Retry with a faster model` / `Keep waiting`) has no supported `config.toml` setting for suppression, a default choice, or automatic waiting. It is runtime UI shown before agent instructions can act; terminal key automation or a patched Codex binary is intentionally out of scope.
+- Global workflow instructions treat temporary model unavailability as an operational condition: retry the preferred model at least three times, then choose the best viable fallback autonomously and escalate only a real blocker.
 - Trusted projects list
 - Global setup owns `~/.codex/config.toml`; project-local setup deliberately does not create `.codex/config.toml` so the global model/settings remain authoritative.
 - Local setup removes legacy managed project-local config symlinks but preserves custom `.codex/config.toml` files.
