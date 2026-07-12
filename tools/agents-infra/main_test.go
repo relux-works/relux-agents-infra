@@ -127,6 +127,57 @@ yolo_mode = false
 	}
 }
 
+func TestRunClaudePrintConfigReportsIndependentPrimarySessionDiagnostics(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	child := filepath.Join(parent, "child")
+	mustMkdir(t, filepath.Join(parent, ".agents", ".configs"))
+	mustWrite(t, filepath.Join(parent, ".agents", ".configs", "project-config.toml"), `
+[agents.codex.primary_session]
+model = "codex-parent"
+reasoning_effort = "xhigh"
+yolo_mode = true
+
+[agents.claude.primary_session]
+model = "claude-parent"
+`)
+	mustMkdir(t, filepath.Join(child, ".agents", ".configs"))
+	childConfig := filepath.Join(child, ".agents", ".configs", "project-config.toml")
+	mustWrite(t, childConfig, `
+[agents.codex.primary_session]
+model = "codex-child"
+yolo_mode = false
+
+[agents.claude.primary_session]
+model = "claude-child"
+`)
+	t.Setenv("HOME", home)
+	t.Setenv(callerCWDEnv, child)
+
+	output := captureStdout(t, func() {
+		if err := runClaude([]string{"--print-config", "--model", "claude-cli", "-p", "inspect"}); err != nil {
+			t.Fatalf("runClaude: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"project_configs:\n  - " + filepath.Join(parent, ".agents", ".configs", "project-config.toml"),
+		"  - " + childConfig,
+		"effective_value: \"claude-cli\"\n    effective_source: cli:--model",
+		"project_value: \"claude-child\"\n    project_source: " + childConfig + "\n    project_application: suppressed_by_explicit_cli",
+		"claude_args:\n  - \"--model\"\n  - \"claude-cli\"\n  - \"-p\"\n  - \"inspect\"",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("print-config missing %q:\n%s", want, output)
+		}
+	}
+	for _, unexpected := range []string{"codex-child", "xhigh", "--dangerously-bypass-approvals-and-sandbox"} {
+		if strings.Contains(output, unexpected) {
+			t.Fatalf("Claude print-config leaked Codex policy %q:\n%s", unexpected, output)
+		}
+	}
+}
+
 func TestRunDoctorLocalReportsComposedPrimarySessionDiagnostics(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
@@ -141,6 +192,9 @@ enabled_servers = ["figma"]
 [agents.codex.primary_session]
 model = "parent-model"
 yolo_mode = true
+
+[agents.claude.primary_session]
+model = "claude-parent"
 `)
 	mustMkdir(t, filepath.Join(child, ".agents", ".configs"))
 	childConfig := filepath.Join(child, ".agents", ".configs", "project-config.toml")
@@ -151,6 +205,9 @@ enabled_servers = ["lldb", "figma"]
 [agents.codex.primary_session]
 reasoning_effort = "xhigh"
 yolo_mode = false
+
+[agents.claude.primary_session]
+model = "claude-child"
 `)
 	mustMkdir(t, filepath.Join(child, ".codex"))
 	mustWrite(t, filepath.Join(child, ".codex", "config.toml"), "model = \"legacy-local\"\n")
@@ -172,6 +229,9 @@ yolo_mode = false
 		"codex_primary_reasoning_effort_source": childConfig,
 		"codex_primary_yolo_mode":               "false",
 		"codex_primary_yolo_mode_source":        childConfig,
+		"claude_primary_config_valid":           "true",
+		"claude_primary_model":                  "claude-child",
+		"claude_primary_model_source":           childConfig,
 	}
 	for key, wantValue := range want {
 		if got := fields[key]; got != wantValue {
@@ -199,6 +259,9 @@ func TestRunDoctorLocalReportsAbsentPrimarySessionDefaults(t *testing.T) {
 		"codex_primary_reasoning_effort_source": "native",
 		"codex_primary_yolo_mode":               "false",
 		"codex_primary_yolo_mode_source":        "default",
+		"claude_primary_config_valid":           "true",
+		"claude_primary_model":                  "",
+		"claude_primary_model_source":           "native",
 	}
 	for key, wantValue := range want {
 		if got := fields[key]; got != wantValue {
@@ -234,6 +297,36 @@ yolo_mode = "false"
 	}
 	if _, ok := fields["codex_primary_model"]; ok {
 		t.Fatalf("invalid config should not emit partial primary values:\n%s", output)
+	}
+}
+
+func TestRunDoctorLocalReportsInvalidClaudePrimarySession(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	mustMkdir(t, filepath.Join(project, ".agents", ".configs"))
+	configPath := filepath.Join(project, ".agents", ".configs", "project-config.toml")
+	mustWrite(t, configPath, `
+[agents.codex.primary_session]
+model = "gpt-5.6-terra"
+
+[agents.claude.primary_session]
+model = ""
+`)
+	t.Setenv("HOME", home)
+
+	var doctorErr error
+	output := captureStdout(t, func() {
+		doctorErr = runDoctor([]string{"local", project})
+	})
+	if doctorErr == nil || !strings.Contains(doctorErr.Error(), configPath) || !strings.Contains(doctorErr.Error(), "agents.claude.primary_session.model") {
+		t.Fatalf("runDoctor error = %q, want Claude field validation", doctorErr)
+	}
+	fields := parseKeyValueOutput(output)
+	if got := fields["claude_primary_config_valid"]; got != "false" {
+		t.Fatalf("claude_primary_config_valid = %q, want false:\n%s", got, output)
+	}
+	if _, ok := fields["claude_primary_model"]; ok {
+		t.Fatalf("invalid Claude config should not emit partial Claude values:\n%s", output)
 	}
 }
 

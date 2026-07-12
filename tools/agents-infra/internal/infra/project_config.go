@@ -17,6 +17,8 @@ const (
 	codexPrimaryModelField           = codexPrimarySessionField + ".model"
 	codexPrimaryReasoningEffortField = codexPrimarySessionField + ".reasoning_effort"
 	codexPrimaryYoloModeField        = codexPrimarySessionField + ".yolo_mode"
+	claudePrimarySessionField        = "agents.claude.primary_session"
+	claudePrimaryModelField          = claudePrimarySessionField + ".model"
 )
 
 // CodexPrimarySessionPolicy is the root-to-leaf composition of all discovered
@@ -49,16 +51,46 @@ type CodexPrimarySessionSource struct {
 	YoloMode        *bool
 }
 
+// ClaudePrimarySessionPolicy is the root-to-leaf composition of all discovered
+// [agents.claude.primary_session] tables. Claude accepts a model policy only;
+// its reasoning and permission controls remain independent of Codex policy.
+type ClaudePrimarySessionPolicy struct {
+	Model ClaudePrimarySessionStringValue
+}
+
+type ClaudePrimarySessionStringValue struct {
+	Value   string
+	Source  string
+	Present bool
+}
+
+// ClaudePrimarySessionSource preserves the model contributed by one project
+// config. Pointer presence distinguishes an omitted model from a configured one.
+type ClaudePrimarySessionSource struct {
+	Model *string
+}
+
 type parsedProjectConfig struct {
-	EnabledMCPServers []string
-	PrimarySession    CodexPrimarySessionSource
+	EnabledMCPServers    []string
+	PrimarySession       CodexPrimarySessionSource
+	ClaudePrimarySession ClaudePrimarySessionSource
+}
+
+// ProjectConfigSource records all policy contributed by one project config.
+// Launcher-specific plans copy only their provider's policy from this source.
+type ProjectConfigSource struct {
+	Path                 string
+	EnabledServers       []string
+	CodexPrimarySession  CodexPrimarySessionSource
+	ClaudePrimarySession ClaudePrimarySessionSource
 }
 
 type compositeProjectConfig struct {
-	EnabledOrder   []string
-	EnabledBy      map[string][]string
-	Sources        []CodexProjectConfigSource
-	PrimarySession CodexPrimarySessionPolicy
+	EnabledOrder         []string
+	EnabledBy            map[string][]string
+	Sources              []ProjectConfigSource
+	PrimarySession       CodexPrimarySessionPolicy
+	ClaudePrimarySession ClaudePrimarySessionPolicy
 }
 
 func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath string) (compositeProjectConfig, error) {
@@ -84,12 +116,14 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
 			return compositeProjectConfig{}, err
 		}
 
-		composite.Sources = append(composite.Sources, CodexProjectConfigSource{
-			Path:           path,
-			EnabledServers: append([]string(nil), config.EnabledMCPServers...),
-			PrimarySession: cloneCodexPrimarySessionSource(config.PrimarySession),
+		composite.Sources = append(composite.Sources, ProjectConfigSource{
+			Path:                 path,
+			EnabledServers:       append([]string(nil), config.EnabledMCPServers...),
+			CodexPrimarySession:  cloneCodexPrimarySessionSource(config.PrimarySession),
+			ClaudePrimarySession: cloneClaudePrimarySessionSource(config.ClaudePrimarySession),
 		})
 		composeCodexPrimarySession(&composite.PrimarySession, config.PrimarySession, path)
+		composeClaudePrimarySession(&composite.ClaudePrimarySession, config.ClaudePrimarySession, path)
 
 		for _, name := range config.EnabledMCPServers {
 			if !isBareTOMLKey(name) {
@@ -113,7 +147,7 @@ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
 			"%s: field %s (including %s): parse TOML: %w",
 			path,
 			projectConfigParseField,
-			codexPrimarySessionField,
+			codexPrimarySessionField+" and "+claudePrimarySessionField,
 			err,
 		)
 	}
@@ -137,32 +171,45 @@ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
 	if !present {
 		return config, nil
 	}
+	config.PrimarySession, err = parseCodexPrimarySession(agents, path)
+	if err != nil {
+		return parsedProjectConfig{}, err
+	}
+	config.ClaudePrimarySession, err = parseClaudePrimarySession(agents, path)
+	if err != nil {
+		return parsedProjectConfig{}, err
+	}
+	return config, nil
+}
+
+func parseCodexPrimarySession(agents map[string]any, path string) (CodexPrimarySessionSource, error) {
 	codex, present, err := projectConfigTable(agents, "codex", "agents.codex")
 	if err != nil {
-		return parsedProjectConfig{}, projectConfigFieldError(path, "agents.codex", err)
+		return CodexPrimarySessionSource{}, projectConfigFieldError(path, "agents.codex", err)
 	}
 	if !present {
-		return config, nil
+		return CodexPrimarySessionSource{}, nil
 	}
 	primary, present, err := projectConfigTable(codex, "primary_session", codexPrimarySessionField)
 	if err != nil {
-		return parsedProjectConfig{}, projectConfigFieldError(path, codexPrimarySessionField, err)
+		return CodexPrimarySessionSource{}, projectConfigFieldError(path, codexPrimarySessionField, err)
 	}
 	if !present {
-		return config, nil
+		return CodexPrimarySessionSource{}, nil
 	}
 
-	config.PrimarySession.Model, err = projectConfigNonEmptyString(primary, "model")
+	var source CodexPrimarySessionSource
+	source.Model, err = projectConfigNonEmptyString(primary, "model")
 	if err != nil {
-		return parsedProjectConfig{}, projectConfigFieldError(path, codexPrimaryModelField, err)
+		return CodexPrimarySessionSource{}, projectConfigFieldError(path, codexPrimaryModelField, err)
 	}
-	config.PrimarySession.ReasoningEffort, err = projectConfigNonEmptyString(primary, "reasoning_effort")
+	source.ReasoningEffort, err = projectConfigNonEmptyString(primary, "reasoning_effort")
 	if err != nil {
-		return parsedProjectConfig{}, projectConfigFieldError(path, codexPrimaryReasoningEffortField, err)
+		return CodexPrimarySessionSource{}, projectConfigFieldError(path, codexPrimaryReasoningEffortField, err)
 	}
-	config.PrimarySession.YoloMode, err = projectConfigBool(primary, "yolo_mode")
+	source.YoloMode, err = projectConfigBool(primary, "yolo_mode")
 	if err != nil {
-		return parsedProjectConfig{}, projectConfigFieldError(path, codexPrimaryYoloModeField, err)
+		return CodexPrimarySessionSource{}, projectConfigFieldError(path, codexPrimaryYoloModeField, err)
 	}
 
 	var unsupported []string
@@ -175,20 +222,64 @@ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
 	}
 	if len(unsupported) > 0 {
 		sort.Strings(unsupported)
-		return parsedProjectConfig{}, projectConfigFieldError(
+		return CodexPrimarySessionSource{}, projectConfigFieldError(
 			path,
 			codexPrimarySessionField+"."+unsupported[0],
 			errors.New("unsupported field"),
 		)
 	}
-	if config.PrimarySession.Model == nil && config.PrimarySession.ReasoningEffort == nil && config.PrimarySession.YoloMode == nil {
-		return parsedProjectConfig{}, projectConfigFieldError(
+	if !codexPrimarySessionSourcePresent(source) {
+		return CodexPrimarySessionSource{}, projectConfigFieldError(
 			path,
 			codexPrimarySessionField,
 			errors.New("table must contain at least one supported field"),
 		)
 	}
-	return config, nil
+	return source, nil
+}
+
+func parseClaudePrimarySession(agents map[string]any, path string) (ClaudePrimarySessionSource, error) {
+	claude, present, err := projectConfigTable(agents, "claude", "agents.claude")
+	if err != nil {
+		return ClaudePrimarySessionSource{}, projectConfigFieldError(path, "agents.claude", err)
+	}
+	if !present {
+		return ClaudePrimarySessionSource{}, nil
+	}
+	primary, present, err := projectConfigTable(claude, "primary_session", claudePrimarySessionField)
+	if err != nil {
+		return ClaudePrimarySessionSource{}, projectConfigFieldError(path, claudePrimarySessionField, err)
+	}
+	if !present {
+		return ClaudePrimarySessionSource{}, nil
+	}
+
+	model, err := projectConfigNonEmptyString(primary, "model")
+	if err != nil {
+		return ClaudePrimarySessionSource{}, projectConfigFieldError(path, claudePrimaryModelField, err)
+	}
+	var unsupported []string
+	for key := range primary {
+		if key != "model" {
+			unsupported = append(unsupported, key)
+		}
+	}
+	if len(unsupported) > 0 {
+		sort.Strings(unsupported)
+		return ClaudePrimarySessionSource{}, projectConfigFieldError(
+			path,
+			claudePrimarySessionField+"."+unsupported[0],
+			errors.New("unsupported field"),
+		)
+	}
+	if model == nil {
+		return ClaudePrimarySessionSource{}, projectConfigFieldError(
+			path,
+			claudePrimarySessionField,
+			errors.New("table must contain at least one supported field"),
+		)
+	}
+	return ClaudePrimarySessionSource{Model: model}, nil
 }
 
 func projectConfigTable(parent map[string]any, key, field string) (map[string]any, bool, error) {
@@ -278,12 +369,26 @@ func composeCodexPrimarySession(policy *CodexPrimarySessionPolicy, source CodexP
 	}
 }
 
+func composeClaudePrimarySession(policy *ClaudePrimarySessionPolicy, source ClaudePrimarySessionSource, path string) {
+	if source.Model != nil {
+		policy.Model = ClaudePrimarySessionStringValue{
+			Value:   *source.Model,
+			Source:  path,
+			Present: true,
+		}
+	}
+}
+
 func cloneCodexPrimarySessionSource(source CodexPrimarySessionSource) CodexPrimarySessionSource {
 	return CodexPrimarySessionSource{
 		Model:           cloneStringPointer(source.Model),
 		ReasoningEffort: cloneStringPointer(source.ReasoningEffort),
 		YoloMode:        cloneBoolPointer(source.YoloMode),
 	}
+}
+
+func cloneClaudePrimarySessionSource(source ClaudePrimarySessionSource) ClaudePrimarySessionSource {
+	return ClaudePrimarySessionSource{Model: cloneStringPointer(source.Model)}
 }
 
 func cloneStringPointer(value *string) *string {

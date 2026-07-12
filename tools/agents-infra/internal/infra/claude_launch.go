@@ -18,6 +18,8 @@ type ClaudeLaunchPlan struct {
 	RegistrySources          []CodexMCPRegistrySource
 	MCPServers               []ClaudeMCPLaunchServer
 	MCPConfigJSON            string
+	PrimarySession           ClaudePrimarySessionPolicy
+	PrimarySessionResolution ClaudePrimarySessionResolution
 	ConfigArgs               []string
 	UserArgs                 []string
 	Args                     []string
@@ -28,6 +30,32 @@ type ClaudeLaunchPlan struct {
 type ClaudeProjectConfigSource struct {
 	Path           string
 	EnabledServers []string
+	PrimarySession ClaudePrimarySessionSource
+}
+
+type ClaudePrimarySessionApplication string
+
+const (
+	ClaudePrimarySessionNotConfigured   ClaudePrimarySessionApplication = "not_configured"
+	ClaudePrimarySessionApplied         ClaudePrimarySessionApplication = "applied"
+	ClaudePrimarySessionSuppressedByCLI ClaudePrimarySessionApplication = "suppressed_by_explicit_cli"
+)
+
+// ClaudePrimarySessionResolution records the invocation-level Claude model
+// decision. ProjectValue and ProjectSource preserve the composed project
+// policy even when an explicit Claude CLI model suppresses its application.
+type ClaudePrimarySessionResolution struct {
+	Model ClaudePrimarySessionStringResolution
+}
+
+type ClaudePrimarySessionStringResolution struct {
+	EffectiveValue      string
+	EffectiveValueKnown bool
+	EffectiveSource     string
+	ProjectConfigured   bool
+	ProjectValue        string
+	ProjectSource       string
+	ProjectApplication  ClaudePrimarySessionApplication
 }
 
 type ClaudeMCPLaunchServer struct {
@@ -85,14 +113,16 @@ func BuildClaudeLaunchPlan(startDir, homeDir string, args []string) (ClaudeLaunc
 
 	ancestors := ancestorDirsRootFirst(startDir)
 	globalProjectConfigPath := filepath.Join(homeDir, ".agents", ".configs", projectConfigFileName)
-	enabledOrder, enabledBy, projectConfigs, err := loadCompositeMCPEnablement(ancestors, globalProjectConfigPath, "mcp")
+	projectConfig, err := loadCompositeProjectConfig(ancestors, globalProjectConfigPath)
 	if err != nil {
 		return ClaudeLaunchPlan{}, err
 	}
-	for _, source := range projectConfigs {
+	plan.PrimarySession = projectConfig.ClaudePrimarySession
+	for _, source := range projectConfig.Sources {
 		plan.ProjectConfigs = append(plan.ProjectConfigs, ClaudeProjectConfigSource{
 			Path:           source.Path,
-			EnabledServers: source.EnabledServers,
+			EnabledServers: append([]string(nil), source.EnabledServers...),
+			PrimarySession: cloneClaudePrimarySessionSource(source.ClaudePrimarySession),
 		})
 	}
 
@@ -103,10 +133,10 @@ func BuildClaudeLaunchPlan(startDir, homeDir string, args []string) (ClaudeLaunc
 	plan.RegistrySources = registrySources
 
 	mcpServers := map[string]claudeMCPConfigServer{}
-	for _, name := range enabledOrder {
+	for _, name := range projectConfig.EnabledOrder {
 		def, ok := definitions[name]
 		if !ok {
-			return ClaudeLaunchPlan{}, fmt.Errorf("MCP server %q is enabled by %s but no definition was found in codex-mcp-servers.toml registries", name, strings.Join(enabledBy[name], ", "))
+			return ClaudeLaunchPlan{}, fmt.Errorf("MCP server %q is enabled by %s but no definition was found in codex-mcp-servers.toml registries", name, strings.Join(projectConfig.EnabledBy[name], ", "))
 		}
 		if err := validateCodexMCPDefinition(name, def); err != nil {
 			return ClaudeLaunchPlan{}, err
@@ -118,7 +148,7 @@ func BuildClaudeLaunchPlan(startDir, homeDir string, args []string) (ClaudeLaunc
 			Command:           def.Server.Command,
 			Args:              append([]string(nil), def.Server.Args...),
 			DefinitionSource:  def.Source,
-			EnabledBy:         append([]string(nil), enabledBy[name]...),
+			EnabledBy:         append([]string(nil), projectConfig.EnabledBy[name]...),
 		}
 		plan.MCPServers = append(plan.MCPServers, server)
 		mcpServers[name] = claudeMCPConfigServer(server)
@@ -132,6 +162,9 @@ func BuildClaudeLaunchPlan(startDir, homeDir string, args []string) (ClaudeLaunc
 		plan.MCPConfigJSON = configJSON
 		plan.ConfigArgs = []string{"--mcp-config", configJSON}
 	}
+	primaryResolution, primaryArgs := resolveClaudePrimarySession(plan.PrimarySession, parsed)
+	plan.PrimarySessionResolution = primaryResolution
+	plan.ConfigArgs = append(plan.ConfigArgs, primaryArgs...)
 	plan.Args = append(append([]string(nil), plan.ConfigArgs...), plan.UserArgs...)
 	return plan, nil
 }
@@ -192,6 +225,8 @@ func RenderClaudeLaunchPlan(plan ClaudeLaunchPlan) string {
 		}
 	}
 
+	renderClaudePrimarySessionResolution(&out, plan.PrimarySessionResolution)
+
 	out.WriteString("mcp_registries:\n")
 	if len(plan.RegistrySources) == 0 {
 		out.WriteString("  - (none)\n")
@@ -247,34 +282,105 @@ func RenderClaudeLaunchPlan(plan ClaudeLaunchPlan) string {
 	return out.String()
 }
 
+func renderClaudePrimarySessionResolution(out *strings.Builder, resolution ClaudePrimarySessionResolution) {
+	out.WriteString("primary_session:\n")
+	out.WriteString("  model:\n")
+	if resolution.Model.EffectiveValueKnown {
+		fmt.Fprintf(out, "    effective_value: %s\n", strconv.Quote(resolution.Model.EffectiveValue))
+	} else {
+		fmt.Fprintln(out, "    effective_value: (claude-native)")
+	}
+	fmt.Fprintf(out, "    effective_source: %s\n", resolution.Model.EffectiveSource)
+	if resolution.Model.ProjectConfigured {
+		fmt.Fprintf(out, "    project_value: %s\n", strconv.Quote(resolution.Model.ProjectValue))
+		fmt.Fprintf(out, "    project_source: %s\n", resolution.Model.ProjectSource)
+	} else {
+		fmt.Fprintln(out, "    project_value: (absent)")
+		fmt.Fprintln(out, "    project_source: (none)")
+	}
+	fmt.Fprintf(out, "    project_application: %s\n", resolution.Model.ProjectApplication)
+}
+
 type parsedClaudeWrapperArgs struct {
-	claudeArgs        []string
-	printConfig       bool
-	expandedShortcuts []CodexWrapperShortcut
+	claudeArgs          []string
+	printConfig         bool
+	explicitModel       bool
+	explicitModelValue  string
+	explicitModelSource string
+	expandedShortcuts   []CodexWrapperShortcut
 }
 
 func parseClaudeWrapperArgs(args []string) (parsedClaudeWrapperArgs, error) {
 	var parsed parsedClaudeWrapperArgs
 	passThrough := false
-	for _, arg := range args {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
 		if passThrough {
 			parsed.claudeArgs = append(parsed.claudeArgs, arg)
 			continue
 		}
-		switch arg {
-		case "--":
+		switch {
+		case arg == "--":
 			passThrough = true
-		case "--print-config":
+		case arg == "--print-config":
 			parsed.printConfig = true
-		case "-d", "--danger", "--yolo":
+		case arg == "-d" || arg == "--danger" || arg == "--yolo":
 			parsed.claudeArgs = append(parsed.claudeArgs, claudeDangerouslySkipPermissions)
 			parsed.expandedShortcuts = append(parsed.expandedShortcuts, CodexWrapperShortcut{
 				From: arg,
 				To:   claudeDangerouslySkipPermissions,
 			})
+		case arg == "--model":
+			parsed.claudeArgs = append(parsed.claudeArgs, arg)
+			parsed.explicitModel = true
+			parsed.explicitModelSource = "cli:--model"
+			if index+1 < len(args) {
+				index++
+				parsed.explicitModelValue = args[index]
+				parsed.claudeArgs = append(parsed.claudeArgs, args[index])
+			}
+		case strings.HasPrefix(arg, "--model="):
+			parsed.claudeArgs = append(parsed.claudeArgs, arg)
+			parsed.explicitModel = true
+			parsed.explicitModelSource = "cli:--model"
+			parsed.explicitModelValue = strings.TrimPrefix(arg, "--model=")
 		default:
 			parsed.claudeArgs = append(parsed.claudeArgs, arg)
 		}
 	}
 	return parsed, nil
+}
+
+func resolveClaudePrimarySession(policy ClaudePrimarySessionPolicy, parsed parsedClaudeWrapperArgs) (ClaudePrimarySessionResolution, []string) {
+	resolution := ClaudePrimarySessionResolution{
+		Model: ClaudePrimarySessionStringResolution{
+			EffectiveSource:    "native",
+			ProjectConfigured:  policy.Model.Present,
+			ProjectValue:       policy.Model.Value,
+			ProjectSource:      policy.Model.Source,
+			ProjectApplication: ClaudePrimarySessionNotConfigured,
+		},
+	}
+	if parsed.explicitModel {
+		resolution.Model.EffectiveSource = parsed.explicitModelSource
+		if resolution.Model.EffectiveSource == "" {
+			resolution.Model.EffectiveSource = "explicit_cli"
+		}
+		if parsed.explicitModelValue != "" {
+			resolution.Model.EffectiveValue = parsed.explicitModelValue
+			resolution.Model.EffectiveValueKnown = true
+		}
+		if policy.Model.Present {
+			resolution.Model.ProjectApplication = ClaudePrimarySessionSuppressedByCLI
+		}
+		return resolution, nil
+	}
+	if !policy.Model.Present {
+		return resolution, nil
+	}
+	resolution.Model.EffectiveValue = policy.Model.Value
+	resolution.Model.EffectiveValueKnown = true
+	resolution.Model.EffectiveSource = policy.Model.Source
+	resolution.Model.ProjectApplication = ClaudePrimarySessionApplied
+	return resolution, []string{"--model", policy.Model.Value}
 }

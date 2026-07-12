@@ -18,10 +18,10 @@ func TestBuildClaudeLaunchPlanComposesAncestorConfigsAndProvenance(t *testing.T)
 	mustMkdir(t, filepath.Join(home, ".agents", ".configs"))
 	mustWrite(t, filepath.Join(home, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.figma]\nurl = \"https://global.example/figma\"\n")
 	mustMkdir(t, filepath.Join(parent, ".agents", ".configs"))
-	mustWrite(t, filepath.Join(parent, ".agents", ".configs", "project-config.toml"), "[mcp]\nenabled_servers = [\"figma\"]\n")
+	mustWrite(t, filepath.Join(parent, ".agents", ".configs", "project-config.toml"), "[mcp]\nenabled_servers = [\"figma\"]\n\n[agents.claude.primary_session]\nmodel = \"claude-parent\"\n")
 	mustWrite(t, filepath.Join(parent, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.figma]\nurl = \"https://parent.example/figma\"\n")
 	mustMkdir(t, filepath.Join(child, ".agents", ".configs"))
-	mustWrite(t, filepath.Join(child, ".agents", ".configs", "project-config.toml"), "[mcp]\nenabled_servers = [\"jira\", \"figma\"]\n")
+	mustWrite(t, filepath.Join(child, ".agents", ".configs", "project-config.toml"), "[mcp]\nenabled_servers = [\"jira\", \"figma\"]\n\n[agents.claude.primary_session]\nmodel = \"claude-child\"\n")
 	mustWrite(t, filepath.Join(child, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.jira]\nurl = \"https://child.example/jira\"\nbearer_token_env_var = \"JIRA_TOKEN\"\n")
 
 	plan, err := BuildClaudeLaunchPlan(child, home, []string{"-d", "-"})
@@ -41,9 +41,16 @@ func TestBuildClaudeLaunchPlanComposesAncestorConfigsAndProvenance(t *testing.T)
 	if plan.MCPServers[1].Name != "jira" || plan.MCPServers[1].BearerTokenEnvVar != "JIRA_TOKEN" {
 		t.Fatalf("jira server = %#v", plan.MCPServers[1])
 	}
+	if !plan.PrimarySession.Model.Present || plan.PrimarySession.Model.Value != "claude-child" || plan.PrimarySession.Model.Source != filepath.Join(child, ".agents", ".configs", "project-config.toml") {
+		t.Fatalf("Claude primary session = %#v, want child model with child provenance", plan.PrimarySession)
+	}
+	if plan.PrimarySessionResolution.Model.ProjectApplication != ClaudePrimarySessionApplied {
+		t.Fatalf("Claude primary resolution = %#v, want project policy applied", plan.PrimarySessionResolution)
+	}
 
 	wantArgs := []string{
 		"--mcp-config", plan.MCPConfigJSON,
+		"--model", "claude-child",
 		claudeDangerouslySkipPermissions,
 		"-",
 	}
@@ -75,7 +82,72 @@ func TestBuildClaudeLaunchPlanComposesAncestorConfigsAndProvenance(t *testing.T)
 		"enabled_mcp=jira,figma",
 		"definition: " + filepath.Join(parent, ".agents", ".configs", "codex-mcp-servers.toml"),
 		"definition: " + filepath.Join(child, ".agents", ".configs", "codex-mcp-servers.toml"),
+		"primary_session:\n  model:\n    effective_value: \"claude-child\"",
 		"-d => " + claudeDangerouslySkipPermissions,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered plan missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestBuildClaudeLaunchPlanKeepsProviderPrimaryPoliciesIndependent(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	child := filepath.Join(parent, "child")
+	mustMkdir(t, filepath.Join(parent, ".agents", ".configs"))
+	mustWrite(t, filepath.Join(parent, ".agents", ".configs", "project-config.toml"), `
+[agents.codex.primary_session]
+model = "codex-parent"
+reasoning_effort = "xhigh"
+yolo_mode = true
+
+[agents.claude.primary_session]
+model = "claude-parent"
+`)
+	mustMkdir(t, filepath.Join(child, ".agents", ".configs"))
+	childConfig := filepath.Join(child, ".agents", ".configs", "project-config.toml")
+	mustWrite(t, childConfig, `
+[agents.codex.primary_session]
+model = "codex-child"
+yolo_mode = false
+
+[agents.claude.primary_session]
+model = "claude-child"
+`)
+
+	plan, err := BuildClaudeLaunchPlan(child, home, nil)
+	if err != nil {
+		t.Fatalf("BuildClaudeLaunchPlan: %v", err)
+	}
+	if got, want := plan.Args, []string{"--model", "claude-child"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Claude Args = %#v, want %#v", got, want)
+	}
+	if plan.PrimarySession.Model.Source != childConfig || plan.PrimarySessionResolution.Model.EffectiveSource != childConfig {
+		t.Fatalf("Claude provenance = %#v / %#v, want child config %s", plan.PrimarySession, plan.PrimarySessionResolution, childConfig)
+	}
+	for _, arg := range plan.Args {
+		if arg == codexDangerouslyBypassApprovalsAndSandbox || arg == "codex-child" || arg == "xhigh" {
+			t.Fatalf("Claude Args leaked Codex policy: %#v", plan.Args)
+		}
+	}
+
+	explicit, err := BuildClaudeLaunchPlan(child, home, []string{"--model", "claude-cli", "-p", "prompt"})
+	if err != nil {
+		t.Fatalf("BuildClaudeLaunchPlan explicit model: %v", err)
+	}
+	if got, want := explicit.Args, []string{"--model", "claude-cli", "-p", "prompt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("explicit Claude Args = %#v, want %#v", got, want)
+	}
+	resolution := explicit.PrimarySessionResolution.Model
+	if resolution.EffectiveValue != "claude-cli" || resolution.EffectiveSource != "cli:--model" || resolution.ProjectApplication != ClaudePrimarySessionSuppressedByCLI {
+		t.Fatalf("explicit Claude resolution = %#v", resolution)
+	}
+	rendered := RenderClaudeLaunchPlan(explicit)
+	for _, want := range []string{
+		"effective_value: \"claude-cli\"\n    effective_source: cli:--model",
+		"project_value: \"claude-child\"\n    project_source: " + childConfig + "\n    project_application: suppressed_by_explicit_cli",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered plan missing %q:\n%s", want, rendered)

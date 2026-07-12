@@ -679,6 +679,156 @@ func TestSetupLocalSamePrimaryValueAvoidsRewrite(t *testing.T) {
 	assertFileBytes(t, path, original)
 }
 
+func TestSetupLocalClaudePrimarySessionMutatesOnlyClaudeTable(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	path := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
+	original := `# project header
+[mcp]
+enabled_servers = ["figma"] # keep MCP
+
+[agents.codex.primary_session] # keep Codex comment
+model = "gpt-5.6-terra" # keep Codex model
+reasoning_effort = "xhigh"
+yolo_mode = true
+
+[agents.claude.primary_session] # keep Claude comment
+model = "claude-old" # keep Claude model comment
+
+[unrelated]
+owner = "preserve"
+`
+	mustMkdir(t, filepath.Dir(path))
+	mustWrite(t, path, original)
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	model := "claude-opus-4-6"
+	if err := Setup(Options{
+		Layout:                    layout,
+		ClaudePrimarySessionSetup: ClaudePrimarySessionSetup{Model: &model},
+	}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	updated := readFileString(t, path)
+	for _, preserved := range []string{
+		"[mcp]\nenabled_servers = [\"figma\"] # keep MCP",
+		"[agents.codex.primary_session] # keep Codex comment\nmodel = \"gpt-5.6-terra\" # keep Codex model\nreasoning_effort = \"xhigh\"\nyolo_mode = true",
+		"[unrelated]\nowner = \"preserve\"",
+	} {
+		if !strings.Contains(updated, preserved) {
+			t.Fatalf("Claude-only mutation did not preserve %q:\n%s", preserved, updated)
+		}
+	}
+	if !strings.Contains(updated, "model = 'claude-opus-4-6' # keep Claude model comment") {
+		t.Fatalf("Claude model was not updated in place:\n%s", updated)
+	}
+	parsed, err := parseProjectConfig([]byte(updated), path)
+	if err != nil {
+		t.Fatalf("parseProjectConfig(updated): %v", err)
+	}
+	if parsed.PrimarySession.Model == nil || *parsed.PrimarySession.Model != "gpt-5.6-terra" || parsed.PrimarySession.YoloMode == nil || !*parsed.PrimarySession.YoloMode {
+		t.Fatalf("Codex policy changed during Claude-only setup: %#v", parsed.PrimarySession)
+	}
+	if parsed.ClaudePrimarySession.Model == nil || *parsed.ClaudePrimarySession.Model != model {
+		t.Fatalf("Claude policy = %#v, want %q", parsed.ClaudePrimarySession, model)
+	}
+}
+
+func TestSetupLocalClearClaudePrimarySessionPreservesCodexAndOtherTOML(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	path := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
+	original := `[mcp]
+enabled_servers = ["figma"]
+
+[agents.codex.primary_session]
+model = "gpt-5.6-terra"
+reasoning_effort = "xhigh"
+yolo_mode = true
+
+[agents.claude.primary_session]
+model = "claude-opus-4-6"
+# preserved user comment from cleared table
+
+[unrelated]
+keep = "yes"
+`
+	mustMkdir(t, filepath.Dir(path))
+	mustWrite(t, path, original)
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	if err := Setup(Options{
+		Layout:                    layout,
+		ClaudePrimarySessionSetup: ClaudePrimarySessionSetup{Clear: true},
+	}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	updated := readFileString(t, path)
+	for _, removed := range []string{"[agents.claude.primary_session]", "model = \"claude-opus-4-6\""} {
+		if strings.Contains(updated, removed) {
+			t.Fatalf("clear left %q behind:\n%s", removed, updated)
+		}
+	}
+	for _, preserved := range []string{
+		"[mcp]\nenabled_servers = [\"figma\"]",
+		"[agents.codex.primary_session]\nmodel = \"gpt-5.6-terra\"\nreasoning_effort = \"xhigh\"\nyolo_mode = true",
+		"# preserved user comment from cleared table",
+		"[unrelated]\nkeep = \"yes\"",
+	} {
+		if !strings.Contains(updated, preserved) {
+			t.Fatalf("Claude clear did not preserve %q:\n%s", preserved, updated)
+		}
+	}
+	parsed, err := parseProjectConfig([]byte(updated), path)
+	if err != nil {
+		t.Fatalf("parseProjectConfig(updated): %v", err)
+	}
+	if claudePrimarySessionSourcePresent(parsed.ClaudePrimarySession) {
+		t.Fatalf("Claude primary session still present: %#v", parsed.ClaudePrimarySession)
+	}
+	if parsed.PrimarySession.Model == nil || *parsed.PrimarySession.Model != "gpt-5.6-terra" {
+		t.Fatalf("Codex policy changed during Claude clear: %#v", parsed.PrimarySession)
+	}
+}
+
+func TestSetupLocalRejectsInvalidClaudePrimarySessionFlagsBeforeWrite(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     ClaudePrimarySessionSetup
+		wantField string
+	}{
+		{name: "empty model", setup: ClaudePrimarySessionSetup{Model: stringPointer("  ")}, wantField: claudePrimaryModelField},
+		{name: "clear conflicts with model", setup: ClaudePrimarySessionSetup{Clear: true, Model: stringPointer("claude-opus-4-6")}, wantField: claudePrimarySessionField},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := seedSourceRepo(t)
+			project := t.TempDir()
+			path := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
+			original := []byte("[agents.codex.primary_session]\nmodel = \"gpt-5.6-terra\"\n")
+			mustMkdir(t, filepath.Dir(path))
+			if err := os.WriteFile(path, original, 0o640); err != nil {
+				t.Fatalf("WriteFile(%s): %v", path, err)
+			}
+			layout, err := LocalLayout(source, project)
+			if err != nil {
+				t.Fatalf("LocalLayout: %v", err)
+			}
+			err = Setup(Options{Layout: layout, ClaudePrimarySessionSetup: test.setup})
+			if err == nil || !strings.Contains(err.Error(), "field "+test.wantField) {
+				t.Fatalf("Setup error = %v, want field %s", err, test.wantField)
+			}
+			assertFileBytes(t, path, original)
+		})
+	}
+}
+
 func TestProjectConfigTextEditsRejectInvalidRanges(t *testing.T) {
 	tests := []struct {
 		name  string

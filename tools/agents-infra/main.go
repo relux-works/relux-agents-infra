@@ -64,6 +64,7 @@ func runSetup(args []string) error {
 	projectDir := fs.String("project-dir", "", "project directory for local setup")
 	codexConfigMode := fs.String("codex-config", string(infra.CodexConfigModePreserve), "Codex config handling for local setup: preserve, global, or local")
 	var primarySessionSetup infra.CodexPrimarySessionSetup
+	var claudePrimarySessionSetup infra.ClaudePrimarySessionSetup
 	fs.Func("codex-primary-model", "primary Codex model for this project", func(value string) error {
 		primarySessionSetup.Model = &value
 		return nil
@@ -86,6 +87,11 @@ func runSetup(args []string) error {
 		return nil
 	})
 	clearPrimarySession := fs.Bool("clear-codex-primary-session", false, "remove this project's primary Codex session table")
+	fs.Func("claude-primary-model", "primary Claude model for this project", func(value string) error {
+		claudePrimarySessionSetup.Model = &value
+		return nil
+	})
+	clearClaudePrimarySession := fs.Bool("clear-claude-primary-session", false, "remove this project's primary Claude session table")
 
 	parseArgs := args[1:]
 	var leadingProjectDir string
@@ -107,17 +113,19 @@ func runSetup(args []string) error {
 		return fmt.Errorf("setup local accepts one project directory, got %q", positionals)
 	}
 	primarySessionSetup.Clear = *clearPrimarySession
+	claudePrimarySessionSetup.Clear = *clearClaudePrimarySession
 
 	layout, err := resolveLayout(mode, *sourceDir, *homeDir, *projectDir, positionals)
 	if err != nil {
 		return err
 	}
 	return infra.Setup(infra.Options{
-		Layout:              layout,
-		NoSync:              *noSync,
-		CodexConfigMode:     infra.CodexConfigMode(*codexConfigMode),
-		PrimarySessionSetup: primarySessionSetup,
-		Stdout:              os.Stdout,
+		Layout:                    layout,
+		NoSync:                    *noSync,
+		CodexConfigMode:           infra.CodexConfigMode(*codexConfigMode),
+		PrimarySessionSetup:       primarySessionSetup,
+		ClaudePrimarySessionSetup: claudePrimarySessionSetup,
+		Stdout:                    os.Stdout,
 	})
 }
 
@@ -195,6 +203,11 @@ func runDoctor(args []string) error {
 			fmt.Fprintf(os.Stdout, "codex_primary_yolo_mode: %t\n", report.CodexPrimarySession.YoloMode.Value)
 			fmt.Fprintf(os.Stdout, "codex_primary_yolo_mode_source: %s\n", codexPrimaryBoolSource(report.CodexPrimarySession.YoloMode))
 		}
+		fmt.Fprintf(os.Stdout, "claude_primary_config_valid: %t\n", report.ClaudePrimaryConfigValid)
+		if report.ClaudePrimaryConfigValid {
+			fmt.Fprintf(os.Stdout, "claude_primary_model: %s\n", report.ClaudePrimarySession.Model.Value)
+			fmt.Fprintf(os.Stdout, "claude_primary_model_source: %s\n", claudePrimaryStringSource(report.ClaudePrimarySession.Model))
+		}
 		if report.CodexConfigShadowsGlobal {
 			if report.CodexConfigGenerated {
 				fmt.Fprintf(os.Stdout, "codex_config_action: generated project-local .codex/config.toml is active because local MCP opt-in is configured\n")
@@ -222,6 +235,13 @@ func codexPrimaryBoolSource(value infra.CodexPrimarySessionBoolValue) string {
 		return value.Source
 	}
 	return "default"
+}
+
+func claudePrimaryStringSource(value infra.ClaudePrimarySessionStringValue) string {
+	if value.Present {
+		return value.Source
+	}
+	return "native"
 }
 
 func runCodex(args []string) error {
@@ -317,7 +337,7 @@ func usageText() string {
 	return `Usage:
   agents-infra version
   agents-infra setup global [--source-dir DIR] [--home-dir DIR] [--no-sync]
-  agents-infra setup local [PROJECT_DIR] [--source-dir DIR] [--project-dir DIR] [--no-sync] [--codex-config preserve|global|local] [--codex-primary-model MODEL] [--codex-primary-reasoning-effort EFFORT] [--codex-yolo-mode=true|false] [--clear-codex-primary-session]
+  agents-infra setup local [PROJECT_DIR] [--source-dir DIR] [--project-dir DIR] [--no-sync] [--codex-config preserve|global|local] [--codex-primary-model MODEL] [--codex-primary-reasoning-effort EFFORT] [--codex-yolo-mode=true|false] [--clear-codex-primary-session] [--claude-primary-model MODEL] [--clear-claude-primary-session]
   agents-infra refresh-links --agents-dir DIR --claude-dir DIR --codex-dir DIR --bin-dir DIR [--mode global|local] [--codex-config preserve|global|local]
   agents-infra doctor global [--home-dir DIR]
   agents-infra doctor local [PROJECT_DIR] [--project-dir DIR]

@@ -19,6 +19,7 @@ func TestRunSetupLocalAcceptsPrimaryFlagsAfterProjectDirectory(t *testing.T) {
 			"--codex-primary-model", "gpt-5.6-terra",
 			"--codex-primary-reasoning-effort", "xhigh",
 			"--codex-yolo-mode=false",
+			"--claude-primary-model", "claude-opus-4-6",
 		}); err != nil {
 			t.Fatalf("runSetup: %v", err)
 		}
@@ -34,6 +35,8 @@ func TestRunSetupLocalAcceptsPrimaryFlagsAfterProjectDirectory(t *testing.T) {
 		"model = 'gpt-5.6-terra'",
 		"reasoning_effort = 'xhigh'",
 		"yolo_mode = false",
+		"[agents.claude.primary_session]",
+		"model = 'claude-opus-4-6'",
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("project config missing %q:\n%s", want, data)
@@ -50,6 +53,53 @@ func TestRunSetupRejectsNonBooleanCodexYoloMode(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "expected true or false") {
 		t.Fatalf("runSetup error = %v, want strict boolean validation", err)
+	}
+}
+
+func TestRunSetupLocalClearsOnlyClaudePrimarySession(t *testing.T) {
+	source := sourceRepoRoot(t)
+	project := t.TempDir()
+	path := filepath.Join(project, ".agents", ".configs", "project-config.toml")
+	mustMkdir(t, filepath.Dir(path))
+	original := `[mcp]
+enabled_servers = ["figma"]
+
+[agents.codex.primary_session]
+model = "gpt-5.6-terra"
+reasoning_effort = "xhigh"
+yolo_mode = true
+
+[agents.claude.primary_session]
+model = "claude-opus-4-6"
+`
+	mustWrite(t, path, original)
+
+	captureStdout(t, func() {
+		if err := runSetup([]string{
+			"local",
+			project,
+			"--source-dir", source,
+			"--clear-claude-primary-session",
+		}); err != nil {
+			t.Fatalf("runSetup: %v", err)
+		}
+	})
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	updated := string(data)
+	for _, want := range []string{
+		"[mcp]\nenabled_servers = [\"figma\"]",
+		"[agents.codex.primary_session]\nmodel = \"gpt-5.6-terra\"\nreasoning_effort = \"xhigh\"\nyolo_mode = true",
+	} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("Claude clear did not preserve %q:\n%s", want, updated)
+		}
+	}
+	if strings.Contains(updated, "[agents.claude.primary_session]") || strings.Contains(updated, "claude-opus-4-6") {
+		t.Fatalf("Claude clear did not remove Claude policy:\n%s", updated)
 	}
 }
 

@@ -42,6 +42,7 @@ type Options struct {
 	NoSync                    bool
 	CodexConfigMode           CodexConfigMode
 	PrimarySessionSetup       CodexPrimarySessionSetup
+	ClaudePrimarySessionSetup ClaudePrimarySessionSetup
 	Stdout                    io.Writer
 	projectConfigAtomicWriter projectConfigAtomicWriter
 }
@@ -61,6 +62,8 @@ type Report struct {
 	CodexMCPEnabled          []string
 	CodexPrimaryConfigValid  bool
 	CodexPrimarySession      CodexPrimarySessionPolicy
+	ClaudePrimaryConfigValid bool
+	ClaudePrimarySession     ClaudePrimarySessionPolicy
 	HelpersLinked            bool
 	InfraSkillLink           bool
 }
@@ -112,9 +115,10 @@ func Setup(opts Options) error {
 	if _, err := normalizeCodexConfigMode(opts.CodexConfigMode); err != nil {
 		return err
 	}
-	preparedProjectConfig, err := prepareCodexPrimarySessionSetup(
+	preparedProjectConfig, err := preparePrimarySessionSetup(
 		opts.Layout,
 		opts.PrimarySessionSetup,
+		opts.ClaudePrimarySessionSetup,
 		opts.projectConfigAtomicWriter,
 	)
 	if err != nil {
@@ -165,8 +169,9 @@ func RefreshLinks(opts Options) error {
 
 func Doctor(layout Layout) (Report, error) {
 	report := Report{
-		Layout:                  layout,
-		CodexPrimaryConfigValid: true,
+		Layout:                   layout,
+		CodexPrimaryConfigValid:  true,
+		ClaudePrimaryConfigValid: true,
 	}
 	if _, err := os.Stat(filepath.Join(layout.AgentsDir, ".git")); err == nil {
 		report.AgentsGitFree = false
@@ -193,11 +198,13 @@ func Doctor(layout Layout) (Report, error) {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			report.CodexPrimaryConfigValid = false
+			report.ClaudePrimaryConfigValid = false
 			return report, fmt.Errorf("resolve home dir for project config discovery: %w", err)
 		}
 		homeDir, err = filepath.Abs(homeDir)
 		if err != nil {
 			report.CodexPrimaryConfigValid = false
+			report.ClaudePrimaryConfigValid = false
 			return report, fmt.Errorf("resolve home dir for project config discovery: %w", err)
 		}
 		composite, err := loadCompositeProjectConfig(
@@ -206,10 +213,12 @@ func Doctor(layout Layout) (Report, error) {
 		)
 		if err != nil {
 			report.CodexPrimaryConfigValid = false
+			report.ClaudePrimaryConfigValid = false
 			return report, err
 		}
 		report.CodexMCPEnabled = composite.EnabledOrder
 		report.CodexPrimarySession = composite.PrimarySession
+		report.ClaudePrimarySession = composite.ClaudePrimarySession
 	}
 	return report, nil
 }

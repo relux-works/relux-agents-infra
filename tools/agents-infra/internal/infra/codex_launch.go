@@ -142,7 +142,13 @@ func BuildCodexLaunchPlan(startDir, homeDir string, args []string) (CodexLaunchP
 	if err != nil {
 		return CodexLaunchPlan{}, err
 	}
-	plan.ProjectConfigs = projectConfig.Sources
+	for _, source := range projectConfig.Sources {
+		plan.ProjectConfigs = append(plan.ProjectConfigs, CodexProjectConfigSource{
+			Path:           source.Path,
+			EnabledServers: append([]string(nil), source.EnabledServers...),
+			PrimarySession: cloneCodexPrimarySessionSource(source.CodexPrimarySession),
+		})
+	}
 	plan.PrimarySession = projectConfig.PrimarySession
 
 	definitions, registrySources, err := loadCompositeMCPRegistry(homeDir, ancestors)
@@ -694,17 +700,6 @@ func ancestorDirsRootFirst(startDir string) []string {
 		rootFirst = append(rootFirst, cwdFirst[i])
 	}
 	return rootFirst
-}
-
-func loadCompositeMCPEnablement(ancestors []string, globalProjectConfigPath, section string) ([]string, map[string][]string, []CodexProjectConfigSource, error) {
-	if section != "mcp" {
-		return nil, nil, nil, fmt.Errorf("unsupported project config MCP section %q", section)
-	}
-	composite, err := loadCompositeProjectConfig(ancestors, globalProjectConfigPath)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return composite.EnabledOrder, composite.EnabledBy, composite.Sources, nil
 }
 
 func loadCompositeMCPRegistry(homeDir string, ancestors []string) (map[string]codexMCPDefinition, []CodexMCPRegistrySource, error) {
