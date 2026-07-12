@@ -63,19 +63,61 @@ func runSetup(args []string) error {
 	homeDir := fs.String("home-dir", "", "home directory for global setup")
 	projectDir := fs.String("project-dir", "", "project directory for local setup")
 	codexConfigMode := fs.String("codex-config", string(infra.CodexConfigModePreserve), "Codex config handling for local setup: preserve, global, or local")
-	if err := fs.Parse(args[1:]); err != nil {
+	var primarySessionSetup infra.CodexPrimarySessionSetup
+	fs.Func("codex-primary-model", "primary Codex model for this project", func(value string) error {
+		primarySessionSetup.Model = &value
+		return nil
+	})
+	fs.Func("codex-primary-reasoning-effort", "primary Codex reasoning effort for this project", func(value string) error {
+		primarySessionSetup.ReasoningEffort = &value
+		return nil
+	})
+	fs.Func("codex-yolo-mode", "persistent Codex yolo mode for this project: true or false", func(value string) error {
+		var parsed bool
+		switch value {
+		case "true":
+			parsed = true
+		case "false":
+			parsed = false
+		default:
+			return fmt.Errorf("expected true or false")
+		}
+		primarySessionSetup.YoloMode = &parsed
+		return nil
+	})
+	clearPrimarySession := fs.Bool("clear-codex-primary-session", false, "remove this project's primary Codex session table")
+
+	parseArgs := args[1:]
+	var leadingProjectDir string
+	if mode == string(infra.ModeLocal) && len(parseArgs) > 0 && !strings.HasPrefix(parseArgs[0], "-") {
+		leadingProjectDir = parseArgs[0]
+		parseArgs = parseArgs[1:]
+	}
+	if err := fs.Parse(parseArgs); err != nil {
 		return err
 	}
+	positionals := fs.Args()
+	if leadingProjectDir != "" {
+		positionals = append([]string{leadingProjectDir}, positionals...)
+	}
+	if mode == string(infra.ModeGlobal) && len(positionals) > 0 {
+		return fmt.Errorf("setup global does not accept positional project directories: %q", positionals[0])
+	}
+	if mode == string(infra.ModeLocal) && len(positionals) > 1 {
+		return fmt.Errorf("setup local accepts one project directory, got %q", positionals)
+	}
+	primarySessionSetup.Clear = *clearPrimarySession
 
-	layout, err := resolveLayout(mode, *sourceDir, *homeDir, *projectDir, fs.Args())
+	layout, err := resolveLayout(mode, *sourceDir, *homeDir, *projectDir, positionals)
 	if err != nil {
 		return err
 	}
 	return infra.Setup(infra.Options{
-		Layout:          layout,
-		NoSync:          *noSync,
-		CodexConfigMode: infra.CodexConfigMode(*codexConfigMode),
-		Stdout:          os.Stdout,
+		Layout:              layout,
+		NoSync:              *noSync,
+		CodexConfigMode:     infra.CodexConfigMode(*codexConfigMode),
+		PrimarySessionSetup: primarySessionSetup,
+		Stdout:              os.Stdout,
 	})
 }
 
@@ -124,7 +166,7 @@ func runDoctor(args []string) error {
 	if err != nil {
 		return err
 	}
-	report := infra.Doctor(layout)
+	report, doctorErr := infra.Doctor(layout)
 	fmt.Fprintf(os.Stdout, "mode: %s\n", report.Layout.Mode)
 	fmt.Fprintf(os.Stdout, "agents_dir: %s\n", report.Layout.AgentsDir)
 	fmt.Fprintf(os.Stdout, "claude_dir: %s\n", report.Layout.ClaudeDir)
@@ -144,6 +186,15 @@ func runDoctor(args []string) error {
 	if report.Layout.Mode == infra.ModeLocal {
 		fmt.Fprintf(os.Stdout, "codex_mcp_enabled: %s\n", strings.Join(report.CodexMCPEnabled, ","))
 		fmt.Fprintf(os.Stdout, "codex_config_shadowing_global: %t\n", report.CodexConfigShadowsGlobal)
+		fmt.Fprintf(os.Stdout, "codex_primary_config_valid: %t\n", report.CodexPrimaryConfigValid)
+		if report.CodexPrimaryConfigValid {
+			fmt.Fprintf(os.Stdout, "codex_primary_model: %s\n", report.CodexPrimarySession.Model.Value)
+			fmt.Fprintf(os.Stdout, "codex_primary_model_source: %s\n", codexPrimaryStringSource(report.CodexPrimarySession.Model))
+			fmt.Fprintf(os.Stdout, "codex_primary_reasoning_effort: %s\n", report.CodexPrimarySession.ReasoningEffort.Value)
+			fmt.Fprintf(os.Stdout, "codex_primary_reasoning_effort_source: %s\n", codexPrimaryStringSource(report.CodexPrimarySession.ReasoningEffort))
+			fmt.Fprintf(os.Stdout, "codex_primary_yolo_mode: %t\n", report.CodexPrimarySession.YoloMode.Value)
+			fmt.Fprintf(os.Stdout, "codex_primary_yolo_mode_source: %s\n", codexPrimaryBoolSource(report.CodexPrimarySession.YoloMode))
+		}
 		if report.CodexConfigShadowsGlobal {
 			if report.CodexConfigGenerated {
 				fmt.Fprintf(os.Stdout, "codex_config_action: generated project-local .codex/config.toml is active because local MCP opt-in is configured\n")
@@ -156,7 +207,21 @@ func runDoctor(args []string) error {
 	}
 	fmt.Fprintf(os.Stdout, "helpers_linked: %t\n", report.HelpersLinked)
 	fmt.Fprintf(os.Stdout, "infra_skill_link: %t\n", report.InfraSkillLink)
-	return nil
+	return doctorErr
+}
+
+func codexPrimaryStringSource(value infra.CodexPrimarySessionStringValue) string {
+	if value.Present {
+		return value.Source
+	}
+	return "native"
+}
+
+func codexPrimaryBoolSource(value infra.CodexPrimarySessionBoolValue) string {
+	if value.Present {
+		return value.Source
+	}
+	return "default"
 }
 
 func runCodex(args []string) error {
@@ -252,7 +317,7 @@ func usageText() string {
 	return `Usage:
   agents-infra version
   agents-infra setup global [--source-dir DIR] [--home-dir DIR] [--no-sync]
-  agents-infra setup local [PROJECT_DIR] [--source-dir DIR] [--project-dir DIR] [--no-sync] [--codex-config preserve|global|local]
+  agents-infra setup local [PROJECT_DIR] [--source-dir DIR] [--project-dir DIR] [--no-sync] [--codex-config preserve|global|local] [--codex-primary-model MODEL] [--codex-primary-reasoning-effort EFFORT] [--codex-yolo-mode=true|false] [--clear-codex-primary-session]
   agents-infra refresh-links --agents-dir DIR --claude-dir DIR --codex-dir DIR --bin-dir DIR [--mode global|local] [--codex-config preserve|global|local]
   agents-infra doctor global [--home-dir DIR]
   agents-infra doctor local [PROJECT_DIR] [--project-dir DIR]

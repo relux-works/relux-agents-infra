@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -201,9 +202,118 @@ func TestDoctor(t *testing.T) {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	report := Doctor(layout)
-	if !report.AgentsGitFree || !report.ClaudeLinked || report.CodexLinked || !report.CodexRendered || !report.CodexProjectRendered || report.CodexConfigPresent || report.CodexConfigLinked || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" || len(report.CodexMCPEnabled) != 0 || !report.HelpersLinked || !report.InfraSkillLink {
+	report := mustDoctor(t, layout)
+	if !report.AgentsGitFree || !report.ClaudeLinked || report.CodexLinked || !report.CodexRendered || !report.CodexProjectRendered || report.CodexConfigPresent || report.CodexConfigLinked || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" || len(report.CodexMCPEnabled) != 0 || !report.CodexPrimaryConfigValid || report.CodexPrimarySession.Model.Present || report.CodexPrimarySession.ReasoningEffort.Present || report.CodexPrimarySession.YoloMode.Present || !report.HelpersLinked || !report.InfraSkillLink {
 		t.Fatalf("unexpected doctor report: %+v", report)
+	}
+}
+
+func TestDoctorReportsComposedPrimarySessionAndMCPPolicy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	child := filepath.Join(parent, "child")
+	mustMkdir(t, filepath.Join(parent, ".agents", ".configs"))
+	parentConfig := filepath.Join(parent, ".agents", ".configs", projectConfigFileName)
+	mustWrite(t, parentConfig, `
+[mcp]
+enabled_servers = ["figma"]
+
+[agents.codex.primary_session]
+model = "parent-model"
+yolo_mode = true
+`)
+	mustMkdir(t, filepath.Join(child, ".agents", ".configs"))
+	childConfig := filepath.Join(child, ".agents", ".configs", projectConfigFileName)
+	mustWrite(t, childConfig, `
+[mcp]
+enabled_servers = ["lldb", "figma"]
+
+[agents.codex.primary_session]
+reasoning_effort = "xhigh"
+yolo_mode = false
+`)
+
+	layout, err := LocalLayout("", child)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	report, err := Doctor(layout)
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if !report.CodexPrimaryConfigValid {
+		t.Fatalf("CodexPrimaryConfigValid = false: %+v", report)
+	}
+	if !reflect.DeepEqual(report.CodexMCPEnabled, []string{"figma", "lldb"}) {
+		t.Fatalf("CodexMCPEnabled = %#v, want composed order", report.CodexMCPEnabled)
+	}
+	if got := report.CodexPrimarySession.Model; !got.Present || got.Value != "parent-model" || got.Source != parentConfig {
+		t.Fatalf("primary model = %#v, want inherited parent value", got)
+	}
+	if got := report.CodexPrimarySession.ReasoningEffort; !got.Present || got.Value != "xhigh" || got.Source != childConfig {
+		t.Fatalf("primary reasoning effort = %#v, want child value", got)
+	}
+	if got := report.CodexPrimarySession.YoloMode; !got.Present || got.Value || got.Source != childConfig {
+		t.Fatalf("primary yolo mode = %#v, want explicit child false", got)
+	}
+}
+
+func TestDoctorIgnoresHomeProjectConfigWithoutProjectOptIn(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(home, "work", "project")
+	mustMkdir(t, project)
+	mustMkdir(t, filepath.Join(home, ".agents", ".configs"))
+	mustWrite(t, filepath.Join(home, ".agents", ".configs", projectConfigFileName), `
+[agents.codex.primary_session]
+model = "must-not-apply"
+yolo_mode = true
+`)
+	t.Setenv("HOME", home)
+
+	layout, err := LocalLayout("", project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	report, err := Doctor(layout)
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if report.CodexPrimarySession.Model.Present || report.CodexPrimarySession.YoloMode.Present {
+		t.Fatalf("home project config was treated as project opt-in: %+v", report.CodexPrimarySession)
+	}
+}
+
+func TestDoctorFailsClosedOnInvalidComposedProjectConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	parent := filepath.Join(root, "parent")
+	child := filepath.Join(parent, "child")
+	mustMkdir(t, filepath.Join(parent, ".agents", ".configs"))
+	mustWrite(t, filepath.Join(parent, ".agents", ".configs", projectConfigFileName), `
+[agents.codex.primary_session]
+model = "parent-model"
+`)
+	mustMkdir(t, filepath.Join(child, ".agents", ".configs"))
+	invalidConfig := filepath.Join(child, ".agents", ".configs", projectConfigFileName)
+	mustWrite(t, invalidConfig, `
+[agents.codex.primary_session]
+yolo_mode = "false"
+`)
+
+	layout, err := LocalLayout("", child)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	report, err := Doctor(layout)
+	if err == nil {
+		t.Fatal("Doctor succeeded with invalid child project config")
+	}
+	if report.CodexPrimaryConfigValid {
+		t.Fatalf("CodexPrimaryConfigValid = true after error: %+v", report)
+	}
+	if !strings.Contains(err.Error(), invalidConfig) || !strings.Contains(err.Error(), codexPrimaryYoloModeField) {
+		t.Fatalf("Doctor error = %q, want source path and field", err)
 	}
 }
 
@@ -217,7 +327,7 @@ func TestDoctorDetectsProjectLocalCodexConfigShadowing(t *testing.T) {
 	mustMkdir(t, filepath.Join(project, ".codex"))
 	mustWrite(t, filepath.Join(project, ".codex", "config.toml"), "model = \"gpt-5.4\"\n")
 
-	report := Doctor(layout)
+	report := mustDoctor(t, layout)
 	if !report.CodexConfigPresent {
 		t.Fatalf("expected local Codex config to be present: %+v", report)
 	}
@@ -340,7 +450,7 @@ func TestSetupLocalPreservesCustomProjectCodexConfig(t *testing.T) {
 	}
 
 	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "gpt-5.4")
-	report := Doctor(layout)
+	report := mustDoctor(t, layout)
 	if !report.CodexConfigPresent || !report.CodexConfigShadowsGlobal {
 		t.Fatalf("custom project Codex config should be preserved and reported as shadowing: %+v", report)
 	}
@@ -366,7 +476,7 @@ func TestSetupLocalProjectMCPOptInInstallsCodexLocalLauncher(t *testing.T) {
 	assertFileContains(t, launcherPath, "exec \"$DIR/agents-infra\" codex \"$@\"")
 	assertFileNotContains(t, launcherPath, "mcp_servers.figma.url")
 
-	report := Doctor(layout)
+	report := mustDoctor(t, layout)
 	if report.CodexConfigPresent || report.CodexConfigLinked || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
 		t.Fatalf("project MCP opt-in should not create project-local Codex config: %+v", report)
 	}
@@ -411,7 +521,7 @@ func TestSetupLocalRemovesGeneratedCodexConfigAndLauncherWhenMCPOptInRemoved(t *
 
 	assertNoPath(t, filepath.Join(project, ".codex", "config.toml"))
 	assertNoPath(t, filepath.Join(project, ".local", "bin", "codex-local"))
-	report := Doctor(layout)
+	report := mustDoctor(t, layout)
 	if report.CodexConfigPresent || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal {
 		t.Fatalf("generated Codex config should be removed without MCP opt-in: %+v", report)
 	}
@@ -458,7 +568,7 @@ func TestSetupLocalUnknownMCPOptInDefersValidationToLaunchTime(t *testing.T) {
 	if err := Setup(Options{Layout: layout}); err != nil {
 		t.Fatalf("Setup should defer unknown MCP validation to launch time: %v", err)
 	}
-	report := Doctor(layout)
+	report := mustDoctor(t, layout)
 	if len(report.CodexMCPEnabled) != 1 || report.CodexMCPEnabled[0] != "missing" {
 		t.Fatalf("CodexMCPEnabled = %#v, want [missing]", report.CodexMCPEnabled)
 	}
@@ -479,7 +589,7 @@ func TestSetupLocalGlobalCodexConfigModeRemovesCustomProjectCodexConfig(t *testi
 	}
 
 	assertNoPath(t, filepath.Join(project, ".codex", "config.toml"))
-	report := Doctor(layout)
+	report := mustDoctor(t, layout)
 	if report.CodexConfigPresent || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
 		t.Fatalf("global Codex config mode should leave global config authoritative: %+v", report)
 	}
@@ -498,7 +608,7 @@ func TestSetupLocalLocalCodexConfigModeLinksProjectCodexConfig(t *testing.T) {
 	}
 
 	assertSymlink(t, filepath.Join(project, ".codex", "config.toml"), filepath.Join(project, ".agents", ".configs", "codex-config.toml"))
-	report := Doctor(layout)
+	report := mustDoctor(t, layout)
 	if !report.CodexConfigPresent || !report.CodexConfigLinked || !report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "project-local" {
 		t.Fatalf("local Codex config mode should install project-local config: %+v", report)
 	}
@@ -535,7 +645,7 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
 
 	assertSymlink(t, filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".agents", ".configs", "codex-config.toml"))
 	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "hide_rate_limit_model_nudge = true")
-	report := Doctor(layout)
+	report := mustDoctor(t, layout)
 	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
 		t.Fatalf("unexpected global Codex config doctor report: %+v", report)
 	}
@@ -646,6 +756,15 @@ args = ["--mcp"]
 	mustWrite(t, filepath.Join(root, "task-board.config.json"), "{}")
 	mustWrite(t, filepath.Join(root, "tools", "agents-infra", "go.mod"), "module example\n")
 	return root
+}
+
+func mustDoctor(t *testing.T, layout Layout) Report {
+	t.Helper()
+	report, err := Doctor(layout)
+	if err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	return report
 }
 
 func mustMkdir(t *testing.T, path string) {

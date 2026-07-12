@@ -38,10 +38,12 @@ type Layout struct {
 }
 
 type Options struct {
-	Layout          Layout
-	NoSync          bool
-	CodexConfigMode CodexConfigMode
-	Stdout          io.Writer
+	Layout                    Layout
+	NoSync                    bool
+	CodexConfigMode           CodexConfigMode
+	PrimarySessionSetup       CodexPrimarySessionSetup
+	Stdout                    io.Writer
+	projectConfigAtomicWriter projectConfigAtomicWriter
 }
 
 type Report struct {
@@ -57,6 +59,8 @@ type Report struct {
 	CodexConfigShadowsGlobal bool
 	CodexConfigEffective     string
 	CodexMCPEnabled          []string
+	CodexPrimaryConfigValid  bool
+	CodexPrimarySession      CodexPrimarySessionPolicy
 	HelpersLinked            bool
 	InfraSkillLink           bool
 }
@@ -105,11 +109,19 @@ func LocalLayout(sourceDir, projectDir string) (Layout, error) {
 }
 
 func Setup(opts Options) error {
-	if opts.Layout.SourceDir == "" {
-		return fmt.Errorf("source dir is required")
-	}
 	if _, err := normalizeCodexConfigMode(opts.CodexConfigMode); err != nil {
 		return err
+	}
+	preparedProjectConfig, err := prepareCodexPrimarySessionSetup(
+		opts.Layout,
+		opts.PrimarySessionSetup,
+		opts.projectConfigAtomicWriter,
+	)
+	if err != nil {
+		return err
+	}
+	if opts.Layout.SourceDir == "" {
+		return fmt.Errorf("source dir is required")
 	}
 	if !opts.NoSync {
 		if err := syncRepo(opts.Layout.SourceDir, opts.Layout.AgentsDir); err != nil {
@@ -126,7 +138,10 @@ func Setup(opts Options) error {
 	if err := scrubGeneratedArtifacts(opts.Layout, opts.Stdout); err != nil {
 		return err
 	}
-	return RefreshLinks(opts)
+	if err := RefreshLinks(opts); err != nil {
+		return err
+	}
+	return commitPreparedProjectConfig(preparedProjectConfig, opts.Stdout)
 }
 
 func RefreshLinks(opts Options) error {
@@ -148,8 +163,11 @@ func RefreshLinks(opts Options) error {
 	return installCLIWrapper(opts.Layout, opts.Stdout)
 }
 
-func Doctor(layout Layout) Report {
-	report := Report{Layout: layout}
+func Doctor(layout Layout) (Report, error) {
+	report := Report{
+		Layout:                  layout,
+		CodexPrimaryConfigValid: true,
+	}
 	if _, err := os.Stat(filepath.Join(layout.AgentsDir, ".git")); err == nil {
 		report.AgentsGitFree = false
 	} else {
@@ -163,19 +181,37 @@ func Doctor(layout Layout) Report {
 	report.CodexConfigLinked = isLinkTo(codexConfigPath, filepath.Join(layout.AgentsDir, ".configs", "codex-config.toml"))
 	report.CodexConfigGenerated = isGeneratedCodexConfigFile(codexConfigPath)
 	report.CodexConfigEffective = "global"
+	report.HelpersLinked = isLinkTo(filepath.Join(layout.BinDir, "agents-attachments"), filepath.Join(layout.AgentsDir, ".scripts", "agents-attachments"))
+	report.InfraSkillLink = isLinkTo(filepath.Join(layout.AgentsDir, "skills", repoSkillName), layout.AgentsDir)
 	if layout.Mode == ModeLocal {
 		report.CodexProjectRendered = isRenderedInstructionsFile(filepath.Join(layout.RootDir, "AGENTS.md"))
-		if enabled, err := projectEnabledMCPServers(layout); err == nil {
-			report.CodexMCPEnabled = enabled
-		}
 		report.CodexConfigShadowsGlobal = report.CodexConfigPresent
 		if report.CodexConfigPresent {
 			report.CodexConfigEffective = "project-local"
 		}
+
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			report.CodexPrimaryConfigValid = false
+			return report, fmt.Errorf("resolve home dir for project config discovery: %w", err)
+		}
+		homeDir, err = filepath.Abs(homeDir)
+		if err != nil {
+			report.CodexPrimaryConfigValid = false
+			return report, fmt.Errorf("resolve home dir for project config discovery: %w", err)
+		}
+		composite, err := loadCompositeProjectConfig(
+			ancestorDirsRootFirst(layout.RootDir),
+			filepath.Join(homeDir, ".agents", ".configs", projectConfigFileName),
+		)
+		if err != nil {
+			report.CodexPrimaryConfigValid = false
+			return report, err
+		}
+		report.CodexMCPEnabled = composite.EnabledOrder
+		report.CodexPrimarySession = composite.PrimarySession
 	}
-	report.HelpersLinked = isLinkTo(filepath.Join(layout.BinDir, "agents-attachments"), filepath.Join(layout.AgentsDir, ".scripts", "agents-attachments"))
-	report.InfraSkillLink = isLinkTo(filepath.Join(layout.AgentsDir, "skills", repoSkillName), layout.AgentsDir)
-	return report
+	return report, nil
 }
 
 func normalizeCodexConfigMode(mode CodexConfigMode) (CodexConfigMode, error) {
@@ -272,6 +308,8 @@ func shouldSkip(rel string, isDir bool) bool {
 	case rel == "skills" || strings.HasPrefix(rel, "skills/"):
 		return true
 	case rel == ".temp" || strings.HasPrefix(rel, ".temp/"):
+		return true
+	case rel == ".configs/"+projectConfigFileName:
 		return true
 	case base == ".DS_Store", base == ".skill-lock.json", base == ".gitignore", base == ".gitattributes", base == ".gitmodules", base == "task-board.config.json":
 		return true
@@ -631,33 +669,14 @@ func projectEnabledMCPServers(layout Layout) ([]string, error) {
 }
 
 func parseEnabledMCPServers(data []byte, path, wantSection string) ([]string, error) {
-	var section string
-	for lineNo, rawLine := range strings.Split(string(data), "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
-			continue
-		}
-		if section != wantSection {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			return nil, fmt.Errorf("%s:%d: expected key = value", path, lineNo+1)
-		}
-		if strings.TrimSpace(key) != "enabled_servers" {
-			continue
-		}
-		servers, err := parseTOMLStringArray(strings.TrimSpace(value))
-		if err != nil {
-			return nil, fmt.Errorf("%s:%d: parse enabled_servers: %w", path, lineNo+1, err)
-		}
-		return servers, nil
+	if wantSection != "mcp" {
+		return nil, fmt.Errorf("unsupported project config MCP section %q", wantSection)
 	}
-	return nil, nil
+	config, err := parseProjectConfig(data, path)
+	if err != nil {
+		return nil, err
+	}
+	return config.EnabledMCPServers, nil
 }
 
 func removeGeneratedProjectCodexConfig(path string, out io.Writer) error {
@@ -1182,9 +1201,55 @@ func samePath(a, b string) bool {
 	aa, errA := filepath.Abs(a)
 	bb, errB := filepath.Abs(b)
 	if errA != nil || errB != nil {
-		return a == b
+		return samePathName(a, b)
 	}
-	return aa == bb
+	aa = filepath.Clean(aa)
+	bb = filepath.Clean(bb)
+	if samePathName(aa, bb) {
+		return true
+	}
+
+	anchorA, suffixA, okA := existingPathIdentity(aa)
+	anchorB, suffixB, okB := existingPathIdentity(bb)
+	if !okA || !okB || len(suffixA) != len(suffixB) || !os.SameFile(anchorA, anchorB) {
+		return false
+	}
+	for index := range suffixA {
+		if !samePathName(suffixA[index], suffixB[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func samePathName(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// existingPathIdentity returns the nearest existing ancestor and the missing
+// path components below it. Comparing both pieces recognizes symlink and other
+// filesystem aliases even when the final project-config file does not exist.
+func existingPathIdentity(path string) (fs.FileInfo, []string, bool) {
+	current := path
+	var suffix []string
+	for {
+		info, err := os.Stat(current)
+		if err == nil {
+			return info, suffix, true
+		}
+		if !os.IsNotExist(err) {
+			return nil, nil, false
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil, nil, false
+		}
+		suffix = append([]string{filepath.Base(current)}, suffix...)
+		current = parent
+	}
 }
 
 func isLinkTo(path, target string) bool {
