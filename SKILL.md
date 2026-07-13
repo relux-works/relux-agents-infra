@@ -105,11 +105,12 @@ Key fields:
 - `codex_config_shadowing_global: true` means project-local config overrides the global config; remove it with `--codex-config=global` if unintended.
 - `codex_config_linked: true` means the project-local config is the managed agents-infra symlink, not a custom file.
 
-## Codex primary-session policy
+## Provider-specific primary-session policy
 
-Project policy for the primary `agents-infra codex` session is optional and
-belongs only in `.agents/.configs/project-config.toml`. It is separate from
-`.codex/config.toml` and does not choose task-board child-spawn models.
+Project policy for primary `agents-infra codex` and `agents-infra claude`
+sessions is optional and belongs only in `.agents/.configs/project-config.toml`.
+It is separate from provider-native config and does not choose task-board
+child-spawn models.
 
 ```toml
 [mcp]
@@ -119,17 +120,22 @@ enabled_servers = ["figma"]
 model = "gpt-5.6-terra"
 reasoning_effort = "xhigh"
 yolo_mode = false
+
+[agents.claude.primary_session]
+model = "claude-opus-4-6"
+yolo_mode = false
 ```
 
-The table needs at least one supported field. `model` and `reasoning_effort`
-are non-empty strings; `yolo_mode` must be an unquoted TOML boolean. Codex is
-the authority for model availability and model/effort compatibility.
+Each table needs at least one supported field. Model and Codex
+`reasoning_effort` values are non-empty strings; both providers accept
+`yolo_mode` as an unquoted TOML boolean. Providers remain the authority for
+model availability and Codex model/effort compatibility.
 
-`agents-infra codex` walks from filesystem root to its current directory,
-combining every project config it finds except
-`~/.agents/.configs/project-config.toml`. The nearest explicit field wins;
-omitted fields inherit, and `yolo_mode = false` explicitly masks an inherited
-`true`. A malformed or invalid discovered config fails before launch.
+Both launchers walk from filesystem root to their current directory, combining
+every project config they find except `~/.agents/.configs/project-config.toml`.
+The nearest explicit field wins; omitted fields inherit, and `yolo_mode = false`
+explicitly masks an inherited `true`. A malformed or invalid discovered config
+fails before launch.
 
 For model and reasoning, precedence is explicit wrapper CLI selection
 (`--model`/`-m`, top-level `-c model=...`, or top-level
@@ -139,12 +145,13 @@ explicit values supplied with it; it does not suppress yolo. Equal explicit
 duplicates collapse, conflicting values fail, and only arguments before `--`
 take part in model/reasoning/profile wrapper resolution.
 
-Yolo defaults to safe. `-d`, `--danger`, `--yolo`, or the native dangerous flag
-opt an invocation in; otherwise only effective `yolo_mode = true` does. The
-result contains exactly one `--dangerously-bypass-approvals-and-sandbox` when
-enabled. This persistent setting is limited to `agents-infra codex` primary
-launches and never propagates to Claude, `task-board spawn`, run manifests, or
-spawn-ceiling policy.
+Yolo defaults to safe for both providers. `-d`, `--danger`, `--yolo`, or the
+matching native dangerous flag opt an invocation in; otherwise only effective
+`yolo_mode = true` does. The result contains exactly one
+`--dangerously-bypass-approvals-and-sandbox` for Codex or
+`--dangerously-skip-permissions` for Claude when enabled. Each persistent
+setting is limited to its matching primary launch and never propagates to
+`task-board spawn`, run manifests, or spawn-ceiling policy.
 
 Use supported setup flags for precise local mutation:
 
@@ -152,9 +159,12 @@ Use supported setup flags for precise local mutation:
 agents-infra setup local /path/to/project \
   --codex-primary-model gpt-5.6-terra \
   --codex-primary-reasoning-effort xhigh \
-  --codex-yolo-mode=false
+  --codex-yolo-mode=false \
+  --claude-primary-model claude-opus-4-6 \
+  --claude-yolo-mode=false
 
 agents-infra setup local /path/to/project --clear-codex-primary-session
+agents-infra setup local /path/to/project --clear-claude-primary-session
 ```
 
 No primary-session flag preserves project-config bytes. Set flags update only
@@ -173,11 +183,12 @@ agents-infra codex
 ```
 
 `--print-config` is non-launching: it shows discovered paths, field provenance,
-profile/CLI suppression, yolo expansion, and final argv. Doctor reports
-`codex_primary_config_valid` plus model, reasoning, and yolo values and their
-sources; absent strings use source `native`, and absent yolo is `false` from
-`default`. For complete troubleshooting and `.codex/config.toml` coexistence,
-see [README.md](README.md#project-primary-codex-session-policy).
+CLI/profile suppression where applicable, yolo expansion, and final argv.
+Doctor reports each provider's primary-session model and yolo values with their
+sources (and Codex reasoning); absent strings use source `native`, and absent
+yolo is `false` from `default`. For complete troubleshooting and
+`.codex/config.toml` coexistence, see
+[README.md](README.md#project-primary-codex-session-policy).
 
 Task-board spawn ceilings are documented by the separate
 [task-board spawn-ceiling contract](https://github.com/relux-works/skill-project-management/blob/main/.specs/project-agent-selection-policy.md#task-board-spawn-ceiling-contract).

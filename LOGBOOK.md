@@ -5,6 +5,21 @@
 
 ## 2026-07-13
 
+### 1804 — Claude Separator Review Correction
+- FINDING: The prior separator concern is not a task regression: the detailed contract requires literal native danger input to be consumed while mirroring Codex, and `codex_launch.go:379` uses the same ordering.
+- DECISION: Treat `--` as stopping wrapper-shortcut/selection parsing; retain native dangerous-flag de-duplication and provenance parity with Codex.
+- STATUS: `TASK-260713-1soh7i` accepted after full Go validation and documentation audit.
+
+### 1803 — Claude Yolo Separator Regression
+- REGRESSION: `claude_launch.go:342` recognizes `--dangerously-skip-permissions` before checking `--`; a native argument after the separator suppresses `yolo_mode=false` as explicit CLI input.
+- FINDING: `go run . claude --print-config -- --dangerously-skip-permissions` reports `effective_value: true` and `suppressed_by_explicit_cli`; the task requires only pre-separator arguments to participate.
+- STATUS: `TASK-260713-1soh7i` routed to rework; add focused coverage for the native flag after `--`.
+
+### 1757 — Claude Persistent Yolo Policy
+- DECISION: `[agents.claude.primary_session].yolo_mode` has independent nearest-field precedence; explicit false masks inherited true and explicit Claude danger input suppresses project policy.
+- FIX: Claude parse, launch resolution, print-config, setup, doctor, docs, and tests now mirror the Codex yolo contract with `--dangerously-skip-permissions` emitted at most once.
+- STATUS: Full Go test, vet, build, 81.0% infra coverage, print-config/doctor smoke, and setup true→false→clear smoke pass.
+
 ### 1718 — Provider Session Policy Review Accepted
 - MILESTONE: `TASK-260713-1bok5k` verified independent Claude provenance and no Codex model/reasoning/yolo leakage in both target repositories.
 - STATUS: Uncached Go tests, vet, build, gofmt, diff-check, print-config, and doctor smokes passed.

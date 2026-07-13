@@ -107,6 +107,7 @@ yolo_mode = false
 
 [agents.claude.primary_session]
 model = "claude-opus-4-6"
+yolo_mode = false
 ```
 
 `[agents.codex.primary_session]` must contain at least one of these optional
@@ -115,10 +116,10 @@ trimming; `yolo_mode` is a real TOML boolean, not a quoted string. Codex—not
 agents-infra—remains responsible for whether a model is available and whether a
 model/effort pair is compatible.
 
-`[agents.claude.primary_session]` accepts only the optional non-empty `model`
-string. Claude reasoning, permission, and yolo controls are intentionally not
-accepted in this table. Codex fields never configure `agents-infra claude`, and
-the Claude model never configures `agents-infra codex`; `[mcp]` remains the one
+`[agents.claude.primary_session]` accepts optional non-empty `model` and
+`yolo_mode` fields. `yolo_mode` is an unquoted TOML boolean. Claude reasoning
+remains provider-native. Codex fields never configure `agents-infra claude`,
+and Claude fields never configure `agents-infra codex`; `[mcp]` remains the one
 intentional provider-shared project section.
 
 When launched from a project directory, `agents-infra codex` walks from the
@@ -131,9 +132,10 @@ independently: the nearest file that explicitly supplies that field wins. In
 particular, a child `yolo_mode = false` masks a parent's `true`; omission means
 inheritance.
 
-Claude model provenance composes independently with the same root-to-leaf rule:
-the nearest `[agents.claude.primary_session]` model wins. It neither inherits
-Codex model/effort/yolo values nor affects Codex resolution.
+Claude model and yolo provenance compose independently with the same
+root-to-leaf rule: the nearest explicitly configured field wins, and
+`yolo_mode = false` masks an inherited `true`. Claude never inherits Codex
+model, effort, or yolo values and does not affect Codex resolution.
 
 For model and reasoning effort, the per-field launch precedence is:
 
@@ -149,20 +151,25 @@ profile still wins for its own field. Equal duplicate explicit values collapse
 to one override; conflicting explicit values fail before Codex is executed.
 Model, reasoning, and profile wrapper arguments participate only before `--`.
 
-Yolo is an independent safety decision. `-d`, `--danger`, `--yolo`, or the
-native `--dangerously-bypass-approvals-and-sandbox` explicitly opt one launch
-in. Otherwise, only an effective project `yolo_mode = true` enables it. A
-project `false` or an absent value emits no dangerous flag; a profile never
-suppresses yolo. When enabled, the launch contains exactly one native dangerous
-flag. Persistent yolo applies only to `agents-infra codex` primary launches—it
-does not affect Claude, `task-board spawn`, task-board manifests, or child-run
-selection.
+Yolo is an independent safety decision per provider. For either launcher,
+explicit `-d`, `--danger`, `--yolo`, or its native dangerous flag wins over
+project policy; otherwise effective project `yolo_mode = true` enables it, and
+an explicit project `false` or an absent value emits no dangerous flag. Codex
+uses `--dangerously-bypass-approvals-and-sandbox`; Claude uses
+`--dangerously-skip-permissions`. Each launch emits that provider's native
+dangerous flag at most once, and `--print-config` records the effective source
+and whether project policy was suppressed by explicit CLI input. Persistent
+yolo applies only to its matching `agents-infra codex` or `agents-infra claude`
+primary launch; it never affects `task-board spawn`, task-board manifests, or
+child-run selection.
 
-For Claude model selection, `agents-infra claude` applies the effective project
-Claude model through native `--model MODEL`. An explicit Claude `--model` or
-`--model=MODEL` before `--` wins and suppresses the project model for that
-launch. The Claude wrapper does not infer a model from Codex flags, profiles,
-or yolo policy.
+For Claude primary-session policy, `agents-infra claude` applies an effective
+project model through native `--model MODEL` and an effective yolo value through
+`--dangerously-skip-permissions`. An explicit Claude `--model` or
+`--model=MODEL` before `--` wins and suppresses only the project model for that
+launch; explicit Claude danger input suppresses only the project yolo policy.
+The Claude wrapper does not infer model or yolo values from Codex policy,
+profiles, or task-board settings.
 
 Use the supported local setup surface to update a project without replacing
 MCP settings, unrelated TOML tables, comments, or unspecified primary fields:
@@ -171,7 +178,9 @@ MCP settings, unrelated TOML tables, comments, or unspecified primary fields:
 agents-infra setup local /abs/path/to/project \
   --codex-primary-model gpt-5.6-terra \
   --codex-primary-reasoning-effort xhigh \
-  --codex-yolo-mode=false
+  --codex-yolo-mode=false \
+  --claude-primary-model claude-opus-4-6 \
+  --claude-yolo-mode=false
 
 agents-infra setup local /abs/path/to/project \
   --clear-codex-primary-session
@@ -212,9 +221,9 @@ agents-infra codex
 ```
 
 `--print-config` prints every discovered project-config path; effective and
-project values with their sources; explicit-CLI/profile suppression state;
-wrapper yolo expansion; and the exact `codex_args` to be executed. It is the
-first diagnostic when a launch does not use the expected values.
+project values with their sources; explicit-CLI/profile suppression state where
+applicable; wrapper yolo expansion; and the exact provider args to be executed.
+It is the first diagnostic when a launch does not use the expected values.
 
 `doctor local` uses the same resolver for persistent configuration evidence:
 
@@ -235,12 +244,15 @@ codex_primary_yolo_mode_source: /abs/path/to/project/.agents/.configs/project-co
 claude_primary_config_valid: true
 claude_primary_model: claude-opus-4-6
 claude_primary_model_source: /abs/path/to/project/.agents/.configs/project-config.toml
+claude_primary_yolo_mode: false
+claude_primary_yolo_mode_source: /abs/path/to/project/.agents/.configs/project-config.toml
 ```
 
-When model or effort is absent, doctor renders an empty value with source
-`native`; absent yolo renders `false` with source `default`. Invalid ancestor
-TOML makes doctor nonzero, reports the exact path and field, and sets both
-provider validation flags false without printing partial provider policy.
+When a provider model or Codex effort is absent, doctor renders an empty value
+with source `native`; absent Codex or Claude yolo renders `false` with source
+`default`. Invalid ancestor TOML makes doctor nonzero, reports the exact path
+and field, and sets both provider validation flags false without printing
+partial provider policy.
 
 Existing `.codex/config.toml` behavior is unchanged: no automatic migration
 or deletion occurs, and local config remains an intentional Codex-native
@@ -255,8 +267,9 @@ Troubleshooting:
 - Unexpected model or effort: run `agents-infra codex --print-config`; check
   `effective_source`, `project_application`, an explicit `-c`/`--model`, and
   profile suppression.
-- Unexpected danger flag: inspect `wrapper_expansions` and `yolo_mode`; set
-  the nearest project field explicitly to `false` to mask an inherited `true`.
+- Unexpected danger flag: inspect that launcher's `wrapper_expansions` and
+  `yolo_mode`; set the nearest provider field explicitly to `false` to mask an
+  inherited `true`.
 - Unexpected Claude model: run `agents-infra claude --print-config`; check its
   `effective_source`, `project_application`, and any explicit `--model`.
 - Invalid configuration: use unquoted strings for model/effort and an unquoted
@@ -516,9 +529,11 @@ agents-infra claude --print-config
 ```
 
 `-d` expands to Codex `--dangerously-bypass-approvals-and-sandbox` or Claude
-Code `--dangerously-skip-permissions` respectively. If no project opt-in is
-found while walking upward, neither launcher mounts anything — no `-c`
-overrides for Codex, no `--mcp-config` flag for Claude Code.
+Code `--dangerously-skip-permissions` respectively. Each launcher can also
+apply its own persistent `[agents.<provider>.primary_session].yolo_mode`
+policy. If no project opt-in is found while walking upward, neither launcher
+mounts anything — no `-c` overrides for Codex, no `--mcp-config` flag for
+Claude Code.
 
 LLDB MCP is available as an opt-in stdio server:
 

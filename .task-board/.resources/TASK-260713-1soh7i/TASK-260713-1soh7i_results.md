@@ -1,0 +1,1 @@
+Claude yolo_mode policy implemented across config composition, launcher resolution, print-config, setup, doctor, tests, and docs. Validation: go test ./..., go vet ./..., go build ./..., 81.0% internal/infra coverage, print-config and doctor smoke, setup true-to-false-to-clear smoke. Logs: .temp/TASK-260713-1soh7i/.
