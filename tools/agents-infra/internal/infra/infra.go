@@ -128,7 +128,7 @@ func Setup(opts Options) error {
 		return fmt.Errorf("source dir is required")
 	}
 	if !opts.NoSync {
-		if err := syncRepo(opts.Layout.SourceDir, opts.Layout.AgentsDir); err != nil {
+		if err := syncRepo(opts.Layout); err != nil {
 			return err
 		}
 		logf(opts.Stdout, "Synced source repo into %s", opts.Layout.AgentsDir)
@@ -242,7 +242,9 @@ func logf(w io.Writer, format string, args ...any) {
 	fmt.Fprintf(w, format+"\n", args...)
 }
 
-func syncRepo(sourceDir, agentsDir string) error {
+func syncRepo(layout Layout) error {
+	sourceDir := layout.SourceDir
+	agentsDir := layout.AgentsDir
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
 		return fmt.Errorf("create agents dir: %w", err)
 	}
@@ -265,6 +267,9 @@ func syncRepo(sourceDir, agentsDir string) error {
 		}
 
 		dst := filepath.Join(agentsDir, rel)
+		if shouldPreserveExistingLocalConfig(layout.Mode, rel, dst) {
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
 			return err
@@ -289,6 +294,18 @@ func syncRepo(sourceDir, agentsDir string) error {
 	})
 }
 
+func shouldPreserveExistingLocalConfig(mode Mode, rel, dst string) bool {
+	if mode != ModeLocal || !pathExists(dst) {
+		return false
+	}
+	switch filepath.ToSlash(rel) {
+	case ".configs/codex-config.toml", ".configs/claude-settings.json":
+		return true
+	default:
+		return false
+	}
+}
+
 func removeGlobalProjectConfig(layout Layout, out io.Writer) error {
 	if layout.Mode != ModeGlobal {
 		return nil
@@ -311,6 +328,18 @@ func shouldSkip(rel string, isDir bool) bool {
 	base := filepath.Base(rel)
 	switch {
 	case hasPathComponent(rel, ".git"):
+		return true
+	case rel == ".agents" || strings.HasPrefix(rel, ".agents/"):
+		return true
+	case rel == ".claude" || strings.HasPrefix(rel, ".claude/"):
+		return true
+	case rel == ".codex" || strings.HasPrefix(rel, ".codex/"):
+		return true
+	case rel == ".local" || strings.HasPrefix(rel, ".local/"):
+		return true
+	case rel == ".planning" || strings.HasPrefix(rel, ".planning/"):
+		return true
+	case rel == ".relux" || strings.HasPrefix(rel, ".relux/"):
 		return true
 	case rel == ".task-board" || strings.HasPrefix(rel, ".task-board/"):
 		return true
@@ -443,10 +472,10 @@ func ensureRepoSkillLinks(layout Layout, out io.Writer) error {
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		return fmt.Errorf("create skills dir: %w", err)
 	}
-	if err := removeStaleRepoSkillLinks(skillsDir, layout.AgentsDir, out); err != nil {
+	if err := createSymlink(layout.AgentsDir, filepath.Join(skillsDir, repoSkillName), out); err != nil {
 		return err
 	}
-	if err := createSymlink(layout.AgentsDir, filepath.Join(skillsDir, repoSkillName), out); err != nil {
+	if err := removeStaleRepoSkillLinks(skillsDir, layout.AgentsDir, out); err != nil {
 		return err
 	}
 	hiddenSkillsDir := filepath.Join(layout.AgentsDir, ".skills")
@@ -491,6 +520,10 @@ func removeStaleRepoSkillLinks(skillsDir, agentsDir string, out io.Writer) error
 			continue
 		}
 		if err := os.Remove(path); err != nil {
+			if os.IsPermission(err) {
+				logf(out, "Skipped stale repo skill link removal after permission error: %s", path)
+				continue
+			}
 			return fmt.Errorf("remove stale repo skill link %s: %w", path, err)
 		}
 		logf(out, "Removed stale repo skill link: %s", path)
@@ -563,10 +596,11 @@ func setupClaude(layout Layout, out io.Writer) error {
 		return err
 	}
 	for _, entry := range entries {
-		if shouldIgnoreGeneratedEntry(entry.Name()) {
+		sourcePath := filepath.Join(skillsDir, entry.Name())
+		if shouldSkipSkillFanout(entry.Name(), sourcePath, layout.AgentsDir, out) {
 			continue
 		}
-		if err := createSymlink(filepath.Join(skillsDir, entry.Name()), filepath.Join(claudeSkillsDir, entry.Name()), out); err != nil {
+		if err := createSymlink(sourcePath, filepath.Join(claudeSkillsDir, entry.Name()), out); err != nil {
 			return err
 		}
 	}
@@ -593,7 +627,8 @@ func setupCodex(layout Layout, codexConfigMode CodexConfigMode, out io.Writer) e
 		return err
 	}
 	for _, entry := range entries {
-		if shouldIgnoreGeneratedEntry(entry.Name()) {
+		sourcePath := filepath.Join(skillsDir, entry.Name())
+		if shouldSkipSkillFanout(entry.Name(), sourcePath, layout.AgentsDir, out) {
 			continue
 		}
 		systemSkill := filepath.Join(layout.CodexDir, "skills", ".system", entry.Name())
@@ -601,7 +636,7 @@ func setupCodex(layout Layout, codexConfigMode CodexConfigMode, out io.Writer) e
 			logf(out, "Skipping %s because it exists in %s", entry.Name(), systemSkill)
 			continue
 		}
-		if err := createSymlink(filepath.Join(skillsDir, entry.Name()), filepath.Join(codexSkillsDir, entry.Name()), out); err != nil {
+		if err := createSymlink(sourcePath, filepath.Join(codexSkillsDir, entry.Name()), out); err != nil {
 			return err
 		}
 	}
@@ -656,6 +691,17 @@ func setupCodex(layout Layout, codexConfigMode CodexConfigMode, out io.Writer) e
 		}
 	}
 	return nil
+}
+
+func shouldSkipSkillFanout(name, path, agentsDir string, out io.Writer) bool {
+	if shouldIgnoreGeneratedEntry(name) {
+		return true
+	}
+	if name == repoSkillName || !isLinkTo(path, agentsDir) {
+		return false
+	}
+	logf(out, "Skipping stale repo skill link during fan-out: %s", path)
+	return true
 }
 
 type codexMCPServer struct {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -149,6 +150,46 @@ func TestSetupRemovesStaleRepoSkillSelfLinks(t *testing.T) {
 	assertSymlink(t, filepath.Join(project, ".agents", "skills", repoSkillName), filepath.Join(project, ".agents"))
 }
 
+func TestRefreshLinksKeepsCanonicalRepoSkillWhenStaleSelfLinkCannotBeRemoved(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod-based permission smoke is Unix-only")
+	}
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	if err := Setup(Options{Layout: layout}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	skillsDir := filepath.Join(project, ".agents", "skills")
+	staleLink := filepath.Join(skillsDir, "legacy-agents-infra")
+	if err := os.Symlink(layout.AgentsDir, staleLink); err != nil {
+		t.Fatalf("Symlink(%s): %v", staleLink, err)
+	}
+	if err := os.Chmod(skillsDir, 0o555); err != nil {
+		t.Fatalf("Chmod(%s): %v", skillsDir, err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(skillsDir, 0o755)
+	})
+
+	var logs bytes.Buffer
+	if err := RefreshLinks(Options{Layout: layout, Stdout: &logs}); err != nil {
+		t.Fatalf("RefreshLinks should tolerate permission-denied stale cleanup: %v\nlogs:\n%s", err, logs.String())
+	}
+
+	assertSymlink(t, filepath.Join(skillsDir, repoSkillName), filepath.Join(project, ".agents"))
+	assertSymlink(t, staleLink, filepath.Join(project, ".agents"))
+	assertNoPath(t, filepath.Join(project, ".claude", "skills", "legacy-agents-infra"))
+	assertNoPath(t, filepath.Join(project, ".codex", "skills", "legacy-agents-infra"))
+	if !strings.Contains(logs.String(), "Skipped stale repo skill link") {
+		t.Fatalf("expected stale-link skip log, got:\n%s", logs.String())
+	}
+}
+
 func TestSyncSkipsGitAndTemp(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
@@ -189,6 +230,39 @@ func TestSyncSkipsNestedGitMetadata(t *testing.T) {
 	assertNoPath(t, filepath.Join(project, ".agents", ".skills", "pdf", ".git"))
 	assertNoPath(t, filepath.Join(project, ".agents", ".skills", "pdf", ".gitignore"))
 	assertNoPath(t, filepath.Join(project, ".agents", ".skills", "pdf", "examples", ".git"))
+}
+
+func TestSyncSkipsSourceLocalRuntimeDirs(t *testing.T) {
+	source := seedSourceRepo(t)
+	mustMkdir(t, filepath.Join(source, ".agents", ".configs"))
+	mustWrite(t, filepath.Join(source, ".agents", ".configs", "codex-config.toml"), "nested")
+	mustMkdir(t, filepath.Join(source, ".claude", "skills"))
+	mustWrite(t, filepath.Join(source, ".claude", "settings.json"), "nested")
+	mustMkdir(t, filepath.Join(source, ".codex", "skills"))
+	mustWrite(t, filepath.Join(source, ".codex", "config.toml"), "nested")
+	mustMkdir(t, filepath.Join(source, ".local", "bin"))
+	mustWrite(t, filepath.Join(source, ".local", "bin", "agents-infra"), "nested")
+	mustMkdir(t, filepath.Join(source, ".planning"))
+	mustWrite(t, filepath.Join(source, ".planning", "plan.md"), "nested")
+	mustMkdir(t, filepath.Join(source, ".relux"))
+	mustWrite(t, filepath.Join(source, ".relux", "state.json"), "nested")
+
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+
+	if err := Setup(Options{Layout: layout}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	assertNoPath(t, filepath.Join(project, ".agents", ".agents"))
+	assertNoPath(t, filepath.Join(project, ".agents", ".claude"))
+	assertNoPath(t, filepath.Join(project, ".agents", ".codex"))
+	assertNoPath(t, filepath.Join(project, ".agents", ".local"))
+	assertNoPath(t, filepath.Join(project, ".agents", ".planning"))
+	assertNoPath(t, filepath.Join(project, ".agents", ".relux"))
 }
 
 func TestDoctor(t *testing.T) {
@@ -454,6 +528,43 @@ func TestSetupLocalPreservesCustomProjectCodexConfig(t *testing.T) {
 	if !report.CodexConfigPresent || !report.CodexConfigShadowsGlobal {
 		t.Fatalf("custom project Codex config should be preserved and reported as shadowing: %+v", report)
 	}
+}
+
+func TestSetupLocalPreservesExistingNativeAgentConfigsOnResync(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+
+	if err := Setup(Options{Layout: layout, CodexConfigMode: CodexConfigModeLocal}); err != nil {
+		t.Fatalf("initial Setup: %v", err)
+	}
+
+	codexConfig := filepath.Join(project, ".agents", ".configs", "codex-config.toml")
+	claudeSettings := filepath.Join(project, ".agents", ".configs", "claude-settings.json")
+	mustWrite(t, codexConfig, "model = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"xhigh\"\n")
+	mustWrite(t, claudeSettings, "{\n  \"model\": \"claude-sonnet-5\",\n  \"permissions\": {\"defaultMode\": \"bypassPermissions\"}\n}\n")
+
+	mustWrite(t, filepath.Join(source, ".configs", "codex-config.toml"), "model = \"source-default-overwrite\"\n")
+	mustWrite(t, filepath.Join(source, ".configs", "claude-settings.json"), "{\"model\":\"source-default-overwrite\"}\n")
+	mustWrite(t, filepath.Join(source, ".configs", "codex-mcp-servers.toml"), `[servers.updated]
+url = "https://example.test/mcp"
+`)
+
+	if err := Setup(Options{Layout: layout, CodexConfigMode: CodexConfigModeLocal}); err != nil {
+		t.Fatalf("second Setup: %v", err)
+	}
+
+	assertFileContains(t, codexConfig, "gpt-5.6-terra")
+	assertFileNotContains(t, codexConfig, "source-default-overwrite")
+	assertFileContains(t, claudeSettings, "claude-sonnet-5")
+	assertFileContains(t, claudeSettings, "bypassPermissions")
+	assertFileNotContains(t, claudeSettings, "source-default-overwrite")
+	assertFileContains(t, filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.updated]")
+	assertSymlink(t, filepath.Join(project, ".codex", "config.toml"), codexConfig)
+	assertSymlink(t, filepath.Join(project, ".claude", "settings.json"), claudeSettings)
 }
 
 func TestSetupLocalProjectMCPOptInInstallsCodexLocalLauncher(t *testing.T) {
