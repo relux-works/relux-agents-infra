@@ -1,0 +1,1 @@
+Implemented the proportional-process rule in the workflow source and generated AGENTS.md. Synced the installed global runtime. Focused validation passed. The focused commit uses 2026-07-20 20:30 MSK for author and committer dates; unrelated dirty work stayed unstaged.

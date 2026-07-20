@@ -681,6 +681,15 @@ When refactoring (e.g., ObjC → Swift):
 * The workflow is: **trigger → skill → task tracking → implement → review → reopen or close.** Never jump straight to implementation because it feels faster.
 * Speed is a side effect of good process, not a substitute for it. A change done fast but untracked is worse than a change done properly.
 
+## Proportional Process (Mandatory)
+
+* Match process overhead to the current task's scope, risk, reversibility, and requested outcome. Prefer the smallest workflow that can complete the work correctly and leave enough evidence to trust it.
+* A repository having a task tracker does **not** by itself trigger the `project-management` skill, board decomposition, planning artifacts, spawned agents, producer/reviewer chains, or exhaustive validation. Use those only when the user asks, the repository or an applicable skill explicitly requires them, or the work materially benefits from specialization, parallelism, context isolation, or independent review.
+* For localized, mechanical, and readily reversible work—such as copying files into an existing package, making a small documentation or configuration edit, formatting text, or rerendering an existing artifact—reuse an existing task or create the minimum required tracker entry, work inline, run narrow checks that can catch regressions caused by that exact delta, and finish.
+* Self-review is sufficient for low-risk changes unless an independent review is explicitly required or justified by meaningful failure impact, ambiguity, security, legal sensitivity, or irreversible external effects. Do not spawn a reviewer merely to satisfy ceremony.
+* Re-evaluate the workflow whenever scope narrows. Do not carry forward earlier research, review, rendering, or validation gates unless they still protect against a plausible failure in the current delta.
+* Skills and workflow systems are constraints, not deliverables. If a mandatory repository or skill contract requires a heavier process, follow it, but do not add extra layers beyond that contract. Ceremony that costs more than the work without increasing confidence is a process failure.
+
 ## Model Availability and Fallback
 
 * Treat temporary model unavailability as an operational condition, not as a decision to hand back to the human.
