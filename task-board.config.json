@@ -4,11 +4,28 @@
     "board_dir": ".task-board"
   },
   "spawn": {
+    "enabled": true,
+    "max_parallel": 20,
     "ceilings": {
       "codex": {
-        "model": "gpt-5.6-terra",
+        "model": "gpt-5.6-sol",
+        "model_criterion": "less_or_equal",
         "reasoning_effort": "xhigh"
+      },
+      "claude": {
+        "model": "claude-fable-5",
+        "model_criterion": "less_or_equal"
       }
+    },
+    "preferred_agentic_system": {
+      "mixed": [
+        "claude",
+        "codex"
+      ]
     }
+  },
+  "version_control": {
+    "confirm": true,
+    "desired_commit_time": "backdated to previous day, after 20:00 MSK (evening) per owner policy"
   }
 }
