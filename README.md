@@ -315,6 +315,38 @@ Task-board child spawn ceilings belong to the separate
 Agents-infra neither reads nor validates that `task-board.config.json` policy;
 it owns only this primary-session TOML.
 
+### Parent primary-goal alignment
+
+The installed workflow instructions also tell an eligible primary parent to
+keep the active task-board's provider-neutral `primary-goal-v1` record aligned
+with materially actionable user requirements. This applies only when
+`TASK_BOARD_RUN_ID` is absent and an active task-board is available.
+
+The parent reads `task-board goal get`, then uses `goal set-primary` when no
+record is active or `goal update --if-revision N` when the complete objective
+materially changes. Later goal-changing turns replace the complete objective
+while retaining unresolved prior requirements. The policy permits at most one
+successful write per user turn, skips chatter and semantic no-ops, and retries
+one revision conflict after re-reading. Routine successful synchronization is
+silent.
+
+Spawned owners never mutate this record; they continue to use
+`task-board spawn goal`. A primary update does not alter a spawned delivery
+goal, so delivery-scope changes still require the explicit spawn-goal upsert or
+reroute workflow. Version 1 does not invoke native Codex or Claude goal APIs and
+does not clear the primary automatically on session exit.
+
+This is instruction-only integration. Agents-infra stores no board goal state
+and has no task-board library dependency; the parent invokes the external CLI.
+After authoring-source changes, install and verify the policy with:
+
+```bash
+agents-infra setup global --source-dir /path/to/relux-agents-infra
+rg -n "Primary Parent Goal Actualization" \
+  ~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md \
+  ~/.codex/AGENTS.md
+```
+
 ## Tooling
 
 | Tool | Purpose | Command | Outputs |
@@ -409,7 +441,7 @@ Modular instruction files in `.instructions/`:
 | `INSTRUCTIONS_SKILLS.md` | Skills system usage |
 | `INSTRUCTIONS_DIAGRAMS.md` | C4/PlantUML diagram rules |
 | `INSTRUCTIONS_TESTING.md` | Swift Testing, refactoring workflow |
-| `INSTRUCTIONS_WORKFLOW.md` | Task tracking, model fallback, autonomous completion, forced-fit escalation, Git, and logging |
+| `INSTRUCTIONS_WORKFLOW.md` | Task tracking, parent primary-goal actualization, model fallback, autonomous completion, forced-fit escalation, Git, and logging |
 | `INSTRUCTIONS_DOCS.md` | Documentation requirements |
 | `INSTRUCTIONS_STYLE.md` | Communication style |
 

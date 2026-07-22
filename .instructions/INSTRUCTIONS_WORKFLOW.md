@@ -61,6 +61,19 @@
 
 ---
 
+## Primary Parent Goal Actualization
+
+* Apply this policy only in a primary parent session when `TASK_BOARD_RUN_ID` is absent and an active task-board is available.
+* On the first materially actionable user requirement, read `task-board goal get`. If no primary goal is active, create it with `task-board goal set-primary --objective TEXT --reason TEXT`. If one is active, update it with `task-board goal update --if-revision N --objective TEXT --reason TEXT` only when the concise, complete objective materially changed.
+* On every later user turn that materially adds, removes, or redirects requirements, recompute one complete objective that preserves every unresolved prior requirement and incorporates the changed intent. Update using the revision observed from the latest read.
+* Perform at most one successful primary-goal write per user turn. Skip status questions, confirmations, tool chatter, wording-only corrections, semantic no-ops, and other turns that do not change the goal.
+* On `primary_goal_revision_conflict`, re-read the active goal, merge the complete objective, and retry once with the new observed revision. Do not narrate routine successful synchronization; report only a persistent failure or conflict, or answer an explicit user request for goal state.
+* Never mutate the primary goal from a spawned run. Spawned owners use `task-board spawn goal`; a primary-goal update never silently expands, cancels, completes, or clears a spawned goal. When materially changed delivery scope must reach an existing owner, use the explicit spawn-goal upsert or reroute contract.
+* Version 1 does not invoke native Codex or Claude goal APIs and never clears the primary goal automatically when a session exits.
+* This is an instruction-only integration: agents-infra stores no task-board state and adds no task-board library dependency. The eligible primary parent calls the external `task-board` CLI.
+
+---
+
 ## Research & Knowledge Persistence
 
 * **All research must go through the repo's established task/documentation flow.** Never keep research only in conversation context.
