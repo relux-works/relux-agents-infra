@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,16 @@ type CodexLaunchPlan struct {
 	Args                     []string
 	PrintConfig              bool
 	WrapperExpandedShortcuts []CodexWrapperShortcut
+	ExplicitProfile          bool
+	ExplicitProfileValue     string
+	ExplicitProfileSource    string
+	RemoteAuthTokenEnvName   string
+	ExplicitSandbox          bool
+	ExplicitSandboxValue     string
+	ExplicitSandboxSource    string
+	ExplicitApproval         bool
+	ExplicitApprovalValue    string
+	ExplicitApprovalSource   string
 }
 
 type CodexPrimarySessionApplication string
@@ -181,6 +192,20 @@ func BuildCodexLaunchPlan(startDir, homeDir string, args []string) (CodexLaunchP
 	plan.PrimarySessionResolution = primaryResolution
 	plan.ConfigArgs = append(plan.ConfigArgs, primaryArgs...)
 	plan.Args = append(append([]string(nil), plan.ConfigArgs...), plan.UserArgs...)
+	plan.ExplicitProfile = parsed.explicit.profile
+	plan.ExplicitProfileValue = parsed.explicit.profileValue
+	plan.ExplicitProfileSource = parsed.explicit.profileSource
+	plan.RemoteAuthTokenEnvName = parsed.explicit.remoteAuthTokenEnvName
+	if selection := parsed.explicit.sandbox; selection != nil {
+		plan.ExplicitSandbox = true
+		plan.ExplicitSandboxValue = selection.value
+		plan.ExplicitSandboxSource = selection.source
+	}
+	if selection := parsed.explicit.approval; selection != nil {
+		plan.ExplicitApproval = true
+		plan.ExplicitApprovalValue = selection.value
+		plan.ExplicitApprovalSource = selection.source
+	}
 	return plan, nil
 }
 
@@ -357,12 +382,159 @@ type parsedCodexWrapperArgs struct {
 }
 
 type codexExplicitSelections struct {
-	model                bool
-	modelValue           *codexExplicitValue
-	reasoningEffort      bool
-	reasoningEffortValue *codexExplicitValue
-	profile              bool
-	profileSource        string
+	model                  bool
+	modelValue             *codexExplicitValue
+	reasoningEffort        bool
+	reasoningEffortValue   *codexExplicitValue
+	profile                bool
+	profileSource          string
+	profileValue           string
+	remoteAuthTokenEnv     bool
+	remoteAuthTokenEnvName string
+	sandbox                *codexPolicySelection
+	approval               *codexPolicySelection
+	// Last -c/--config override per policy key, tracked independently of the
+	// winning selection: Codex deserializes only the last override per key
+	// (earlier repeats are masked by last-wins), and a typed flag does not
+	// mask an invalid override (probe-verified exit 1 on
+	// `codex exec --sandbox read-only -c 'sandbox_mode="banana"'`).
+	sandboxConfigLast  *codexExplicitValue
+	approvalConfigLast *codexExplicitValue
+}
+
+// ProviderArgumentError marks a pass-through provider argument the provider's
+// own parser would reject, so callers can distinguish argument problems from
+// invalid project configuration.
+type ProviderArgumentError struct {
+	msg string
+}
+
+func (e *ProviderArgumentError) Error() string { return e.msg }
+
+func providerArgErrorf(format string, args ...any) error {
+	return &ProviderArgumentError{msg: fmt.Sprintf(format, args...)}
+}
+
+// Provider-validated policy value domains, probe-verified on codex-cli
+// 0.145.0. The typed clap flags and the -c/--config deserialization accept
+// different approval sets: on-failure and granular are config-only variants
+// the typed --ask-for-approval flag rejects with exit 2.
+var (
+	codexSandboxPolicyValues        = []string{"read-only", "workspace-write", "danger-full-access"}
+	codexApprovalFlagPolicyValues   = []string{"untrusted", "on-request", "never"}
+	codexApprovalConfigPolicyValues = []string{"untrusted", "on-failure", "on-request", "granular", "never"}
+)
+
+// codexPolicySelection records one explicit pass-through sandbox or approval
+// selection. Codex resolves the typed CLI flag after `-c` key overrides, so a
+// flag selection wins over a config selection regardless of argument order,
+// while repeated `-c` overrides keep provider last-wins semantics. Repeated
+// flags are rejected exactly like the Codex clap parser rejects them.
+type codexPolicySelection struct {
+	value    string
+	source   string
+	fromFlag bool
+}
+
+func (s *codexExplicitSelections) recordPolicyFlag(field **codexPolicySelection, flagName, value string, allowed []string) error {
+	if *field != nil && (*field).fromFlag {
+		return providerArgErrorf("the Codex argument %s cannot be used multiple times", flagName)
+	}
+	// The Codex clap parser validates every typed policy value against its
+	// enum (probe-verified exit 2, "invalid value 'banana'"), so an unknown
+	// value fails closed instead of composing an argv Codex rejects at launch.
+	if !containsString(allowed, value) {
+		return providerArgErrorf("invalid value %s for the Codex argument %s (possible values: %s)", strconv.Quote(value), flagName, strings.Join(allowed, ", "))
+	}
+	*field = &codexPolicySelection{value: value, source: "cli:" + flagName, fromFlag: true}
+	return nil
+}
+
+// codexProfileNamePattern mirrors the plain profile-name parser of the Codex
+// CONFIG_PROFILE_V2 value: one or more ASCII letters, digits, dashes, or
+// underscores. Probe-verified on codex-cli 0.145.0: empty, dot, slash, space,
+// plus, at, tilde, comma, colon, backslash, equals, and non-ASCII values all
+// exit 2 with "invalid --profile value ...; pass a plain name such as `work`",
+// while values such as a_b, a-b, ab1, A_B, 123, -ab, _ab, and ab- are accepted.
+var codexProfileNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// recordProfileFlag registers one explicit --profile/-p occurrence in any
+// spelling. The Codex clap parser rejects a repeated profile option at
+// runtime (probe-verified exit 2, "the argument '--profile
+// <CONFIG_PROFILE_V2>' cannot be used multiple times"; an `app-server --help`
+// parser probe is insufficient because help short-circuits this validation)
+// and validates the value against its plain profile-name syntax, so both a
+// second occurrence and a name outside that domain fail closed instead of
+// composing an argv Codex rejects at launch. Whether the named profile exists
+// stays provider-native config resolution; only parser syntax is mirrored.
+func (s *codexExplicitSelections) recordProfileFlag(flagName, value string) error {
+	if s.profile {
+		return providerArgErrorf("the Codex argument %s cannot be used multiple times", flagName)
+	}
+	if !codexProfileNamePattern.MatchString(value) {
+		return providerArgErrorf("invalid value %s for the Codex argument %s; pass a plain profile name such as work", strconv.Quote(value), flagName)
+	}
+	s.profile = true
+	return nil
+}
+
+// recordRemoteAuthTokenEnv registers one explicit --remote-auth-token-env
+// occurrence. The Codex clap parser rejects a repeated occurrence
+// (probe-verified exit 2, "the argument '--remote-auth-token-env <ENV_VAR>'
+// cannot be used multiple times" on codex-cli 0.145.0), so a second one fails
+// closed. The recorded value is the environment variable NAME the contract
+// surfaces in required_env_names; the value behind it is never read. Codex
+// accepts an empty name (probe exit 0 on --remote-auth-token-env=), which
+// simply yields no environment requirement.
+func (s *codexExplicitSelections) recordRemoteAuthTokenEnv(flagName, value string) error {
+	if s.remoteAuthTokenEnv {
+		return providerArgErrorf("the Codex argument %s cannot be used multiple times", flagName)
+	}
+	s.remoteAuthTokenEnv = true
+	s.remoteAuthTokenEnvName = value
+	return nil
+}
+
+func (s *codexExplicitSelections) recordPolicyConfig(field **codexPolicySelection, value codexExplicitValue) {
+	if *field != nil && (*field).fromFlag {
+		return
+	}
+	*field = &codexPolicySelection{value: value.effective, source: value.source}
+}
+
+// validatePolicyConfigDomains mirrors the config deserialization Codex runs
+// at startup: only the last -c/--config override per policy key is
+// deserialized, an unknown or non-string value fails the launch (probe
+// exit 1, "unknown variant"/"invalid type"), and a typed policy flag does not
+// mask that failure. All probe-verified on codex-cli 0.145.0.
+func (s *codexExplicitSelections) validatePolicyConfigDomains() error {
+	if err := validateCodexPolicyConfigValue(s.sandboxConfigLast, "sandbox_mode", codexSandboxPolicyValues); err != nil {
+		return err
+	}
+	return validateCodexPolicyConfigValue(s.approvalConfigLast, "approval_policy", codexApprovalConfigPolicyValues)
+}
+
+func validateCodexPolicyConfigValue(value *codexExplicitValue, key string, allowed []string) error {
+	if value == nil {
+		return nil
+	}
+	// A non-string TOML value keeps its raw text as the effective string
+	// ("true", "3"), which is never a domain member, so it fails closed the
+	// same way Codex rejects it ("invalid type ... expected string").
+	if !containsString(allowed, value.effective) {
+		return providerArgErrorf("unknown variant %s for the Codex config override %s (expected one of: %s)", strconv.Quote(value.effective), key, strings.Join(allowed, ", "))
+	}
+	return nil
+}
+
+func (s *codexExplicitSelections) policySelectionSource() string {
+	if s.sandbox != nil {
+		return s.sandbox.source
+	}
+	if s.approval != nil {
+		return s.approval.source
+	}
+	return ""
 }
 
 type codexExplicitValue struct {
@@ -409,6 +581,24 @@ func parseCodexWrapperArgs(args []string) (parsedCodexWrapperArgs, error) {
 	if err != nil {
 		return parsedCodexWrapperArgs{}, err
 	}
+	// The Codex clap parser rejects the bypass flag alongside the typed
+	// sandbox/approval flags, so an explicit danger request combined with an
+	// explicit policy flag can never launch; fail closed with the same rule.
+	if parsed.dangerRequested {
+		if explicit.sandbox != nil && explicit.sandbox.fromFlag {
+			return parsedCodexWrapperArgs{}, providerArgErrorf("the Codex argument %s cannot be used with --sandbox", codexDangerouslyBypassApprovalsAndSandbox)
+		}
+		if explicit.approval != nil && explicit.approval.fromFlag {
+			return parsedCodexWrapperArgs{}, providerArgErrorf("the Codex argument %s cannot be used with --ask-for-approval", codexDangerouslyBypassApprovalsAndSandbox)
+		}
+	}
+	// Config-level policy domains are checked after every clap-level rule,
+	// mirroring Codex order: clap parses the full command line first and the
+	// -c overrides only fail later, when config deserialization runs at
+	// startup.
+	if err := explicit.validatePolicyConfigDomains(); err != nil {
+		return parsedCodexWrapperArgs{}, err
+	}
 	parsed.codexArgs = normalizedArgs
 	parsed.explicit = explicit
 	return parsed, nil
@@ -427,20 +617,17 @@ func normalizeCodexExplicitSelections(args []string) ([]string, codexExplicitSel
 		switch {
 		case arg == "--model" || arg == "-m":
 			selections.model = true
-			normalized = append(normalized, arg)
-			if index+1 >= len(args) {
-				continue
+			value, consumed, err := takeCodexOptionValue(args, index, arg)
+			if err != nil {
+				return nil, codexExplicitSelections{}, err
 			}
-			index++
-			candidate := directCodexExplicitValue(args[index], "cli:"+arg)
-			keep, err := acceptCodexExplicitValue("model", &selections.modelValue, candidate)
+			index += consumed
+			keep, err := acceptCodexExplicitValue("model", &selections.modelValue, directCodexExplicitValue(value, "cli:"+arg))
 			if err != nil {
 				return nil, codexExplicitSelections{}, err
 			}
 			if keep {
-				normalized = append(normalized, args[index])
-			} else {
-				normalized = normalized[:len(normalized)-1]
+				normalized = append(normalized, arg, value)
 			}
 		case strings.HasPrefix(arg, "--model=") || strings.HasPrefix(arg, "-m="):
 			selections.model = true
@@ -452,35 +639,104 @@ func normalizeCodexExplicitSelections(args []string) ([]string, codexExplicitSel
 			if keep {
 				normalized = append(normalized, arg)
 			}
-		case arg == "--profile" || arg == "-p":
-			selections.profile = true
-			if selections.profileSource == "" {
-				selections.profileSource = "cli:" + arg
-			}
-			normalized = append(normalized, arg)
-			if index+1 < len(args) {
-				index++
-				normalized = append(normalized, args[index])
-			}
-		case strings.HasPrefix(arg, "--profile=") || strings.HasPrefix(arg, "-p="):
-			selections.profile = true
-			if selections.profileSource == "" {
-				option, _, _ := strings.Cut(arg, "=")
-				selections.profileSource = "cli:" + option
-			}
-			normalized = append(normalized, arg)
-		case arg == "-c" || arg == "--config":
-			if index+1 >= len(args) {
-				normalized = append(normalized, arg)
-				continue
-			}
-			index++
-			keep, err := normalizeCodexConfigOverride(args[index], "cli:"+arg, &selections)
+		case strings.HasPrefix(arg, "-m") && len(arg) > 2:
+			// Attached short form -mVALUE, accepted by the Codex parser.
+			selections.model = true
+			keep, err := acceptCodexExplicitValue("model", &selections.modelValue, directCodexExplicitValue(strings.TrimPrefix(arg, "-m"), "cli:-m"))
 			if err != nil {
 				return nil, codexExplicitSelections{}, err
 			}
 			if keep {
-				normalized = append(normalized, arg, args[index])
+				normalized = append(normalized, arg)
+			}
+		case arg == "--profile" || arg == "-p":
+			value, consumed, err := takeCodexOptionValue(args, index, arg)
+			if err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			if err := selections.recordProfileFlag(arg, value); err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			index += consumed
+			selections.profileSource = "cli:" + arg
+			selections.profileValue = value
+			normalized = append(normalized, arg, value)
+		case strings.HasPrefix(arg, "--profile=") || strings.HasPrefix(arg, "-p="):
+			option, value, _ := strings.Cut(arg, "=")
+			if err := selections.recordProfileFlag(option, value); err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			selections.profileSource = "cli:" + option
+			selections.profileValue = value
+			normalized = append(normalized, arg)
+		case strings.HasPrefix(arg, "-p") && len(arg) > 2:
+			// Attached short form -pVALUE, accepted by the Codex parser.
+			value := strings.TrimPrefix(arg, "-p")
+			if err := selections.recordProfileFlag("-p", value); err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			selections.profileSource = "cli:-p"
+			selections.profileValue = value
+			normalized = append(normalized, arg)
+		case arg == "--remote-auth-token-env":
+			value, consumed, err := takeCodexOptionValue(args, index, arg)
+			if err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			if err := selections.recordRemoteAuthTokenEnv(arg, value); err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			index += consumed
+			normalized = append(normalized, arg, value)
+		case strings.HasPrefix(arg, "--remote-auth-token-env="):
+			if err := selections.recordRemoteAuthTokenEnv("--remote-auth-token-env", strings.TrimPrefix(arg, "--remote-auth-token-env=")); err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			normalized = append(normalized, arg)
+		case arg == "--sandbox" || arg == "-s":
+			value, consumed, err := takeCodexOptionValue(args, index, arg)
+			if err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			if err := selections.recordPolicyFlag(&selections.sandbox, arg, value, codexSandboxPolicyValues); err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			normalized = append(normalized, args[index:index+1+consumed]...)
+			index += consumed
+		case strings.HasPrefix(arg, "--sandbox=") || strings.HasPrefix(arg, "-s=") || (strings.HasPrefix(arg, "-s") && len(arg) > 2 && !strings.HasPrefix(arg, "-s=")):
+			flagName, value := splitCodexPolicyFlag(arg, "--sandbox", "-s")
+			if err := selections.recordPolicyFlag(&selections.sandbox, flagName, value, codexSandboxPolicyValues); err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			normalized = append(normalized, arg)
+		case arg == "--ask-for-approval" || arg == "-a":
+			value, consumed, err := takeCodexOptionValue(args, index, arg)
+			if err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			if err := selections.recordPolicyFlag(&selections.approval, arg, value, codexApprovalFlagPolicyValues); err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			normalized = append(normalized, args[index:index+1+consumed]...)
+			index += consumed
+		case strings.HasPrefix(arg, "--ask-for-approval=") || strings.HasPrefix(arg, "-a=") || (strings.HasPrefix(arg, "-a") && len(arg) > 2 && !strings.HasPrefix(arg, "-a=")):
+			flagName, value := splitCodexPolicyFlag(arg, "--ask-for-approval", "-a")
+			if err := selections.recordPolicyFlag(&selections.approval, flagName, value, codexApprovalFlagPolicyValues); err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			normalized = append(normalized, arg)
+		case arg == "-c" || arg == "--config":
+			value, consumed, err := takeCodexOptionValue(args, index, arg)
+			if err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			index += consumed
+			keep, err := normalizeCodexConfigOverride(value, "cli:"+arg, &selections)
+			if err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			if keep {
+				normalized = append(normalized, arg, value)
 			}
 		case strings.HasPrefix(arg, "-c="):
 			keep, err := normalizeCodexConfigOverride(strings.TrimPrefix(arg, "-c="), "cli:-c", &selections)
@@ -498,11 +754,45 @@ func normalizeCodexExplicitSelections(args []string) ([]string, codexExplicitSel
 			if keep {
 				normalized = append(normalized, arg)
 			}
+		case arg == "--enable" || arg == "--disable" || arg == "--local-provider":
+			// Value-taking config-level globals that pass through untouched;
+			// the Codex clap parser still requires one non-flag value per
+			// occurrence, so a missing value fails closed here instead of
+			// composing an argv Codex rejects at launch.
+			value, consumed, err := takeCodexOptionValue(args, index, arg)
+			if err != nil {
+				return nil, codexExplicitSelections{}, err
+			}
+			index += consumed
+			normalized = append(normalized, arg, value)
 		default:
 			normalized = append(normalized, arg)
 		}
 	}
 	return normalized, selections, nil
+}
+
+// takeCodexOptionValue consumes the spaced value of a recognized value-taking
+// Codex option. The Codex clap parser does not accept flag-like tokens as
+// option values and requires one value per occurrence (probe-verified exit 2,
+// "a value is required ... but none was supplied", for --model, --profile,
+// -c/--config, --enable, --disable, --local-provider, and the policy flags),
+// so both gaps fail closed instead of composing an argv Codex would reject.
+func takeCodexOptionValue(args []string, index int, flagName string) (string, int, error) {
+	if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
+		return "", 0, providerArgErrorf("a value is required for the Codex argument %s", flagName)
+	}
+	return args[index+1], 1, nil
+}
+
+func splitCodexPolicyFlag(arg, longName, shortName string) (flagName, value string) {
+	if rest, ok := strings.CutPrefix(arg, longName+"="); ok {
+		return longName, rest
+	}
+	if rest, ok := strings.CutPrefix(arg, shortName+"="); ok {
+		return shortName, rest
+	}
+	return shortName, strings.TrimPrefix(arg, shortName)
 }
 
 func normalizeCodexConfigOverride(value, source string, selections *codexExplicitSelections) (bool, error) {
@@ -525,6 +815,14 @@ func normalizeCodexConfigOverride(value, source string, selections *codexExplici
 			&selections.reasoningEffortValue,
 			configCodexExplicitValue(rawValue, source+" model_reasoning_effort"),
 		)
+	case "sandbox_mode":
+		value := configCodexExplicitValue(rawValue, source+" sandbox_mode")
+		selections.sandboxConfigLast = &value
+		selections.recordPolicyConfig(&selections.sandbox, value)
+	case "approval_policy":
+		value := configCodexExplicitValue(rawValue, source+" approval_policy")
+		selections.approvalConfigLast = &value
+		selections.recordPolicyConfig(&selections.approval, value)
 	}
 	return true, nil
 }
@@ -674,6 +972,15 @@ func resolveCodexPrimarySessionYolo(project CodexPrimarySessionBoolValue, parsed
 		if project.Present {
 			resolution.ProjectApplication = CodexPrimarySessionSuppressedByCLI
 		}
+		return resolution
+	}
+	// An explicit sandbox or approval selection suppresses project yolo_mode:
+	// composing the bypass flag next to a typed policy flag is a Codex clap
+	// conflict, and next to a `-c` policy override it would silently discard
+	// the user's explicit selection at runtime.
+	if project.Present && project.Value && parsed.explicit.policySelectionSource() != "" {
+		resolution.EffectiveSource = parsed.explicit.policySelectionSource()
+		resolution.ProjectApplication = CodexPrimarySessionSuppressedByCLI
 		return resolution
 	}
 	if project.Present {

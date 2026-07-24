@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/attachments"
 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
 )
 
@@ -23,6 +24,9 @@ const callerCWDEnv = "AGENTS_INFRA_CALLER_CWD"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		if code, ok := attachments.ExitCode(err); ok {
+			os.Exit(code)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -41,6 +45,8 @@ func run(args []string) error {
 		return runDoctor(args[1:])
 	case "compose":
 		return runCompose(args[1:])
+	case "attachments":
+		return runAttachments(args[1:])
 	case "codex":
 		return runCodex(args[1:])
 	case "claude":
@@ -52,6 +58,26 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usageText())
 	}
+}
+
+func runAttachments(args []string) error {
+	if callerCWD := os.Getenv(callerCWDEnv); callerCWD != "" {
+		originalCWD, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("read current directory: %w", err)
+		}
+		if err := os.Chdir(callerCWD); err != nil {
+			return fmt.Errorf("restore caller cwd for attachments: %w", err)
+		}
+		defer func() {
+			_ = os.Chdir(originalCWD)
+		}()
+	}
+	return attachments.Run(args, attachments.Options{
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+		Env:    os.Getenv,
+	})
 }
 
 func runSetup(args []string) error {
@@ -228,7 +254,7 @@ func runDoctor(args []string) error {
 		}
 		if report.CodexConfigShadowsGlobal {
 			if report.CodexConfigGenerated {
-				fmt.Fprintf(os.Stdout, "codex_config_action: generated project-local .codex/config.toml is active because local MCP opt-in is configured\n")
+				fmt.Fprintf(os.Stdout, "codex_config_action: managed project-local .codex/config.toml is active; rendered from the installed Codex config without user-level profiles; use --codex-config=global to remove it if unintended\n")
 			} else if report.CodexConfigLinked {
 				fmt.Fprintf(os.Stdout, "codex_config_action: managed project-local .codex/config.toml is active; use --codex-config=global to remove it if unintended\n")
 			} else {
@@ -316,21 +342,29 @@ func runClaude(args []string) error {
 func runCompose(args []string) error {
 	fs := flag.NewFlagSet("compose", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	agent := fs.String("agent", "", "child agent provider: codex or claude")
-	projectDir := fs.String("project", "", "project directory used for MCP composition")
-	schemaVersion := fs.Int("schema-version", 0, "child launch composition schema version")
+	mode := fs.String("mode", "child", "composition mode: child or primary-session")
+	agent := fs.String("agent", "", "agent provider: codex or claude")
+	projectDir := fs.String("project", "", "project directory used for composition")
+	schemaVersion := fs.Int("schema-version", 0, "composition contract schema version")
 	jsonOutput := fs.Bool("json", false, "emit one JSON contract document")
 	if err := fs.Parse(args); err != nil {
 		return err
-	}
-	if len(fs.Args()) != 0 {
-		return fmt.Errorf("compose does not accept positional arguments: %q", fs.Args())
 	}
 	if *agent != "codex" && *agent != "claude" {
 		return fmt.Errorf("compose requires --agent codex or --agent claude")
 	}
 	if !*jsonOutput {
 		return fmt.Errorf("compose requires --json")
+	}
+	switch *mode {
+	case "child":
+	case "primary-session":
+		return runComposePrimarySession(*agent, *projectDir, *schemaVersion, fs.Args())
+	default:
+		return fmt.Errorf("compose requires --mode child or --mode primary-session")
+	}
+	if len(fs.Args()) != 0 {
+		return fmt.Errorf("compose does not accept positional arguments: %q", fs.Args())
 	}
 	canonicalProjectDir, err := infra.CanonicalProjectDir(*projectDir)
 	if err != nil {
@@ -355,6 +389,42 @@ func runCompose(args []string) error {
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(composition); err != nil {
 		return fmt.Errorf("encode child launch composition: %w", err)
+	}
+	return nil
+}
+
+// runComposePrimarySession emits the non-launching primary-session launch
+// plan. Provider user args are everything after the compose flags (typically
+// separated with `--`) and pass through the same wrapper parsing as
+// `agents-infra codex|claude`.
+func runComposePrimarySession(provider, projectDir string, schemaVersion int, userArgs []string) error {
+	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
+	canonicalProjectDir, err := infra.CanonicalProjectDir(projectDir)
+	if err != nil {
+		return err
+	}
+	if schemaVersion != infra.PrimarySessionLaunchPlanSchemaVersion {
+		envelope := infra.NewPrimarySessionLaunchPlanErrorEnvelope(provider, canonicalProjectDir, producer, infra.PrimarySessionErrorUnsupportedSchemaVersion)
+		if err := json.NewEncoder(os.Stdout).Encode(envelope); err != nil {
+			return fmt.Errorf("encode primary-session error envelope: %w", err)
+		}
+		return fmt.Errorf("unsupported primary-session launch plan schema version %d", schemaVersion)
+	}
+	plan, err := infra.BuildPrimarySessionLaunchPlan(provider, canonicalProjectDir, "", userArgs, producer, nil)
+	if err != nil {
+		code := infra.PrimarySessionErrorInvalidProjectConfiguration
+		var composeErr *infra.PrimarySessionComposeError
+		if errors.As(err, &composeErr) {
+			code = composeErr.Code
+		}
+		envelope := infra.NewPrimarySessionLaunchPlanErrorEnvelope(provider, canonicalProjectDir, producer, code)
+		if encodeErr := json.NewEncoder(os.Stdout).Encode(envelope); encodeErr != nil {
+			return fmt.Errorf("encode primary-session error envelope: %w", encodeErr)
+		}
+		return fmt.Errorf("compose primary-session launch plan: %w", err)
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(plan); err != nil {
+		return fmt.Errorf("encode primary-session launch plan: %w", err)
 	}
 	return nil
 }
@@ -413,6 +483,8 @@ func usageText() string {
   agents-infra doctor global [--home-dir DIR]
   agents-infra doctor local [PROJECT_DIR] [--project-dir DIR]
   agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json
+  agents-infra compose --mode primary-session --agent codex|claude --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]
+  agents-infra attachments list|show|path|materialize|stage-images [...]
   agents-infra codex [--print-config] [-d|--danger|--yolo] [--] [CODEX_ARGS...]
   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]`
 }

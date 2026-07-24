@@ -43,6 +43,7 @@ The canonical interface after bootstrap is:
 - `agents-infra setup local [PATH]`
 - `agents-infra doctor global|local`
 - `agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json`
+- `agents-infra compose --mode primary-session --agent codex|claude --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
 - `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
 - `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
 - `agents-infra version`
@@ -67,20 +68,24 @@ model, reasoning effort, service tier, trusted projects, and TUI notices are
 owned by the global `~/.codex/config.toml` link by default. This prevents stale
 project-local configs from silently overriding the current global model.
 
-During local setup, agents-infra removes only the legacy project-local
-`.codex/config.toml` symlink it used to create. A custom project-local config is
-left in place because project-specific model/reasoning overrides must be
-explicit and intentional, not silently destroyed.
+During local setup in the default `preserve` mode, agents-infra removes managed
+project-local Codex config artifacts it created: either the legacy symlink or a
+rendered managed regular file. A custom project-local config is left in place
+because project-specific model/reasoning overrides must be explicit and
+intentional, not silently destroyed.
 
 Use `--codex-config` when local setup should make an explicit decision:
 
 - `--codex-config=preserve` keeps custom project-local config files and removes
-  only the old managed symlink. This is the default.
+  a managed local config from a prior explicit `local` setup. This is the
+  default.
 - `--codex-config=global` removes `.codex/config.toml`, making the global
   `~/.codex/config.toml` authoritative for the project.
-- `--codex-config=local` links `.codex/config.toml` to the installed project
-  runtime at `.agents/.configs/codex-config.toml`, making model/reasoning
-  settings project-local by explicit choice.
+- `--codex-config=local` renders a managed regular `.codex/config.toml` from
+  `.agents/.configs/codex-config.toml`, making its supported settings
+  project-local by explicit choice. The renderer omits the user-level-only
+  top-level `profiles` table while preserving all other valid TOML settings.
+  Invalid installed TOML fails before the existing project config is replaced.
 
 ### Child launch MCP composition contract
 
@@ -112,6 +117,27 @@ Unsupported versions use `unsupported_schema_version`, while malformed or
 invalid discovered project configuration uses
 `invalid_project_configuration`. Consumers must reject a contract/version
 mismatch rather than partially applying its arguments.
+
+### Task-board Session Manager wrappers and shell aliases
+
+The primary launch path for a board-scoped session is the Task-board Session
+Manager, not a direct `agents-infra` launch. `task-board codex` and
+`task-board claude` are thin clients: each resolves launch policy exclusively
+through `agents-infra compose --mode primary-session --agent codex|claude
+--project DIR --schema-version 1 --json`, then owns the provider process,
+session/thread identity, and native board-goal binding. agents-infra stays
+board-agnostic and only renders the launch plan.
+
+Because of that, the recommended personal shortcut aliases now target the
+task-board wrappers rather than the raw launchers:
+
+```zsh
+alias codexD="task-board codex"
+alias claudeD="task-board claude"
+```
+
+Use `agents-infra codex` / `agents-infra claude` directly only for a launch that
+must bypass the Session Manager (no board-goal binding, no managed session).
 
 ### Provider-specific primary session policies
 
@@ -288,12 +314,15 @@ and field, and sets both provider validation flags false without printing
 partial provider policy.
 
 Existing `.codex/config.toml` behavior is unchanged: no automatic migration
-or deletion occurs, and local config remains an intentional Codex-native
-project layer. `codex_config_shadowing_global: true` means it overrides the
-global `~/.codex/config.toml`; use `--codex-config=global` to remove an
-unwanted local config, or `--codex-config=local` to install the managed local
-one. Project primary-session overrides and `.codex/config.toml` can coexist;
-use an explicit `--profile` when the profile should control model and effort.
+or deletion occurs in the default `preserve` mode, and custom local config
+remains an intentional Codex-native project layer.
+`codex_config_shadowing_global: true` means it overrides the global
+`~/.codex/config.toml`; use `--codex-config=global` to remove an unwanted local
+config, or `--codex-config=local` to render the managed project-safe local one.
+The managed local file intentionally has no `profiles` table because Codex does
+not support profiles at project scope. Project primary-session overrides and
+`.codex/config.toml` can coexist; profiles remain available through the full
+global config.
 
 Troubleshooting:
 
@@ -352,9 +381,8 @@ rg -n "Primary Parent Goal Actualization" \
 | Tool | Purpose | Command | Outputs |
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
-| `agents-infra` | Set up or inspect global/project-local agent runtimes; compose non-launching MCP-only child argv; configure and launch isolated primary Codex and Claude sessions | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra codex --print-config`, `agents-infra claude --print-config` | Runtime directories under the target root; deterministic compose JSON or printed diagnostics on stdout |
-| `agents-attachments` | Resolve generic attachment manifests and stage image inputs for inspection | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
-| `python3` | Run the `agents-attachments` helper and its focused tests | `python3 -m py_compile .scripts/agents-attachments`, `python3 -m unittest tests/test_agents_attachments.py` | Python bytecode cache and task-scoped logs under `.temp/` |
+| `agents-infra` | Set up or inspect global/project-local agent runtimes; compose non-launching MCP-only child argv; configure and launch isolated primary Codex and Claude sessions; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config` | Runtime directories under the target root; deterministic compose JSON, attachment manifests/staged images, or printed diagnostics on stdout |
+| `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
 | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
 | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
 | `task-board` | Track project work, checklist state, and outcome resources | `task-board q --format compact 'get(TASK-ID) { full }'`, `task-board m 'set_status(TASK-ID, status=development)'` | `.task-board/` and `.task-board/.resources/` |
@@ -409,8 +437,7 @@ rg -n "Primary Parent Goal Actualization" \
 │   └── setup.ps1
 │
 ├── .scripts/               # Setup and utility scripts
-│   ├── setup-symlinks.sh   # Internal compatibility wrapper over agents-infra
-│   └── agents-attachments  # Manifest resolver plus image staging helper
+│   └── setup-symlinks.sh   # Internal compatibility wrapper over agents-infra
 │
 ├── .configs/               # Tool configurations
 │   ├── claude-settings.json    # Claude Code settings (reference)
@@ -535,6 +562,7 @@ Reference config with:
 
 - Model: `gpt-5.5`
 - Reasoning effort: `xhigh`
+- Service tier: `default` (Standard). The named `fast` profile remains available for explicit model/reasoning selection; use `/fast on` for interactive Fast opt-in, and persistent Fast requires `service_tier = "fast"` with `[features].fast_mode = true`.
 - Project docs byte limit: `131072`
 - The approaching-rate-limit model switch reminder is suppressed with `[notice].hide_rate_limit_model_nudge = true` so Codex does not ask to move to a lower-credit model.
 - As of the audited Codex CLI `0.144.1`, the separate safety-buffering chooser (`Retry with a faster model` / `Keep waiting`) has no supported `config.toml` setting for suppression, a default choice, or automatic waiting. It is runtime UI shown before agent instructions can act; terminal key automation or a patched Codex binary is intentionally out of scope.
@@ -542,9 +570,9 @@ Reference config with:
 - Trusted projects list
 - Global setup owns `~/.codex/config.toml`; project-local setup deliberately does not create `.codex/config.toml` so the global model/settings remain authoritative.
 - Local setup removes legacy managed project-local config symlinks but preserves custom `.codex/config.toml` files.
-- Explicit project-local config is available with `agents-infra setup local /path/to/project --codex-config=local`.
+- Explicit project-local config is available with `agents-infra setup local /path/to/project --codex-config=local`; it is rendered atomically from the installed config without the unsupported top-level `profiles` table.
 - Enforce global config with `agents-infra setup local /path/to/project --codex-config=global`.
-- `agents-infra doctor local` reports `codex_config_shadowing_global: true` when a project-local `.codex/config.toml` is overriding the global config.
+- `agents-infra doctor local` reports `codex_config_generated: true` for the managed rendered file and `codex_config_shadowing_global: true` whenever a project-local `.codex/config.toml` overrides the global config.
 
 ### Project-Local MCP Opt-In (Codex + Claude Code)
 
@@ -605,6 +633,115 @@ agents-infra compose --agent claude --project "$PWD" --schema-version 1 --json
 Its `argv_prefix` is only the provider rendering of the resolved
 `enabled_servers` set; safe metadata repeats no URL, command, args, or headers.
 Bearer token values are never read or emitted.
+
+For a session manager that wants to own the primary provider process itself
+(for example the task-board Session Manager), use the primary-session
+composition mode. It resolves exactly the launch plan `agents-infra codex` or
+`agents-infra claude` would execute — same project-config precedence, same
+executable lookup, same argument ordering, including provider user args passed
+after `--` — but performs no launch and emits one machine-readable
+`agents-infra.primary-session-launch-plan` schema v1 document:
+
+```bash
+agents-infra compose --mode primary-session --agent codex --project "$PWD" --schema-version 1 --json
+agents-infra compose --mode primary-session --agent claude --project "$PWD" --schema-version 1 --json -- --continue
+```
+
+The response contains:
+
+- `executable` — the resolved provider binary path (fails closed with error
+  code `provider_executable_not_found` when the provider is not on `PATH`);
+- `launch_variants.interactive.argv` — the exact argv the launching wrapper
+  would pass for a terminal session;
+- `launch_variants.managed_host` — the argv for a manager-owned host process.
+  For Codex the kind is `codex-app-server` and the argv is derived from the
+  same normalized interactive argv with an explicit, total three-way
+  classification (host argv, managed client argv, resolved session policy):
+  every config-level global option class keeps its relative order (arbitrary
+  `-c`/`--config` overrides, `--enable`, `--disable`, `--strict-config`,
+  `--profile`/`-p`/`-pVALUE`, `--oss`, `--local-provider`, `--search`,
+  `--dangerously-bypass-hook-trust`), the effective `--model`/`-m`/`-mVALUE`
+  converts to its `-c model=` override, and a terminal `app-server` token
+  ends the argv; the consumer appends `--listen <url>`. Approval/sandbox
+  policy is intentionally absent from this argv (the bypass flag,
+  `--sandbox`/`--ask-for-approval` selections, and
+  `-c sandbox_mode=`/`approval_policy=` overrides) — the manager applies it
+  per thread over the app-server RPC using the `resolved` block. For Claude
+  the kind is `claude-pty` and the argv equals the interactive composition,
+  run under a manager-owned PTY;
+- `launch_variants.managed_client` — every remaining interactive token, in
+  interactive order: thread/client options (`-C`/`--cd`, `--add-dir`,
+  `-i`/`--image`, `--no-alt-screen`, `--remote`, `--remote-auth-token-env`),
+  subcommands with their flags, prompt text, and everything after `--`.
+  Unrecognized future provider flags also land here instead of being silently
+  dropped; the session manager applies these on its client or thread layer
+  (thread cwd, writable roots, initial prompt, session selection) and must
+  fail closed on any token it cannot represent. The split is total: every
+  interactive token appears in `managed_host.argv`, in `managed_client.argv`,
+  or as session policy in `resolved`. For Claude this fragment is always
+  empty because the whole interactive argv runs in the managed PTY;
+- `resolved` — model, reasoning, yolo, sandbox, profile, approval, and MCP
+  with per-field provenance (`value` is null when the provider's native
+  configuration decides or the field does not apply to the provider);
+- `required_env_names` and `sources` — environment variable names (never
+  values) and the project-config/registry files that contributed. The names
+  cover composed MCP `bearer_token_env_var` references and, for Codex, the
+  environment variable named by a valid `--remote-auth-token-env VALUE` or
+  `--remote-auth-token-env=VALUE` selection, in deterministic order (MCP names
+  first, then the remote auth name) and de-duplicated. Tokens after the
+  provider `--` are never interpreted as environment options, and Codex's
+  accepted empty name (`--remote-auth-token-env=`) contributes no requirement.
+  A repeated occurrence or a missing value fails closed exactly like the Codex
+  parser rejects it.
+
+Explicit Codex model and profile selections resolve in every form the
+provider parser accepts — `--model`/`-m` and `--profile`/`-p` spaced, `=`,
+and attached (`-mVALUE`, `-pVALUE`) — with `cli:<flag>` provenance, and an
+explicit CLI model suppresses the composed project-config model. Profile
+values are validated against the Codex plain profile-name syntax (ASCII
+letters, digits, dashes, underscores; non-empty) in every spelling, so an ok
+plan never carries a profile value the provider rejects at launch; whether the
+named profile exists remains provider-native config resolution.
+
+Pass-through native policy selections are reflected into `resolved` with
+provider-faithful precedence. Codex `--sandbox`/`-s` and
+`--ask-for-approval`/`-a` (spaced, `=`, and attached short forms) resolve with
+`cli:<flag>` provenance; `-c sandbox_mode=` and `-c approval_policy=` resolve
+with `cli:-c <key>` provenance, a typed flag wins over a `-c` override
+regardless of order, and repeated `-c` overrides keep last-wins semantics.
+Repeated Codex policy flags, a flag without a value, and combining the bypass
+flag (or `-d`) with an explicit policy flag all fail closed exactly like the
+Codex parser rejects them. Policy values are validated against the
+provider-accepted domains before they are serialized as effective, so an ok
+plan never carries a value the provider rejects at launch: typed
+`--sandbox`/`--ask-for-approval` values must be in the clap flag enums, while
+`-c sandbox_mode=`/`approval_policy=` values must be in the config
+deserialization domains (`on-failure` and `granular` are config-only approval
+variants the typed flag rejects). Matching the provider, only the last `-c`
+override per policy key is validated — earlier repeats are masked by
+last-wins — and a typed flag does not mask an invalid `-c` override. Claude
+`--effort` and `--permission-mode` resolve into `resolved.reasoning` and
+`resolved.approval` with last-wins duplicate semantics; `--permission-mode`
+validates every occurrence against the provider's case-sensitive choices and
+fails closed on an unknown mode, while `--effort` matches case-insensitively
+and canonicalizes to its lowercase domain value. An unknown effort token is
+not rejected — Claude launches, warns, and applies its own default — so the
+token stays in the composed argv but `resolved.reasoning` reports the
+provider-native fallback (`value` null, source `native`) instead of claiming
+the ignored value is effective. An effective yolo resolves approval to
+`bypass-permissions` because `--dangerously-skip-permissions` overrides an
+explicit mode at Claude runtime.
+An explicit sandbox/approval/permission-mode selection suppresses
+project-config `yolo_mode` (reported as `suppressed_by_explicit_cli`), so the
+composed argv never pairs a bypass flag with the user's explicit policy.
+
+Error envelopes mirror the child contract: `unsupported_schema_version`,
+`invalid_project_configuration`, `invalid_provider_arguments` (a pass-through
+provider argument the provider's own parser would reject),
+`provider_executable_not_found`. The default
+`--mode child` contract above is unchanged. agents-infra stays board-agnostic:
+it renders the plan; the caller owns board discovery, goals, and the launched
+process.
 
 `-d` expands to Codex `--dangerously-bypass-approvals-and-sandbox` or Claude
 Code `--dangerously-skip-permissions` respectively. Each launcher can also
@@ -681,7 +818,7 @@ This repo defines a generic agent attachment contract:
 
 - manifest file name: `agents-attachments-manifest.json`
 - env var: `AGENTS_ATTACHMENTS_MANIFEST`
-- helper CLI: `agents-attachments`
+- helper CLI: `agents-attachments`, backed by `agents-infra attachments`
 
 The repo does not itself ingest chat attachments. A separate runtime or launcher
 must materialize files locally, write the manifest, and export the env var before
@@ -773,7 +910,7 @@ project-root/
 │   └── skills/ -> .agents/skills/...
 ├── AGENTS.md           # Rendered project-root Codex instructions
 └── .local/bin/
-    ├── agents-attachments -> .agents/.scripts/agents-attachments
+    ├── agents-attachments # launcher for agents-infra attachments
     └── agents-infra       # launcher for the Go CLI
 ```
 

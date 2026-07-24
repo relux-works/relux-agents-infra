@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -613,6 +614,7 @@ func TestNormalizeCodexExplicitSelectionsSupportsNativeFormsAndBoundaries(t *tes
 		wantModel     bool
 		wantReasoning bool
 		wantProfile   bool
+		wantErr       string
 	}{
 		{
 			name: "equals forms and equal duplicates",
@@ -623,14 +625,12 @@ func TestNormalizeCodexExplicitSelectionsSupportsNativeFormsAndBoundaries(t *tes
 				`--config=model_reasoning_effort='high'`,
 				`-c=model_reasoning_effort="high"`,
 				"--profile=fast",
-				"-p=fast",
 				"prompt",
 			},
 			want: []string{
 				"--model=cli-model",
 				`--config=model_reasoning_effort='high'`,
 				"--profile=fast",
-				"-p=fast",
 				"prompt",
 			},
 			wantModel:     true,
@@ -644,15 +644,37 @@ func TestNormalizeCodexExplicitSelectionsSupportsNativeFormsAndBoundaries(t *tes
 			wantProfile: true,
 		},
 		{
-			name:      "missing model value remains native",
-			args:      []string{"--model"},
-			want:      []string{"--model"},
-			wantModel: true,
+			// Codex rejects a repeated profile occurrence at runtime even
+			// with equal values (probe-verified exit 2), so equal duplicates
+			// fail closed too.
+			name:    "repeated profile fails closed",
+			args:    []string{"--profile=fast", "-p=fast", "prompt"},
+			wantErr: "the Codex argument -p cannot be used multiple times",
 		},
 		{
-			name: "missing config value remains native",
-			args: []string{"-c"},
-			want: []string{"-c"},
+			name:    "missing model value fails closed",
+			args:    []string{"--model"},
+			wantErr: "a value is required for the Codex argument --model",
+		},
+		{
+			name:    "missing config value fails closed",
+			args:    []string{"-c"},
+			wantErr: "a value is required for the Codex argument -c",
+		},
+		{
+			name:    "flag-like model value fails closed",
+			args:    []string{"--model", "-c", "foo=bar"},
+			wantErr: "a value is required for the Codex argument --model",
+		},
+		{
+			name:    "missing profile value fails closed",
+			args:    []string{"--profile"},
+			wantErr: "a value is required for the Codex argument --profile",
+		},
+		{
+			name:    "missing enable value fails closed",
+			args:    []string{"--enable"},
+			wantErr: "a value is required for the Codex argument --enable",
 		},
 		{
 			name: "unrelated config forms remain native",
@@ -664,11 +686,54 @@ func TestNormalizeCodexExplicitSelectionsSupportsNativeFormsAndBoundaries(t *tes
 			args: []string{"--", "--model", "prompt-text"},
 			want: []string{"--", "--model", "prompt-text"},
 		},
+		{
+			// The Codex CONFIG_PROFILE_V2 parser accepts only plain names of
+			// ASCII letters, digits, dashes, and underscores (probe exit 2 on
+			// every other shape).
+			name:    "profile value outside plain-name domain fails closed",
+			args:    []string{"--profile", "foo/bar"},
+			wantErr: "invalid value \"foo/bar\" for the Codex argument --profile; pass a plain profile name such as work",
+		},
+		{
+			name:    "empty equals profile value fails closed",
+			args:    []string{"--profile="},
+			wantErr: "invalid value \"\" for the Codex argument --profile; pass a plain profile name such as work",
+		},
+		{
+			name: "remote auth token env value is consumed as a value",
+			args: []string{"--remote-auth-token-env", "MY_TOKEN", "prompt"},
+			want: []string{"--remote-auth-token-env", "MY_TOKEN", "prompt"},
+		},
+		{
+			name:    "repeated remote auth token env fails closed",
+			args:    []string{"--remote-auth-token-env", "A", "--remote-auth-token-env=B"},
+			wantErr: "the Codex argument --remote-auth-token-env cannot be used multiple times",
+		},
+		{
+			name:    "missing remote auth token env value fails closed",
+			args:    []string{"--remote-auth-token-env"},
+			wantErr: "a value is required for the Codex argument --remote-auth-token-env",
+		},
+		{
+			name: "remote auth token env after separator stays uninterpreted",
+			args: []string{"--", "--remote-auth-token-env", "PROMPT_TEXT"},
+			want: []string{"--", "--remote-auth-token-env", "PROMPT_TEXT"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, selections, err := normalizeCodexExplicitSelections(tt.args)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				var argErr *ProviderArgumentError
+				if !errors.As(err, &argErr) {
+					t.Fatalf("err = %T, want *ProviderArgumentError", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("normalizeCodexExplicitSelections: %v", err)
 			}

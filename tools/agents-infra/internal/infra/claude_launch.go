@@ -25,7 +25,24 @@ type ClaudeLaunchPlan struct {
 	Args                     []string
 	PrintConfig              bool
 	WrapperExpandedShortcuts []CodexWrapperShortcut
+	ExplicitEffort           bool
+	ExplicitEffortValue      string
+	ExplicitEffortSource     string
+	ExplicitEffortRecognized bool
+	ExplicitPermissionMode   bool
+	ExplicitPermissionValue  string
+	ExplicitPermissionSource string
 }
+
+// Provider-validated policy value domains, probe-verified on Claude Code
+// 2.1.217: commander validates every --permission-mode occurrence
+// case-sensitively and exits 1 on an unknown choice, while --effort matches
+// case-insensitively and an unknown value is ignored with a warning, leaving
+// the provider default in effect.
+var (
+	claudePermissionModeValues = []string{"acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"}
+	claudeEffortValues         = []string{"low", "medium", "high", "xhigh", "max"}
+)
 
 type ClaudeProjectConfigSource struct {
 	Path           string
@@ -176,6 +193,13 @@ func BuildClaudeLaunchPlan(startDir, homeDir string, args []string) (ClaudeLaunc
 	plan.PrimarySessionResolution = primaryResolution
 	plan.ConfigArgs = append(plan.ConfigArgs, primaryArgs...)
 	plan.Args = append(append([]string(nil), plan.ConfigArgs...), plan.UserArgs...)
+	plan.ExplicitEffort = parsed.explicitEffort
+	plan.ExplicitEffortValue = parsed.explicitEffortValue
+	plan.ExplicitEffortSource = parsed.explicitEffortSource
+	plan.ExplicitEffortRecognized = parsed.explicitEffortRecognized
+	plan.ExplicitPermissionMode = parsed.explicitPermissionMode
+	plan.ExplicitPermissionValue = parsed.explicitPermissionValue
+	plan.ExplicitPermissionSource = parsed.explicitPermissionSource
 	return plan, nil
 }
 
@@ -324,14 +348,50 @@ func renderClaudePrimarySessionResolution(out *strings.Builder, resolution Claud
 }
 
 type parsedClaudeWrapperArgs struct {
-	claudeArgs          []string
-	printConfig         bool
-	explicitModel       bool
-	explicitModelValue  string
-	explicitModelSource string
-	dangerRequested     bool
-	dangerSource        string
-	expandedShortcuts   []CodexWrapperShortcut
+	claudeArgs               []string
+	printConfig              bool
+	explicitModel            bool
+	explicitModelValue       string
+	explicitModelSource      string
+	explicitEffort           bool
+	explicitEffortValue      string
+	explicitEffortSource     string
+	explicitEffortRecognized bool
+	explicitPermissionMode   bool
+	explicitPermissionValue  string
+	explicitPermissionSource string
+	dangerRequested          bool
+	dangerSource             string
+	expandedShortcuts        []CodexWrapperShortcut
+}
+
+// recordEffort registers one --effort occurrence with last-wins semantics.
+// Claude matches effort values case-insensitively, so a recognized token is
+// canonicalized to its lowercase domain value; an unrecognized token stays in
+// argv (Claude accepts the launch, warns, and applies its own default), so it
+// is recorded verbatim but never reported as an effective value.
+func (p *parsedClaudeWrapperArgs) recordEffort(value string) {
+	p.explicitEffort = true
+	p.explicitEffortSource = "cli:--effort"
+	lower := strings.ToLower(value)
+	if containsString(claudeEffortValues, lower) {
+		p.explicitEffortValue = lower
+		p.explicitEffortRecognized = true
+		return
+	}
+	p.explicitEffortValue = value
+	p.explicitEffortRecognized = false
+}
+
+// validateClaudePermissionMode mirrors the commander choices validation Claude
+// runs on every --permission-mode occurrence (probe-verified exit 1,
+// case-sensitive, on Claude Code 2.1.217), so an unknown mode fails closed
+// instead of composing an argv Claude rejects at launch.
+func validateClaudePermissionMode(value string) error {
+	if !containsString(claudePermissionModeValues, value) {
+		return providerArgErrorf("the Claude argument --permission-mode value %s is invalid (allowed choices: %s)", strconv.Quote(value), strings.Join(claudePermissionModeValues, ", "))
+	}
+	return nil
 }
 
 func parseClaudeWrapperArgs(args []string) (parsedClaudeWrapperArgs, error) {
@@ -364,20 +424,59 @@ func parseClaudeWrapperArgs(args []string) (parsedClaudeWrapperArgs, error) {
 				From: arg,
 				To:   claudeDangerouslySkipPermissions,
 			})
+		// Claude Code's commander parser lets a repeated option's last
+		// occurrence win and rejects a trailing option without a value
+		// (probe-verified exit 1, "option '--model <model>' argument
+		// missing"), so the model, effort, and permission-mode reflection
+		// mirrors both rules.
 		case arg == "--model":
 			parsed.claudeArgs = append(parsed.claudeArgs, arg)
+			if index+1 >= len(args) {
+				return parsedClaudeWrapperArgs{}, providerArgErrorf("the Claude argument --model requires a value")
+			}
+			index++
 			parsed.explicitModel = true
 			parsed.explicitModelSource = "cli:--model"
-			if index+1 < len(args) {
-				index++
-				parsed.explicitModelValue = args[index]
-				parsed.claudeArgs = append(parsed.claudeArgs, args[index])
-			}
+			parsed.explicitModelValue = args[index]
+			parsed.claudeArgs = append(parsed.claudeArgs, args[index])
 		case strings.HasPrefix(arg, "--model="):
 			parsed.claudeArgs = append(parsed.claudeArgs, arg)
 			parsed.explicitModel = true
 			parsed.explicitModelSource = "cli:--model"
 			parsed.explicitModelValue = strings.TrimPrefix(arg, "--model=")
+		case arg == "--effort":
+			parsed.claudeArgs = append(parsed.claudeArgs, arg)
+			if index+1 >= len(args) {
+				return parsedClaudeWrapperArgs{}, providerArgErrorf("the Claude argument --effort requires a value")
+			}
+			index++
+			parsed.claudeArgs = append(parsed.claudeArgs, args[index])
+			parsed.recordEffort(args[index])
+		case strings.HasPrefix(arg, "--effort="):
+			parsed.claudeArgs = append(parsed.claudeArgs, arg)
+			parsed.recordEffort(strings.TrimPrefix(arg, "--effort="))
+		case arg == "--permission-mode":
+			parsed.claudeArgs = append(parsed.claudeArgs, arg)
+			if index+1 >= len(args) {
+				return parsedClaudeWrapperArgs{}, providerArgErrorf("the Claude argument --permission-mode requires a value")
+			}
+			index++
+			if err := validateClaudePermissionMode(args[index]); err != nil {
+				return parsedClaudeWrapperArgs{}, err
+			}
+			parsed.claudeArgs = append(parsed.claudeArgs, args[index])
+			parsed.explicitPermissionMode = true
+			parsed.explicitPermissionValue = args[index]
+			parsed.explicitPermissionSource = "cli:--permission-mode"
+		case strings.HasPrefix(arg, "--permission-mode="):
+			value := strings.TrimPrefix(arg, "--permission-mode=")
+			if err := validateClaudePermissionMode(value); err != nil {
+				return parsedClaudeWrapperArgs{}, err
+			}
+			parsed.claudeArgs = append(parsed.claudeArgs, arg)
+			parsed.explicitPermissionMode = true
+			parsed.explicitPermissionValue = value
+			parsed.explicitPermissionSource = "cli:--permission-mode"
 		default:
 			parsed.claudeArgs = append(parsed.claudeArgs, arg)
 		}
@@ -439,6 +538,14 @@ func resolveClaudePrimarySessionYolo(project ClaudePrimarySessionBoolValue, pars
 		if project.Present {
 			resolution.ProjectApplication = ClaudePrimarySessionSuppressedByCLI
 		}
+		return resolution
+	}
+	// An explicit --permission-mode suppresses project yolo_mode: composing
+	// --dangerously-skip-permissions next to it would silently override the
+	// user's explicit mode at runtime (probe-verified skip-permissions wins).
+	if project.Present && project.Value && parsed.explicitPermissionMode {
+		resolution.EffectiveSource = parsed.explicitPermissionSource
+		resolution.ProjectApplication = ClaudePrimarySessionSuppressedByCLI
 		return resolution
 	}
 	if project.Present {

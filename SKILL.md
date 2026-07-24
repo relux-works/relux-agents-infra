@@ -89,9 +89,9 @@ agents-infra setup local /path/to/project --codex-config=local
 
 Mode semantics:
 
-- `preserve` (default) preserves custom `.codex/config.toml` files, but removes the old managed symlink `.codex/config.toml -> .agents/.configs/codex-config.toml`.
+- `preserve` (default) preserves custom `.codex/config.toml` files, but removes a managed project-local config from a prior explicit `local` setup, including the old symlink form.
 - `global` removes `.codex/config.toml`; use this when a local config unintentionally shadows the global model/settings.
-- `local` links `.codex/config.toml` to `.agents/.configs/codex-config.toml`; use only when project-local model/reasoning config is intentional.
+- `local` atomically renders a managed regular `.codex/config.toml` from `.agents/.configs/codex-config.toml`; it omits the user-level-only top-level `profiles` table and preserves all other valid TOML settings. Malformed installed TOML leaves the existing project config unchanged. Use this mode only when project-local config is intentional.
 
 Diagnose effective state with:
 
@@ -104,7 +104,8 @@ Key fields:
 - `codex_config_effective: global` means Codex uses the global `~/.codex/config.toml`.
 - `codex_config_effective: project-local` means `.codex/config.toml` is active for that project.
 - `codex_config_shadowing_global: true` means project-local config overrides the global config; remove it with `--codex-config=global` if unintended.
-- `codex_config_linked: true` means the project-local config is the managed agents-infra symlink, not a custom file.
+- `codex_config_generated: true` means the project-local config is the managed project-safe file rendered by agents-infra.
+- `codex_config_linked: true` means the config is a symlink to the full installed config, as used by global setup or left by an older local setup.
 
 ## Provider-specific primary-session policy
 
@@ -331,6 +332,41 @@ server names, source paths, and referenced bearer-token environment variable
 names, but primary-session policy, provider user args, and environment values
 are excluded.
 
+Session managers that own the primary provider process themselves use the
+primary-session mode instead:
+
+```bash
+agents-infra compose --mode primary-session --agent codex|claude --project /path/to/project --schema-version 1 --json [-- PROVIDER_ARGS...]
+```
+
+It emits one `agents-infra.primary-session-launch-plan` version-1 JSON
+document: the resolved provider executable, an `interactive` argv identical to
+what `agents-infra codex|claude` would launch, a `managed_host` argv
+(`codex-app-server` or `claude-pty`) plus a `managed_client` argv for
+thread/client tokens (for Codex the classification is total — every
+interactive token lands in host argv, client argv, or resolved session
+policy, never silently dropped; for Claude the client fragment is always
+empty), the resolved model/reasoning/yolo/sandbox/profile/approval/MCP policy
+with per-field provenance (including attached `-mVALUE`/`-pVALUE` forms),
+required environment variable names (never values; composed MCP bearer-token
+references plus a valid Codex `--remote-auth-token-env` name, de-duplicated,
+with post-`--` tokens never interpreted), and the contributing
+config sources. Codex `--profile` values are additionally validated against
+the provider's plain profile-name syntax in every spelling, failing closed
+with `invalid_provider_arguments` on names the Codex parser rejects. Pass-through native policy selections (Codex
+`--sandbox`/`--ask-for-approval` flags and `-c sandbox_mode=`/`-c
+approval_policy=` overrides; Claude `--effort`/`--permission-mode`) are
+reflected into `resolved` with provider-faithful precedence and duplicate
+handling, and an explicit policy selection suppresses project-config
+`yolo_mode` so the bypass flag is never composed next to it. Policy values
+are validated against the provider-accepted domains (typed-flag enums versus
+config-override variants for Codex, case-sensitive permission-mode choices
+for Claude) and fail closed with `invalid_provider_arguments` when the
+provider itself would reject them; an unknown Claude `--effort` value, which
+Claude ignores with a warning, keeps its argv token but reports
+`resolved.reasoning` as provider-native instead of effective. No launch is
+performed and no board or goal state is read.
+
 ## Attachments Contract
 
 Incoming user files are modeled as a generic manifest, not as board-specific state.
@@ -352,7 +388,8 @@ Runtime responsibilities:
 This repo's responsibilities:
 
 - define the contract in `.instructions/INSTRUCTIONS_ATTACHMENTS.md`
-- ship the helper in `.scripts/agents-attachments`
+- ship the helper in the Go `agents-infra attachments` subcommand plus the
+  generated backwards-compatible `agents-attachments` launcher
 - install/symlink the helper via `.scripts/setup-symlinks.sh`
 
 Image intake workflow:
@@ -384,4 +421,4 @@ Image intake workflow:
 
 - [README.md](README.md)
 - [.instructions/INSTRUCTIONS_ATTACHMENTS.md](.instructions/INSTRUCTIONS_ATTACHMENTS.md)
-- [.scripts/agents-attachments](.scripts/agents-attachments)
+- [tools/agents-infra/internal/attachments](tools/agents-infra/internal/attachments)
