@@ -3,11 +3,14 @@ package infra
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
@@ -46,8 +49,14 @@ func TestCLIWrapperBodyForWindows(t *testing.T) {
 	if !strings.Contains(body, "AGENTS_INFRA_CALLER_CWD=%CD%") {
 		t.Fatalf("windows wrapper body missing caller cwd preservation: %q", body)
 	}
-	if !strings.Contains(body, "go run . %*") {
-		t.Fatalf("windows wrapper body missing go run invocation: %q", body)
+	if !strings.Contains(body, `go build -o "%AGENTS_INFRA_BINARY%" .`) {
+		t.Fatalf("windows wrapper body missing go build invocation: %q", body)
+	}
+	if !strings.Contains(body, `"%AGENTS_INFRA_BINARY%" %*`) {
+		t.Fatalf("windows wrapper body missing built binary invocation: %q", body)
+	}
+	if !strings.Contains(body, "exit /b %ERRORLEVEL%") {
+		t.Fatalf("windows wrapper body missing exit-code propagation: %q", body)
 	}
 }
 
@@ -61,6 +70,85 @@ func TestCLIWrapperBodyForUnixPreservesCallerCWD(t *testing.T) {
 	}
 	if !strings.Contains(body, "export AGENTS_INFRA_CALLER_CWD") {
 		t.Fatalf("unix wrapper body missing caller cwd export: %q", body)
+	}
+	if !strings.Contains(body, `go build -o "$AGENTS_INFRA_BINARY" .`) || !strings.Contains(body, `exec "$AGENTS_INFRA_BINARY" "$@"`) {
+		t.Fatalf("unix wrapper body should build and execute the Go binary: %q", body)
+	}
+}
+
+func TestAgentsAttachmentsWrapperBodyForWindowsPropagatesSelectedLauncherExit(t *testing.T) {
+	body := agentsAttachmentsWrapperBody("windows")
+	for _, want := range []string{
+		"if exist \"%DIR%agents-infra.cmd\" (\r\n  \"%DIR%agents-infra.cmd\" attachments %*\r\n  exit /b\r\n)",
+		"if exist \"%DIR%agents-infra.exe\" (\r\n  \"%DIR%agents-infra.exe\" attachments %*\r\n  exit /b\r\n)",
+		"agents-infra attachments %*\r\nexit /b\r\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("windows agents-attachments wrapper missing %q:\n%s", want, body)
+		}
+	}
+	for _, unwanted := range []string{
+		"& exit /b %ERRORLEVEL%",
+		"exit /b %ERRORLEVEL%",
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("windows agents-attachments wrapper contains stale-errorlevel pattern %q:\n%s", unwanted, body)
+		}
+	}
+	if strings.Index(body, "agents-infra.cmd") > strings.Index(body, "agents-infra.exe") {
+		t.Fatalf("windows wrapper should prefer sibling .cmd before .exe:\n%s", body)
+	}
+}
+
+func TestAgentsAttachmentsWrapperBodyForUnixDelegatesToSiblingOrPath(t *testing.T) {
+	body := agentsAttachmentsWrapperBody("darwin")
+	for _, want := range []string{
+		`TARGET="$DIR/agents-infra"`,
+		"TARGET=agents-infra",
+		`"$TARGET" attachments "$@"`,
+		`exit "$STATUS"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("unix agents-attachments wrapper missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "python") {
+		t.Fatalf("unix agents-attachments wrapper should not mention Python:\n%s", body)
+	}
+}
+
+func TestAgentsAttachmentsUnixWrapperPreservesGoRunUsageExitCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell launcher test")
+	}
+	dir := t.TempDir()
+	launcher := filepath.Join(dir, "agents-attachments")
+	delegated := filepath.Join(dir, "agents-infra")
+	mustWrite(t, launcher, agentsAttachmentsWrapperBody(runtime.GOOS))
+	mustWrite(t, delegated, "#!/usr/bin/env sh\nprintf '%s\\n' 'Usage: agents-attachments list' >&2\nprintf '%s\\n' 'exit status 2' >&2\nexit 1\n")
+	if err := os.Chmod(launcher, 0o755); err != nil {
+		t.Fatalf("Chmod(%s): %v", launcher, err)
+	}
+	if err := os.Chmod(delegated, 0o755); err != nil {
+		t.Fatalf("Chmod(%s): %v", delegated, err)
+	}
+
+	command := exec.Command(launcher)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	err := command.Run()
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("launcher error = %v, want exit code 2", err)
+	}
+	if exitErr.ExitCode() != 2 {
+		t.Fatalf("launcher exit code = %d, want 2; stderr:\n%s", exitErr.ExitCode(), stderr.String())
+	}
+	if strings.Contains(stderr.String(), "exit status 2") {
+		t.Fatalf("launcher leaked go run status trailer:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Usage: agents-attachments list") {
+		t.Fatalf("launcher stderr missing delegated usage:\n%s", stderr.String())
 	}
 }
 
@@ -94,8 +182,10 @@ func TestSetupLocalCreatesInstalledRuntime(t *testing.T) {
 	assertFileContains(t, filepath.Join(project, "AGENTS.md"), imageIntakeWorkflowFixture)
 	assertFileContains(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture)
 	assertSymlink(t, filepath.Join(project, ".codex", "skills", "pdf"), filepath.Join(project, ".agents", "skills", "pdf"))
-	assertSymlink(t, filepath.Join(project, ".local", "bin", "agents-attachments"), filepath.Join(project, ".agents", ".scripts", "agents-attachments"))
-	assertFileContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), imageIntakeWorkflowFixture)
+	assertNoPath(t, filepath.Join(project, ".agents", ".scripts", "agents-attachments"))
+	assertRegularFile(t, filepath.Join(project, ".local", "bin", "agents-attachments"))
+	assertFileContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), `"$TARGET" attachments "$@"`)
+	assertFileNotContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), "python")
 
 	launcher := filepath.Join(project, ".local", "bin", "agents-infra")
 	data, err := os.ReadFile(launcher)
@@ -188,6 +278,39 @@ func TestRefreshLinksKeepsCanonicalRepoSkillWhenStaleSelfLinkCannotBeRemoved(t *
 	if !strings.Contains(logs.String(), "Skipped stale repo skill link") {
 		t.Fatalf("expected stale-link skip log, got:\n%s", logs.String())
 	}
+}
+
+func TestRefreshLinksReplacesLegacyPythonAttachmentsHelper(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	if err := Setup(Options{Layout: layout}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	legacyScript := filepath.Join(project, ".agents", ".scripts", "agents-attachments")
+	mustMkdir(t, filepath.Dir(legacyScript))
+	mustWrite(t, legacyScript, "#!/usr/bin/env python3\n")
+	mustMkdir(t, filepath.Join(project, ".local", "bin"))
+	legacyLink := filepath.Join(project, ".local", "bin", "agents-attachments")
+	if err := os.Remove(legacyLink); err != nil {
+		t.Fatalf("Remove generated agents-attachments launcher: %v", err)
+	}
+	if err := os.Symlink(legacyScript, legacyLink); err != nil {
+		t.Fatalf("Symlink legacy agents-attachments: %v", err)
+	}
+
+	if err := RefreshLinks(Options{Layout: layout}); err != nil {
+		t.Fatalf("RefreshLinks: %v", err)
+	}
+
+	assertNoPath(t, legacyScript)
+	assertRegularFile(t, filepath.Join(project, ".local", "bin", "agents-attachments"))
+	assertFileContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), "agents-infra")
+	assertFileContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), "attachments")
+	assertFileNotContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), "python")
 }
 
 func TestSyncSkipsGitAndTemp(t *testing.T) {
@@ -563,7 +686,8 @@ url = "https://example.test/mcp"
 	assertFileContains(t, claudeSettings, "bypassPermissions")
 	assertFileNotContains(t, claudeSettings, "source-default-overwrite")
 	assertFileContains(t, filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.updated]")
-	assertSymlink(t, filepath.Join(project, ".codex", "config.toml"), codexConfig)
+	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "gpt-5.6-terra")
+	assertFileNotContains(t, filepath.Join(project, ".codex", "config.toml"), "source-default-overwrite")
 	assertSymlink(t, filepath.Join(project, ".claude", "settings.json"), claudeSettings)
 }
 
@@ -706,7 +830,89 @@ func TestSetupLocalGlobalCodexConfigModeRemovesCustomProjectCodexConfig(t *testi
 	}
 }
 
-func TestSetupLocalLocalCodexConfigModeLinksProjectCodexConfig(t *testing.T) {
+func TestSetupLocalLocalCodexConfigModeRendersProjectSafeCodexConfig(t *testing.T) {
+	source := seedSourceRepo(t)
+	sourceConfigPath := filepath.Join(source, ".configs", "codex-config.toml")
+	sourceConfig := `model = "gpt-5.6-terra"
+model_reasoning_effort = "xhigh"
+service_tier = "fast"
+feature_flags = ["alpha", "beta"]
+inline_policy = { enabled = true, retries = 3 }
+released_at = 2026-07-23T10:30:00Z
+
+[profiles.fast]
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"
+
+[projects."/tmp/example"]
+trust_level = "trusted"
+
+[notice]
+hide_rate_limit_model_nudge = true
+
+[[hooks]]
+name = "first"
+args = ["one", "two"]
+
+[[hooks]]
+name = "second"
+args = []
+`
+	mustWrite(t, sourceConfigPath, sourceConfig)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	mustMkdir(t, filepath.Join(project, ".codex"))
+	legacyTarget := filepath.Join(project, ".agents", ".configs", "codex-config.toml")
+	if err := os.Symlink(legacyTarget, filepath.Join(project, ".codex", "config.toml")); err != nil {
+		t.Fatalf("Symlink(legacy project Codex config): %v", err)
+	}
+
+	if err := Setup(Options{Layout: layout, CodexConfigMode: CodexConfigModeLocal}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	projectConfigPath := filepath.Join(project, ".codex", "config.toml")
+	info, err := os.Lstat(projectConfigPath)
+	if err != nil {
+		t.Fatalf("Lstat(%s): %v", projectConfigPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("project-local Codex config should be rendered, got symlink: %s", projectConfigPath)
+	}
+	assertFileContains(t, projectConfigPath, generatedCodexConfigMarker)
+	assertFileNotContains(t, projectConfigPath, "[profiles.fast]")
+
+	installedConfigData, err := os.ReadFile(filepath.Join(project, ".agents", ".configs", "codex-config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(installed Codex config): %v", err)
+	}
+	projectConfigData, err := os.ReadFile(projectConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile(project Codex config): %v", err)
+	}
+	var wantDocument map[string]any
+	if err := toml.Unmarshal(installedConfigData, &wantDocument); err != nil {
+		t.Fatalf("Unmarshal(installed Codex config): %v", err)
+	}
+	delete(wantDocument, "profiles")
+	var gotDocument map[string]any
+	if err := toml.Unmarshal(projectConfigData, &gotDocument); err != nil {
+		t.Fatalf("Unmarshal(project Codex config): %v", err)
+	}
+	if !reflect.DeepEqual(gotDocument, wantDocument) {
+		t.Fatalf("rendered project Codex config changed valid settings:\ngot:  %#v\nwant: %#v", gotDocument, wantDocument)
+	}
+
+	report := mustDoctor(t, layout)
+	if !report.CodexConfigPresent || report.CodexConfigLinked || !report.CodexConfigGenerated || !report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "project-local" {
+		t.Fatalf("local Codex config mode should install project-local config: %+v", report)
+	}
+}
+
+func TestSetupLocalLocalCodexConfigModeRejectsMalformedSourceWithoutClobberingGeneratedConfig(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
 	layout, err := LocalLayout(source, project)
@@ -715,13 +921,37 @@ func TestSetupLocalLocalCodexConfigModeLinksProjectCodexConfig(t *testing.T) {
 	}
 
 	if err := Setup(Options{Layout: layout, CodexConfigMode: CodexConfigModeLocal}); err != nil {
-		t.Fatalf("Setup: %v", err)
+		t.Fatalf("initial Setup: %v", err)
+	}
+	projectConfigPath := filepath.Join(project, ".codex", "config.toml")
+	before, err := os.ReadFile(projectConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile(initial project Codex config): %v", err)
 	}
 
-	assertSymlink(t, filepath.Join(project, ".codex", "config.toml"), filepath.Join(project, ".agents", ".configs", "codex-config.toml"))
-	report := mustDoctor(t, layout)
-	if !report.CodexConfigPresent || !report.CodexConfigLinked || !report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "project-local" {
-		t.Fatalf("local Codex config mode should install project-local config: %+v", report)
+	installedConfigPath := filepath.Join(project, ".agents", ".configs", "codex-config.toml")
+	mustWrite(t, installedConfigPath, "model = \"broken\"\n[profiles.fast\n")
+	err = RefreshLinks(Options{Layout: layout, CodexConfigMode: CodexConfigModeLocal})
+	if err == nil {
+		t.Fatal("RefreshLinks succeeded with malformed installed Codex config")
+	}
+	if !strings.Contains(err.Error(), "parse installed Codex config") || !strings.Contains(err.Error(), installedConfigPath) {
+		t.Fatalf("unexpected malformed Codex config error: %v", err)
+	}
+
+	after, readErr := os.ReadFile(projectConfigPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(project Codex config after failed refresh): %v", readErr)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("failed refresh changed project Codex config:\nbefore: %q\nafter:  %q", string(before), string(after))
+	}
+	temporaryFiles, globErr := filepath.Glob(filepath.Join(project, ".codex", ".config.toml.tmp-*"))
+	if globErr != nil {
+		t.Fatalf("Glob(temporary Codex configs): %v", globErr)
+	}
+	if len(temporaryFiles) != 0 {
+		t.Fatalf("failed refresh left temporary Codex configs: %#v", temporaryFiles)
 	}
 }
 
@@ -756,8 +986,9 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
 
 	assertSymlink(t, filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".agents", ".configs", "codex-config.toml"))
 	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "hide_rate_limit_model_nudge = true")
+	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "[profiles.fast]")
 	report := mustDoctor(t, layout)
-	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
+	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
 		t.Fatalf("unexpected global Codex config doctor report: %+v", report)
 	}
 	assertFileNotContains(t, filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.figma]")
@@ -846,7 +1077,7 @@ func seedSourceRepo(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n")
 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
-	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
+	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\n\n[profiles.fast]\nmodel = \"gpt-5.5\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
 url = "https://mcp.figma.com/mcp"
 
@@ -858,7 +1089,6 @@ command = "/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriv
 args = ["--mcp"]
 `)
 	mustWrite(t, filepath.Join(root, ".rules", "default.rules"), "allow")
-	mustWrite(t, filepath.Join(root, ".scripts", "agents-attachments"), "#!/bin/sh\n# "+imageIntakeWorkflowFixture+"\nexit 0\n")
 	mustWrite(t, filepath.Join(root, ".skills", "skill-creator", "SKILL.md"), "creator")
 	mustWrite(t, filepath.Join(root, ".skills", "pdf", "SKILL.md"), "pdf")
 	mustWrite(t, filepath.Join(root, ".gitignore"), "ignored")
@@ -914,6 +1144,20 @@ func assertSymlink(t *testing.T, path, target string) {
 	}
 	if got != target {
 		t.Fatalf("%s -> %s, want %s", path, got, target)
+	}
+}
+
+func assertRegularFile(t *testing.T, path string) {
+	t.Helper()
+	st, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("expected regular file %s to exist: %v", path, err)
+	}
+	if st.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("expected %s to be a regular file, got symlink", path)
+	}
+	if st.IsDir() {
+		t.Fatalf("expected %s to be a regular file, got directory", path)
 	}
 }
 

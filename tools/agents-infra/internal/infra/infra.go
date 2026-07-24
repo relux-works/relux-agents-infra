@@ -186,7 +186,7 @@ func Doctor(layout Layout) (Report, error) {
 	report.CodexConfigLinked = isLinkTo(codexConfigPath, filepath.Join(layout.AgentsDir, ".configs", "codex-config.toml"))
 	report.CodexConfigGenerated = isGeneratedCodexConfigFile(codexConfigPath)
 	report.CodexConfigEffective = "global"
-	report.HelpersLinked = isLinkTo(filepath.Join(layout.BinDir, "agents-attachments"), filepath.Join(layout.AgentsDir, ".scripts", "agents-attachments"))
+	report.HelpersLinked = isGeneratedAgentsAttachmentsLauncher(filepath.Join(layout.BinDir, agentsAttachmentsWrapperName(runtime.GOOS)))
 	report.InfraSkillLink = isLinkTo(filepath.Join(layout.AgentsDir, "skills", repoSkillName), layout.AgentsDir)
 	if layout.Mode == ModeLocal {
 		report.CodexProjectRendered = isRenderedInstructionsFile(filepath.Join(layout.RootDir, "AGENTS.md"))
@@ -671,10 +671,9 @@ func setupCodex(layout Layout, codexConfigMode CodexConfigMode, out io.Writer) e
 			}
 			logf(out, "Ensured no project-local Codex config so global config remains authoritative")
 		case CodexConfigModeLocal:
-			if err := createSymlink(agentsCodexConfigPath, codexConfigPath, out); err != nil {
+			if err := renderProjectCodexConfig(agentsCodexConfigPath, codexConfigPath, out); err != nil {
 				return err
 			}
-			logf(out, "Linked project-local Codex config: %s", codexConfigPath)
 		}
 	}
 	rulesDir := filepath.Join(layout.AgentsDir, ".rules")
@@ -890,13 +889,92 @@ func setupHelpers(layout Layout, out io.Writer) error {
 	if err := os.MkdirAll(layout.BinDir, 0o755); err != nil {
 		return err
 	}
-	if err := createSymlink(filepath.Join(layout.AgentsDir, ".scripts", "agents-attachments"), filepath.Join(layout.BinDir, "agents-attachments"), out); err != nil {
+	if err := removeLegacyAgentsAttachmentsScript(layout, out); err != nil {
+		return err
+	}
+	if err := installAgentsAttachmentsLauncher(layout, out); err != nil {
 		return err
 	}
 	if err := setupCodexLocalLauncher(layout, out); err != nil {
 		return err
 	}
 	return nil
+}
+
+func removeLegacyAgentsAttachmentsScript(layout Layout, out io.Writer) error {
+	path := filepath.Join(layout.AgentsDir, ".scripts", "agents-attachments")
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if err := removeManagedPath(path, out); err != nil {
+		return err
+	}
+	logf(out, "Removed legacy Python agents-attachments helper: %s", path)
+	return nil
+}
+
+func installAgentsAttachmentsLauncher(layout Layout, out io.Writer) error {
+	path := filepath.Join(layout.BinDir, agentsAttachmentsWrapperName(runtime.GOOS))
+	body := agentsAttachmentsWrapperBody(runtime.GOOS)
+	if existing, err := os.ReadFile(path); err == nil && string(existing) == body {
+		logf(out, "Agents attachments launcher already up to date: %s", path)
+		return nil
+	}
+	if err := removeManagedPath(path, out); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		return fmt.Errorf("write agents attachments launcher: %w", err)
+	}
+	logf(out, "Installed agents attachments launcher: %s", path)
+	return nil
+}
+
+func agentsAttachmentsWrapperName(goos string) string {
+	if strings.EqualFold(goos, "windows") {
+		return "agents-attachments.cmd"
+	}
+	return "agents-attachments"
+}
+
+func agentsAttachmentsWrapperBody(goos string) string {
+	if strings.EqualFold(goos, "windows") {
+		return "@echo off\r\nsetlocal\r\nset \"DIR=%~dp0\"\r\nif exist \"%DIR%agents-infra.cmd\" (\r\n  \"%DIR%agents-infra.cmd\" attachments %*\r\n  exit /b\r\n)\r\nif exist \"%DIR%agents-infra.exe\" (\r\n  \"%DIR%agents-infra.exe\" attachments %*\r\n  exit /b\r\n)\r\nagents-infra attachments %*\r\nexit /b\r\n"
+	}
+	return `#!/usr/bin/env sh
+set -eu
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -x "$DIR/agents-infra" ]; then
+  TARGET="$DIR/agents-infra"
+else
+  TARGET=agents-infra
+fi
+STATUS_FILE=$(mktemp "${TMPDIR:-/tmp}/agents-attachments.XXXXXX")
+trap 'rm -f "$STATUS_FILE"' EXIT HUP INT TERM
+if "$TARGET" attachments "$@" 2>"$STATUS_FILE"; then
+  STATUS=0
+else
+  STATUS=$?
+fi
+MAPPED_STATUS=$(sed -n '$s/^exit status \([0-9][0-9]*\)$/\1/p' "$STATUS_FILE")
+if [ -n "$MAPPED_STATUS" ]; then
+  sed '$d' "$STATUS_FILE" >&2
+  exit "$MAPPED_STATUS"
+fi
+cat "$STATUS_FILE" >&2
+exit "$STATUS"
+`
+}
+
+func isGeneratedAgentsAttachmentsLauncher(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	body := string(data)
+	return strings.Contains(body, "agents-infra") && strings.Contains(body, "attachments")
 }
 
 func setupCodexLocalLauncher(layout Layout, out io.Writer) error {
@@ -989,15 +1067,18 @@ func cliWrapperName(goos string) string {
 
 func cliWrapperBody(goos, sourceDir string) string {
 	if strings.EqualFold(goos, "windows") {
-		return fmt.Sprintf("@echo off\r\nsetlocal\r\nset \"AGENTS_INFRA_SOURCE_DIR=%s\"\r\nset \"AGENTS_INFRA_CALLER_CWD=%%CD%%\"\r\ncd /d \"%%AGENTS_INFRA_SOURCE_DIR%%\\tools\\agents-infra\"\r\ngo run . %%*\r\n", sourceDir)
+		return fmt.Sprintf("@echo off\r\nsetlocal\r\nset \"AGENTS_INFRA_SOURCE_DIR=%s\"\r\nset \"AGENTS_INFRA_CALLER_CWD=%%CD%%\"\r\nset \"AGENTS_INFRA_BINARY=%%AGENTS_INFRA_SOURCE_DIR%%\\.temp\\bin\\agents-infra-local.exe\"\r\nif not exist \"%%AGENTS_INFRA_SOURCE_DIR%%\\.temp\\bin\" mkdir \"%%AGENTS_INFRA_SOURCE_DIR%%\\.temp\\bin\"\r\ncd /d \"%%AGENTS_INFRA_SOURCE_DIR%%\\tools\\agents-infra\"\r\ngo build -o \"%%AGENTS_INFRA_BINARY%%\" .\r\nif errorlevel 1 exit /b %%ERRORLEVEL%%\r\n\"%%AGENTS_INFRA_BINARY%%\" %%*\r\nexit /b %%ERRORLEVEL%%\r\n", sourceDir)
 	}
 	return fmt.Sprintf(`#!/usr/bin/env sh
 set -eu
 export AGENTS_INFRA_SOURCE_DIR=%q
 AGENTS_INFRA_CALLER_CWD=$(pwd)
 export AGENTS_INFRA_CALLER_CWD
+AGENTS_INFRA_BINARY="$AGENTS_INFRA_SOURCE_DIR/.temp/bin/agents-infra-local"
+mkdir -p "$(dirname -- "$AGENTS_INFRA_BINARY")"
 cd "$AGENTS_INFRA_SOURCE_DIR/tools/agents-infra"
-exec go run . "$@"
+go build -o "$AGENTS_INFRA_BINARY" .
+exec "$AGENTS_INFRA_BINARY" "$@"
 `, sourceDir)
 }
 
