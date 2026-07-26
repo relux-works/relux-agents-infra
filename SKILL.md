@@ -48,6 +48,7 @@ agents-infra setup global
 agents-infra setup local /path/to/project
 agents-infra doctor global
 agents-infra doctor local /path/to/project
+agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json
 agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json
 agents-infra version
 ```
@@ -92,6 +93,10 @@ Mode semantics:
 - `preserve` (default) preserves custom `.codex/config.toml` files, but removes a managed project-local config from a prior explicit `local` setup, including the old symlink form.
 - `global` removes `.codex/config.toml`; use this when a local config unintentionally shadows the global model/settings.
 - `local` atomically renders a managed regular `.codex/config.toml` from `.agents/.configs/codex-config.toml`; it omits the user-level-only top-level `profiles` table and preserves all other valid TOML settings. Malformed installed TOML leaves the existing project config unchanged. Use this mode only when project-local config is intentional.
+
+Those modes govern setup. Primary launch preparation intentionally refreshes
+the managed local Codex config before a direct or externally owned primary
+session so the two launch paths remain identical.
 
 Diagnose effective state with:
 
@@ -366,6 +371,23 @@ provider itself would reject them; an unknown Claude `--effort` value, which
 Claude ignores with a warning, keeps its argv token but reports
 `resolved.reasoning` as provider-native instead of effective. No launch is
 performed and no board or goal state is read.
+
+Before a session manager starts or connects to a primary provider host, it must
+refresh the same installed project surface as the direct launcher:
+
+```bash
+agents-infra prepare --agent codex|claude --project /path/to/project --schema-version 1 --json
+```
+
+This board-agnostic, non-launching contract emits one
+`agents-infra.primary-session-preparation` version-1 report. With an installed
+project `.agents/` runtime it refreshes the provider-specific managed surface:
+Codex instructions, skills/rules, and generated `.codex/config.toml`; or the
+Claude entrypoint, instruction/settings links, and managed skills. Without a
+local runtime it reports an explicit no-op. The nearest installed ancestor
+runtime is selected and the global `~/.agents` runtime is never treated as a
+project. Direct `agents-infra codex|claude` launches call the same preparation
+function immediately before provider exec; `--print-config` remains read-only.
 
 ## Attachments Contract
 

@@ -45,6 +45,8 @@ func run(args []string) error {
 		return runDoctor(args[1:])
 	case "compose":
 		return runCompose(args[1:])
+	case "prepare":
+		return runPrepare(args[1:])
 	case "attachments":
 		return runAttachments(args[1:])
 	case "codex":
@@ -305,6 +307,13 @@ func runCodex(args []string) error {
 		fmt.Fprint(os.Stdout, rendered)
 		return nil
 	}
+	if _, err := infra.PreparePrimarySession(
+		"codex",
+		plan.StartDir,
+		infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit},
+	); err != nil {
+		return fmt.Errorf("prepare Codex project surface: %w", err)
+	}
 	fmt.Fprint(os.Stderr, rendered)
 	codexPath, err := exec.LookPath("codex")
 	if err != nil {
@@ -326,6 +335,13 @@ func runClaude(args []string) error {
 	if plan.PrintConfig {
 		fmt.Fprint(os.Stdout, rendered)
 		return nil
+	}
+	if _, err := infra.PreparePrimarySession(
+		"claude",
+		plan.StartDir,
+		infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit},
+	); err != nil {
+		return fmt.Errorf("prepare Claude project surface: %w", err)
 	}
 	fmt.Fprint(os.Stderr, rendered)
 	claudePath, err := exec.LookPath("claude")
@@ -389,6 +405,61 @@ func runCompose(args []string) error {
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(composition); err != nil {
 		return fmt.Errorf("encode child launch composition: %w", err)
+	}
+	return nil
+}
+
+func runPrepare(args []string) error {
+	fs := flag.NewFlagSet("prepare", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	agent := fs.String("agent", "", "agent provider: codex or claude")
+	projectDir := fs.String("project", "", "project directory to prepare")
+	schemaVersion := fs.Int("schema-version", 0, "preparation contract schema version")
+	jsonOutput := fs.Bool("json", false, "emit one JSON contract document")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *agent != "codex" && *agent != "claude" {
+		return fmt.Errorf("prepare requires --agent codex or --agent claude")
+	}
+	if !*jsonOutput {
+		return fmt.Errorf("prepare requires --json")
+	}
+	if len(fs.Args()) != 0 {
+		return fmt.Errorf("prepare does not accept positional arguments: %q", fs.Args())
+	}
+	canonicalProjectDir, err := infra.CanonicalProjectDir(*projectDir)
+	if err != nil {
+		return err
+	}
+	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
+	if *schemaVersion != infra.PrimarySessionPreparationSchemaVersion {
+		envelope := infra.NewPrimarySessionPreparationErrorEnvelope(
+			*agent,
+			canonicalProjectDir,
+			producer,
+			infra.PrimarySessionPreparationErrorUnsupportedSchemaVersion,
+		)
+		if err := json.NewEncoder(os.Stdout).Encode(envelope); err != nil {
+			return fmt.Errorf("encode prepare error envelope: %w", err)
+		}
+		return fmt.Errorf("unsupported primary-session preparation schema version %d", *schemaVersion)
+	}
+	report, err := infra.PreparePrimarySession(*agent, canonicalProjectDir, producer)
+	if err != nil {
+		envelope := infra.NewPrimarySessionPreparationErrorEnvelope(
+			*agent,
+			canonicalProjectDir,
+			producer,
+			infra.PrimarySessionPreparationErrorRenderFailed,
+		)
+		if encodeErr := json.NewEncoder(os.Stdout).Encode(envelope); encodeErr != nil {
+			return fmt.Errorf("encode prepare error envelope: %w", encodeErr)
+		}
+		return fmt.Errorf("prepare primary-session project surface: %w", err)
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(report); err != nil {
+		return fmt.Errorf("encode primary-session preparation report: %w", err)
 	}
 	return nil
 }
@@ -484,6 +555,7 @@ func usageText() string {
   agents-infra doctor local [PROJECT_DIR] [--project-dir DIR]
   agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json
   agents-infra compose --mode primary-session --agent codex|claude --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]
+  agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json
   agents-infra attachments list|show|path|materialize|stage-images [...]
   agents-infra codex [--print-config] [-d|--danger|--yolo] [--] [CODEX_ARGS...]
   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]`

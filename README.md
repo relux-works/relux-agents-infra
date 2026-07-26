@@ -44,6 +44,7 @@ The canonical interface after bootstrap is:
 - `agents-infra doctor global|local`
 - `agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json`
 - `agents-infra compose --mode primary-session --agent codex|claude --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
+- `agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json`
 - `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
 - `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
 - `agents-infra version`
@@ -87,6 +88,11 @@ Use `--codex-config` when local setup should make an explicit decision:
   top-level `profiles` table while preserving all other valid TOML settings.
   Invalid installed TOML fails before the existing project config is replaced.
 
+These modes govern `setup local`. A primary `agents-infra codex` launch—or an
+external owner using the preparation contract below—intentionally refreshes
+the managed local config immediately before launch so every primary-session
+path observes the same installed project surface.
+
 ### Child launch MCP composition contract
 
 Automation that owns child process policy can request the project MCP subset
@@ -118,15 +124,54 @@ invalid discovered project configuration uses
 `invalid_project_configuration`. Consumers must reject a contract/version
 mismatch rather than partially applying its arguments.
 
+### Primary-session project preparation contract
+
+Session owners that launch a primary provider outside the agents-infra process
+must refresh the same installed project surface as the direct launcher:
+
+```bash
+agents-infra prepare --agent codex --project /abs/path/to/project --schema-version 1 --json
+agents-infra prepare --agent claude --project /abs/path/to/project --schema-version 1 --json
+```
+
+The command is non-launching and board-agnostic. It walks from `--project`
+toward the filesystem root, selects the nearest installed project `.agents/`
+runtime, and never treats the user's global `~/.agents` runtime as a project.
+Codex preparation refreshes the managed
+`.codex/AGENTS.md`, project-root `AGENTS.md`, skills/rules links, and an atomic
+managed `.codex/config.toml` rendered from
+`.agents/.configs/codex-config.toml` without the user-only `profiles` table.
+Claude preparation refreshes `.claude/CLAUDE.md`, instruction/settings links,
+and managed skill links. When no project-local runtime is installed, the
+command succeeds as an explicit no-op so the provider-native/global surface
+remains authoritative.
+
+Stdout contains exactly one
+`agents-infra.primary-session-preparation` schema-version-1 JSON report. It
+identifies the provider and canonical requested project, the selected
+`runtime_project_dir`, whether a local runtime was present, verified
+provider-state booleans such as
+`codex_project_rendered`/`codex_config_generated`, and an ordered artifact list
+with regular-file SHA-256 values or symlink targets. Unsupported schemas and
+render failures return nonzero with a safe error envelope.
+
+`agents-infra codex` and `agents-infra claude` call this same preparation
+function immediately before provider launch. `--print-config` remains a
+read-only inspection path. External session owners must call `prepare` after
+successful composition and before starting or connecting to their provider
+host; composition still supplies MCP and primary-session policy through the
+versioned launch plan.
+
 ### Task-board Session Manager wrappers and shell aliases
 
 The primary launch path for a board-scoped session is the Task-board Session
 Manager, not a direct `agents-infra` launch. `task-board codex` and
 `task-board claude` are thin clients: each resolves launch policy exclusively
 through `agents-infra compose --mode primary-session --agent codex|claude
---project DIR --schema-version 1 --json`, then owns the provider process,
-session/thread identity, and native board-goal binding. agents-infra stays
-board-agnostic and only renders the launch plan.
+--project DIR --schema-version 1 --json`, invokes the matching `agents-infra
+prepare` contract, then owns the provider process, session/thread identity, and
+native board-goal binding. agents-infra stays board-agnostic: it renders the
+provider project surface and launch plan without reading board state.
 
 Because of that, the recommended personal shortcut aliases now target the
 task-board wrappers rather than the raw launchers:
@@ -381,7 +426,7 @@ rg -n "Primary Parent Goal Actualization" \
 | Tool | Purpose | Command | Outputs |
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
-| `agents-infra` | Set up or inspect global/project-local agent runtimes; compose non-launching MCP-only child argv; configure and launch isolated primary Codex and Claude sessions; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config` | Runtime directories under the target root; deterministic compose JSON, attachment manifests/staged images, or printed diagnostics on stdout |
+| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex and Claude sessions; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, attachment manifests/staged images, or printed diagnostics on stdout |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
 | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
 | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |

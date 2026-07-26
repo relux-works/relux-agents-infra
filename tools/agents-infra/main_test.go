@@ -652,6 +652,212 @@ yolo_mode = true
 	}
 }
 
+func TestRunPrepareEmitsOneV1Document(t *testing.T) {
+	project := preparedRuntimeFixtureMain(t)
+	output := captureStdout(t, func() {
+		if err := run([]string{
+			"prepare",
+			"--agent", "codex",
+			"--project", project,
+			"--schema-version", "1",
+			"--json",
+		}); err != nil {
+			t.Fatalf("run prepare: %v", err)
+		}
+	})
+	var report infra.PrimarySessionPreparationReport
+	decodeSingleJSONDocument(t, output, &report)
+	if report.Contract != infra.PrimarySessionPreparationContract ||
+		report.SchemaVersion != 1 ||
+		report.Status != "ok" ||
+		report.Provider != "codex" ||
+		!report.CodexProjectRendered ||
+		!report.CodexConfigGenerated {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestRunPrepareUnsupportedSchemaVersionEmitsSafeErrorEnvelope(t *testing.T) {
+	project := t.TempDir()
+	var prepareErr error
+	output := captureStdout(t, func() {
+		prepareErr = runPrepare([]string{
+			"--agent", "claude",
+			"--project", project,
+			"--schema-version", "2",
+			"--json",
+		})
+	})
+	if prepareErr == nil {
+		t.Fatal("runPrepare succeeded for unsupported schema")
+	}
+	var envelope infra.PrimarySessionPreparationErrorEnvelope
+	decodeSingleJSONDocument(t, output, &envelope)
+	if envelope.Contract != infra.PrimarySessionPreparationContract ||
+		envelope.Status != "error" ||
+		envelope.Error.Code != infra.PrimarySessionPreparationErrorUnsupportedSchemaVersion {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
+func TestDirectLaunchAndPrepareCommandRenderIdenticalProviderArtifacts(t *testing.T) {
+	home := t.TempDir()
+	binDir := t.TempDir()
+	mustWrite(t, filepath.Join(binDir, "codex"), "#!/bin/sh\nexit 0\n")
+	mustWrite(t, filepath.Join(binDir, "claude"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", binDir)
+
+	for _, provider := range []string{"codex", "claude"} {
+		t.Run(provider, func(t *testing.T) {
+			launchProject := preparedRuntimeFixtureMain(t)
+			prepareProject := preparedRuntimeFixtureMain(t)
+			t.Setenv(callerCWDEnv, launchProject)
+			var launchErr error
+			if provider == "codex" {
+				launchErr = runCodex(nil)
+			} else {
+				launchErr = runClaude(nil)
+			}
+			if launchErr != nil {
+				t.Fatalf("direct launch: %v", launchErr)
+			}
+
+			output := captureStdout(t, func() {
+				if err := runPrepare([]string{
+					"--agent", provider,
+					"--project", prepareProject,
+					"--schema-version", "1",
+					"--json",
+				}); err != nil {
+					t.Fatalf("prepare: %v", err)
+				}
+			})
+			var report infra.PrimarySessionPreparationReport
+			decodeSingleJSONDocument(t, output, &report)
+			canonicalLaunchProject, err := filepath.EvalSymlinks(launchProject)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonicalPrepareProject := report.ProjectDir
+			for _, artifact := range report.Artifacts {
+				relative, err := filepath.Rel(canonicalPrepareProject, artifact.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				otherPath := filepath.Join(canonicalLaunchProject, relative)
+				if artifact.Target != "" {
+					otherTarget, err := os.Readlink(otherPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantRelativeTarget, err := filepath.Rel(canonicalPrepareProject, artifact.Target)
+					if err != nil {
+						t.Fatal(err)
+					}
+					gotRelativeTarget, err := filepath.Rel(canonicalLaunchProject, otherTarget)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if gotRelativeTarget != wantRelativeTarget {
+						t.Fatalf("%s link target differs for %s: %s != %s", provider, relative, gotRelativeTarget, wantRelativeTarget)
+					}
+					continue
+				}
+				other, err := os.ReadFile(otherPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prepared, err := os.ReadFile(artifact.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				normalizedOther := strings.ReplaceAll(string(other), canonicalLaunchProject, "$PROJECT")
+				normalizedPrepared := strings.ReplaceAll(string(prepared), canonicalPrepareProject, "$PROJECT")
+				if normalizedOther != normalizedPrepared {
+					t.Fatalf("%s artifact differs for %s", provider, relative)
+				}
+			}
+			launchSurface := normalizedProviderSurface(t, canonicalLaunchProject, provider)
+			preparedSurface := normalizedProviderSurface(t, canonicalPrepareProject, provider)
+			if !reflect.DeepEqual(launchSurface, preparedSurface) {
+				t.Fatalf(
+					"%s full provider surface differs:\ndirect=%#v\nprepare=%#v",
+					provider,
+					launchSurface,
+					preparedSurface,
+				)
+			}
+		})
+	}
+}
+
+func normalizedProviderSurface(t *testing.T, project, provider string) map[string]string {
+	t.Helper()
+	surfaceDir := filepath.Join(project, "."+provider)
+	snapshot := map[string]string{}
+	err := filepath.WalkDir(surfaceDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(project, path)
+		if err != nil {
+			return err
+		}
+		switch {
+		case entry.Type()&os.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			snapshot[relative] = "link:" + strings.ReplaceAll(target, project, "$PROJECT")
+		case entry.IsDir():
+			snapshot[relative] = "dir"
+		default:
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			snapshot[relative] = "file:" + strings.ReplaceAll(string(data), project, "$PROJECT")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot %s surface: %v", provider, err)
+	}
+	if provider == "codex" {
+		data, err := os.ReadFile(filepath.Join(project, "AGENTS.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot["AGENTS.md"] = "file:" + strings.ReplaceAll(string(data), project, "$PROJECT")
+	}
+	return snapshot
+}
+
+func preparedRuntimeFixtureMain(t *testing.T) string {
+	t.Helper()
+	project := t.TempDir()
+	for _, dir := range []string{
+		filepath.Join(project, ".agents", ".configs"),
+		filepath.Join(project, ".agents", ".instructions"),
+		filepath.Join(project, ".agents", ".rules"),
+		filepath.Join(project, ".agents", "skills", "example"),
+	} {
+		mustMkdir(t, dir)
+	}
+	mustWrite(t, filepath.Join(project, ".agents", ".configs", "codex-config.toml"), `model = "gpt-test"
+
+[profiles.fast]
+model = "gpt-fast"
+`)
+	mustWrite(t, filepath.Join(project, ".agents", ".configs", "claude-settings.json"), "{}\n")
+	mustWrite(t, filepath.Join(project, ".agents", ".instructions", "AGENTS.md"), "# Managed instructions\n")
+	mustWrite(t, filepath.Join(project, ".agents", ".rules", "default.rules"), "allow\n")
+	mustWrite(t, filepath.Join(project, ".agents", "skills", "example", "SKILL.md"), "# Example\n")
+	return project
+}
+
 func TestRunComposePrimarySessionUnsupportedSchemaVersionEmitsSafeErrorEnvelope(t *testing.T) {
 	project := t.TempDir()
 	var composeErr error
