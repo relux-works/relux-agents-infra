@@ -64,6 +64,13 @@ A usable source carries the instruction entrypoints, `.configs`, `.rules`, the
 instruction module its entrypoints include. Anything less is refused before the
 destination is touched.
 
+For local setup that module is proven by running what the launcher runs, not by
+listing its files and not by compiling alone: the generated launcher builds the
+module into `PROJECT/.local/bin/.agents-infra-build/` and executes the result on
+every invocation, so setup and `verify local` do the same and require the binary
+to answer `version` as `agents-infra`. Both therefore need a Go toolchain — the
+same one the launcher needs. The launcher never writes into the source checkout.
+
 ```bash
 agents-infra verify local /path/to/project
 ```

@@ -90,6 +90,39 @@ only the instruction and config markers used to pass, and setup would exit 0,
 print a full install log, and leave a launcher that failed the first time it
 ran.
 
+For `setup local` and `verify local`, the launcher backend is not checked by
+listing files, and not by compiling it either. The generated launcher runs
+`go build .` in `SOURCE/tools/agents-infra` into its own output path and then
+executes the result, on every invocation — so setup performs that whole
+operation and requires the built binary to answer `version` as `agents-infra`.
+
+Each narrower check was satisfied by a tree that then failed on first use. A
+module can carry `go.mod` and `main.go` and still be missing the packages the
+build needs. A module can compile cleanly into a program that exits non-zero, or
+into a program that is not agents-infra at all. And a build to some unrelated
+temporary directory says nothing about whether the launcher's real output path
+can be written. A refusal carries the command output naming what failed.
+
+The launcher builds into `PROJECT/.local/bin/.agents-infra-build/`, inside the
+target it was installed for — never into the shared source checkout. That path
+would otherwise be contended by every project installed from the same source,
+would break for a read-only source, and could not be reproduced by verification
+without mutating the tree being verified.
+
+Two consequences worth knowing:
+
+- `setup local` and `verify local` need a Go toolchain. The generated launcher
+  already needs one on every invocation, so this is not a new requirement for
+  the runtime — but it does mean a host without Go cannot install a local
+  runtime instead of installing a broken one.
+- Setup and `verify local` build to the launcher's own output path, so the
+  launcher's first invocation finds an artifact that is already there. Nothing
+  is written into the source tree.
+
+`setup global` generates no launcher — the bootstrap owns
+`~/.local/bin/agents-infra` — so it makes no claim about a build and does not
+run one.
+
 Three things are refused instead of guessed:
 
 - An explicit `--source-dir`/`AGENTS_INFRA_SOURCE_DIR` that is not an
@@ -121,8 +154,10 @@ agents-infra verify global
 
 `verify` re-runs the same postcondition: the receipt must have been minted for
 this destination, the installed tree must carry every asset above, and the
-generated launcher must point at a source that can still build it. A receipt on
-its own proves nothing — it is always checked against the live artifacts.
+generated launcher's recorded source must still produce a binary that starts —
+`verify local` builds it to the launcher's recorded output path and runs it,
+rather than checking that the module's files are present. A receipt on its own
+proves nothing — it is always checked against the live artifacts.
 
 Consumers that bootstrap a repo-local runtime should gate on `verify` rather
 than on the exit status of `setup` alone.
