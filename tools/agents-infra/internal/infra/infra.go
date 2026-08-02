@@ -125,8 +125,13 @@ func Setup(opts Options) error {
 	if err != nil {
 		return err
 	}
-	if opts.Layout.SourceDir == "" {
-		return fmt.Errorf("source dir is required")
+	if err := requireLayoutSourceDir(opts.Layout); err != nil {
+		return err
+	}
+	// From here on the destination is being rewritten, so it stops vouching for
+	// itself until this run finishes and passes its postconditions.
+	if err := invalidateRuntimeReceipt(opts.Layout.AgentsDir); err != nil {
+		return err
 	}
 	if !opts.NoSync {
 		if err := syncRepo(opts.Layout); err != nil {
@@ -146,7 +151,15 @@ func Setup(opts Options) error {
 	if err := RefreshLinks(opts); err != nil {
 		return err
 	}
-	return commitPreparedProjectConfig(preparedProjectConfig, opts.Stdout)
+	if err := commitPreparedProjectConfig(preparedProjectConfig, opts.Stdout); err != nil {
+		return err
+	}
+	// Postcondition, not a label: what was installed has to be usable before the
+	// run is allowed to mark it so.
+	if err := verifyRuntimeArtifacts(opts.Layout); err != nil {
+		return err
+	}
+	return writeRuntimeReceipt(opts.Layout)
 }
 
 func RefreshLinks(opts Options) error {
@@ -349,6 +362,9 @@ func shouldSkip(rel string, isDir bool) bool {
 	case rel == ".temp" || strings.HasPrefix(rel, ".temp/"):
 		return true
 	case rel == ".configs/"+projectConfigFileName:
+		return true
+	// A receipt is minted by a verified run, never inherited from a source tree.
+	case base == runtimeReceiptFileName:
 		return true
 	case base == ".DS_Store", base == ".skill-lock.json", base == ".gitignore", base == ".gitattributes", base == ".gitmodules", base == "task-board.config.json":
 		return true

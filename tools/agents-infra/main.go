@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/attachments"
@@ -43,6 +43,8 @@ func run(args []string) error {
 		return runRefreshLinks(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
+	case "verify":
+		return runVerify(args[1:])
 	case "compose":
 		return runCompose(args[1:])
 	case "prepare":
@@ -159,7 +161,11 @@ func runSetup(args []string) error {
 	primarySessionSetup.Clear = *clearPrimarySession
 	claudePrimarySessionSetup.Clear = *clearClaudePrimarySession
 
-	layout, err := resolveLayout(mode, *sourceDir, *homeDir, *projectDir, positionals)
+	layout, err := resolveLayout(mode, *homeDir, *projectDir, positionals)
+	if err != nil {
+		return err
+	}
+	layout.SourceDir, err = resolveSetupSourceDir(layout, *sourceDir)
 	if err != nil {
 		return err
 	}
@@ -202,6 +208,32 @@ func runRefreshLinks(args []string) error {
 	})
 }
 
+// runVerify re-checks the postcondition Setup enforces, so a caller that only
+// sees an exit code and a directory can still tell an installed runtime apart
+// from a directory that merely looks like one.
+func runVerify(args []string) error {
+	if len(args) == 0 {
+		return errors.New("verify requires mode: global or local")
+	}
+	mode := args[0]
+	fs := flag.NewFlagSet("verify "+mode, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	homeDir := fs.String("home-dir", "", "home directory for global verify")
+	projectDir := fs.String("project-dir", "", "project directory for local verify")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	layout, err := resolveLayout(mode, *homeDir, *projectDir, fs.Args())
+	if err != nil {
+		return err
+	}
+	if err := infra.VerifyInstalledRuntime(layout); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "verified %s agent runtime: %s\n", layout.Mode, layout.AgentsDir)
+	return nil
+}
+
 func runDoctor(args []string) error {
 	if len(args) == 0 {
 		return errors.New("doctor requires mode: global or local")
@@ -214,7 +246,7 @@ func runDoctor(args []string) error {
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	layout, err := resolveLayout(mode, "", *homeDir, *projectDir, fs.Args())
+	layout, err := resolveLayout(mode, *homeDir, *projectDir, fs.Args())
 	if err != nil {
 		return err
 	}
@@ -505,10 +537,28 @@ func runVersion() error {
 	return nil
 }
 
-func resolveLayout(mode, sourceDir, homeDir, projectDir string, positional []string) (infra.Layout, error) {
-	if sourceDir == "" {
-		sourceDir = os.Getenv("AGENTS_INFRA_SOURCE_DIR")
+// resolveSetupSourceDir resolves the source tree a setup run copies from. The
+// installed binary carries no source path of its own, so an explicit flag or
+// environment override is followed by the installer's recorded repo path and
+// the installed .agents runtime.
+func resolveSetupSourceDir(layout infra.Layout, sourceDirFlag string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
 	}
+	return infra.ResolveSourceDir(infra.SourceDirRequest{
+		Mode:              layout.Mode,
+		Flag:              sourceDirFlag,
+		Env:               os.Getenv(infra.SourceDirEnv),
+		ConfigDirOverride: os.Getenv(infra.ConfigDirEnv),
+		XDGConfigHome:     os.Getenv("XDG_CONFIG_HOME"),
+		GOOS:              runtime.GOOS,
+		HomeDir:           homeDir,
+		TargetAgentsDir:   layout.AgentsDir,
+	})
+}
+
+func resolveLayout(mode, homeDir, projectDir string, positional []string) (infra.Layout, error) {
 	switch mode {
 	case string(infra.ModeGlobal):
 		if homeDir == "" {
@@ -518,7 +568,7 @@ func resolveLayout(mode, sourceDir, homeDir, projectDir string, positional []str
 				return infra.Layout{}, fmt.Errorf("resolve home dir: %w", err)
 			}
 		}
-		return infra.GlobalLayout(sourceDir, homeDir)
+		return infra.GlobalLayout("", homeDir)
 	case string(infra.ModeLocal):
 		if projectDir == "" {
 			if len(positional) > 0 {
@@ -529,13 +579,7 @@ func resolveLayout(mode, sourceDir, homeDir, projectDir string, positional []str
 				projectDir = "."
 			}
 		}
-		if sourceDir != "" {
-			abs, err := filepath.Abs(sourceDir)
-			if err == nil {
-				sourceDir = abs
-			}
-		}
-		return infra.LocalLayout(sourceDir, projectDir)
+		return infra.LocalLayout("", projectDir)
 	default:
 		return infra.Layout{}, fmt.Errorf("unknown mode %q", mode)
 	}
@@ -553,10 +597,20 @@ func usageText() string {
   agents-infra refresh-links --agents-dir DIR --claude-dir DIR --codex-dir DIR --bin-dir DIR [--mode global|local] [--codex-config preserve|global|local]
   agents-infra doctor global [--home-dir DIR]
   agents-infra doctor local [PROJECT_DIR] [--project-dir DIR]
+  agents-infra verify global [--home-dir DIR]
+  agents-infra verify local [PROJECT_DIR] [--project-dir DIR]
   agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json
   agents-infra compose --mode primary-session --agent codex|claude --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]
   agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json
   agents-infra attachments list|show|path|materialize|stage-images [...]
   agents-infra codex [--print-config] [-d|--danger|--yolo] [--] [CODEX_ARGS...]
-  agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]`
+  agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
+
+Source tree resolution for setup (first usable wins):
+  1. --source-dir DIR
+  2. ` + infra.SourceDirEnv + `
+  3. repoPath from the installer's machine-scoped install.json
+  4. the installed ~/.agents runtime
+An explicit --source-dir or ` + infra.SourceDirEnv + ` is never replaced by a
+discovered fallback; an unusable one fails and names what is missing.`
 }

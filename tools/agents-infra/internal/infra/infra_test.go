@@ -1066,7 +1066,7 @@ func seedSourceRepo(t *testing.T) string {
 	mustMkdir(t, filepath.Join(root, ".scripts"))
 	mustMkdir(t, filepath.Join(root, ".skills", "skill-creator"))
 	mustMkdir(t, filepath.Join(root, ".skills", "pdf"))
-	mustMkdir(t, filepath.Join(root, "tools", "agents-infra"))
+	seedLauncherBackend(t, root)
 	mustMkdir(t, filepath.Join(root, ".temp"))
 	mustMkdir(t, filepath.Join(root, ".task-board"))
 	mustMkdir(t, filepath.Join(root, ".git"))
