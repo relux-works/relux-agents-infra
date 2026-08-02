@@ -53,6 +53,80 @@ Setup syncs the repo into `.agents`, treats `.skills/` as the authoritative
 source-managed skill tree, refreshes the managed links it owns inside `skills/`,
 and then refreshes symlinks in `.claude/`, `.codex/`, and `.local/bin`.
 
+### Source tree resolution
+
+`setup global` and `setup local` need a source tree to sync from. An installed
+binary carries no path of its own, so it resolves one — first usable wins:
+
+1. `--source-dir DIR`
+2. `AGENTS_INFRA_SOURCE_DIR`
+3. `repoPath` from the machine-scoped `install.json` the installer writes
+4. the installed `~/.agents` runtime
+
+Callers therefore do not need a host-specific checkout path:
+`agents-infra setup local /path/to/project` works from a globally installed
+binary.
+
+#### What makes a tree usable
+
+The contract is derived from what setup installs, not from a set of
+recognisable file names. A usable source tree carries:
+
+| Asset | Needed by |
+| --- | --- |
+| `.instructions/INSTRUCTIONS.md` | Claude instructions entrypoint |
+| `.instructions/AGENTS.md` | rendered Codex instructions entrypoint |
+| `.configs` | linked agent config tree |
+| `.rules` | linked agent rules tree |
+| `tools/agents-infra/go.mod`, `tools/agents-infra/main.go` | the Go module the generated local `agents-infra` launcher builds on every invocation |
+
+…plus every instruction module the entrypoints `@include`. That closure is
+resolved up front, so a tree that references modules it does not ship is
+refused before the destination is touched rather than failing half way through
+the render.
+
+The launcher backend is part of the contract for a concrete reason: a tree with
+only the instruction and config markers used to pass, and setup would exit 0,
+print a full install log, and leave a launcher that failed the first time it
+ran.
+
+Three things are refused instead of guessed:
+
+- An explicit `--source-dir`/`AGENTS_INFRA_SOURCE_DIR` that is not an
+  agents-infra tree fails and names every missing asset and the component that
+  needs it. It never falls back to a discovered candidate, so a wrong path
+  cannot install something else.
+- A candidate that contains the destination is rejected rather than synced into
+  itself.
+- A tree that satisfies the markers but not the full contract is rejected, not
+  installed part way.
+
+When nothing resolves, the error lists every candidate and why each was
+unusable.
+
+### Verifying an installed runtime
+
+Exit code zero and the existence of `.agents` are not evidence that a runtime
+works. A setup run only marks its destination complete after its postconditions
+pass, by writing `.agents/.agents-infra-install.json`. That receipt is dropped
+before the run mutates anything and rewritten only at the end, so a run that
+fails part way through leaves nothing vouching for what it wrote. Sync never
+copies a receipt out of a source tree, and a receipt naming a different
+destination is rejected.
+
+```bash
+agents-infra verify local /path/to/project
+agents-infra verify global
+```
+
+`verify` re-runs the same postcondition: the receipt must have been minted for
+this destination, the installed tree must carry every asset above, and the
+generated launcher must point at a source that can still build it. A receipt on
+its own proves nothing — it is always checked against the live artifacts.
+
+Consumers that bootstrap a repo-local runtime should gate on `verify` rather
+than on the exit status of `setup` alone.
+
 Author shared changes in this source repo. Do **not** edit `~/.agents/`
 directly.
 The installed `~/.agents/` copy is runtime state and should not keep git metadata.

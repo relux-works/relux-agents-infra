@@ -53,6 +53,25 @@ agents-infra compose --agent codex --project /path/to/project --schema-version 1
 agents-infra version
 ```
 
+`setup global` and `setup local` need no host-specific source path. They resolve
+the source tree from `--source-dir`, then `AGENTS_INFRA_SOURCE_DIR`, then the
+`repoPath` recorded in the installer's `install.json`, then the installed
+`~/.agents` runtime. An explicit source that is not an agents-infra tree fails
+and names what is missing instead of falling back.
+
+A usable source carries the instruction entrypoints, `.configs`, `.rules`, the
+`tools/agents-infra` Go module the generated launcher builds, and every
+instruction module its entrypoints include. Anything less is refused before the
+destination is touched.
+
+```bash
+agents-infra verify local /path/to/project
+```
+
+`verify` is the postcondition setup itself enforces before marking a runtime
+complete. Gate on it rather than on `setup`'s exit code: a directory that exists
+is not a runtime that works.
+
 This repo is setup/configuration infrastructure, not the runtime that launches agent sessions.
 `~/.agents` is the installed destination, not the place to author shared changes.
 
