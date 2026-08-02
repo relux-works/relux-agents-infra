@@ -127,7 +127,7 @@ func (e *SourceDirError) Error() string {
 			b.WriteString("\n  " + attempt.describe())
 		}
 	}
-	b.WriteString("\nA usable source tree contains " + strings.Join(assetLabels(), ", ") + ",\nplus every instruction module its entrypoints include.")
+	b.WriteString("\nA usable source tree contains " + strings.Join(assetLabels(), ", ") + ",\nplus every instruction module its entrypoints include, and its tools/agents-infra\nmodule must be one `go build .` completes.")
 	b.WriteString("\nPass --source-dir DIR or set " + SourceDirEnv + " to a relux-agents-infra checkout or an installed .agents runtime.")
 	return b.String()
 }
@@ -426,6 +426,13 @@ func requireLayoutSourceDir(layout Layout) error {
 	}
 	if missing := MissingSourceDirAssets(attempt.Path); len(missing) > 0 {
 		attempt.Missing = missing
+		return &SourceDirError{Mode: layout.Mode, Attempts: []SourceDirAttempt{attempt}}
+	}
+	// The assets above are names; the launcher runs a build. Proving the build
+	// here, before the destination is touched, is what keeps a module the
+	// launcher cannot compile from being installed and then attested.
+	if failure := launcherBackendSourceFailure(layout.Mode, attempt.Path); failure != "" {
+		attempt.Reason = failure
 		return &SourceDirError{Mode: layout.Mode, Attempts: []SourceDirAttempt{attempt}}
 	}
 	return nil

@@ -9,6 +9,27 @@ import (
 	"testing"
 )
 
+// launcherBackendFixtureMain is the smallest program that is actually an
+// agents-infra CLI: it answers `version` the way runVersion does. A fixture
+// that only compiles would model a runtime the launcher cannot use, so it
+// cannot stand in for one that it can.
+const launcherBackendFixtureMain = `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Println("agents-infra fixture commit=none build_date=none")
+		return
+	}
+	fmt.Fprintln(os.Stderr, "usage: agents-infra version")
+	os.Exit(2)
+}
+`
+
 // seedLauncherBackend writes the Go module the generated agents-infra launcher
 // builds. It is part of the source contract, not decoration: without it the
 // installed runtime's agents-infra command cannot start.
@@ -16,7 +37,7 @@ func seedLauncherBackend(t *testing.T, dir string) {
 	t.Helper()
 	mustMkdir(t, filepath.Join(dir, "tools", "agents-infra"))
 	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "go.mod"), "module example.com/agents-infra\n\ngo 1.22\n")
-	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "main.go"), "package main\n\nfunc main() {}\n")
+	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "main.go"), launcherBackendFixtureMain)
 }
 
 func writeSourceTree(t *testing.T, dir string) string {

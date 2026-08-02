@@ -1060,7 +1060,7 @@ func installCLIWrapper(layout Layout, out io.Writer) error {
 	if sourceDir == "" {
 		sourceDir = layout.AgentsDir
 	}
-	body := cliWrapperBody(goos, sourceDir)
+	body := cliWrapperBody(goos, sourceDir, cliLocalBinaryPath(layout, goos))
 	if existing, err := os.ReadFile(path); err == nil && string(existing) == body {
 		logf(out, "CLI launcher already up to date: %s", path)
 		return nil
@@ -1082,21 +1082,50 @@ func cliWrapperName(goos string) string {
 	return "agents-infra"
 }
 
-func cliWrapperBody(goos, sourceDir string) string {
+// cliLocalBinaryDirName holds the binary the generated launcher builds and then
+// executes. It lives inside the target's own bin dir — the tree this setup run
+// was asked to write — and deliberately not in the shared source checkout.
+//
+// Writing the build output into the source made three things impossible to
+// state truthfully. A launcher installed for one project raced every other
+// project's launcher over one path; a source checkout that is read-only, or
+// whose scratch dir is not writable, produced a launcher that installed and
+// verified and then failed on first use; and verification could not reproduce
+// the real output path without mutating the tree it was checking. Keeping the
+// output in the target removes all three: the path setup attests is the path
+// the launcher uses.
+const cliLocalBinaryDirName = ".agents-infra-build"
+
+func cliLocalBinaryName(goos string) string {
 	if strings.EqualFold(goos, "windows") {
-		return fmt.Sprintf("@echo off\r\nsetlocal\r\nset \"AGENTS_INFRA_SOURCE_DIR=%s\"\r\nset \"AGENTS_INFRA_CALLER_CWD=%%CD%%\"\r\nset \"AGENTS_INFRA_BINARY=%%AGENTS_INFRA_SOURCE_DIR%%\\.temp\\bin\\agents-infra-local.exe\"\r\nif not exist \"%%AGENTS_INFRA_SOURCE_DIR%%\\.temp\\bin\" mkdir \"%%AGENTS_INFRA_SOURCE_DIR%%\\.temp\\bin\"\r\ncd /d \"%%AGENTS_INFRA_SOURCE_DIR%%\\tools\\agents-infra\"\r\ngo build -o \"%%AGENTS_INFRA_BINARY%%\" .\r\nif errorlevel 1 exit /b %%ERRORLEVEL%%\r\n\"%%AGENTS_INFRA_BINARY%%\" %%*\r\nexit /b %%ERRORLEVEL%%\r\n", sourceDir)
+		return "agents-infra-local.exe"
+	}
+	return "agents-infra-local"
+}
+
+// cliLocalBinaryPath is the single definition of where the generated launcher
+// writes its build output; the wrapper bakes it in and verification reads it
+// back out of the wrapper, so the two cannot drift apart.
+func cliLocalBinaryPath(layout Layout, goos string) string {
+	return filepath.Join(layout.BinDir, cliLocalBinaryDirName, cliLocalBinaryName(goos))
+}
+
+func cliWrapperBody(goos, sourceDir, binaryPath string) string {
+	if strings.EqualFold(goos, "windows") {
+		return fmt.Sprintf("@echo off\r\nsetlocal\r\nset \"AGENTS_INFRA_SOURCE_DIR=%s\"\r\nset \"AGENTS_INFRA_CALLER_CWD=%%CD%%\"\r\nset \"AGENTS_INFRA_BINARY=%s\"\r\nif not exist \"%s\" mkdir \"%s\"\r\ncd /d \"%%AGENTS_INFRA_SOURCE_DIR%%\\tools\\agents-infra\"\r\ngo build -o \"%%AGENTS_INFRA_BINARY%%\" .\r\nif errorlevel 1 exit /b %%ERRORLEVEL%%\r\n\"%%AGENTS_INFRA_BINARY%%\" %%*\r\nexit /b %%ERRORLEVEL%%\r\n",
+			sourceDir, binaryPath, filepath.Dir(binaryPath), filepath.Dir(binaryPath))
 	}
 	return fmt.Sprintf(`#!/usr/bin/env sh
 set -eu
 export AGENTS_INFRA_SOURCE_DIR=%q
 AGENTS_INFRA_CALLER_CWD=$(pwd)
 export AGENTS_INFRA_CALLER_CWD
-AGENTS_INFRA_BINARY="$AGENTS_INFRA_SOURCE_DIR/.temp/bin/agents-infra-local"
+AGENTS_INFRA_BINARY=%q
 mkdir -p "$(dirname -- "$AGENTS_INFRA_BINARY")"
 cd "$AGENTS_INFRA_SOURCE_DIR/tools/agents-infra"
 go build -o "$AGENTS_INFRA_BINARY" .
 exec "$AGENTS_INFRA_BINARY" "$@"
-`, sourceDir)
+`, sourceDir, binaryPath)
 }
 
 func writeClaudeEntrypoint(layout Layout) error {

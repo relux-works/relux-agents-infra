@@ -33,8 +33,34 @@ func runInstalledBinary(t *testing.T, binary, home, configDir string, args ...st
 		"AGENTS_INFRA_SOURCE_DIR=",
 		"AGENTS_INFRA_CALLER_CWD=",
 	)
+	// Setup builds the launcher backend, and an isolated HOME would otherwise
+	// point the Go toolchain at an empty module cache inside a temp dir: the
+	// build would go to the network and the caches would outlive the test. An
+	// operator's HOME carries these; the harness has to model that, not invent
+	// a colder machine than the one under test.
+	command.Env = append(command.Env, sharedGoCacheEnv(t)...)
 	output, err := command.CombinedOutput()
 	return string(output), err
+}
+
+// sharedGoCacheEnv reports the Go cache locations of the machine running the
+// tests, so a child process given an isolated HOME still builds against the
+// caches a real operator would have.
+func sharedGoCacheEnv(t *testing.T) []string {
+	t.Helper()
+	output, err := exec.Command("go", "env", "GOPATH", "GOCACHE", "GOMODCACHE").Output()
+	if err != nil {
+		t.Fatalf("go env: %v", err)
+	}
+	values := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(values) != 3 {
+		t.Fatalf("go env returned %d values, want 3: %q", len(values), output)
+	}
+	return []string{
+		"GOPATH=" + values[0],
+		"GOCACHE=" + values[1],
+		"GOMODCACHE=" + values[2],
+	}
 }
 
 func writeInstallState(t *testing.T, configDir, repoPath string) {
@@ -78,9 +104,30 @@ func seedRuntimeSource(t *testing.T, dir string) string {
 	mustWrite(t, filepath.Join(dir, ".instructions", "AGENTS.md"), "# Agents\n")
 	mustMkdir(t, filepath.Join(dir, "tools", "agents-infra"))
 	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "go.mod"), "module example.com/agents-infra\n\ngo 1.22\n")
-	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "main.go"), "package main\n\nfunc main() {}\n")
+	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "main.go"), runnableLauncherBackendMain)
 	return dir
 }
+
+// runnableLauncherBackendMain is the smallest program that is actually an
+// agents-infra CLI: it answers `version` the way runVersion does. A fixture
+// that merely compiles models a runtime the launcher cannot use, so it cannot
+// stand in for one that it can.
+const runnableLauncherBackendMain = `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Println("agents-infra fixture commit=none build_date=none")
+		return
+	}
+	fmt.Fprintln(os.Stderr, "usage: agents-infra version")
+	os.Exit(2)
+}
+`
 
 func TestInstalledBinarySetupLocalResolvesInstalledRuntimeWithoutInstallState(t *testing.T) {
 	binary := buildInstalledBinary(t)
@@ -133,6 +180,148 @@ func TestInstalledBinarySetupLocalRefusesMarkerValidSourceWithoutLauncherBackend
 		}
 	}
 	assertNoFalselyUsableRuntime(t, binary, home, configDir, project, output)
+}
+
+// Negative: this is the same forgery one level deeper. The tree carries the
+// real go.mod, go.sum and main.go — every path the contract names, from the
+// actual module — and is missing the internal packages that module imports. A
+// presence list cannot tell the two apart; `go build .` can, and that is what
+// the generated launcher runs on every invocation.
+func TestInstalledBinarySetupLocalRefusesLauncherBackendThatCannotBuild(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	source := seedRuntimeSource(t, t.TempDir())
+	seedRealLauncherBackendWithoutItsPackages(t, source)
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, source)
+	project := t.TempDir()
+
+	output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project)
+	if err == nil {
+		t.Fatalf("installed binary accepted a launcher backend that cannot build\n%s", output)
+	}
+	for _, want := range []string{
+		"go build",
+		filepath.Join(source, "tools", "agents-infra"),
+		"internal/infra",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("failure output missing %q:\n%s", want, output)
+		}
+	}
+	if _, statErr := os.Lstat(filepath.Join(project, ".agents")); !os.IsNotExist(statErr) {
+		t.Fatalf("setup wrote the destination before rejecting an unbuildable backend: %v", statErr)
+	}
+	assertNoFalselyUsableRuntime(t, binary, home, configDir, project, output)
+}
+
+// seedRealLauncherBackendWithoutItsPackages narrows the module rather than
+// removing it: the three files the contract and the receipt read stay, taken
+// from the real repository, and only the packages `go build` needs are absent.
+// A check that still passes here is checking names.
+func seedRealLauncherBackendWithoutItsPackages(t *testing.T, source string) {
+	t.Helper()
+	realModule := filepath.Join(sourceRepoRoot(t), "tools", "agents-infra")
+	target := filepath.Join(source, "tools", "agents-infra")
+	mustMkdir(t, target)
+	for _, name := range []string{"go.mod", "go.sum", "main.go"} {
+		body, err := os.ReadFile(filepath.Join(realModule, name))
+		if err != nil {
+			t.Fatalf("read %s from the real module: %v", name, err)
+		}
+		mustWrite(t, filepath.Join(target, name), string(body))
+	}
+	for _, name := range []string{"go.mod", "main.go"} {
+		if _, err := os.Lstat(filepath.Join(target, name)); err != nil {
+			t.Fatalf("the negative must keep %s in place, not remove it: %v", name, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(target, "internal")); !os.IsNotExist(err) {
+		t.Fatalf("the forged module must not carry internal packages: %v", err)
+	}
+}
+
+// Negative: the forgery one level deeper again. Nothing is missing and nothing
+// fails to compile — `go build .` exits zero over a complete module. The program
+// it produces exits 42, which is what the launcher execs. A build-only
+// attestation mints a receipt here and hands back a runtime whose very first
+// command fails.
+func TestInstalledBinarySetupLocalRefusesLauncherBackendThatBuildsButDoesNotStart(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	source := seedRuntimeSource(t, t.TempDir())
+	seedLauncherBackendThatBuildsButDoesNotStart(t, source)
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, source)
+	project := t.TempDir()
+
+	output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project)
+	if err == nil {
+		t.Fatalf("installed binary accepted a launcher backend that builds but does not start\n%s", output)
+	}
+	for _, want := range []string{"version", "exit status 42"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("failure output missing %q:\n%s", want, output)
+		}
+	}
+	if _, statErr := os.Lstat(filepath.Join(project, ".agents")); !os.IsNotExist(statErr) {
+		t.Fatalf("setup wrote the destination before rejecting a backend that does not start: %v", statErr)
+	}
+	assertNoFalselyUsableRuntime(t, binary, home, configDir, project, output)
+}
+
+// Negative, the "preserve" half of the same contract: a runtime that installed
+// and verified cleanly must stop verifying once its launcher backend stops
+// producing a binary that starts. A receipt is evidence of a run that passed,
+// not a standing licence.
+func TestInstalledBinaryVerifyLocalRefusesRuntimeWhoseLauncherStoppedStarting(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	source := seedRuntimeSource(t, t.TempDir())
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, source)
+	project := t.TempDir()
+
+	output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project)
+	if err != nil {
+		t.Fatalf("installed binary setup local: %v\n%s", err, output)
+	}
+	// Sanity: the same check accepts the runtime it just installed, so the
+	// failure below is the break and not a gate that refuses everything.
+	if verifyOutput, verifyErr := runInstalledBinary(t, binary, home, configDir, "verify", "local", project); verifyErr != nil {
+		t.Fatalf("verify rejected the runtime it just installed: %v\n%s", verifyErr, verifyOutput)
+	}
+
+	seedLauncherBackendThatBuildsButDoesNotStart(t, source)
+
+	verifyOutput, verifyErr := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
+	if verifyErr == nil {
+		t.Fatalf("verify preserved a usable verdict for a launcher that no longer starts\n%s", verifyOutput)
+	}
+	for _, want := range []string{"cannot start", "exit status 42"} {
+		if !strings.Contains(verifyOutput, want) {
+			t.Fatalf("failure output missing %q:\n%s", want, verifyOutput)
+		}
+	}
+}
+
+// seedLauncherBackendThatBuildsButDoesNotStart narrows the module to exactly one
+// broken property. The self-check is the point: if this fixture ever stopped
+// compiling it would quietly collapse into the weaker build negative above and
+// the startup gate would go untested.
+func seedLauncherBackendThatBuildsButDoesNotStart(t *testing.T, source string) {
+	t.Helper()
+	target := filepath.Join(source, "tools", "agents-infra")
+	mustMkdir(t, target)
+	mustWrite(t, filepath.Join(target, "go.mod"), "module example.com/agents-infra\n\ngo 1.22\n")
+	mustWrite(t, filepath.Join(target, "main.go"), "package main\n\nimport \"os\"\n\nfunc main() { os.Exit(42) }\n")
+	probe := filepath.Join(t.TempDir(), "probe")
+	build := exec.Command("go", "build", "-o", probe, ".")
+	build.Dir = target
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("the startup negative must still compile, otherwise it only re-tests the build gate: %v\n%s", err, output)
+	}
 }
 
 // Negative: a tree whose instruction entrypoint pulls in modules it does not

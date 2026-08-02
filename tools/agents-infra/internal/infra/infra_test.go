@@ -42,9 +42,15 @@ func TestCLIWrapperNameForWindows(t *testing.T) {
 }
 
 func TestCLIWrapperBodyForWindows(t *testing.T) {
-	body := cliWrapperBody("windows", `C:\src\relux-agents-infra`)
+	body := cliWrapperBody("windows", `C:\src\relux-agents-infra`, `C:\project\.local\bin\.agents-infra-build\agents-infra-local.exe`)
 	if !strings.Contains(body, "AGENTS_INFRA_SOURCE_DIR=C:\\src\\relux-agents-infra") {
 		t.Fatalf("windows wrapper body missing source dir: %q", body)
+	}
+	if !strings.Contains(body, `set "AGENTS_INFRA_BINARY=C:\project\.local\bin\.agents-infra-build\agents-infra-local.exe"`) {
+		t.Fatalf("windows wrapper body does not build into the target: %q", body)
+	}
+	if strings.Contains(body, `%AGENTS_INFRA_SOURCE_DIR%\.temp`) {
+		t.Fatalf("windows wrapper body still writes into the source checkout: %q", body)
 	}
 	if !strings.Contains(body, "AGENTS_INFRA_CALLER_CWD=%CD%") {
 		t.Fatalf("windows wrapper body missing caller cwd preservation: %q", body)
@@ -61,9 +67,15 @@ func TestCLIWrapperBodyForWindows(t *testing.T) {
 }
 
 func TestCLIWrapperBodyForUnixPreservesCallerCWD(t *testing.T) {
-	body := cliWrapperBody("darwin", `/src/relux-agents-infra`)
+	body := cliWrapperBody("darwin", `/src/relux-agents-infra`, `/project/.local/bin/.agents-infra-build/agents-infra-local`)
 	if !strings.Contains(body, `export AGENTS_INFRA_SOURCE_DIR="/src/relux-agents-infra"`) {
 		t.Fatalf("unix wrapper body missing source dir export: %q", body)
+	}
+	if !strings.Contains(body, `AGENTS_INFRA_BINARY="/project/.local/bin/.agents-infra-build/agents-infra-local"`) {
+		t.Fatalf("unix wrapper body does not build into the target: %q", body)
+	}
+	if strings.Contains(body, `$AGENTS_INFRA_SOURCE_DIR/.temp`) {
+		t.Fatalf("unix wrapper body still writes into the source checkout: %q", body)
 	}
 	if !strings.Contains(body, "AGENTS_INFRA_CALLER_CWD=$(pwd)") {
 		t.Fatalf("unix wrapper body missing caller cwd capture: %q", body)
@@ -1057,6 +1069,20 @@ func TestSetupLocalPreservesProjectAgentsSourceBeforeRendering(t *testing.T) {
 	assertFileContains(t, filepath.Join(project, "AGENTS.md"), "local body")
 }
 
+// seedGitCheckout writes git metadata a real checkout carries, rather than an
+// empty .git directory. The difference is not cosmetic: `go build` stamps VCS
+// information, so a directory git refuses to read fails the build the generated
+// launcher runs — and a fixture that models a broken checkout would be testing
+// that, not what it claims to test.
+func seedGitCheckout(t *testing.T, root string) {
+	t.Helper()
+	gitDir := filepath.Join(root, ".git")
+	mustMkdir(t, filepath.Join(gitDir, "objects"))
+	mustMkdir(t, filepath.Join(gitDir, "refs", "heads"))
+	mustWrite(t, filepath.Join(gitDir, "HEAD"), "ref: refs/heads/main\n")
+	mustWrite(t, filepath.Join(gitDir, "config"), "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n")
+}
+
 func seedSourceRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -1069,7 +1095,7 @@ func seedSourceRepo(t *testing.T) string {
 	seedLauncherBackend(t, root)
 	mustMkdir(t, filepath.Join(root, ".temp"))
 	mustMkdir(t, filepath.Join(root, ".task-board"))
-	mustMkdir(t, filepath.Join(root, ".git"))
+	seedGitCheckout(t, root)
 
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS.md"), "# Global Instructions\n\n@~/.agents/.instructions/INSTRUCTIONS_PLATFORM.md\n@~/.agents/.instructions/INSTRUCTIONS_ATTACHMENTS.md\n@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "AGENTS.md"), "# Global Instructions\n\n@~/.agents/.instructions/INSTRUCTIONS_PLATFORM.md\n@~/.agents/.instructions/INSTRUCTIONS_ATTACHMENTS.md\n@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md\n")
@@ -1095,7 +1121,6 @@ args = ["--mcp"]
 	mustWrite(t, filepath.Join(root, ".temp", "junk.txt"), "junk")
 	mustWrite(t, filepath.Join(root, ".task-board", "README.md"), "board")
 	mustWrite(t, filepath.Join(root, "task-board.config.json"), "{}")
-	mustWrite(t, filepath.Join(root, "tools", "agents-infra", "go.mod"), "module example\n")
 	return root
 }
 

@@ -170,9 +170,11 @@ func runtimeArtifactFailures(layout Layout) []string {
 }
 
 // launcherBackendFailures checks the artifact installCLIWrapper actually wrote:
-// the launcher hardcodes a source dir and builds SOURCE/tools/agents-infra on
-// every invocation, so a launcher whose source cannot be built is a runtime
-// that reports itself installed and then fails on first use.
+// the launcher hardcodes a source dir and an output path, builds
+// SOURCE/tools/agents-infra to that path on every invocation, and executes the
+// result. A launcher whose source cannot be built, whose output path cannot be
+// written, or whose built binary does not start is a runtime that reports
+// itself installed and then fails on first use.
 func launcherBackendFailures(layout Layout) []string {
 	if layout.Mode == ModeGlobal {
 		// Global setup does not generate a wrapper; the bootstrap owns it.
@@ -193,6 +195,14 @@ func launcherBackendFailures(layout Layout) []string {
 	if !ok {
 		return []string{fmt.Sprintf("agents-infra launcher %s does not record a source dir", path)}
 	}
+	// Read the output path back out of the launcher instead of recomputing it.
+	// A postcondition that assumes where the launcher builds is checking its own
+	// assumption, and a build to some other destination proves nothing about the
+	// one the consumer uses.
+	binaryPath, ok := generatedCLIWrapperBinaryPath(string(body))
+	if !ok {
+		return []string{fmt.Sprintf("agents-infra launcher %s does not record the binary it builds and executes", path)}
+	}
 	var failures []string
 	for _, asset := range sourceAssets {
 		if !asset.launcherBackend {
@@ -202,7 +212,18 @@ func launcherBackendFailures(layout Layout) []string {
 			failures = append(failures, fmt.Sprintf("agents-infra launcher %s builds %s, which is missing %s", path, sourceDir, asset.label()))
 		}
 	}
-	return failures
+	if len(failures) > 0 {
+		// The named-asset failures above already say what is absent; running a
+		// build that is guaranteed to fail would only repeat it less clearly.
+		return failures
+	}
+	// Every path the launcher reads is present, which is not the same claim as
+	// "the launcher works". The postcondition runs the launcher's whole
+	// operation: build to the launcher's own output path, then start the result.
+	if failure := launcherStartupFailure(sourceDir, binaryPath); failure != "" {
+		return []string{fmt.Sprintf("agents-infra launcher %s cannot start: %s", path, failure)}
+	}
+	return nil
 }
 
 // generatedCLIWrapperSourceDir extracts the source dir cliWrapperBody baked
@@ -220,6 +241,27 @@ func generatedCLIWrapperSourceDir(body string) (string, bool) {
 		if value, ok := strings.CutPrefix(trimmed, `set "AGENTS_INFRA_SOURCE_DIR=`); ok {
 			value = strings.TrimSuffix(value, `"`)
 			return value, value != ""
+		}
+	}
+	return "", false
+}
+
+// generatedCLIWrapperBinaryPath extracts the build output path cliWrapperBody
+// baked into a generated launcher — the destination the launcher writes on
+// every invocation and then executes.
+func generatedCLIWrapperBinaryPath(body string) (string, bool) {
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if value, ok := strings.CutPrefix(trimmed, `set "AGENTS_INFRA_BINARY=`); ok {
+			value = strings.TrimSuffix(value, `"`)
+			return value, value != ""
+		}
+		if value, ok := strings.CutPrefix(trimmed, "AGENTS_INFRA_BINARY="); ok {
+			unquoted, err := strconv.Unquote(value)
+			if err != nil {
+				return "", false
+			}
+			return unquoted, unquoted != ""
 		}
 	}
 	return "", false
