@@ -1037,7 +1037,6 @@ func TestRunComposePrimarySessionCodexRoutesAttachedFormsAndClientTokens(t *test
 	}
 	wantHost := []string{
 		"-c", "model=\"gpt-5.4\"",
-		"-pspeed",
 		"--oss", "--local-provider", "ollama",
 		"--dangerously-bypass-hook-trust",
 		"--search",
@@ -1047,6 +1046,7 @@ func TestRunComposePrimarySessionCodexRoutesAttachedFormsAndClientTokens(t *test
 		t.Fatalf("managed host argv = %#v, want %#v", plan.LaunchVariants.ManagedHost.Argv, wantHost)
 	}
 	wantClient := []string{
+		"-pspeed",
 		"-C", "/tmp", "--add-dir", "/tmp",
 		"--no-alt-screen",
 		"resume", "--last",

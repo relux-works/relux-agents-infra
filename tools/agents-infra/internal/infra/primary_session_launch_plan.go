@@ -355,15 +355,23 @@ func codexManagedArgvSplit(interactive []string) (host, client []string) {
 			if !codexPolicyConfigOverride(strings.TrimPrefix(arg, "--config=")) {
 				host = append(host, arg)
 			}
-		case arg == "--profile" || arg == "-p" || arg == "--enable" || arg == "--disable" || arg == "--local-provider":
+		case arg == "--profile" || arg == "-p":
+			if index+1 < len(interactive) {
+				client = append(client, arg, interactive[index+1])
+				index++
+			} else {
+				client = append(client, arg)
+			}
+		case strings.HasPrefix(arg, "--profile=") || strings.HasPrefix(arg, "-p="),
+			strings.HasPrefix(arg, "-p") && len(arg) > 2:
+			client = append(client, arg)
+		case arg == "--enable" || arg == "--disable" || arg == "--local-provider":
 			host = append(host, arg)
 			if index+1 < len(interactive) {
 				index++
 				host = append(host, interactive[index])
 			}
-		case strings.HasPrefix(arg, "--profile=") || strings.HasPrefix(arg, "-p="),
-			strings.HasPrefix(arg, "-p") && len(arg) > 2,
-			strings.HasPrefix(arg, "--enable=") || strings.HasPrefix(arg, "--disable="),
+		case strings.HasPrefix(arg, "--enable=") || strings.HasPrefix(arg, "--disable="),
 			strings.HasPrefix(arg, "--local-provider="),
 			arg == "--strict-config", arg == "--oss", arg == "--search",
 			arg == "--dangerously-bypass-hook-trust":

@@ -203,8 +203,17 @@ func TestBuildPrimarySessionLaunchPlanCodexExplicitProfile(t *testing.T) {
 		t.Fatalf("resolved model with explicit profile = %#v", plan.Resolved.Model)
 	}
 	argv := plan.LaunchVariants.ManagedHost.Argv
-	if len(argv) < 3 || argv[len(argv)-3] != "--profile" || argv[len(argv)-2] != "speed" || argv[len(argv)-1] != "app-server" {
-		t.Fatalf("managed argv = %#v, want --profile speed before app-server", argv)
+	if len(argv) == 0 || argv[len(argv)-1] != "app-server" {
+		t.Fatalf("managed host argv = %#v, want app-server last (profile routed to client for codex 0.146+)", argv)
+	}
+	for _, token := range argv {
+		if token == "--profile" || token == "-p" || token == "--profile=speed" || token == "-pspeed" {
+			t.Fatalf("managed host argv = %#v, must not contain profile (routed to client)", argv)
+		}
+	}
+	clientArgv := plan.LaunchVariants.ManagedClient.Argv
+	if len(clientArgv) != 2 || clientArgv[0] != "--profile" || clientArgv[1] != "speed" {
+		t.Fatalf("managed client argv = %#v, want [--profile speed]", clientArgv)
 	}
 }
 
@@ -705,11 +714,13 @@ func TestBuildPrimarySessionLaunchPlanCodexManagedHostGlobalArgForms(t *testing.
 		"-c", "model=\"gpt-6\"",
 		"--enable=web_search",
 		`-c=service_tier="fast"`,
-		"--profile=speed",
 		"app-server",
 	}
 	if !reflect.DeepEqual(plan.LaunchVariants.ManagedHost.Argv, wantManaged) {
 		t.Fatalf("managed host argv = %#v, want %#v", plan.LaunchVariants.ManagedHost.Argv, wantManaged)
+	}
+	if !reflect.DeepEqual(plan.LaunchVariants.ManagedClient.Argv, []string{"--profile=speed", "resume"}) {
+		t.Fatalf("managed client argv = %#v, want profile in client", plan.LaunchVariants.ManagedClient.Argv)
 	}
 	if plan.Resolved.Sandbox.Value == nil || *plan.Resolved.Sandbox.Value != "read-only" || plan.Resolved.Sandbox.Source != "cli:--config sandbox_mode" {
 		t.Fatalf("resolved sandbox = %#v", plan.Resolved.Sandbox)
@@ -741,13 +752,13 @@ func TestCodexManagedArgvSplitsHostPolicyAndClientClasses(t *testing.T) {
 		"--enable", "web_search",
 		"--disable=response_storage",
 		"--strict-config",
-		"-p", "speed",
 		"app-server",
 	}
 	if !reflect.DeepEqual(host, wantHost) {
 		t.Fatalf("host argv = %#v, want %#v", host, wantHost)
 	}
 	wantClient := []string{
+		"-p", "speed",
 		"exec", "--json",
 		"--",
 		"prompt text", "--strict-config",
@@ -784,7 +795,6 @@ func TestCodexManagedArgvSplitIsTotalOverAcceptedGlobalClasses(t *testing.T) {
 		"--dangerously-bypass-hook-trust",
 		"--search",
 		"-c", "model=\"gpt-5.4\"",
-		"-pspeed",
 		"app-server",
 	}
 	if !reflect.DeepEqual(host, wantHost) {
@@ -797,6 +807,7 @@ func TestCodexManagedArgvSplitIsTotalOverAcceptedGlobalClasses(t *testing.T) {
 		"-i", "shot.png",
 		"--remote", "ws://127.0.0.1:4500",
 		"--remote-auth-token-env", "CODEX_REMOTE_TOKEN",
+		"-pspeed",
 		"resume", "--last",
 	}
 	if !reflect.DeepEqual(client, wantClient) {
@@ -829,12 +840,12 @@ func TestBuildPrimarySessionLaunchPlanCodexAttachedModelProfileForms(t *testing.
 	if plan.Resolved.Profile.Value == nil || *plan.Resolved.Profile.Value != "speed" || plan.Resolved.Profile.Source != "cli:-p" {
 		t.Fatalf("resolved profile = %#v, want speed from cli:-p", plan.Resolved.Profile)
 	}
-	wantManaged := []string{"-c", "model=\"gpt-5.4\"", "-pspeed", "app-server"}
+	wantManaged := []string{"-c", "model=\"gpt-5.4\"", "app-server"}
 	if !reflect.DeepEqual(plan.LaunchVariants.ManagedHost.Argv, wantManaged) {
 		t.Fatalf("managed host argv = %#v, want %#v", plan.LaunchVariants.ManagedHost.Argv, wantManaged)
 	}
-	if !reflect.DeepEqual(plan.LaunchVariants.ManagedClient.Argv, []string{}) {
-		t.Fatalf("managed client argv = %#v, want empty", plan.LaunchVariants.ManagedClient.Argv)
+	if !reflect.DeepEqual(plan.LaunchVariants.ManagedClient.Argv, []string{"-pspeed"}) {
+		t.Fatalf("managed client argv = %#v, want [-pspeed]", plan.LaunchVariants.ManagedClient.Argv)
 	}
 }
 
