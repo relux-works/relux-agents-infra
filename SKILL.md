@@ -129,9 +129,9 @@ Mode semantics:
 - `global` removes `.codex/config.toml`; use this when a local config unintentionally shadows the global model/settings.
 - `local` atomically renders a managed regular `.codex/config.toml` from `.agents/.configs/codex-config.toml`; it omits the user-level-only top-level `profiles` table and preserves all other valid TOML settings. Malformed installed TOML leaves the existing project config unchanged. Use this mode only when project-local config is intentional.
 
-Those modes govern setup. Primary launch preparation intentionally refreshes
-the managed local Codex config before a direct or externally owned primary
-session so the two launch paths remain identical.
+Those modes alone govern project Codex config state. Primary launch preparation
+refreshes instructions, skills, and rules while preserving an absent, managed,
+custom, or linked `.codex/config.toml` exactly.
 
 Diagnose effective state with:
 

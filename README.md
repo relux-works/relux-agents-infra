@@ -205,10 +205,10 @@ Use `--codex-config` when local setup should make an explicit decision:
   top-level `profiles` table while preserving all other valid TOML settings.
   Invalid installed TOML fails before the existing project config is replaced.
 
-These modes govern `setup local`. A primary `agents-infra codex` launch—or an
-external owner using the preparation contract below—intentionally refreshes
-the managed local config immediately before launch so every primary-session
-path observes the same installed project surface.
+These modes alone govern project Codex config state. A primary
+`agents-infra codex` launch—or an external owner using the preparation contract
+below—refreshes instructions, skills, and rules while preserving an absent,
+managed, custom, or linked `.codex/config.toml` exactly.
 
 ### Child launch MCP composition contract
 
