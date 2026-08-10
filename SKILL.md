@@ -92,6 +92,15 @@ For project-local setup, install into the target repo so that:
 - `.claude/` and `.codex/` are just thin shims/symlinks into `.agents`
 - `.local/bin/` exposes helper CLIs for that local setup, including `agents-infra`
 
+Project-local instructions are an overlay, not a copy of global policy:
+
+- `setup local` skips the source `.instructions/` tree
+- it creates minimal `.agents/.instructions/AGENTS.md` and
+  `.agents/.instructions/INSTRUCTIONS.md` entrypoints only when missing
+- it preserves all existing project instruction files on every resync
+- add project-specific modules and relative includes under that local directory
+- never populate local instructions by copying shared global modules
+
 ## Codex config modes
 
 Keep local agent runtime setup separate from Codex model/reasoning config.

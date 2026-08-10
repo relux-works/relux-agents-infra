@@ -17,6 +17,7 @@ const (
 	modelAvailabilityPolicyFixture = "retry the preferred model before choosing an autonomous fallback"
 	forcedFitPolicyFixture         = "do not fake an impossible platform model with flags, stubs, or mocks"
 	imageIntakeWorkflowFixture     = "agents-attachments stage-images"
+	dirtyCheckoutPolicyFixture     = "validate in a task-scoped worktree before integrating a reviewed patch"
 )
 
 func TestLocalLayout(t *testing.T) {
@@ -184,15 +185,17 @@ func TestSetupLocalCreatesInstalledRuntime(t *testing.T) {
 	assertSymlink(t, filepath.Join(project, ".claude", "skills", "pdf"), filepath.Join(project, ".agents", "skills", "pdf"))
 	assertRenderedInstructions(t, filepath.Join(project, ".codex", "AGENTS.md"))
 	assertRenderedInstructions(t, filepath.Join(project, "AGENTS.md"))
-	assertFileContains(t, filepath.Join(project, ".codex", "AGENTS.md"), modelAvailabilityPolicyFixture)
-	assertFileContains(t, filepath.Join(project, "AGENTS.md"), modelAvailabilityPolicyFixture)
-	assertFileContains(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture)
-	assertFileContains(t, filepath.Join(project, ".codex", "AGENTS.md"), forcedFitPolicyFixture)
-	assertFileContains(t, filepath.Join(project, "AGENTS.md"), forcedFitPolicyFixture)
-	assertFileContains(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), forcedFitPolicyFixture)
-	assertFileContains(t, filepath.Join(project, ".codex", "AGENTS.md"), imageIntakeWorkflowFixture)
-	assertFileContains(t, filepath.Join(project, "AGENTS.md"), imageIntakeWorkflowFixture)
-	assertFileContains(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture)
+	assertFileContains(t, filepath.Join(project, ".agents", ".instructions", "AGENTS.md"), "# Project Instructions")
+	assertFileContains(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS.md"), "# Project Instructions")
+	assertNoPath(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_PLATFORM.md"))
+	assertNoPath(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"))
+	assertNoPath(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"))
+	assertFileNotContains(t, filepath.Join(project, ".codex", "AGENTS.md"), modelAvailabilityPolicyFixture)
+	assertFileNotContains(t, filepath.Join(project, "AGENTS.md"), modelAvailabilityPolicyFixture)
+	assertFileNotContains(t, filepath.Join(project, ".codex", "AGENTS.md"), imageIntakeWorkflowFixture)
+	assertFileNotContains(t, filepath.Join(project, "AGENTS.md"), imageIntakeWorkflowFixture)
+	assertFileNotContains(t, filepath.Join(project, ".codex", "AGENTS.md"), dirtyCheckoutPolicyFixture)
+	assertFileNotContains(t, filepath.Join(project, "AGENTS.md"), dirtyCheckoutPolicyFixture)
 	assertSymlink(t, filepath.Join(project, ".codex", "skills", "pdf"), filepath.Join(project, ".agents", "skills", "pdf"))
 	assertNoPath(t, filepath.Join(project, ".agents", ".scripts", "agents-attachments"))
 	assertRegularFile(t, filepath.Join(project, ".local", "bin", "agents-attachments"))
@@ -216,6 +219,35 @@ func TestSetupLocalCreatesInstalledRuntime(t *testing.T) {
 	if !strings.Contains(string(entry), "@instructions/INSTRUCTIONS.md") {
 		t.Fatalf("CLAUDE.md should reference Claude runtime instructions: %q", string(entry))
 	}
+}
+
+func TestSetupLocalPreservesProjectInstructionSpaceAcrossResync(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	instructionsDir := filepath.Join(project, ".agents", ".instructions")
+	mustMkdir(t, instructionsDir)
+	mustWrite(t, filepath.Join(instructionsDir, "AGENTS.md"), "# Local Codex Instructions\n\n@PROJECT.md\n")
+	mustWrite(t, filepath.Join(instructionsDir, "INSTRUCTIONS.md"), "# Local Claude Instructions\n\n@PROJECT.md\n")
+	mustWrite(t, filepath.Join(instructionsDir, "PROJECT.md"), "project-owned instructions\n")
+	mustWrite(t, filepath.Join(instructionsDir, "INSTRUCTIONS_WORKFLOW.md"), "project-owned workflow override\n")
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := Setup(Options{Layout: layout}); err != nil {
+			t.Fatalf("Setup run %d: %v", i+1, err)
+		}
+	}
+
+	assertFileContains(t, filepath.Join(instructionsDir, "AGENTS.md"), "# Local Codex Instructions")
+	assertFileContains(t, filepath.Join(instructionsDir, "INSTRUCTIONS.md"), "# Local Claude Instructions")
+	assertFileContains(t, filepath.Join(instructionsDir, "PROJECT.md"), "project-owned instructions")
+	assertFileContains(t, filepath.Join(instructionsDir, "INSTRUCTIONS_WORKFLOW.md"), "project-owned workflow override")
+	assertFileNotContains(t, filepath.Join(instructionsDir, "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture)
+	assertFileContains(t, filepath.Join(project, ".codex", "AGENTS.md"), "project-owned instructions")
+	assertFileContains(t, filepath.Join(project, "AGENTS.md"), "project-owned instructions")
 }
 
 func TestSetupRemovesStaleRepoSkillSelfLinks(t *testing.T) {
@@ -565,6 +597,11 @@ func TestSetupGlobalDoesNotInstallCLIWrapper(t *testing.T) {
 
 	assertNoPath(t, filepath.Join(home, ".local", "bin", "agents-infra"))
 	assertNoPath(t, filepath.Join(home, ".local", "bin", "agents-infra.cmd"))
+	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture)
+	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), modelAvailabilityPolicyFixture)
+	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture)
+	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), dirtyCheckoutPolicyFixture)
+	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), dirtyCheckoutPolicyFixture)
 }
 
 func TestSetupGlobalRemovesStaleProjectConfig(t *testing.T) {
@@ -1101,7 +1138,7 @@ func seedSourceRepo(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, ".instructions", "AGENTS.md"), "# Global Instructions\n\n@~/.agents/.instructions/INSTRUCTIONS_PLATFORM.md\n@~/.agents/.instructions/INSTRUCTIONS_ATTACHMENTS.md\n@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_PLATFORM.md"), "platform instructions\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
-	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n")
+	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n")
 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\n\n[profiles.fast]\nmodel = \"gpt-5.5\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]

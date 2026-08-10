@@ -168,10 +168,18 @@ The installed `~/.agents/` copy is runtime state and should not keep git metadat
 
 For project-local installs, use `agents-infra setup local /abs/path/to/project`.
 That creates a local runtime layout under the project root:
-- `.agents/`: the installed runtime copy; put the actual contents here
+- `.agents/`: the installed runtime copy and project-owned instruction space
 - `.claude/`: thin Claude shim that points into `.agents`
 - `.codex/`: thin Codex shim that points into `.agents`
 - `.local/bin/`: helper CLIs for the local setup, including `agents-infra`
+
+Local setup reproduces the global runtime topology, not the global instruction
+content. It does not copy source `.instructions/` modules into the project.
+Instead it creates `.agents/.instructions/AGENTS.md` and
+`.agents/.instructions/INSTRUCTIONS.md` as minimal project-owned entrypoints
+when they are missing. Existing local entrypoints and modules are never
+overwritten during resync. Add only project-specific guidance there; global
+policy continues to come from the global agent runtime.
 
 Project-local setup intentionally does not create `.codex/config.toml`. Codex
 model, reasoning effort, service tier, trusted projects, and TUI notices are
@@ -1054,7 +1062,7 @@ Project-local install example:
 ```
 project-root/
 ├── .agents/
-│   ├── .instructions/
+│   ├── .instructions/       # Project-owned; not copied from global modules
 │   ├── .configs/
 │   ├── .scripts/
 │   ├── .skills/
@@ -1072,7 +1080,16 @@ project-root/
     └── agents-infra       # launcher for the Go CLI
 ```
 
-In local-project mode, treat `.agents/` as the installed source/runtime-common tree. `.claude/` and `.codex/` are agent-specific runtime outputs. Codex does not expand Claude-style `@...` include indexes, so `setup` materializes `.codex/AGENTS.md` and project-root `AGENTS.md` as flattened markdown. If a hand-written project-root `AGENTS.md` exists, `setup local` preserves it as `.agents/.instructions/AGENTS.project.md` before rendering the Codex-visible file.
+In local-project mode, treat `.agents/` as the installed source/runtime-common
+tree, with `.agents/.instructions/` reserved for project-owned guidance.
+`setup local` skips the source repo's global `.instructions/` tree, creates only
+missing local entrypoints, and preserves every existing local instruction file
+across resyncs. `.claude/` and `.codex/` are agent-specific runtime outputs.
+Codex does not expand Claude-style `@...` include indexes, so `setup`
+materializes `.codex/AGENTS.md` and project-root `AGENTS.md` as flattened
+markdown. If a hand-written project-root `AGENTS.md` exists, `setup local`
+preserves it as `.agents/.instructions/AGENTS.project.md` before rendering the
+Codex-visible file.
 
 ## Adding New Skills
 
