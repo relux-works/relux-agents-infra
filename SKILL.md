@@ -408,12 +408,15 @@ agents-infra prepare --agent codex|claude --project /path/to/project --schema-ve
 This board-agnostic, non-launching contract emits one
 `agents-infra.primary-session-preparation` version-1 report. With an installed
 project `.agents/` runtime it refreshes the provider-specific managed surface:
-Codex instructions, skills/rules, and generated `.codex/config.toml`; or the
-Claude entrypoint, instruction/settings links, and managed skills. Without a
-local runtime it reports an explicit no-op. The nearest installed ancestor
-runtime is selected and the global `~/.agents` runtime is never treated as a
-project. Direct `agents-infra codex|claude` launches call the same preparation
-function immediately before provider exec; `--print-config` remains read-only.
+Codex instructions and skills/rules; or the Claude entrypoint,
+instruction/settings links, and managed skills. Codex preparation preserves
+the exact pre-existing `.codex/config.toml` state, including absence; only
+explicit `setup local --codex-config=preserve|global|local` selects that mode.
+The report marks the config artifact `absent` or `preserved`. Without a local
+runtime it reports an explicit no-op. The nearest installed ancestor runtime
+is selected and the global `~/.agents` runtime is never treated as a project.
+Direct `agents-infra codex|claude` launches call the same preparation function
+immediately before provider exec; `--print-config` remains read-only.
 
 ## Attachments Contract
 

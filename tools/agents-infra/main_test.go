@@ -672,7 +672,10 @@ func TestRunPrepareEmitsOneV1Document(t *testing.T) {
 		report.Status != "ok" ||
 		report.Provider != "codex" ||
 		!report.CodexProjectRendered ||
-		!report.CodexConfigGenerated {
+		report.CodexConfigGenerated ||
+		len(report.Artifacts) != 3 ||
+		report.Artifacts[2].Kind != "codex-config" ||
+		report.Artifacts[2].State != "absent" {
 		t.Fatalf("report = %#v", report)
 	}
 }
@@ -746,6 +749,15 @@ func TestDirectLaunchAndPrepareCommandRenderIdenticalProviderArtifacts(t *testin
 					t.Fatal(err)
 				}
 				otherPath := filepath.Join(canonicalLaunchProject, relative)
+				if artifact.State == "absent" {
+					if _, err := os.Lstat(otherPath); !os.IsNotExist(err) {
+						t.Fatalf("%s direct launch changed absent artifact %s: %v", provider, relative, err)
+					}
+					if _, err := os.Lstat(artifact.Path); !os.IsNotExist(err) {
+						t.Fatalf("%s prepare changed absent artifact %s: %v", provider, relative, err)
+					}
+					continue
+				}
 				if artifact.Target != "" {
 					otherTarget, err := os.Readlink(otherPath)
 					if err != nil {

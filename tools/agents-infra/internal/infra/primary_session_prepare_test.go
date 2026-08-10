@@ -4,11 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 )
 
-func TestPreparePrimarySessionCodexRendersManagedProjectSurface(t *testing.T) {
+func TestPreparePrimarySessionCodexPreservesAbsentProjectConfig(t *testing.T) {
 	project := preparedRuntimeFixture(t)
 	report, err := PreparePrimarySession(
 		"codex",
@@ -18,29 +17,121 @@ func TestPreparePrimarySessionCodexRendersManagedProjectSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.LocalRuntimePresent || !report.CodexProjectRendered || !report.CodexConfigGenerated {
+	if !report.LocalRuntimePresent || !report.CodexProjectRendered || report.CodexConfigGenerated {
 		t.Fatalf("report = %#v", report)
 	}
 	if len(report.Artifacts) != 3 {
 		t.Fatalf("artifacts = %#v", report.Artifacts)
 	}
-	for _, artifact := range report.Artifacts {
-		if artifact.State != "rendered" || artifact.SHA256 == "" {
-			t.Fatalf("artifact = %#v", artifact)
-		}
+	if states := []string{
+		report.Artifacts[0].State,
+		report.Artifacts[1].State,
+		report.Artifacts[2].State,
+	}; !reflect.DeepEqual(states, []string{"rendered", "rendered", "absent"}) {
+		t.Fatalf("artifact states = %#v", states)
 	}
-	config, err := os.ReadFile(filepath.Join(project, ".codex", "config.toml"))
+	if report.Artifacts[0].SHA256 == "" || report.Artifacts[1].SHA256 == "" || report.Artifacts[2].SHA256 != "" {
+		t.Fatalf("artifacts = %#v", report.Artifacts)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".codex", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("prepare changed absent project config: %v", err)
+	}
+}
+
+func TestPreparePrimarySessionCodexPreservesManagedProjectConfigBytes(t *testing.T) {
+	project := preparedRuntimeFixture(t)
+	layout, err := LocalLayout("", project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(config), generatedCodexConfigMarker+"\n") {
-		t.Fatalf("config lacks generated marker:\n%s", config)
+	if err := setupCodex(layout, CodexConfigModeLocal, nil); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(string(config), "[profiles.fast]") {
-		t.Fatalf("project config retained user-only profiles:\n%s", config)
+	configPath := filepath.Join(project, ".codex", "config.toml")
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(config), "model = 'gpt-test'") {
-		t.Fatalf("project config lost installed config:\n%s", config)
+
+	report, err := PreparePrimarySession(
+		"codex",
+		project,
+		ChildLaunchCompositionProducer{Version: "test", Commit: "abc123"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("managed project config changed:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if !report.CodexConfigGenerated || report.Artifacts[2].State != "preserved" || report.Artifacts[2].SHA256 == "" {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestPreparePrimarySessionCodexPreservesCustomProjectConfigBytes(t *testing.T) {
+	project := preparedRuntimeFixture(t)
+	configPath := filepath.Join(project, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := []byte("model = \"custom-project-model\"\n[profiles.local]\nmodel = \"custom-profile\"\n")
+	if err := os.WriteFile(configPath, before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := PreparePrimarySession(
+		"codex",
+		project,
+		ChildLaunchCompositionProducer{Version: "test", Commit: "abc123"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("custom project config changed:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if report.CodexConfigGenerated || report.Artifacts[2].State != "preserved" || report.Artifacts[2].SHA256 == "" {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestPreparePrimarySessionCodexPreservesProjectConfigSymlink(t *testing.T) {
+	project := preparedRuntimeFixture(t)
+	configPath := filepath.Join(project, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join("..", ".agents", ".configs", "codex-config.toml")
+	if err := os.Symlink(target, configPath); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := PreparePrimarySession(
+		"codex",
+		project,
+		ChildLaunchCompositionProducer{Version: "test", Commit: "abc123"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Readlink(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != target {
+		t.Fatalf("project config symlink target changed: got %q, want %q", after, target)
+	}
+	if report.CodexConfigGenerated || report.Artifacts[2].State != "preserved" || report.Artifacts[2].Target != target {
+		t.Fatalf("report = %#v", report)
 	}
 }
 
@@ -115,8 +206,11 @@ func TestPreparePrimarySessionUsesNearestInstalledAncestorRuntime(t *testing.T) 
 	if report.ProjectDir != canonicalNested || report.RuntimeProjectDir != canonicalProject {
 		t.Fatalf("report roots = %#v", report)
 	}
-	if _, err := os.Stat(filepath.Join(canonicalProject, ".codex", "config.toml")); err != nil {
-		t.Fatalf("ancestor runtime was not prepared: %v", err)
+	if _, err := os.Stat(filepath.Join(canonicalProject, "AGENTS.md")); err != nil {
+		t.Fatalf("ancestor runtime instructions were not prepared: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(canonicalProject, ".codex", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("ancestor runtime config was unexpectedly created: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(canonicalNested, ".codex")); !os.IsNotExist(err) {
 		t.Fatalf("nested provider surface was unexpectedly created: %v", err)

@@ -112,18 +112,18 @@ func PreparePrimarySession(
 
 	switch provider {
 	case "codex":
-		if err := setupCodex(layout, CodexConfigModeLocal, nil); err != nil {
+		if err := setupCodexSurface(layout, nil); err != nil {
 			return report, fmt.Errorf("prepare Codex project surface: %w", err)
 		}
+		configPath := filepath.Join(layout.CodexDir, "config.toml")
 		report.CodexProjectRendered = isRenderedInstructionsFile(filepath.Join(layout.RootDir, "AGENTS.md"))
-		report.CodexConfigGenerated = isGeneratedCodexConfigFile(filepath.Join(layout.CodexDir, "config.toml"))
+		report.CodexConfigGenerated = isGeneratedCodexConfigFile(configPath)
 		for _, artifact := range []struct {
 			kind string
 			path string
 		}{
 			{kind: "codex-instructions", path: filepath.Join(layout.CodexDir, "AGENTS.md")},
 			{kind: "project-instructions", path: filepath.Join(layout.RootDir, "AGENTS.md")},
-			{kind: "codex-config", path: filepath.Join(layout.CodexDir, "config.toml")},
 		} {
 			rendered, err := primarySessionArtifact(artifact.kind, artifact.path, "rendered")
 			if err != nil {
@@ -131,7 +131,12 @@ func PreparePrimarySession(
 			}
 			report.Artifacts = append(report.Artifacts, rendered)
 		}
-		if !report.CodexProjectRendered || !report.CodexConfigGenerated {
+		configArtifact, err := preservedPrimarySessionArtifact("codex-config", configPath)
+		if err != nil {
+			return report, err
+		}
+		report.Artifacts = append(report.Artifacts, configArtifact)
+		if !report.CodexProjectRendered {
 			return report, fmt.Errorf("Codex project surface verification failed")
 		}
 	case "claude":
@@ -167,6 +172,16 @@ func PreparePrimarySession(
 		}
 	}
 	return report, nil
+}
+
+func preservedPrimarySessionArtifact(kind, path string) (PrimarySessionArtifact, error) {
+	if _, err := os.Lstat(path); err != nil {
+		if os.IsNotExist(err) {
+			return PrimarySessionArtifact{Kind: kind, Path: path, State: "absent"}, nil
+		}
+		return PrimarySessionArtifact{}, fmt.Errorf("inspect preserved artifact %s: %w", path, err)
+	}
+	return primarySessionArtifact(kind, path, "preserved")
 }
 
 func installedProjectRuntimeRoot(startDir string) (string, bool, error) {

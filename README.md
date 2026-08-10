@@ -246,14 +246,15 @@ agents-infra prepare --agent claude --project /abs/path/to/project --schema-vers
 The command is non-launching and board-agnostic. It walks from `--project`
 toward the filesystem root, selects the nearest installed project `.agents/`
 runtime, and never treats the user's global `~/.agents` runtime as a project.
-Codex preparation refreshes the managed
-`.codex/AGENTS.md`, project-root `AGENTS.md`, skills/rules links, and an atomic
-managed `.codex/config.toml` rendered from
-`.agents/.configs/codex-config.toml` without the user-only `profiles` table.
-Claude preparation refreshes `.claude/CLAUDE.md`, instruction/settings links,
-and managed skill links. When no project-local runtime is installed, the
-command succeeds as an explicit no-op so the provider-native/global surface
-remains authoritative.
+Codex preparation refreshes the managed `.codex/AGENTS.md`, project-root
+`AGENTS.md`, and skills/rules links. It never chooses a Codex config mode:
+an absent `.codex/config.toml` stays absent, while an existing managed, custom,
+or linked config is preserved byte-for-byte or target-for-target. The explicit
+`setup local --codex-config=preserve|global|local` operation remains the only
+owner of that choice. Claude preparation refreshes `.claude/CLAUDE.md`,
+instruction/settings links, and managed skill links. When no project-local
+runtime is installed, the command succeeds as an explicit no-op so the
+provider-native/global surface remains authoritative.
 
 Stdout contains exactly one
 `agents-infra.primary-session-preparation` schema-version-1 JSON report. It
@@ -261,8 +262,11 @@ identifies the provider and canonical requested project, the selected
 `runtime_project_dir`, whether a local runtime was present, verified
 provider-state booleans such as
 `codex_project_rendered`/`codex_config_generated`, and an ordered artifact list
-with regular-file SHA-256 values or symlink targets. Unsupported schemas and
-render failures return nonzero with a safe error envelope.
+with regular-file SHA-256 values or symlink targets. The Codex config artifact
+is reported as `absent` or `preserved`; `codex_config_generated` describes an
+existing preserved managed file and does not authorize rendering one.
+Unsupported schemas and render failures return nonzero with a safe error
+envelope.
 
 `agents-infra codex` and `agents-infra claude` call this same preparation
 function immediately before provider launch. `--print-config` remains a

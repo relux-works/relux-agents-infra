@@ -625,6 +625,16 @@ func setupClaude(layout Layout, out io.Writer) error {
 }
 
 func setupCodex(layout Layout, codexConfigMode CodexConfigMode, out io.Writer) error {
+	return setupCodexWithConfig(layout, &codexConfigMode, out)
+}
+
+// setupCodexSurface refreshes provider instructions, skills, and rules without
+// changing the caller-selected project config state.
+func setupCodexSurface(layout Layout, out io.Writer) error {
+	return setupCodexWithConfig(layout, nil, out)
+}
+
+func setupCodexWithConfig(layout Layout, codexConfigMode *CodexConfigMode, out io.Writer) error {
 	codexSkillsDir := filepath.Join(layout.CodexDir, "skills")
 	if err := os.MkdirAll(codexSkillsDir, 0o755); err != nil {
 		return err
@@ -659,12 +669,12 @@ func setupCodex(layout Layout, codexConfigMode CodexConfigMode, out io.Writer) e
 	}
 	codexConfigPath := filepath.Join(layout.CodexDir, "config.toml")
 	agentsCodexConfigPath := filepath.Join(layout.AgentsDir, ".configs", "codex-config.toml")
-	if layout.Mode == ModeGlobal {
+	if layout.Mode == ModeGlobal && codexConfigMode != nil {
 		if err := createSymlink(agentsCodexConfigPath, codexConfigPath, out); err != nil {
 			return err
 		}
-	} else {
-		mode, err := normalizeCodexConfigMode(codexConfigMode)
+	} else if codexConfigMode != nil {
+		mode, err := normalizeCodexConfigMode(*codexConfigMode)
 		if err != nil {
 			return err
 		}
