@@ -41,6 +41,7 @@
 
 * **Never commit or stage files automatically.**
 * When work is ready to commit, stop and ask for review.
+* An explicit user request to stage or commit the current scope is authorization; it is not an "automatic" commit. Inspect the exact diff, validate it, and carry out the requested commits without inventing an extra review boundary.
 * **Never add Co-Authored-By lines** or any AI attribution to commits.
 * When you need to work on multiple revisions, parallel fixes, or isolated experiments in the same repo, prefer **`git worktree`** over juggling branches in one checkout.
 * Place temporary worktrees under the project's **`.temp/`** directory, not next to the main checkout.
@@ -48,6 +49,31 @@
   * `.temp/<TASK-ID>/worktree/`
   * or `.temp/<TASK-ID>/<repo-name>-worktree/`
 * This keeps the main checkout stable while making task-local scratch state easy to find and clean up.
+
+### Dirty Checkout Isolation
+
+When the active checkout already contains changes that were not created for the
+current task:
+
+1. Inspect `git status --short` and the relevant diffs before editing.
+2. Preserve every pre-existing tracked and untracked change. Do not reset,
+   overwrite, stage, or silently absorb it into the current task.
+3. If the task can be implemented from `HEAD` without those changes, create a
+   task-scoped worktree under `.temp/<TASK-ID>/worktree/` and perform the task
+   there.
+4. Validate the isolated result in that worktree and export a reviewable patch
+   with `git diff --binary`.
+5. Before applying it to the main checkout, run `git apply --check` there and
+   inspect overlap with the pre-existing diff. Apply only when the two scopes
+   compose cleanly.
+6. Re-run relevant validation in the main checkout after integration. The main
+   checkout, not the isolated worktree, is the final source of truth.
+
+Do not create a worktree merely as ceremony for a clean, localized checkout.
+Use it when it materially isolates unrelated changes, concurrent revisions, or
+risky experiments. If the user explicitly asks to curate or commit the
+pre-existing changes too, first inspect and group them by coherent intent;
+isolation does not make foreign diffs part of the current task automatically.
 
 ---
 
