@@ -20,6 +20,17 @@
 * When a new APK must be installed, install it once with the least disruptive
   supported update path and reuse that installation across related checks.
   Avoid repeated install cycles between test attempts.
+* When spawning a developer, tester, or other device worker, carry this state-
+  preservation contract into the task instructions explicitly. Do not delegate
+  a vague "run the Android tests" request that lets the worker choose a lane
+  which may uninstall the package, replace the app, clear its data, revoke its
+  permissions, or discard the user's authenticated/session state when those
+  mutations are not required by the task.
+* On a physical device, avoid Gradle-managed install/test lanes when direct
+  instrumentation, an already-installed app, or a test-APK-only update can
+  validate the requested behavior. Use a lane that may uninstall or replace the
+  app only when that package mutation is necessary for the exact task and its
+  state/permission consequences have been accounted for in advance.
 * Before an unavoidable state-resetting operation, resolve the exact package,
   capture any needed evidence, state why the reset is required, and account for
   permissions, approvals, authentication, or setup that only the user can
