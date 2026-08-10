@@ -43,12 +43,13 @@ spawn run completed: codex (run=RUN-260810-b8de2a, pid=73525, exit=0)
 - [TASK-260811-2zy1et_results.md](file://TASK-260811-2zy1et/TASK-260811-2zy1et_results.md) — Validation and installation evidence for the documentation alignment
 - [TASK-260811-2zy1et_spawn-log_-reviewer--reviewer--codex-_RUN-260810-b8de2a.log](file://TASK-260811-2zy1et/TASK-260811-2zy1et_spawn-log_-reviewer--reviewer--codex-_RUN-260810-b8de2a.log) — System spawn log captured by task-board
 - [TASK-260811-2zy1et_reviewer-verdict.md](file://TASK-260811-2zy1et/TASK-260811-2zy1et_reviewer-verdict.md) — Accepted reviewer verdict and adversarial preservation evidence
+- [TASK-260811-2zy1et_remote-integration.md](file://TASK-260811-2zy1et/TASK-260811-2zy1et_remote-integration.md) — Remote-main integration, rebased hash mapping, and post-rebase verification
 
 ## Created
 2026-08-10T21:02:09Z
 
 ## Last Update
-2026-08-10T21:09:32Z
+2026-08-10T21:13:25Z
 
 ## Assigned To
 [reviewer] reviewer (codex)
