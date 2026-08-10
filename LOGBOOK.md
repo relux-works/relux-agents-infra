@@ -3,6 +3,22 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-08-10
+
+### 1829 — Local Verify Does Not Prove Source Freshness
+- FINDING: `agents-infra verify local /Users/alexis/src/voice` passed while its installed `INSTRUCTIONS_TESTING.md` lacked the two newest Android spawn/device-state clauses present in the source and global runtime.
+- ROOT CAUSE: Local verification proves the installed runtime is internally usable; it does not compare that runtime with the current source tree.
+- STATUS: `TASK-260810-1drz2j` resynced the project runtime, proved direct source-to-installed/rendered parity, and passed independent review.
+
+## 2026-08-04
+
+### 1714 — Primary Launch Overrode Explicit Codex Config Mode
+- ROOT CAUSE: `PreparePrimarySession` called `setupCodex(..., CodexConfigModeLocal, ...)` before every direct or session-manager Codex launch, recreating `.codex/config.toml` after an explicit `setup local --codex-config=global` and shadowing the user-level config.
+- FIX: primary preparation now refreshes only Codex instructions, skills, and rules. It preserves an absent, managed, custom, or linked project config exactly and reports the config artifact as `absent` or `preserved`.
+- EVIDENCE: expected-red tests reproduced creation, managed-byte replacement, and custom-config replacement; focused tests cover absent, managed-file, custom-file, symlink, and ancestor-runtime states. `go test ./... -count=1`, `go vet ./...`, `go build ./...`, formatting, and diff checks pass.
+- LIVE VERIFICATION: installed the source build globally, refreshed `/Users/alexis/src/voice` with `--codex-config=global`, then launched `codexD` and `claudeD`. Codex used `gpt-5.6-sol`/`xhigh`/YOLO, Claude used `claude-fable-5`/YOLO, both bounded prompts completed without launch warnings, and `.codex/config.toml` remained absent after both launches.
+- STATUS: Source fix and verification complete; committed as `b10d3b7` after owner authorization.
+
 ## 2026-07-25
 
 ### 0210 — Profile Name Domain and Remote Auth Env Metadata (0155 Pair Resolved)

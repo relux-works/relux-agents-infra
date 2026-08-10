@@ -1,0 +1,42 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 1,
+  "expected_previous_revision": 0,
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Change agents-infra local setup so it scaffolds project-owned instruction topology without copying shared global instruction content, while preserving global setup behavior and provider-specific rendering.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 1
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "created",
+    "reason": "The owner requires local instructions to duplicate the approach, not the global content.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "alexis"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-10T20:09:43.346801Z",
+  "created_by": "alexis",
+  "reason": "The owner requires local instructions to duplicate the approach, not the global content."
+}

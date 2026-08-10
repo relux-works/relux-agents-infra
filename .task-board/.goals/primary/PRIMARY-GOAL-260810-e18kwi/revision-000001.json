@@ -1,0 +1,20 @@
+{
+  "contract": "primary-goal-v1",
+  "id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 1,
+  "state": "active",
+  "scope": {
+    "kind": "board"
+  },
+  "objective": "Change agents-infra local setup so it scaffolds project-owned instruction topology without copying shared global instruction content, while preserving global setup behavior and provider-specific rendering.",
+  "mutation": {
+    "kind": "created",
+    "reason": "The owner requires local instructions to duplicate the approach, not the global content.",
+    "actor": {
+      "kind": "primary_parent",
+      "actor_id": "alexis"
+    }
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-10T20:09:43.346801Z"
+}

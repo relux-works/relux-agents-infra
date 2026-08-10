@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 2,
+  "expected_previous_revision": 1,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 1
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Change agents-infra local setup so it scaffolds project-owned instruction topology without copying shared global instruction content, preserve global setup and provider rendering, codify safe task-scoped worktree handling for dirty checkouts, and curate all existing repository changes into coherent verified commits.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 2
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "The user added reusable dirty-worktree guidance and explicitly requested committing the pre-existing repository diffs.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "alexis"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-10T20:17:50.829841Z",
+  "created_by": "alexis",
+  "reason": "The user added reusable dirty-worktree guidance and explicitly requested committing the pre-existing repository diffs."
+}
