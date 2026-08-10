@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 3,
+  "expected_previous_revision": 2,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 2
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Change agents-infra local setup so it scaffolds project-owned instruction topology without copying shared global instruction content, preserve global setup and provider rendering, codify safe task-scoped worktree handling for dirty checkouts, align primary-preparation documentation with exact Codex config preservation, curate all existing repository changes into coherent verified commits, and push both agents-infra and skill-apn repositories.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 3
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "User added explicit delivery requirement to push both repositories; completion audit also found stale primary-preparation documentation.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "alexis"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-10T21:03:58.826398Z",
+  "created_by": "alexis",
+  "reason": "User added explicit delivery requirement to push both repositories; completion audit also found stale primary-preparation documentation."
+}
