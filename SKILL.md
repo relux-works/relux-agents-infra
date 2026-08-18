@@ -50,6 +50,7 @@ agents-infra doctor global
 agents-infra doctor local /path/to/project
 agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json
 agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json
+pi-infra --print-config
 agents-infra version
 ```
 
@@ -60,9 +61,9 @@ the source tree from `--source-dir`, then `AGENTS_INFRA_SOURCE_DIR`, then the
 and names what is missing instead of falling back.
 
 A usable source carries the instruction entrypoints, `.configs`, `.rules`, the
-`tools/agents-infra` Go module the generated launcher builds, and every
-instruction module its entrypoints include. Anything less is refused before the
-destination is touched.
+`tools/agents-infra` Go module the generated launcher builds, the exact
+217-record Pi tree manifest, and every instruction module its entrypoints
+include. Anything less is refused before the destination is touched.
 
 For local setup that module is proven by running what the launcher runs, not by
 listing its files and not by compiling alone: the generated launcher builds the
@@ -91,6 +92,7 @@ For project-local setup, install into the target repo so that:
 - `.agents/` holds the actual installed runtime contents
 - `.claude/` and `.codex/` are just thin shims/symlinks into `.agents`
 - `.local/bin/` exposes helper CLIs for that local setup, including `agents-infra`
+- `.local/bin/pi-infra` is the exact sibling alias for `agents-infra pi`
 
 Project-local instructions are an overlay, not a copy of global policy:
 
@@ -236,6 +238,121 @@ Task-board spawn ceilings are documented by the separate
 [task-board spawn-ceiling contract](https://github.com/relux-works/skill-project-management/blob/main/.specs/project-agent-selection-policy.md#task-board-spawn-ceiling-contract).
 Do not add spawn ceilings, model ranks, or task-board resolver policy to
 agents-infra TOML.
+
+## Managed Pi local-model policy
+
+Pi launcher, setup, alias, catalog, and operator-contract changes belong in
+this source repository. Never edit `~/.agents`, `~/.local/bin/pi-infra`, or a
+project's generated alias as the source of truth. Change `tools/agents-infra`,
+`README.md`, and this skill here, then install and verify:
+
+```bash
+agents-infra setup global --source-dir /path/to/relux-agents-infra
+agents-infra verify global
+agents-infra setup local /abs/path/to/project
+agents-infra verify local /abs/path/to/project
+```
+
+Both setup modes install `pi-infra` beside their exact `agents-infra` target.
+The alias preserves caller cwd and argv order/bytes and delegates only as
+`agents-infra pi`; it never falls back through `PATH`. Setup repairs alias
+drift, while setup's postcondition and `verify` reject missing/changed alias
+bytes or mode and a missing, wrong, or unusable sibling target. Both paths must
+themselves be regular files; a symlink is drift even when it resolves to
+byte-identical content. They also
+validate the authoritative source/installed manifest at
+`tools/agents-infra/internal/infra/pi-v0.84.2-darwin-arm64-tree-manifest.txt`
+with SHA-256
+`2f68ab1b3f28a9c4b8995f91984f8f47001a79735da7e57aa7fe6d223f90378b`.
+
+Managed policy lives only in ancestor
+`.agents/.configs/project-config.toml` files. Profiles are atomic exact-name
+definitions; nearest explicit selection wins, with wrapper `--profile` above
+TOML. Exact decoded UTF-8 profile bytes are the logical identity and feed the
+SHA-256 state key without normalization or lossy sanitization. State paths are
+hash-only beneath the canonical user cache root and are opened through the
+anchored no-follow containment contract. Do not add raw profile-name path
+components, shared locks for byte-distinct names, a fallback for read/path
+failure, or project-controlled catalog evidence.
+
+Use this order for every new or changed deployment:
+
+```bash
+cd /abs/path/to/project
+
+# Required first step: same static resolution/validation as launch, but no
+# process, file, lock, socket, connection, download, or Pi trust mutation.
+pi-infra --print-config
+
+# Equivalent machine-readable resolver for a session owner.
+agents-infra compose --mode primary-session --agent pi \
+  --project "$PWD" --schema-version 1 --json
+
+# Only after reviewing exact provenance, selected profile/model, absolute
+# runtime executable, literal argv, loopback URL, hash-only state paths,
+# requested/unverified capabilities, and standalone Pi catalog identity.
+pi-infra
+```
+
+The first ASCII `--` is a wrapper-only operand boundary because the pinned Pi
+parser has no end-of-options state. It is not forwarded. Suffix tokens are
+preserved only when they begin with neither ASCII `-` nor `@`; ambiguous option
+consumption, repeated separators, or option-looking suffixes fail before side
+effects. Never simplify this to pass-through `--`, prefix-only scanning, or a
+shell command string.
+
+The configured absolute runtime executable plus literal argv is reviewed
+trusted policy. agents-infra reproducibly checks/spawns that selection, refuses
+any runtime argv that does not contain exactly one spaced `--host 127.0.0.1`
+pair and one spaced `--port <base_url-port>` pair, refuses an occupied exact
+loopback listener, requires the direct child alive and exact model readiness,
+retries only connection failures and HTTP 503 while the model loads,
+owns/reaps its process group, isolates Pi state, and performs the deterministic
+standalone Pi tree check both initially and immediately before Pi spawn. It
+never attaches or silently falls back to another runtime, port, profile, model,
+listener, or Muse target-only decoding.
+
+Managed launch refuses the exact llama.cpp model-origin environment names
+`HF_ENDPOINT` and `MODEL_ENDPOINT` before runtime spawn and reports only the
+name, never the value. Treat tokens and cache-location variables separately
+unless their runtime effect is established; do not widen this rule by naming
+convention alone.
+
+Exact `GGML_BACKEND_PATH` is also refused before managed state or runtime spawn:
+llama.cpp build 10470 passes its inherited value to `dlopen()` during backend
+discovery. Other `GGML_*` names remain outside this exact-name policy until a
+runtime effect is established; do not turn this into a speculative prefix gate.
+
+Exact `LLAMA_API_KEY` is refused before managed state or runtime spawn because
+llama.cpp build 10470 uses it as the environment backing for `--api-key`.
+Managed profiles must not inherit ambient runtime authentication absent from
+their reviewed configuration, and refusal must name only `LLAMA_API_KEY`, never
+its value. Keep `HF_TOKEN`, cache-location variables, `LLAMA_API_KEY` lookalikes,
+and unrelated names admitted unless their runtime effect establishes a separate
+policy.
+
+Capabilities remain requested/configured, never independently verified:
+Qwen `text`/`tools`; Muse `dflash`/`text`/`tools` with
+`dflash.status = configured-unverified`. Runtime reports are unverified
+diagnostic provenance. Operators must run real Pi text plus tool round trips
+for each profile and a runtime-specific Muse benchmark/telemetry check. Do not
+invent an attestation API or claim that readiness detects silent DFlash
+disablement.
+
+The practical trust boundary explicitly excludes a malicious selected runtime
+and a malicious same-UID process that wins the post-preflight bind race.
+Preflight plus readiness is not cryptographic listener ownership. Model/runtime
+acquisition or conversion, benchmark automation, secure runtime distribution,
+backend catalogs, compiled observers, proxy adapters/private-pipe authorities,
+and runtime/DFlash cryptographic attestation are outside this contract. Do not
+reintroduce the retired cycle-7 backend/observer/proxy/attestation design into
+TOML, diagnostics, examples, or acceptance gates. Unknown/unverified is
+diagnostics-only, not satisfied evidence.
+
+The exact TOML, compatibility catalog, state-key rules, lifecycle, operator
+smoke procedure, full error list, and security limitations are authoritative in
+[README.md](README.md#managed-pi-local-model-operator-contract). Start every Pi
+incident with `pi-infra --print-config`, then `agents-infra verify local "$PWD"`.
 
 ## MCP server policy
 

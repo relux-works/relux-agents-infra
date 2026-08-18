@@ -25,6 +25,7 @@ agents-infra setup local /path/to/project
 agents-infra doctor global
 agents-infra doctor local /path/to/project
 agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json
+pi-infra --print-config
 agents-infra version
 ```
 
@@ -43,15 +44,19 @@ The canonical interface after bootstrap is:
 - `agents-infra setup local [PATH]`
 - `agents-infra doctor global|local`
 - `agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json`
-- `agents-infra compose --mode primary-session --agent codex|claude --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
+- `agents-infra compose --mode primary-session --agent codex|claude|pi --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
 - `agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json`
 - `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
 - `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
+- `agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+- `pi-infra [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
 - `agents-infra version`
 
 Setup syncs the repo into `.agents`, treats `.skills/` as the authoritative
 source-managed skill tree, refreshes the managed links it owns inside `skills/`,
-and then refreshes symlinks in `.claude/`, `.codex/`, and `.local/bin`.
+and then refreshes symlinks in `.claude/`, `.codex/`, and `.local/bin`. Scratch
+`.temp/` trees are excluded at every source depth and removed from installed
+runtimes, so nested development artifacts cannot become runtime content.
 
 ### Source tree resolution
 
@@ -78,7 +83,9 @@ recognisable file names. A usable source tree carries:
 | `.instructions/AGENTS.md` | rendered Codex instructions entrypoint |
 | `.configs` | linked agent config tree |
 | `.rules` | linked agent rules tree |
+| `SKILL.md`, `README.md` | materialized `relux-agents-infra` skill package and its reference |
 | `tools/agents-infra/go.mod`, `tools/agents-infra/main.go` | the Go module the generated local `agents-infra` launcher builds on every invocation |
+| `tools/agents-infra/internal/infra/pi-v0.84.2-darwin-arm64-tree-manifest.txt` | authoritative 217-record managed Pi release-tree catalog; exact SHA-256 `2f68ab1b3f28a9c4b8995f91984f8f47001a79735da7e57aa7fe6d223f90378b` |
 
 …plus every instruction module the entrypoints `@include`. That closure is
 resolved up front, so a tree that references modules it does not ship is
@@ -123,6 +130,19 @@ Two consequences worth knowing:
 `~/.local/bin/agents-infra` — so it makes no claim about a build and does not
 run one.
 
+Both setup modes install a sibling-only `pi-infra` launcher: global setup writes
+it beside the bootstrap-owned `agents-infra`, and local setup writes it beside
+the generated project launcher. It delegates as `agents-infra pi` without
+changing the caller's working directory or argument bytes/order, including a
+literal wrapper delimiter and its following operands. It never searches `PATH`
+for a substitute target. Setup repairs a drifted managed alias; setup's
+postcondition and `verify` refuse a missing alias, changed bytes or mode, a
+wrong embedded target, and a missing/non-regular/non-executable sibling target.
+The managed alias and sibling target must each be a regular file at its own
+pathname: setup replaces a symlinked alias even when its target has identical
+bytes, and verification rejects symlinks for either artifact instead of
+following them.
+
 Three things are refused instead of guessed:
 
 - An explicit `--source-dir`/`AGENTS_INFRA_SOURCE_DIR` that is not an
@@ -159,6 +179,11 @@ generated launcher's recorded source must still produce a binary that starts —
 rather than checking that the module's files are present. A receipt on its own
 proves nothing — it is always checked against the live artifacts.
 
+The postcondition also hashes the installed Pi manifest and checks the exact
+generated `pi-infra` body and sibling target. Therefore missing catalog bytes,
+catalog drift, alias drift, or a missing target invalidates an otherwise intact
+receipt.
+
 Consumers that bootstrap a repo-local runtime should gate on `verify` rather
 than on the exit status of `setup` alone.
 
@@ -172,6 +197,7 @@ That creates a local runtime layout under the project root:
 - `.claude/`: thin Claude shim that points into `.agents`
 - `.codex/`: thin Codex shim that points into `.agents`
 - `.local/bin/`: helper CLIs for the local setup, including `agents-infra`
+- `.local/bin/pi-infra`: managed sibling alias for `agents-infra pi`
 
 Local setup reproduces the global runtime topology, not the global instruction
 content. It does not copy source `.instructions/` modules into the project.
@@ -312,6 +338,356 @@ Projects may set primary Codex and Claude sessions independently in
 matching `agents-infra` launcher, not a replacement for either provider's own
 configuration. A missing table—or a missing Codex individual field—leaves that
 dimension to the provider-native project/profile/user/system/default resolution.
+
+Pi additionally supports an exact project-local managed-profile contract. It
+verifies the catalogued standalone Pi tree, derives hash-only isolated state,
+owns the configured local-model runtime process group, and launches Pi only
+after exact loopback model discovery. `agents-infra pi --print-config` and
+`compose --mode primary-session --agent pi` emit the same schema-v1 plan without
+creating state, acquiring a lock, opening a socket, or starting a process. With
+no Pi policy, `agents-infra pi` is native passthrough; malformed or unreadable
+policy fails closed. Managed launches reject `--export`, `--session-dir`, and
+path-shaped `--session`/`--fork` selectors so Pi cannot read or write session
+state outside the generated isolated session directory; ID selectors plus
+`--continue` and `--resume` remain scoped to that directory.
+
+Managed Pi diagnostics report Qwen text/tools and Muse text/tools/DFlash only
+as requested or configured, with `verified: []` and `verification:
+"not-claimed"`. Exact loopback preflight, direct-child liveness, and model
+discovery do not prove that a reviewed runtime is internally honest or close
+the same-UID post-preflight bind race; those two adversaries are explicit
+non-claims, not launcher authorization evidence.
+
+### Managed Pi local-model operator contract
+
+Author Pi policy only in this source repository or a project's
+`.agents/.configs/project-config.toml`; never patch the installed `~/.agents`
+copy. Install and verify the command surface, then inspect the non-launching
+plan before every new or changed deployment:
+
+```bash
+# Global runtime and alias.
+agents-infra setup global --source-dir /path/to/relux-agents-infra
+agents-infra verify global
+
+# Project-local runtime and alias.
+agents-infra setup local /abs/path/to/project
+agents-infra verify local /abs/path/to/project
+
+cd /abs/path/to/project
+pi-infra --print-config
+# Launch only after the plan has the intended profile, executable, literal
+# runtime argv, endpoint, state keys, and exact Pi catalog identity.
+pi-infra
+```
+
+`pi-infra` is installed by both setup modes and is exactly a sibling delegation
+to `agents-infra pi`. It preserves the caller cwd and every argument in order.
+The first ASCII `--` is a wrapper-only message boundary: it is removed before
+Pi because pinned Pi has no end-of-options parser state, while safe suffix
+operands are appended byte-for-byte. A second delimiter or a suffix beginning
+with ASCII `-` or `@` is refused before the runtime starts.
+
+The cycle-10 reference policy is exactly:
+
+```toml
+[agents.pi.primary_session]
+profile = "qwen-3.8-27b"
+pi_compatibility = "github-release:earendil-works/pi@v0.84.2:darwin-arm64#sha256-c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65"
+
+[agents.pi.profiles."qwen-3.8-27b"]
+provider = "local-qwen"
+model = "Qwen-3.8-27B"
+base_url = "http://127.0.0.1:18011/v1"
+api = "openai-completions"
+reasoning = false
+input = ["text"]
+context_window = 131072
+max_tokens = 16384
+thinking = "off"
+requested_capabilities = ["text", "tools"]
+
+[agents.pi.profiles."qwen-3.8-27b".compat]
+supports_developer_role = false
+supports_reasoning_effort = false
+supports_usage_in_streaming = true
+supports_finish_reason = true
+max_tokens_field = "max_tokens"
+thinking_format = "qwen-chat-template"
+
+[agents.pi.profiles."qwen-3.8-27b".runtime]
+executable = "/absolute/path/to/reviewed-runtime"
+argv = ["serve", "--model", "Qwen-3.8-27B", "--host", "127.0.0.1", "--port", "18011"]
+readiness_path = "/models"
+startup_timeout_seconds = 120
+shutdown_timeout_seconds = 10
+
+[agents.pi.profiles."muse-glimmer-30b-dflash"]
+provider = "local-muse"
+model = "Muse-Glimmer-30B"
+base_url = "http://127.0.0.1:18012/v1"
+api = "openai-completions"
+reasoning = false
+input = ["text"]
+context_window = 131072
+max_tokens = 16384
+thinking = "off"
+requested_capabilities = ["dflash", "text", "tools"]
+
+[agents.pi.profiles."muse-glimmer-30b-dflash".compat]
+supports_developer_role = false
+supports_reasoning_effort = false
+supports_usage_in_streaming = true
+supports_finish_reason = true
+max_tokens_field = "max_tokens"
+
+[agents.pi.profiles."muse-glimmer-30b-dflash".runtime]
+executable = "/absolute/path/to/reviewed-runtime"
+argv = ["serve", "--model", "Muse-Glimmer-30B", "--draft", "Muse-Glimmer-30B-DFlash", "--host", "127.0.0.1", "--port", "18012"]
+readiness_path = "/models"
+startup_timeout_seconds = 180
+shutdown_timeout_seconds = 10
+
+[agents.pi.profiles."muse-glimmer-30b-dflash".runtime.dflash]
+target_model = "Muse-Glimmer-30B"
+draft_model = "Muse-Glimmer-30B-DFlash"
+target_argv = ["--model", "Muse-Glimmer-30B"]
+draft_argv = ["--draft", "Muse-Glimmer-30B-DFlash"]
+```
+
+The model names, runtime executable, argv, ports, limits, and timeouts are
+operator-supplied deployment inputs. agents-infra does not acquire, convert,
+quantize, license, size, or securely distribute models or runtimes, and it does
+not automate benchmarks.
+
+#### Composition, identity, and CLI precedence
+
+Configs compose from filesystem root to cwd. The nearest explicit
+`primary_session.profile` wins unless wrapper `--profile NAME` selects a
+profile; `pi_compatibility` has nearest-field precedence and no CLI override.
+One child definition of the same exact decoded profile name atomically replaces
+the ancestor definition—profile fields never merge—while a child may select a
+complete ancestor profile. Unreadable, malformed, partial, or unknown-field
+policy is a failure, not policy absence; only genuine absence enables native Pi
+passthrough.
+
+Profile-name identity is its exact post-TOML-decoding UTF-8 bytes. There is no
+normalization, case folding, trimming, path cleaning, or lossy sanitization.
+Explicit `--provider`, `--model`, and `--thinking` must resolve to the exact
+managed identity; equal repeats normalize and conflicts fail. `--api-key` and
+Pi's approval flags retain native precedence, but diagnostics redact the key
+and the wrapper injects no approval. Wrapper-recognized equal forms normalize
+to Pi's pinned spaced syntax. Options cannot consume a value across the removed
+delimiter; ambiguous unknown flags and option-looking message suffixes fail.
+The resulting argv has one provider/model selection, no fake separator, no
+option after operand content, and preserves accepted message bytes/order.
+
+The managed provider is `openai-completions`, input is exactly `['text']`, and
+the endpoint must be literal `http://127.0.0.1:<nonzero-port>/v1` with no user
+info, query, or fragment. `localhost`, IPv6, wildcard, and remote endpoints are
+refused. Runtime argv must also contain exactly one spaced `--host 127.0.0.1`
+pair and exactly one spaced `--port <base_url-port>` pair. Missing, duplicate,
+attached (`--host=...`/`--port=...`), wildcard, or divergent endpoint options
+are refused by the same production resolver used for compose, diagnostics, and
+launch. The runtime executable is an absolute literal reviewed path and argv is
+a non-empty literal token vector: no shell, `PATH` lookup, interpolation,
+globbing, tilde expansion, command substitution, or implicit flag injection.
+For Muse, target and draft token subsequences must each occur exactly once,
+contiguously and without overlap, and end in their declared model. This proves
+the launched argv, not active DFlash.
+
+#### Non-launching diagnostics and contained state
+
+`pi-infra --print-config` and
+`agents-infra compose --mode primary-session --agent pi --project "$PWD"
+--schema-version 1 --json` run the same resolution and static validation. They
+do not run Pi/runtime, create state or locks, bind/connect a socket, download,
+or mutate Pi settings, auth, or trust. An uninspectable value is `unknown` or an
+error, never absence. The plan reports exact sources, normalized Pi argv,
+runtime executable/argv and static state, loopback readiness URL, timeouts,
+generated `models.json` digest/path, catalog identity, requested capabilities,
+and hash-only state/lock paths. Secret values and arbitrary environment values
+are omitted.
+
+The emitted contract is `agents-infra.primary-session-launch-plan` schema 1
+with provider `pi`. `launch_variants.interactive.argv` is the exact normalized
+Pi argv; `managed_host.kind` is `pi-pty` with the same argv; managed-client argv
+is empty. The generated one-provider/one-model `models.json` uses fixed
+non-secret dummy key `agents-infra-local`, zero costs, and configured metadata;
+it contains no executable credential command, header, secret, or environment
+reference.
+
+Let `profile_bytes` be the exact UTF-8 profile-name bytes. The profile key is
+`lowercase_hex(SHA256(profile_bytes))`; the project key is
+`lowercase_hex(SHA256(UTF8(canonical_project_path)))`. State is only:
+
+```text
+<canonical-cache-root>/agents-infra/pi/<64-hex-project-key>/<64-hex-profile-key>/
+  agent/models.json
+  sessions/
+  session.lock
+```
+
+The canonical cache root is a successfully resolved absolute
+`os.UserCacheDir()`. Raw profile text is never a path component. `/`, `\\`,
+`.`, `..`, `../qwen`, `nested/../qwen`, absolute-looking names, case variants,
+Unicode separator lookalikes, and NFC/NFD variants remain byte-distinct names
+and keys. Before side effects, the launcher refuses any byte-distinct key
+collision, proves the exact four-component suffix, and walks/creates it from an
+opened cache-root handle without following managed symlinks. Existing and
+created components are reopened and revalidated. Cache lookup,
+canonicalization, stat/open/read, containment, collision, symlink, type,
+permission, partial-read, or revalidation failures fail closed. Distinct names
+have independent `session.lock` files and cannot intentionally share catalog or
+session state. The production-entry `TestPiLaunchProfileStateKeyIsolation`
+guards this boundary; narrowing to raw names, slash replacement, case folding,
+Unicode normalization, or another lossy key must make it fail.
+
+#### Standalone Pi catalog
+
+Managed launch accepts only the official `v0.84.2` darwin-arm64 standalone
+closure selected by the exact compatibility ID above. Its asset checksum is
+`c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65`;
+the native arm64 Mach-O entrypoint is `<release-root>/pi` with SHA-256
+`d5de3fe32f9e109324f32d6e393554fb2ce10bbc82e8ff935ab2e072f5e2f044`.
+The release archive contains exactly one top-level `pi/`; the installed
+`<release-root>` is the canonical parent of the fully resolved entrypoint, not
+a trusted directory name.
+
+The authoritative attachment is
+`TASK-260817-3a0zr3_pi-v0.84.2-darwin-arm64-tree-manifest.txt`; the shipped
+source copy is
+`tools/agents-infra/internal/infra/pi-v0.84.2-darwin-arm64-tree-manifest.txt`.
+It contains exactly 217 exhaustive regular-file records and hashes to
+`2f68ab1b3f28a9c4b8995f91984f8f47001a79735da7e57aa7fe6d223f90378b`.
+Paths are exact UTF-8, slash-separated, unsigned-byte sorted in C-locale order,
+with records encoded as `<64 lowercase hex><two spaces>./<path><LF>` and a
+required final LF. NUL/CR/LF/backslash, empty/`.`/`..` components, absolute or
+escaping paths, and case/normalization changes are invalid.
+
+The permitted directory set is exactly the root plus proper-prefix closure: 34
+directories. Every file is regular with link count one; symlinks, hard-link
+aliases, sockets, FIFOs, devices, mount crossings, extras, and omissions fail.
+Directory mode is `0755`; `./pi`,
+`./examples/extensions/doom-overlay/doom/build.sh`,
+`./examples/extensions/doom-overlay/doom/build/doom.wasm`, and
+`./native/darwin/prebuilds/darwin-arm64/darwin-modifiers.node` are `0755`; the
+other 213 files are `0644`. Ownership, timestamps, ACLs, and xattrs are not
+identity inputs and cannot excuse unreadability. Asset digest, complete path
+inventory, types, links, modes, manifest bytes/digest, file count, entrypoint
+digest, and Mach-O kind are one compiled catalog entry; project TOML cannot
+replace any member. The full gate runs before managed side effects and again
+immediately before Pi spawn with the same canonical root/entrypoint required.
+Missing, partial, raced, or changed point-of-use reads fail.
+
+#### Runtime lifecycle, capabilities, and operator verification
+
+After all static gates, launch acquires the profile lock, atomically writes only
+the isolated `agent/models.json` as `0600`, and preserves profile-local
+settings, trust, auth, and sessions without reading or writing normal
+`~/.pi/agent`. It exclusively preflights the exact loopback port and refuses an
+occupied listener without connecting. It then closes the probe, rechecks the
+runtime path, and starts `[runtime.executable] + runtime.argv` directly as a
+direct child leading a new owned process group.
+
+Startup requires that direct child to stay alive and the exact readiness URL to
+return OpenAI list JSON containing the exact configured model (Muse requires
+the exact target). Connection failure and HTTP 503 Service Unavailable retry
+until timeout because llama.cpp uses 503 while loading; every other non-200
+response, malformed success, missing data, wrong model, or child exit is fatal.
+A ready foreign listener does not compensate for a dead selected child. After readiness the Pi catalog and
+environment are rechecked, then only the captured absolute standalone Pi path
+starts with isolated `PI_CODING_AGENT_DIR`/session state,
+`PI_SKIP_VERSION_CHECK=1`, and `PI_TELEMETRY=0`. Duplicate or runtime-affecting
+`DYLD_*`, `LD_*`, `NODE_*`, `BUN_*`, or `LLAMA_ARG_*` environment names are
+refused before llama.cpp starts. `HF_ENDPOINT` and `MODEL_ENDPOINT` are refused
+before llama.cpp starts because they can redirect `-hf` model resolution while
+leaving the reviewed argv and model ID unchanged. Exact `GGML_BACKEND_PATH` is
+refused before managed state or runtime spawn because llama.cpp build 10470
+passes its inherited value to `dlopen()` during backend discovery. Other
+`GGML_*` names remain outside this exact-name policy; they require an established
+runtime effect before denial. Refusals identify only the quoted environment name
+and never expose its value. Exact `LLAMA_API_KEY` is refused before managed
+state or runtime spawn because llama.cpp build 10470 uses it as the environment
+backing for `--api-key`; managed profiles must not acquire ambient runtime
+authentication that is absent from reviewed profile configuration. `HF_TOKEN`,
+cache-location variables, and unrelated environment names remain admitted;
+`LLAMA_API_KEY` values are never reported. Managed
+`--export`, `--session-dir`, and path-shaped `--session`/`--fork` are refused;
+plain IDs, `--continue`, and `--resume` remain isolated.
+
+If Pi exits, spawn fails, the runtime exits, or SIGINT/SIGTERM arrives, the
+launcher forwards/terminates as appropriate, reaps the entire runtime process
+group, escalates after the configured shutdown timeout, and releases the lock
+only after owned processes are reaped. It never intentionally attaches to an
+existing listener or silently chooses another profile, runtime, port, model,
+listener, or Muse target-only mode.
+
+Qwen `text`/`tools` and Muse `dflash`/`text`/`tools` are
+requested/configured—not independently verified. Runtime reports, child PID,
+argv, logs, throughput, and `/v1/models` are unverified provenance and never
+populate `capabilities.verified`. Muse admission requires the exact configured
+target/draft argv, live selected child, and exact target readiness; agents-infra
+does not invent an attestation API and cannot detect a trusted runtime silently
+disabling DFlash.
+
+Operator acceptance must therefore record runtime/version/environment and run:
+
+1. One real Pi text response and one function-tool call/result round trip for
+   Qwen.
+2. One real Pi text response and one function-tool call/result round trip for
+   Muse.
+3. A runtime-specific Muse benchmark or telemetry check that distinguishes
+   target-only decoding from DFlash.
+
+That evidence verifies the deployment; benchmark automation and interpretation
+remain operator work and do not authorize later launches.
+
+#### Security boundary, diagnostics, and failures
+
+The reproducible guarantees are exact config provenance, standalone Pi closure
+and parser identity, reviewed absolute runtime executable plus literal argv,
+shell-free spawn, exact loopback preflight, direct-child liveness, exact model
+discovery, owned group cleanup, isolated state, redacted diagnostics, and no
+intentional attach/fallback. The selected runtime code is trusted policy.
+Explicitly excluded threats are a malicious/compromised selected runtime and a
+malicious same-UID process winning the bind race after preflight closes and
+before the runtime binds, plus compromised kernel/platform libraries or
+same-UID mutation outside the retained Pi point-of-use checks. Preflight plus
+readiness is not listener attestation, cryptographic ownership, runtime honesty,
+tool verification, or DFlash verification.
+
+There is no project-config surface or launch gate for model acquisition,
+conversion, benchmark automation, secure runtime distribution, backend
+catalogs, compiled observers, adapter/proxy layers, private-pipe authorities,
+runtime/DFlash attestation, nonce, or cryptographic ownership. A selected
+runtime cannot self-mint authoritative HTTP/stdout/config/argv/environment
+evidence. Unknown or unverified remains diagnostics-only and never becomes a
+satisfied capability gate; a no-observer deployment is supported precisely as
+configured/unverified, not rejected or upgraded to verified.
+
+Managed failures are named and fail closed without fallback:
+
+| Error | Meaning |
+| --- | --- |
+| `invalid_project_configuration`, `invalid_provider_arguments`, `unsafe_pi_operand` | Invalid TOML/domain, Pi arguments, delimiter, or message boundary. |
+| `managed_profile_identity_mismatch`, `unknown_pi_profile` | Explicit identity differs or selected profile is absent. |
+| `profile_state_key_collision`, `profile_state_path_invalid` | Exact-name hash collision, or cache/path/read/no-follow/containment/revalidation failure. |
+| `provider_executable_not_found`, `pi_compatibility_unsupported` | Pi is absent or no compiled entry matches ID/host. |
+| `pi_execution_identity_unavailable`, `pi_execution_identity_malformed`, `pi_execution_identity_mismatch` | Pi closure cannot be fully read, has invalid shape, or differs from the catalog. |
+| `pi_execution_environment_invalid`, `pi_execution_identity_changed` | Environment is denied/ambiguous, or point-of-use identity changed/read failed. |
+| `runtime_executable_not_found`, `runtime_executable_invalid` | Runtime is absent or not the exact absolute readable executable. |
+| `pi_profile_busy` | Exact project/profile lock is already held. |
+| `runtime_listener_occupied`, `runtime_listener_check_failed` | Loopback port is occupied or vacancy cannot be established. |
+| `runtime_start_failed`, `runtime_exited_early` | Direct spawn failed or selected child died. |
+| `runtime_readiness_timeout`, `runtime_readiness_invalid`, `runtime_model_unavailable` | Exact readiness timed out after connection/503 retries, returned another non-200 or malformed response, or lacked the exact model. |
+| `pi_start_failed`, `runtime_shutdown_timeout` | Pi spawn failed, or the runtime group required forced kill; launcher returns nonzero. |
+
+Start troubleshooting with `pi-infra --print-config`, then `agents-infra verify
+local "$PWD"`. Check exact provenance, profile/model, literal runtime argv,
+loopback URL, static executable state, `project_state_key`,
+`profile_state_key`, contained paths, requested/unverified capability labels,
+and Pi catalog identity before permitting a process launch.
 
 Create the local runtime, then either edit the TOML manually or use the setup
 flags below:
@@ -547,7 +923,8 @@ rg -n "Primary Parent Goal Actualization" \
 | Tool | Purpose | Command | Outputs |
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
-| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex and Claude sessions; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, attachment manifests/staged images, or printed diagnostics on stdout |
+| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi state under the user cache directory, attachment manifests/staged images, or printed diagnostics on stdout |
+| `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
 | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
 | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
@@ -802,8 +1179,8 @@ Bearer token values are never read or emitted.
 
 For a session manager that wants to own the primary provider process itself
 (for example the task-board Session Manager), use the primary-session
-composition mode. It resolves exactly the launch plan `agents-infra codex` or
-`agents-infra claude` would execute — same project-config precedence, same
+composition mode. It resolves exactly the launch plan `agents-infra codex`,
+`agents-infra claude`, or `agents-infra pi` would execute — same project-config precedence, same
 executable lookup, same argument ordering, including provider user args passed
 after `--` — but performs no launch and emits one machine-readable
 `agents-infra.primary-session-launch-plan` schema v1 document:
@@ -811,6 +1188,7 @@ after `--` — but performs no launch and emits one machine-readable
 ```bash
 agents-infra compose --mode primary-session --agent codex --project "$PWD" --schema-version 1 --json
 agents-infra compose --mode primary-session --agent claude --project "$PWD" --schema-version 1 --json -- --continue
+agents-infra compose --mode primary-session --agent pi --project "$PWD" --schema-version 1 --json -- --version
 ```
 
 The response contains:
@@ -1030,9 +1408,11 @@ After running `agents-infra setup global`:
 ```
 ~/.agents/
 ├── skills/
-│   ├── relux-agents-infra -> ~/.agents
+│   ├── relux-agents-infra -> ~/.agents/.skills/relux-agents-infra
 │   ├── skill-creator -> ~/.agents/.skills/skill-creator
 │   └── ...
+├── .skills/
+│   └── relux-agents-infra/  # Materialized SKILL.md + README.md; no ancestor-link cycle
 
 ~/.claude/
 ├── CLAUDE.md           # Loads @instructions/INSTRUCTIONS.md
@@ -1056,6 +1436,13 @@ After running `agents-infra setup global`:
 Meaning of the two skill trees:
 - `.skills/` is the authoritative skill content that belongs to this repo, lives under its version control, and is synced into the installed runtime.
 - `skills/` is the external runtime area for public skills and tooling. It may contain content that does not belong to `relux-agents-infra`. `setup` only refreshes the managed links it owns there and must not treat that directory as repo-owned content.
+
+Before mutation, setup recursively validates every source-managed skill link it
+can materialize. Setup's postcondition and `verify` repeat that check across the
+managed installed surfaces. Links must remain contained, resolve successfully,
+and form an acyclic directory graph; multiple contained links may share a target
+when they form a DAG. Global provider-owned top-level skill packages remain
+outside this ownership boundary unless setup manages their name.
 
 Project-local install example:
 
