@@ -1,0 +1,3 @@
+# Post-review factual correction
+
+The accepted verdict states that the llama.cpp b10470 runtime was absent. A primary-session recheck immediately after review disproves that statement: `/Users/alexis/.local/share/llama.cpp/llama-b10470/llama` exists and is executable; `llama version` reports `0.1.1-dev (build 10470, commit 34af94cd9)`; the same tree contains `llama-server` and `libllama-server-impl.dylib`. The review acceptance and gate attacks remain valid. Only the premise-verification paragraph is superseded; the build is available for later live-smoke evidence. The reviewer-recommended lowercase `llama_api_key` admitted-control test remains a non-blocking follow-up.

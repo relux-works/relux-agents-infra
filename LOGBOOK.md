@@ -3,6 +3,320 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-08-18
+
+### 0504 — 503 Retry Accepted; Configured-Timeout Magnitude Still Unbound
+- FINDING: Cycle-2 review of `BUG-260818-jreo1p` reddens four mutants on `tools/agents-infra/internal/infra/pi_launch_posix.go:352` — `deadline.Reset(timeout)` on 503, deleting both in-loop liveness checks, widening `== 503` to `>= 500`, and deleting the 503 branch. A fifth survives: `time.NewTimer(timeout * 10)` keeps every readiness test green (the timeout subtest just runs 10.13s instead of 1.13s), so the suite binds "terminates on some deadline", not "on the configured `startup_timeout_seconds`".
+- EVIDENCE: Installed `~/.local/bin/agents-infra pi` run under `env -i` against Python readiness fixtures with `startup_timeout_seconds = 3`: persistent 503 → `runtime readiness timed out` after 26 polls in 3.17s; 502 → `invalid readiness response: status=502` after 1 poll in 0.26s; runtime PID gone in both. Production behavior honors the configured value; only the regression binding is missing.
+- FINDING: `~/.local/bin/agents-infra` is byte-identical to the current source only when rebuilt with the ldflags `scripts/setup.sh:176` stamps (`-X main.Version/Commit/BuildDate`). A plain `-trimpath` rebuild differs by 96 bytes; the symbol-table delta is exactly those three strings. Cycle one's plain-`-trimpath` provenance method no longer holds and must not be repeated as-is.
+- NOTE: The controlled Qwen smoke does not traverse a 503 window — its llama.cpp bound port 18011 only after `model loaded` at 13.97s. 503 semantics are bound by the Go production-entry tests and the installed-binary run, not by the live smoke.
+- STATUS: Accepted; reviewer supplied no `commit_ack`. Follow-up: assert elapsed time in the timeout subtest.
+
+### 0448 — Controlled Qwen Cache Reproduces Text And Tool Smokes
+- ROOT CAUSE: The three 0442 timeouts used ordinary HOME, while the reviewed 17,923,394,624-byte target and 931,146,432-byte mmproj live under `local-models/.temp/TASK-260817-300nun/live-smoke/home`.
+- EVIDENCE: Under the original `env -i` task-HOME boundary, installed project `pi-infra` text and tool smokes both exit 0. JSON assertions prove exact `QWEN_TEXT_OK`; exactly one `bash` call with `printf QWEN_TOOL_VALUE=42`; exact successful result; and final `QWEN_TOOL_OK:42`. Port/process cleanup exit 0.
+- STATUS: Live gate reproduced; `BUG-260818-jreo1p` rework ready for review. Raw logs attached as `BUG-260818-jreo1p_qwen-controlled-smokes.tar.gz`.
+
+### 0444 — Qwen Re-Smoke Timeout Is Non-Blocking For Readiness Test Rework
+- DECISION: Orchestrator directive `RUN-260818-fe202a:nudge:b5a4e1` identifies the three 120s timeouts as a cache-path mismatch: this re-smoke path does not expose the prior task-scoped cached weights. Preserve the failures and cleanup evidence; do not supersede accepted `local-models` `TASK-260817-300nun` live text/tool evidence or block the additive test rework.
+- STATUS: No further live attempts. `BUG-260818-jreo1p` proceeds to review on isolated red mutants, green production tests/build/vet/setup/verify, and zero orphan/listener evidence.
+
+### 0442 — Qwen Readiness No Longer Reproduces Prior Live Smoke
+- ANOMALY: After `./setup.sh` plus local setup/verify, three installed `/Users/alexis/src/local-models/.local/bin/pi-infra` text smokes reached `runtime_readiness_timeout` at the configured 120s; the tool smoke was not run because exact-model readiness never succeeded.
+- EVIDENCE: All three runs started the reviewed llama.cpp child and emitted its loopback server warnings. Each returned exit 1, released port 18011, and left no matching llama process; memory remained 77% free and `ollama ps` was empty.
+- BLOCKED: Earlier `BUG-260818-jreo1p_results.md` reports passing Qwen text/tool smokes without an attached log. Current deployment evidence cannot reproduce that gate; runtime/model readiness must be restored or the operator must explicitly revise the 120s profile timeout before new live acceptance evidence can be produced.
+
+### 0442 — Readiness Termination Mutants Isolated After Concurrency Nudge
+- FIX: `TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry` now drives production `RunPi` through persistent-503 timeout and child-exit-during-503 cases, asserting at least one exact-503 poll, owned PID reap, and profile-lock release.
+- EVIDENCE: In `.temp/BUG-260818-jreo1p/mutant-repo`, resetting the deadline on every 503 times out the named Go test (exit 1); deleting both in-loop child-liveness checks returns `runtime_readiness_timeout` instead of `runtime_exited_early` (exit 1). Restored source matches baseline and shared source byte-for-byte; isolated green test and orphan checks exit 0.
+- ANOMALY: The orchestrator's isolation nudge arrived after two equivalent mutants had already run briefly in the shared dirty checkout. They were restored byte-for-byte and later repeated in isolation; subsequent bootstrap reinstalled the restored source. Shared production-file mutants remain forbidden while concurrent local-model runs exist.
+
+### 0418 — 503 Retry Loop Shipped With Both Termination Bounds Untested
+- FINDING: `BUG-260818-jreo1p` binds the two branches its AC names — widening `== http.StatusServiceUnavailable` to `>= 500` reddens the 502 subtest, deleting the branch reddens the 503 subtest — but the *other* two clauses of the same AC sentence ("until timeout", "while the owned child remains alive") have zero coverage. Injecting `deadline.Reset(timeout)` into the 503 branch of `tools/agents-infra/internal/infra/pi_launch_posix.go:385` makes the retry infinite and `go test ./internal/infra` still returns `ok 70.703s`. Deleting both in-loop liveness guards (`case <-childWait.done` and `child.Signal(0)`) leaves it green at `ok 71.280s`.
+- ROOT CAUSE OF THE GAP: no fixture in the package ever sustains 503 — `writePiSequencedReadinessServer` flips to 200 on request 3, `writePiReadinessServer` only answers 200. `TestPiLaunchRefusesForeignReadyListenerForDeadChild` serves 200, so it exercises the post-readiness check at `pi_launch_posix.go:176`, never the in-loop one.
+- DECISION: A fix that converts a fatal branch into a retry loop makes the loop's *termination* bounds newly load-bearing. Bind them in the same change, not just the branch that was edited. Code correct by inspection is not code bound by evidence.
+- FINDING: `~/.local/bin/agents-infra` is byte-identical to a `-trimpath` rebuild of current source with the recorded ldflags (sha256 `6e74c363c2fcea21b56efe72f1f355738f83f32971b589ac7e2e5265ff4d837d`). Reproducing the installed artifact from source is a cheap, exact way to prove an installed runtime carries a fix — better than mtime comparison.
+- ANOMALY: A concurrent reviewer (`TASK-260817-300nun`, `RUN-260818-8ca9ef`) reported `deadline.Reset(timeout)` at `pi_launch_posix.go:385` as production code. It never was — that line is the unbounded-retry mutant this review injected and removed. Two agents mutating one shared dirty checkout produced a false finding that would have sent a producer to fix a nonexistent line. Concurrent reviewers must isolate mutants in a private copy, or serialize.
+- STATUS: `BUG-260818-jreo1p` routed `to-dev`; rework is additive test coverage only, no production-path change required. Verdict in `BUG-260818-jreo1p_reviewer-verdict.md`.
+
+### 0401 — Managed Pi Waits Through llama.cpp Loading 503
+- ROOT CAUSE: `waitPiRuntimeReady` treated every non-200 response as fatal; llama.cpp build 10470 binds the exact loopback endpoint and returns HTTP 503 while loading a cached 27B model, so production `RunPi` killed its owned runtime before readiness.
+- FIX: `tools/agents-infra/internal/infra/pi_launch_posix.go` retries exact 503 while the child remains alive and the configured startup deadline remains active; every other non-200 and every read/parse/model mismatch still fails closed.
+- EVIDENCE: `TestPiLaunchReadinessRetriesOnlyServiceUnavailableAtProductionEntry` drives `RunPi`: 503,503,200 spawns Pi only after request 3; 502 stops after request 1. Widening the retry to all 5xx makes the 502 branch fail. Focused/full tests, build, vet, bootstrap, local sync, and installed verification exit 0.
+- STATUS: `BUG-260818-jreo1p` implementation ready for review handoff; discovered by `TASK-260817-300nun` live Qwen smoke.
+
+### 0205 — Exact-Name Gates Need A Case Control, Not Just A Suffix Control
+- FINDING: `BUG-260818-1s1lka`'s `LLAMA_API_KEY` gate survives a `strings.EqualFold` widening mutant across the *entire* `internal/infra` package. `TestPiExecutionEnvironmentAcceptsExactCleanEnvironment` carries a lowercase case-sensitivity control for every sibling exact name (`hf_endpoint`, `model_endpoint`, `ggml_backend_path`) but not for `llama_api_key`; `LLAMA_API_KEY_SUFFIX` only pins the prefix/family dimension. `SKILL.md:329`, shipped by that same change, claims lookalikes stay admitted — a doc claim with no test in the case dimension.
+- DECISION: Accepted anyway. A case-insensitive regression over-refuses a name `getenv` never reads, so it is a usability regression rather than an auth bypass, and it falsifies no AC. One-line follow-up: add `"llama_api_key=case-sensitive-lookalike"` to that clean list.
+- FINDING: The broadening-mutant rule from 0119 needs two axes, not one. For an exact-name gate the family/prefix axis and the case axis are independent bounds; `LLAMA_API_KEY_SUFFIX` reddens the first and says nothing about the second. Add both controls whenever a new exact name joins that list.
+- ANOMALY: The `llama-b10470` tree used at 0119 to verify the `GGML_BACKEND_PATH` premise against the shipped binary is gone from this host (`find / -maxdepth 6 -name llama-server` empty). The `LLAMA_API_KEY` -> `--api-key` premise therefore rests on the task description and the prior cycle's artifacts, not on a re-read of the artifact. Reported as unknown rather than inferred; whether b10470 exposes another ambient-auth env name (e.g. one backing `--api-key-file`) is likewise unestablished and is separate work, since repo policy requires an established runtime effect before adding a name.
+- STATUS: `BUG-260818-1s1lka` accepted by review (`BUG-260818-1s1lka_review-verdict.md`); routed `to-review` for the commit-owning mover, since a reviewer archetype must not supply `commit_ack`.
+
+### 0129 — Managed Pi Refuses Ambient llama.cpp API Authentication
+- ROOT CAUSE: llama.cpp build 10470 maps inherited `LLAMA_API_KEY` to `--api-key`, while managed Pi profiles declare neither that option nor matching generated credentials; ambient process state could silently change runtime authentication.
+- FIX: `tools/agents-infra/internal/infra/pi_catalog.go:295` refuses exact `LLAMA_API_KEY` at `RunPi`'s shared environment boundary before managed state or runtime spawn and reports only the name; `HF_TOKEN`, cache variables, exact-name lookalikes, and unrelated names remain admitted.
+- EVIDENCE: Narrowing the gate to empty values reddens the helper, production `RunPi`, bootstrap-global alias, and project-local wrapper tests for non-empty `LLAMA_API_KEY`; restored focused/full tests, vet, build, bootstrap, and global/local verification exit 0.
+- STATUS: `BUG-260818-1s1lka` implementation ready for review handoff.
+
+### 0119 — b10470 Ships Exactly One GGML Env Name, Which Bounds The Gate Both Ways
+- FINDING: `libggml.0.20.1.dylib` in `~/.local/share/llama.cpp/llama-b10470` imports `_getenv`, `_dlopen`, and `_dlsym`, and `GGML_BACKEND_PATH` is the *only* uppercase `GGML_*` env-shaped literal anywhere in that tree. `GGML_METAL_PATH` does not exist in the build at all. The exact-name policy in `tools/agents-infra/internal/infra/pi_catalog.go:295` is therefore complete for this build, and refusing a speculative `GGML_*` prefix gate is grounded in the artifact, not in caution.
+- DECISION: Verify a docs premise against the shipped binary, not against the task description that introduced it. `llama --version` plus `strings`/`nm` on the ggml dylib settles it in seconds; `README.md:604` and `SKILL.md:320` state build 10470 as fact and now have that backing.
+- FINDING: A narrowing mutant alone under-tests an exact-name gate. Adding `"GGML_"` to the loader prefix list in the same function reddens the `GGML_METAL_PATH` clean control on the in-process lifecycle test *and* both installed launcher surfaces — so the suite pins the upper bound of the class too, not just its lower bound. Reviewers should run the broadening mutant next to the narrowing one whenever a gate is deliberately scoped narrower than its name family.
+- FINDING: Mutating `RunPi`'s gate order (moving `ValidatePiExecutionEnvironment` after `CreatePiStateTree`) reddens `environment refusal created managed state` for *every* member of the refusal table, not only the new one. Ordering is genuinely asserted rather than incidentally satisfied.
+- ANOMALY: `TestPiLaunchForwardsSignalsThenCleansRuntime` fails in any rsync copy of the tree that reaches the Pi asset through a symlink — `officialPiAsset` uses `filepath.Abs` while `identity.Entrypoint` resolves symlinks, so the spawn-path assertion mismatches. Copy artifact only; green in the real checkout. Budget for it when reviewing in a disposable copy.
+- STATUS: `BUG-260818-76hkcb` accepted by review (`BUG-260818-76hkcb_review-verdict.md`); routed `to-review` for the commit-owning mover, since a reviewer archetype must not supply `commit_ack`.
+
+### 0105 — Managed Pi Denies Exact GGML Backend Loader Path
+- ROOT CAUSE: llama.cpp build 10470 passes inherited `GGML_BACKEND_PATH` to `dlopen()` during backend discovery, bypassing the intent of managed `DYLD_*`/`LD_*` loader-injection gates.
+- FIX: `tools/agents-infra/internal/infra/pi_catalog.go:295` refuses exact `GGML_BACKEND_PATH` at `RunPi`'s shared environment boundary before state or runtime spawn and reports only the name; other `GGML_*` remain admitted absent an established runtime effect.
+- EVIDENCE: Production and bootstrap-global/project-local launcher negatives fail under a `GGML_BACKEND_PATH_V2` narrowing mutant; restored controls reach runtime backend initialization with `GGML_METAL_PATH`; full tests, vet, bootstrap, and global/local verification exit 0.
+- STATUS: `BUG-260818-76hkcb` implementation ready for review handoff.
+
+### 0010 — `strings(1)` Is A False-Negative Proxy For Go Gate Literals
+- FINDING: `strings ~/.local/bin/agents-infra | grep HF_ENDPOINT` returns zero hits on a binary that demonstrably refuses `HF_ENDPOINT`. Go compiles short literal string equality (`name == "HF_ENDPOINT"`, 11 bytes) into a length check plus immediate-constant comparisons, so the literal never lands in rodata. Literals reached through a slice or a format string (`LLAMA_ARG_`, `runtime-affecting …`) do appear, which makes the proxy look reliable right up to the point it lies.
+- IMPACT: The installed-binary staleness check used in `BUG-260817-161m6u` (LOGBOOK 2310) would have reported this gate as absent from a correctly built binary. Do not use `strings` to establish whether an installed launcher carries a gate; run the gate with a positive clean control instead.
+- EVIDENCE: `BUG-260817-2bh9nk` review — real `~/.local/bin/pi-infra` (target sha256 `9859d5…a058`) under `env -i`: clean control reaches runtime spawn and creates the runtime marker; `HF_ENDPOINT` and `MODEL_ENDPOINT` each exit 1 with `runtime-affecting environment name "<NAME>" is denied`, no value in output, no runtime child.
+- STATUS: `BUG-260817-2bh9nk` accepted by review; awaiting the commit-owning mover for the final `done` transition.
+
+## 2026-08-17
+
+### 2349 — Managed Pi Pins Model-Origin Environment
+- ROOT CAUSE: llama.cpp build 10470 honors `HF_ENDPOINT` and `MODEL_ENDPOINT` during `-hf` resolution, so inherited values could redirect reviewed model IDs to an unreviewed origin without changing managed argv.
+- FIX: `tools/agents-infra/internal/infra/pi_catalog.go:295` refuses both exact names at the shared `RunPi` environment gate before state or runtime spawn; diagnostics expose names only. Tokens, cache variables, and case-sensitive lookalikes remain separate policy questions.
+- EVIDENCE: Clean, denial, no-value-leak, production-entry, bootstrap-global, and project-local wrapper tests pass; HF-only and MODEL-only narrowing mutants each fail the opposite endpoint's unit and production `RunPi` cases.
+- STATUS: `BUG-260817-2bh9nk` implementation and validation ready for review handoff.
+
+### 2323 — Installed-Launcher Behavioral Proof Beats Binary String Parity
+- FINDING: A managed-profile probe of the installed `~/.local/bin/pi-infra` with a clean control is a complete ordering proof: the control walks argv plan, environment gate, Pi identity, runtime identity and creates `Caches/agents-infra/pi/<state-key>/…` before spawning the runtime child, while `LLAMA_ARG_MODEL`/`LLAMA_ARG_CTX_SIZE` runs stop with only `Caches/` present. Without that control, "no state was created" is indistinguishable from failing early for an unrelated reason.
+- CONSTRAINT: `DYLD_*` cannot be probed through the `pi-infra` shim — macOS SIP strips it when exec'ing `/usr/bin/env sh`, so that gate stays covered at source level only.
+- EVIDENCE: `BUG-260817-161m6u` cycle-2 review — installed binary rebuilt by `./setup.sh` (SHA-256 `df62cd…f42c3` → `3cd24e…a0d`); denied probes name only the variable and leak no value; README delete/narrow/ordering mutants all redden `TestPiOperatorContractDocumentsCycle10Boundary`; `pi_catalog.go` delete and narrow-to-`LLAMA_ARG_MODEL` mutants redden validator and production-entry tests.
+- STATUS: `BUG-260817-161m6u` accepted by review; awaiting the commit-owning mover for the final `done` transition.
+
+### 2310 — `setup global` Never Refreshes The Bootstrap-Owned CLI Binary
+- FINDING: `agents-infra setup global` syncs source into `~/.agents` and prints `Skipping local CLI wrapper install for global setup; bootstrap owns ~/.local/bin/agents-infra`, so the compiled binary that `~/.local/bin/pi-infra` execs keeps running pre-change code. Only the repo bootstrap `./setup.sh` (`scripts/setup.sh:182` `go build -trimpath`) rebuilds it.
+- FINDING: `verify global` inspects the runtime tree, not the executable, so a green `setup global` + `verify global` pair is a proxy signal and does not establish that the installed launcher carries a new gate.
+- EVIDENCE: `BUG-260817-161m6u` review — `strings ~/.local/bin/agents-infra` (mtime 21:11) has `DYLD_`, `pi_execution_environment_invalid`, `PI_CODING_AGENT_DIR` but zero `LLAMA_ARG_`/`runtime-affecting`; a fresh `go build -trimpath` of the same source has both.
+- NOTE: The generated project-local wrapper is a shell script that rebuilds from `AGENTS_INFRA_SOURCE_DIR` on every invocation, so local installs do pick changes up — the asymmetry is global-only.
+- STATUS: `BUG-260817-161m6u` routed to `to-dev`; source gate and its mutants are sound, installed global runtime refresh and a README contract fragment in `pi_operator_docs_test.go` are the outstanding rework.
+
+### 2253 — Managed Pi Denies Inherited llama.cpp Argument Environment
+- ROOT CAUSE: `RunPi` passed inherited `LLAMA_ARG_*` variables to llama.cpp; options absent from reviewed runtime argv could therefore change model or runtime parameters.
+- FIX: `tools/agents-infra/internal/infra/pi_catalog.go:284` refuses the entire case-insensitive `LLAMA_ARG_*` namespace before managed state or runtime spawn and reports only the quoted variable name.
+- EVIDENCE: Production `RunPi` negatives cover `LLAMA_ARG_MODEL` and `LLAMA_ARG_CTX_SIZE`; narrowing the gate to `LLAMA_ARG_M` admits the second variable and makes both validator and production-entry tests fail.
+- STATUS: `BUG-260817-161m6u` source tests/build/vet and installed global/local setup verification pass; ready for review handoff.
+
+### 2132 — Pi Endpoint Gate Survives Attack; llama Env Override Refuted
+- FINDING: Real runtime `llama-b10470` exports `LLAMA_ARG_HOST`/`LLAMA_ARG_PORT` and `pi_launch_posix.go:142` passes the inherited environment through unfiltered, but driving the binary directly proves CLI wins — it logs `LLAMA_ARG_HOST environment variable is set, but will be overwritten by command line argument --host`. Not a bypass of the argv endpoint gate.
+- FINDING: `validatePiRuntimeEndpointArgv` runs at config-parse time (`pi_config.go:207`), so it still refuses divergence when Pi is absent from `PATH` and compose would otherwise report `managed:false`. No unmanaged-fallback bypass.
+- FINDING: Narrowing mutants prove both bounds, not just gate presence — unbinding the port value reddens `runtime_port_drift`, unbinding the host value reddens `wildcard_runtime_bind`, and relaxing exactly-one to at-least-one reddens `duplicate_runtime_port`.
+- ANOMALY: `mainTestOfficialPiAsset` calls `t.Skipf`, so both production-entry endpoint negatives silently SKIP and the package reports `ok` when the gitignored `.temp/TASK-260817-2h8hn4` Pi asset is absent. Story-wide fixture convention (helper is not in `HEAD`, backs 6 tests), not introduced by this bug.
+- NOTE: `--reuse-port` is not refused in runtime argv; `preflightPiListener` binds without `SO_REUSEPORT`, so an occupied port is still caught, but a later same-port `SO_REUSEPORT` process could share the declared endpoint.
+- STATUS: `BUG-260817-2lpkfh` reviewer verdict accepted; awaiting commit-owning mover for the `done` transition with `commit_ack`.
+
+### 2109 — Managed Pi Endpoint Claim Bound To Runtime Argv
+- ROOT CAUSE: `tools/agents-infra/internal/infra/pi_config.go` validated `base_url` independently while accepting arbitrary non-empty runtime argv, so compose could report loopback port `18011` while launching `--host 0.0.0.0` or `--port 19011`.
+- FIX: Managed profiles require exactly one spaced `--host 127.0.0.1` and one spaced `--port <base_url-port>` pair before compose, diagnostics, or launch can succeed.
+- EVIDENCE: Production `runCompose` and setup-generated `.local/bin/agents-infra compose` negatives reject wildcard and port-drift mutants; the exact loopback control preserves literal argv.
+- STATUS: `BUG-260817-2lpkfh` implementation validation in progress.
+
+### 2050 — Skill-Link Gate Proves Graph Acyclicity
+- ROOT CAUSE: Per-link containment could not detect cycles formed through multiple individually contained directory links.
+- FIX: `tools/agents-infra/internal/infra/skill_link_validation.go:88` now follows contained directory-link targets with DFS `visiting`/`done` state; re-entry is refused while shared completed targets remain a valid DAG.
+- EVIDENCE: Source and installed production-entry transitive-cycle negatives fail under a per-link-only narrowing mutant and pass after restoration; focused/full/vet/build plus pristine/source/local-models setup, verify, and `find -L` gates exit 0.
+- STATUS: `BUG-260817-3nk7yf` cycle-5 implementation ready for review handoff.
+
+### 2038 — Per-Link Validation Misses Contained Transitive Skill Cycle
+- REGRESSION: `tools/agents-infra/internal/infra/skill_link_validation.go:116` validates each symlink independently; two individually contained links can still form a traversal cycle through separate directories.
+- EVIDENCE: Source-built production `setup local` and `verify local` both exited 0 for `.skills/transitive-cycle-probe -> ../cycle-target` plus `cycle-target/back -> ../.skills/transitive-cycle-probe`; installed `rsync -aL` reported `directory cycle` on both graph edges while the focused production suite passed.
+- STATUS: `BUG-260817-3nk7yf` review routes to rework; enforce graph acyclicity across setup-owned skill traversal and add a production-entry transitive-cycle negative.
+
+### 2026 — Recursive Skill-Link Containment Gate Closed
+- ROOT CAUSE: `tools/agents-infra/internal/infra/skill_link_validation.go:53` inspected only top-level entries while `syncRepo` copied nested symlinks verbatim.
+- FIX: `inspectSkillLinkTree` walks physical managed package directories without following links and validates every encountered link; global provider ownership remains filtered by top-level managed package name.
+- EVIDENCE: Installed-binary nested escape/cycle negatives fail under a top-level-only narrowing mutant and pass after restoration; focused/full/vet/build plus pristine/source/local-models setup and verify gates pass.
+- STATUS: `BUG-260817-3nk7yf` cycle-3 implementation ready for review handoff.
+
+### 2010 — Nested Skill Symlinks Bypass Setup Containment Gate
+- REGRESSION: `tools/agents-infra/internal/infra/skill_link_validation.go:53` delegates to a top-level-only scanner; symlinks nested under an ordinary `.skills/<name>/` directory are copied but never validated.
+- EVIDENCE: Source-built production `setup local` and `verify local` both exited 0 for nested absolute escape and ancestor-cycle inputs; installed escape resolved outside `.agents`, and installed cycle resolved to the `.agents` ancestor.
+- STATUS: `BUG-260817-3nk7yf` review routes to rework; recursively validate every copied source/runtime symlink while preserving the explicitly scoped global user-managed boundary.
+
+### 2003 — Setup Skill-Link Gate Owns Top-Level Managed Surfaces
+- ROOT CAUSE: `syncRepo` copied top-level source `.skills` symlinks verbatim, while setup and `verify local` had no containment or ancestor-cycle postcondition.
+- FIX: `tools/agents-infra/internal/infra/skill_link_validation.go` rejects unsafe source links before destination mutation and verifies top-level links across `.agents/.skills`, `.agents/skills`, `.claude/skills`, and `.codex/skills`; global provider checks are limited to setup-managed names.
+- DECISION: Do not recursively claim ownership of symlinks inside external skill packages or unrelated global user-managed links; production `./setup.sh` exposed that false ownership boundary.
+- EVIDENCE: Installed-binary escape/cycle negatives and four-surface drift attacks pass; source install, pristine/source/local-models setup+verify, and recursive `find -L` pass.
+
+### 1930 — Setup Skill Containment Gate Has Source-Symlink Bypass
+- REGRESSION: `tools/agents-infra/internal/infra/infra.go:307` preserves source `.skills` symlinks without containment checks; production `setup local` materializes escaping and ancestor/self-cycle links under `.agents/.skills`.
+- EVIDENCE: Installed-binary setup and subsequent `verify local` both exited 0 for `.skills/escape-probe -> <outside-runtime>` and `.skills/cycle-probe -> ..`; `find -L` reached the external marker through the installed runtime.
+- STATUS: `BUG-260817-3nk7yf` review routes to rework; reject or safely omit non-contained/cyclic skill links through production setup and verify, with escaping and ancestor-cycle negative coverage.
+
+### 1921 — Setup Runtime Materialization Cycles Removed
+- ROOT CAUSE: `syncRepo` admitted legacy literal `$AGENTS_INFRA_SOURCE_DIR` and nested `.temp` trees from installed sources; `ensureRepoSkillLinks` linked `skills/relux-agents-infra` to its own `.agents` ancestor.
+- FIX: `tools/agents-infra/internal/infra/infra.go` excludes and scrubs those generated artifacts, materializes `SKILL.md` plus `README.md` under `.skills/relux-agents-infra`, and links only to that contained package.
+- EVIDENCE: Production setup regression fails under literal-copy and ancestor-link narrowing mutants; focused/full tests, vet/build, global/source/local-models setup+verify, and recursive `find -L` inspection pass.
+- STATUS: `BUG-260817-3nk7yf` implementation ready for review handoff.
+
+### 1853 — Pi Alias Type And Mode Drift Gate Closed
+- ROOT CAUSE: Alias setup compared bytes before pathname type/mode, and verification used `os.Stat`; byte-identical symlinks inherited their target's regular-file identity while `0644` aliases skipped repair.
+- FIX: `tools/agents-infra/internal/infra/infra.go` requires regular-file type, exact body, and `0755` before the alias up-to-date branch; `runtime_receipt.go` uses `os.Lstat` for both alias and sibling target before reading or launching either path.
+- EVIDENCE: Production `setup local` repairs mode and byte-identical symlink alias drift; production `verify local` refuses symlink alias and sibling target. Focused production and verifier suites exit 0.
+- STATUS: `TASK-260817-3a0zr3` reviewer cycle-1 findings resolved pending full gates and review handoff.
+
+### 1848 — Pi Alias Symlink Drift Bypasses Verify
+- REGRESSION: `tools/agents-infra/internal/infra/runtime_receipt.go:190` uses `os.Stat` for the managed `pi-infra` launcher, so replacing the installed regular file with a symlink to byte-identical external content passes `verify local`.
+- EVIDENCE: Production `setup local` created the alias; after symlink substitution, production `verify local` exited 0. Mode-only drift is detected, but `installPiInfraLauncher` treats matching bytes at `0644` as up to date and setup fails instead of repairing the drift promised by README/SKILL.
+- STATUS: `TASK-260817-3a0zr3` reviewer routes to rework; reject symlink/non-regular alias identity at setup and verify, repair all documented managed alias drift, and retain production-entry negative/narrowing coverage.
+
+### 1829 — Setup Now Owns Pi Alias And Catalog Integrity
+- FINDING: The authoritative 217-record Pi manifest was a launcher `go:embed` input but was not part of setup source/runtime receipt validation, so setup and verify could accept manifest drift before a managed launch exercised the catalog.
+- FIX: `tools/agents-infra/internal/infra/source_dir.go` and `runtime_receipt.go` require the exact manifest SHA-256; both setup modes install an exact sibling-only `pi-infra`, and verification refuses missing/drifted alias bytes, mode, target, or manifest.
+- EVIDENCE: Production installed-binary global setup preserves alias caller cwd and post-separator argv; production setup/verify negatives refuse alias and catalog drift.
+- STATUS: `TASK-260817-3a0zr3` implementation ready for full validation and review handoff.
+
+### 1807 — Pi Signal Gate Uses Deterministic Child Handshake
+- ROOT CAUSE: The cycle-5 regression used an external Python Pi fixture and a fixed startup marker; under focused race-suite load its interpreter scheduling occasionally exhausted the unrelated `2s` shutdown window and produced `signal: killed`.
+- FIX: `tools/agents-infra/internal/infra/pi_test.go` now drives production `RunPi` with the race-instrumented Go test binary and writes readiness only after `signal.Notify` is active; non-timeout Python readiness fixtures use `10s` startup budgets.
+- EVIDENCE: Signal lifecycle passes 20/20 under `-race`; the exact focused Pi race suite passes 3/3 with SIGINT/SIGTERM forwarding, graceful exit, runtime-group cleanup, and lock release intact.
+
+### 1758 — Pi Signal Cleanup Race Gate Is Flaky Under Suite Load
+- REGRESSION: Required `go test -race ./internal/infra -run 'Test.*Pi' -count=1` failed in `TestPiLaunchForwardsSignalsThenCleansRuntime/terminated`; `RunPi` returned `signal: killed` after the Pi child missed graceful termination before timeout.
+- EVIDENCE: First focused-suite run failed; the isolated signal test then passed 10/10 and a full focused rerun passed, so observed reproduction is 1/12 rather than stable green.
+- STATUS: `TASK-260817-ccpnlm` reviewer cycle 5 routes to rework; make the lifecycle test/implementation deterministic under suite load and retain the closed managed `--export` isolation gate.
+
+### 1748 — Managed Pi Export Bypass Closed
+- ROOT CAUSE: Pinned Pi handles `--export` before isolated agent/session initialization and reads its source path directly, so forwarding the flag bypassed the existing session-location guards.
+- FIX: Managed argument composition now refuses `--export` before state, lock, socket, or process side effects; ordinary Pi native passthrough remains unchanged.
+- EVIDENCE: Production `runPi` drives a global-session sentinel through the refusal, verifies `invalid_provider_arguments`, unchanged bytes, no runtime launch, and an empty managed cache root; the focused unit and production tests pass under `go test -race`.
+
+### 1739 — Managed Pi Export Escapes Session Isolation
+- REGRESSION: `tools/agents-infra/internal/infra/pi_args.go:57` forwards `--export` without the managed session-path guard, so a caller can read an arbitrary session beneath `~/.pi/agent` despite hash-contained session state.
+- EVIDENCE: Source-built production `agents-infra pi --print-config --export <global-session>` exits 0 and emits the global path in both Pi argv surfaces; pinned Pi calls `exportFromFile(parsed.export, ...)` before normal session creation.
+- STATUS: `TASK-260817-ccpnlm` reviewer cycle 4 routes to rework; reject managed export or prove its source is anchored inside the generated session root, with a production-entry negative and a safe narrowing control.
+
+### 1731 — Managed Pi Session Path Bypass Closed
+- ROOT CAUSE: Pinned Pi treats `--session-dir` as an environment override and classifies `--session`/`--fork` values containing `/`, `\`, or ending in `.jsonl` as direct filesystem paths, bypassing hash-contained session state.
+- FIX: `tools/agents-infra/internal/infra/pi_args.go` rejects the directory override and path-shaped selectors for managed profiles while retaining ID lookup, `--continue`, and `--resume` inside `PI_CODING_AGENT_SESSION_DIR`.
+- EVIDENCE: Production `runPi` negatives preserve global-session bytes and prove zero runtime/state side effects across absolute, `.jsonl`, and backslash narrowing shapes; focused race tests pass.
+
+### 1723 — Managed Pi Session Isolation Is CLI-Bypassable
+- REGRESSION: `tools/agents-infra/internal/infra/pi_args.go:54` forwards managed `--session-dir`; pinned Pi gives that flag precedence over `PI_CODING_AGENT_SESSION_DIR`, so callers can redirect session reads/writes into the normal `~/.pi/agent` tree.
+- EVIDENCE: Production `agents-infra pi --print-config --session-dir <HOME>/.pi/agent/sessions` exits 0 and emits the global path in both final Pi argv surfaces despite the hash-contained state path.
+- STATUS: `TASK-260817-ccpnlm` reviewer cycle 3 routes to rework; managed launch must reject or safely neutralize state-location overrides and retain a production-entry negative isolation test.
+
+### 1710 — Pi Session Output Fan-In Serialized Through Reap
+- ROOT CAUSE: Serializing only runtime stdout/stderr left Pi stderr concurrent on the same caller writer; process-group disappearance also allowed `RunPi` to return before `Cmd.Wait` drained runtime pipes.
+- FIX: `tools/agents-infra/internal/infra/pi_launch_posix.go` shares one mutex across every live Pi/runtime output stream and retains multi-consumer child completion until cleanup observes `Cmd.Wait`.
+- EVIDENCE: Reviewer reproduction and `TestPiLaunchSerializesRuntimeOutputFanIn` both pass under `go test -race`; the dual-stream fixture would race if either cross-process serialization or post-reap drain waiting were narrowed away.
+
+### 1702 — Pi Runtime Output Fan-In Races
+- REGRESSION: `RunPi` assigns runtime stdout and stderr to one arbitrary `io.Writer`; `os/exec` writes through two goroutines and races on `bytes.Buffer`.
+- EVIDENCE: `go test -race ./internal/infra -run '^TestPiLaunchOwnedRuntimeLifecycleAndGlobalStatePreservation$' -count=1` exits 1 with concurrent `bytes.Buffer.ReadFrom` writes from `tools/agents-infra/internal/infra/pi_launch_posix.go:142-143`.
+- STATUS: `TASK-260817-ccpnlm` reviewer cycle 2 routes to rework; serialize production output fan-in and retain a dual-stream race regression.
+
+### 1645 — Pi Rework Drives Security Gates Through Production
+- FIX: `tools/agents-infra/internal/infra/pi_args.go` rejects every bare unknown long option and empty managed credential value; only self-contained `--name=value` and complete pre-delimiter flag/value pairs survive.
+- FIX: Exact readiness refuses redirects; isolated state uses random atomic catalog temporaries, single-link regular lock files, and post-open directory revalidation.
+- EVIDENCE: Named profile-state and catalog narrowing cases now enter through production compose; listener, readiness, spawn, point-of-use mutation, signal, shutdown, literal-argv, environment, and lock-release attacks enter through `RunPi`.
+- STATUS: Reviewer cycle-1 bypass reproduced red before rework and now refuses in a source-built binary while both permitted unknown-option forms compose without side effects.
+
+### 1615 — Pi Bare Unknown Argv Gate Bypassed
+- REGRESSION: Managed production diagnostics accept a bare unknown long option and emit it in final Pi argv, although the cycle-10 contract permits only `--name=value` or a complete flag/value pair.
+- ROOT CAUSE: `tools/agents-infra/internal/infra/pi_args.go:226` refuses the bare form only when suffix operands exist; the no-suffix path forwards it.
+- EVIDENCE: `agents-infra pi --print-config --unknown` exited 0 with `status:"ok"`; existing coverage tests only `--unknown -- prompt`, leaving a bypass path.
+- STATUS: `TASK-260817-ccpnlm` reviewer cycle routes to rework; add real-entry refusal and narrowing evidence for the exact permitted unknown-option forms.
+
+### 1557 — Pi Cleanup No Longer Depends on Single-Consumer Exit Evidence
+- ROOT CAUSE: Readiness could consume the runtime child's buffered `Wait` result; cleanup then waited on the already-empty channel and masked `runtime_exited_early` as a shutdown timeout.
+- FIX: `tools/agents-infra/internal/infra/pi_launch_posix.go` now terminates and verifies the owned process group by PGID existence, using the child-result channel only as optional reap evidence.
+- EVIDENCE: Positive real-entry lifecycle proves runtime-group reap and global Pi-state preservation; readiness negatives keep dead-child refusal independent of a ready endpoint.
+
+### 1530 — Pi Profile State Uses Hash-Only Contained Paths
+- ROOT CAUSE: Exact TOML profile identity was interpolated as a raw path component, so traversal escaped the cache root and normalized aliases shared state and locks.
+- DECISION: Derive `profile_state_key` as lowercase SHA-256 of exact decoded-name UTF-8 bytes; never normalize, case-fold, clean, or sanitize before hashing.
+- FIX: `TASK-260817-2h8hn4` cycle 10 requires anchored no-follow cache containment, collision and partial-read refusal before side effects, independent locks for byte-distinct names, and a production-entry raw/lossy-key narrowing test.
+- SCOPE: `.research/260817_pi-local-model-launch-contract.md`; downstream `TASK-260817-ccpnlm` and `TASK-260817-3a0zr3` AC and preconditions.
+
+### 1523 — Pi Profile Name Escapes Managed State Root
+- FINDING: `TASK-260817-2h8hn4` cycle-9 schema accepts every non-empty profile key, while lifecycle derives `.../<sha256(canonical-project)>/<profile>/` with the raw profile name.
+- EVIDENCE: Quoted TOML profile `../../../../../../.pi/agent` parses and normalizes outside the project/profile cache root; distinct names `qwen` and `nested/../qwen` normalize to the same state and lock path.
+- STATUS: Review cycle 9 requires analysis rework: constrain profile names or derive the filesystem component from an injective safe encoding/hash, prove containment and collision resistance at the production entry, and add traversal/separator/normalization negatives before any lock or file write.
+
+### 1515 — Pi Release-Tree Catalog Made Reproducible
+- FIX: `TASK-260817-2h8hn4` cycle 9 restores the exact 217-record manifest, bytewise path ordering, record encoding, exhaustive prefix-closure inventory, entry-type/link policy, and exact permission map for Pi v0.84.2 darwin-arm64.
+- EVIDENCE: Official asset SHA-256 `c996e888...` independently regenerates manifest SHA-256 `2f68ab1b...`; extracted tree has 217 regular files, 34 directories including root, no symlinks/other types, 4 files at `0755`, 213 files at `0644`.
+- DECISION: Managed Pi identity compares the indivisible compiled catalog before side effects and again immediately before Pi spawn; opaque digest-only or regular-files-only approximations are insufficient.
+
+### 1508 — Pi Catalog Digest Lost Its Canonicalization Contract
+- REGRESSION: Cycle 8 retains the 217-file count and release-tree digest but drops the bytewise sort, record encoding, path/type rules, and complete catalog payload that made the managed Pi execution-closure check reproducible in cycle 5.
+- ROOT CAUSE: Trust-boundary simplification removed unrelated Pi catalog-generation details while promising that the exact managed Pi identity gate remained unchanged.
+- STATUS: `TASK-260817-2h8hn4` review cycle 8 requires analysis rework; restore a task-scoped deterministic manifest algorithm plus authoritative catalog content/digest evidence and a narrowing case that changes canonicalization while leaving the asset/entrypoint hashes intact.
+
+### 1500 — Pi Runtime Boundary Reduced to Reproducible Claims
+- DECISION: Reviewed project TOML `runtime.executable` plus literal argv is trusted executable policy; agents-infra reproduces absolute no-shell spawn, loopback preflight/readiness, direct-child liveness, process-group cleanup, isolated Pi state, and no intentional attach/fallback.
+- DECISION: Qwen text/tools and Muse DFlash are requested/configured, never independently verified. Muse acceptance adds exact target/draft argv, exact target readiness, and operator Pi smoke/benchmark evidence.
+- SCOPE: `TASK-260817-2h8hn4` cycle 8 rejects the cycle-7 backend catalog, compiled observer, internal proxy, and attestation API while retaining exact managed Pi identity and argv-parser gates.
+
+### 1449 — Runtime Authority Moved Outside Project Backend
+- DECISION: Managed Pi uses the verified agents-infra executable as the only direct adapter child and public-listener owner; runtime attestation v2 travels over an inherited private control pipe that backend descendants never receive.
+- DECISION: Project TOML may select only immutable backend-catalog entries. Each entry fixes backend execution closure, argv grammar, private transport, compiled observer, and provable capability contracts; projects cannot supply adapter/observer code, digests, endpoints, or authority.
+- FINDING: Current DFlash documentation exposes launch configuration but no independent initialized-engine active-state endpoint. Muse launch remains fail-closed unless a reviewed backend-specific observer is compiled into the catalog; diagnostics report unsupported with capability unknown.
+- EVIDENCE: `TASK-260817-2h8hn4` cycle 7 adds a production-entry self-minted proxy attack and a narrowing mutant that replaces authoritative observation with config/environment echo.
+
+### 1437 — Runtime Attestation Authority Is Self-Minted
+- FINDING: `agents-infra.runtime-attestation.v1` validates a nonce, direct-child PID, model, and capability fields, but the arbitrary project-selected runtime or adapter that receives those expected values is also allowed to mint the JSON claim.
+- ROOT CAUSE: The contract defines exact response shape without an independent authority anchor for socket/process ownership or active DFlash state; a direct-child proxy can own the public listener, echo the expected attestation, and forward inference to a foreign or target-only backend.
+- STATUS: `TASK-260817-2h8hn4` review cycle 6 requires analysis rework with a trusted attestation authority/ownership mechanism and a production-entry self-minted proxy negative case.
+
+### 1433 — Managed Runtime Ownership Uses One Child-Bound Attestation
+- DECISION: Every managed Pi runtime must return `agents-infra.runtime-attestation.v1` bound to a fresh 256-bit launcher nonce, exact direct-child PID, exact model, and exact byte-sorted capability set; Qwen uses `dflash: null`, Muse adds the exact active DFlash target/draft object.
+- ROOT CAUSE: Child liveness and `/v1/models` allowed a foreign listener to satisfy Qwen readiness while the selected non-binding child stayed alive; a preflight port check cannot close the check-to-bind race.
+- STATUS: `TASK-260817-2h8hn4` cycle 6 decision and downstream implementation/operator AC now require absent, unreadable, malformed, stale, replayed, wrong-nonce/PID/model/capability, and foreign-listener refusals through the real launcher.
+
+### 1426 — Pi Qwen Readiness Is Not Child-Bound
+- FINDING: The managed Qwen contract accepts `/v1/models` from the configured loopback origin without a nonce, PID, or other proof that the selected runtime child owns the listener.
+- ROOT CAUSE: Child-bound nonce/PID attestation exists only for the Muse DFlash profile; process liveness plus model readiness cannot distinguish the new child from a pre-existing listener.
+- STATUS: `TASK-260817-2h8hn4` review cycle 5 requires analysis rework; bind readiness to the owned child and add a production-entry foreign-listener bypass plus narrowing evidence.
+
+### 1422 — Managed Pi Uses Verified Standalone Execution Closure
+- ROOT CAUSE: Byte-exact npm Pi verification left the `#!/usr/bin/env node` host, installed dependencies, `PATH`, and loader environment outside the gate; `NODE_OPTIONS=--require` could rewrite managed argv before Pi parsed it.
+- DECISION: Managed profiles admit only a compiled-catalog official standalone release tree, initially Pi `v0.84.2` darwin-arm64; npm/shebang Pi remains native-passthrough-only.
+- DECISION: Direct launch rejects loader-affecting environment names before side effects, invokes the verified canonical standalone path, and repeats full tree/environment-name verification immediately before Pi spawn.
+- SCOPE: `.research/260817_pi-local-model-launch-contract.md`, `TASK-260817-2h8hn4` review cycle 5; downstream `TASK-260817-ccpnlm` and `TASK-260817-3a0zr3` AC updated.
+
+### 1406 — Pi Managed Launch Bound to Immutable Package Identity
+- DECISION: Managed `agents-infra pi` policy selects a read-only compatibility catalog entry compiled into the agents-infra release; project TOML cannot mint digests or extend the catalog.
+- FINDING: Published `@earendil-works/pi-coding-agent@0.84.2` is bound by npm SRI, tarball SHA-256, exact `dist/cli.js` and `dist/cli/args.js` hashes, and a 972-file canonical package manifest digest; semver alone is non-authoritative.
+- DECISION: Direct launch statically verifies the canonical package tree before lock/file/runtime/Pi side effects. Absent, malformed, unsupported, mismatch, and unknown identities remain distinct fail-closed states; non-launching diagnostics never execute Pi/npm/Node/Bun to discover identity.
+- SCOPE: `.research/260817_pi-local-model-launch-contract.md`, `TASK-260817-2h8hn4` review cycle 4.
+
+### 1358 — Pi Argv Contract Lacks Runtime Identity Gate
+- FINDING: `TASK-260817-2h8hn4` proves argv normalization against Pi commit `a1bc0ec79010887210cc7de28714d72c78577dab` (`@earendil-works/pi-coding-agent` 0.84.2), but the proposed launcher resolves an arbitrary `pi` executable and never establishes that its parser grammar matches the pinned snapshot.
+- ROOT CAUSE: Parser-dependent option arities, separator handling, equal forms, and extension-flag consumption are specified without a supported Pi version/build identity, compatibility probe, or deterministic parser catalog selected from verified identity.
+- STATUS: Review cycle 3 requires analysis rework; bind managed launch to exact verified Pi identity or define a deterministic generated compatibility catalog with mismatch/unknown refusal and production-entry negative evidence before runtime start.
+
+### 1351 — Pi Separator Is Not End-of-Options
+- ROOT CAUSE: Pi `parseArgs()` at revision `a1bc0ec79010887210cc7de28714d72c78577dab` treats literal `--` as an unknown flag and continues parsing later model, credential, thinking, and trust options.
+- DECISION: Managed `agents-infra pi` strips its wrapper-only delimiter, forwards only exact safe operands, rejects suffix tokens beginning with `-` or `@`, prevents value consumption across the removed boundary, and normalizes recognized `--flag=value` wrapper forms to Pi's spaced argv.
+- STATUS: `TASK-260817-2h8hn4` contract and production-entry negative/mutant scenarios revised; no runtime may start on unsafe or ambiguous operand boundaries.
+
+### 1337 — Pi Managed Identity and DFlash Gates Defined
+- DECISION: Managed Pi profiles generate one provider/model catalog identity; CLI `--provider` and `--model` are accepted only when they resolve byte-for-byte to that identity. Different endpoint-exposed IDs, patterns, mismatches, and separator lookalikes refuse before runtime start.
+- DECISION: DFlash launch requires a runtime-owned JSON attestation bound to a fresh 256-bit launcher nonce, direct child PID, fresh timestamp, and exact target/draft identities; absent, unreadable, malformed, false, stale, or mismatched evidence terminates runtime before Pi starts.
+- STATUS: `TASK-260817-2h8hn4` contract and production-entry negative scenarios revised; `unknown` remains non-launching diagnostics only.
+
+### 1332 — Pi Local Profile Override and DFlash Attestation Gaps
+- FINDING: The draft Pi contract generates one provider/model entry but permits CLI provider/model overrides without defining how an overridden selection enters the generated catalog or remains bound to the selected runtime profile.
+- FINDING: The DFlash profile requires fail-closed capability proof but defines no authoritative attestation source; its negative scenario permits `unknown`, allowing absent evidence to reach the permissive branch.
+- STATUS: `TASK-260817-2h8hn4` requires analysis rework before implementation; make override materialization/refusal exact and define a launch-time DFlash attestation gate with negative production-entry evidence.
+
+### 1325 — Pi Local Profiles Require Isolated Agent State
+- FINDING: Pi custom providers/models are global-agent-dir data (`models.json`), while project settings use `.pi/settings.json`; project settings alone cannot register local models.
+- DECISION: `agents-infra pi` selected local profiles use `PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR` under agents-infra cache, an atomic generated local-only catalog, a loopback managed runtime child, and no reads/writes under `~/.pi/agent`.
+- ANOMALY: Public DFlash documentation checked 2026-08-17 lists Qwen 3.5/3.6 targets but not the task labels `Qwen 3.8 27B` or `Muse Glimmer 30B`; profile artifact/runtime strings remain exact operator inputs and must not be guessed.
+- SCOPE: `.research/260817_pi-local-model-launch-contract.md`, `TASK-260817-2h8hn4`.
+
 ## 2026-08-10
 
 ### 1829 — Local Verify Does Not Prove Source Freshness

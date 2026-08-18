@@ -1,14 +1,11 @@
 ## Status
 to-review
 
-## Assigned To
-(none)
+## Review
+required
 
-## Created
-2026-07-13T10:25:45Z
-
-## Last Update
-2026-08-18T01:50:30Z
+## Task Class
+code
 
 ## Blocked By
 - (none)
@@ -26,3 +23,12 @@ to-review
 
 ## Outcome Resources
 (none)
+
+## Created
+2026-08-17T10:14:57Z
+
+## Last Update
+2026-08-18T01:50:30Z
+
+## Assigned To
+orchestrator

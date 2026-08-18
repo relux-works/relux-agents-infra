@@ -1,0 +1,26 @@
+BUG-260817-3nk7yf cycle-4 production evidence
+
+Fixture:
+  .skills/transitive-cycle-probe -> ../cycle-target
+  cycle-target/back -> ../.skills/transitive-cycle-probe
+
+Production results:
+  source-built agents-infra setup local: exit 0
+  source-built agents-infra verify local: exit 0
+  installed links retained: yes
+  find -L -maxdepth 12: exit 0, traversed both re-entry edges
+  rsync -aL: exit 0 with directory-cycle warnings on both graph edges
+
+rsync warnings:
+  project/.agents/cycle-target/back: directory cycle
+  project/.agents/.skills/transitive-cycle-probe/back: directory cycle
+
+Focused production control:
+  go test . -count=1 -run TestInstalledBinary...: PASS (15.541s)
+
+Production call sites:
+  tools/agents-infra/internal/infra/infra.go:134-139
+  tools/agents-infra/internal/infra/infra.go:313-318
+  tools/agents-infra/internal/infra/runtime_receipt.go:148-174
+
+Negative shape: bypass path around the check.
