@@ -38,6 +38,12 @@ func seedLauncherBackend(t *testing.T, dir string) {
 	mustMkdir(t, filepath.Join(dir, "tools", "agents-infra"))
 	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "go.mod"), "module example.com/agents-infra\n\ngo 1.22\n")
 	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "main.go"), launcherBackendFixtureMain)
+	manifest, err := os.ReadFile("pi-v0.84.2-darwin-arm64-tree-manifest.txt")
+	if err != nil {
+		t.Fatalf("read authoritative Pi manifest fixture: %v", err)
+	}
+	mustMkdir(t, filepath.Join(dir, "tools", "agents-infra", "internal", "infra"))
+	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "internal", "infra", "pi-v0.84.2-darwin-arm64-tree-manifest.txt"), string(manifest))
 }
 
 func writeSourceTree(t *testing.T, dir string) string {
@@ -47,6 +53,8 @@ func writeSourceTree(t *testing.T, dir string) string {
 	mustMkdir(t, filepath.Join(dir, ".rules"))
 	mustWrite(t, filepath.Join(dir, ".instructions", "INSTRUCTIONS.md"), "# Instructions\n")
 	mustWrite(t, filepath.Join(dir, ".instructions", "AGENTS.md"), "# Agents\n")
+	mustWrite(t, filepath.Join(dir, "SKILL.md"), "# relux-agents-infra\n")
+	mustWrite(t, filepath.Join(dir, "README.md"), "# relux-agents-infra\n")
 	seedLauncherBackend(t, dir)
 	return dir
 }
@@ -286,6 +294,31 @@ func TestSetupRefusesUnusableSourceDirWithoutTouchingDestination(t *testing.T) {
 				t.Fatalf("Setup mutated the destination before rejecting the source: %v", statErr)
 			}
 		})
+	}
+}
+
+func TestSetupRefusesPiCatalogManifestDriftBeforeDestinationMutation(t *testing.T) {
+	source := writeSourceTree(t, t.TempDir())
+	manifest := filepath.Join(source, "tools", "agents-infra", "internal", "infra", "pi-v0.84.2-darwin-arm64-tree-manifest.txt")
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("ReadFile(manifest): %v", err)
+	}
+	data[len(data)-1] ^= 1
+	if err := os.WriteFile(manifest, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(manifest): %v", err)
+	}
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	err = Setup(Options{Layout: layout, Stdout: io.Discard})
+	if err == nil || !strings.Contains(err.Error(), "release-tree catalog") || !strings.Contains(err.Error(), "has drifted") {
+		t.Fatalf("Setup error = %v, want catalog drift refusal", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(project, ".agents")); !os.IsNotExist(statErr) {
+		t.Fatalf("Setup mutated destination before catalog drift refusal: %v", statErr)
 	}
 }
 

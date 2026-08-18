@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -650,6 +653,345 @@ yolo_mode = true
 			}
 		})
 	}
+}
+
+func TestRunPiPrintConfigAndComposeAreNonLaunchingAndRedacted(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+	configDir := filepath.Join(project, ".agents", ".configs")
+	mustMkdir(t, configDir)
+	runtimeSentinel := filepath.Join(t.TempDir(), "runtime-sentinel")
+	mustWrite(t, runtimeSentinel, "#!/bin/sh\necho launched > \"$0.launched\"\n")
+	if err := os.Chmod(runtimeSentinel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(configDir, "project-config.toml"), mainTestPiConfig(runtimeSentinel, 18021))
+	piRoot := mainTestOfficialPiAsset(t)
+	t.Setenv("PATH", piRoot)
+	t.Setenv("HOME", home)
+	t.Setenv(callerCWDEnv, project)
+
+	printOutput := captureStdout(t, func() {
+		if err := runPi([]string{"--print-config", "--api-key=secret", "--", "hello"}); err != nil {
+			t.Fatalf("runPi print: %v", err)
+		}
+	})
+	composeOutput := captureStdout(t, func() {
+		if err := run([]string{"compose", "--mode", "primary-session", "--agent", "pi", "--project", project, "--schema-version", "1", "--json", "--", "--api-key=secret", "--", "hello"}); err != nil {
+			t.Fatalf("compose Pi: %v", err)
+		}
+	})
+	var printPlan, composePlan infra.PrimarySessionLaunchPlan
+	decodeSingleJSONDocument(t, printOutput, &printPlan)
+	decodeSingleJSONDocument(t, composeOutput, &composePlan)
+	if printPlan.Provider != "pi" || printPlan.Pi == nil || !printPlan.Pi.Managed || printPlan.LaunchVariants.ManagedHost.Kind != infra.PrimarySessionManagedHostKindPiPTY {
+		t.Fatalf("Pi plan=%#v", printPlan)
+	}
+	if strings.Contains(printOutput, "secret") || strings.Contains(composeOutput, "secret") {
+		t.Fatal("Pi diagnostics leaked --api-key")
+	}
+	if !reflect.DeepEqual(printPlan.LaunchVariants, composePlan.LaunchVariants) || printPlan.Pi.ModelsJSON.SHA256 != composePlan.Pi.ModelsJSON.SHA256 {
+		t.Fatalf("print/compose parity mismatch")
+	}
+	if _, err := os.Stat(runtimeSentinel + ".launched"); !os.IsNotExist(err) {
+		t.Fatalf("diagnostics launched runtime: %v", err)
+	}
+	for _, path := range []string{printPlan.Pi.State.Lock, printPlan.Pi.State.ModelsJSON} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("diagnostics created %s: %v", path, err)
+		}
+	}
+	if len(printPlan.Pi.Capabilities.Verified) != 0 || printPlan.Pi.Capabilities.Verification != "not-claimed" {
+		t.Fatalf("capability overclaim: %#v", printPlan.Pi.Capabilities)
+	}
+}
+
+// Production call site: runCompose -> BuildPrimarySessionLaunchPlan ->
+// buildPiPrimarySessionLaunchPlan. These cases must fail if runtime argv is no
+// longer bound to the exact endpoint declared by base_url.
+func TestRunComposePiRefusesRuntimeEndpointDivergence(t *testing.T) {
+	piRoot := mainTestOfficialPiAsset(t)
+	base := mainTestPiConfig("/bin/echo", 18021)
+	tests := []struct {
+		name       string
+		config     string
+		wantReject bool
+	}{
+		{name: "exact loopback endpoint control", config: base},
+		{name: "wildcard runtime bind", config: strings.Replace(base, `"--host", "127.0.0.1"`, `"--host", "0.0.0.0"`, 1), wantReject: true},
+		{name: "runtime port drift", config: strings.Replace(base, `"--port", "18021"`, `"--port", "19021"`, 1), wantReject: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+			configPath := filepath.Join(project, ".agents", ".configs", "project-config.toml")
+			mustMkdir(t, filepath.Dir(configPath))
+			mustWrite(t, configPath, test.config)
+			t.Setenv("HOME", home)
+			t.Setenv("PATH", piRoot)
+
+			var composeErr error
+			output := captureStdout(t, func() {
+				composeErr = runCompose([]string{"--mode", "primary-session", "--agent", "pi", "--project", project, "--schema-version", "1", "--json"})
+			})
+			if test.wantReject {
+				if composeErr == nil {
+					t.Fatal("production compose admitted runtime/base_url endpoint divergence")
+				}
+				var envelope infra.PrimarySessionLaunchPlanErrorEnvelope
+				decodeSingleJSONDocument(t, output, &envelope)
+				if envelope.Error.Code != infra.PrimarySessionErrorInvalidProjectConfiguration {
+					t.Fatalf("endpoint divergence error=%#v", envelope.Error)
+				}
+				return
+			}
+			if composeErr != nil {
+				t.Fatalf("exact endpoint control rejected: %v\n%s", composeErr, output)
+			}
+			var plan infra.PrimarySessionLaunchPlan
+			decodeSingleJSONDocument(t, output, &plan)
+			wantArgv := []string{"serve", "--model", "Model", "--host", "127.0.0.1", "--port", "18021"}
+			if plan.Pi == nil || plan.Pi.Runtime == nil || plan.Pi.Runtime.Endpoint != "http://127.0.0.1:18021/v1" || !reflect.DeepEqual(plan.Pi.Runtime.Argv, wantArgv) {
+				t.Fatalf("exact endpoint control plan=%#v", plan.Pi)
+			}
+		})
+	}
+}
+
+func TestRunPiPrintConfigRejectsBareUnknownLongOption(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+	configDir := filepath.Join(project, ".agents", ".configs")
+	mustMkdir(t, configDir)
+	runtimeSentinel := filepath.Join(t.TempDir(), "runtime-sentinel")
+	mustWrite(t, runtimeSentinel, "#!/bin/sh\necho launched > \"$0.launched\"\n")
+	if err := os.Chmod(runtimeSentinel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(configDir, "project-config.toml"), mainTestPiConfig(runtimeSentinel, 18022))
+	t.Setenv("PATH", mainTestOfficialPiAsset(t))
+	t.Setenv("HOME", home)
+	t.Setenv(callerCWDEnv, project)
+
+	if err := runPi([]string{"--print-config", "--unknown"}); err == nil {
+		t.Fatal("production runPi admitted a forbidden bare unknown long option")
+	}
+	if _, err := os.Stat(runtimeSentinel + ".launched"); !os.IsNotExist(err) {
+		t.Fatalf("rejected argv launched runtime: %v", err)
+	}
+
+	for _, args := range [][]string{{"--print-config", "--custom-extension=value"}, {"--print-config", "--custom-extension", "value"}} {
+		output := captureStdout(t, func() {
+			if err := runPi(args); err != nil {
+				t.Fatalf("complete unknown option form %q: %v", args, err)
+			}
+		})
+		var plan infra.PrimarySessionLaunchPlan
+		decodeSingleJSONDocument(t, output, &plan)
+		joined := strings.Join(plan.LaunchVariants.Interactive.Argv, "\x00")
+		if !strings.Contains(joined, strings.Join(args[1:], "\x00")) {
+			t.Fatalf("complete unknown option form was not preserved: args=%q argv=%q", args, plan.LaunchVariants.Interactive.Argv)
+		}
+	}
+}
+
+func TestRunPiRejectsManagedSessionPathOverridesBeforeSideEffects(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	cache := filepath.Join(home, "Library", "Caches")
+	mustMkdir(t, cache)
+	configDir := filepath.Join(project, ".agents", ".configs")
+	mustMkdir(t, configDir)
+	runtimeSentinel := filepath.Join(t.TempDir(), "runtime-sentinel")
+	mustWrite(t, runtimeSentinel, "#!/bin/sh\necho launched > \"$0.launched\"\n")
+	if err := os.Chmod(runtimeSentinel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(configDir, "project-config.toml"), mainTestPiConfig(runtimeSentinel, 18023))
+	globalSessions := filepath.Join(home, ".pi", "agent", "sessions")
+	mustMkdir(t, globalSessions)
+	globalSession := filepath.Join(globalSessions, "sentinel.jsonl")
+	const sentinel = "global-session-sentinel\n"
+	mustWrite(t, globalSession, sentinel)
+	t.Setenv("PATH", mainTestOfficialPiAsset(t))
+	t.Setenv("HOME", home)
+	t.Setenv(callerCWDEnv, project)
+
+	for name, args := range map[string][]string{
+		"session directory":          {"--session-dir", globalSessions},
+		"absolute session path":      {"--session", globalSession},
+		"absolute fork path":         {"--fork", globalSession},
+		"jsonl session path":         {"--session", "sentinel.jsonl"},
+		"backslash-shaped fork path": {"--fork", `..\global-session`},
+		"global session export":      {"--export", globalSession},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := runPi(args)
+			var launchErr *infra.PiLaunchError
+			if !errors.As(err, &launchErr) || launchErr.Code != "invalid_provider_arguments" {
+				t.Fatalf("production runPi(%q) error=%v", args, err)
+			}
+			if _, err := os.Stat(runtimeSentinel + ".launched"); !os.IsNotExist(err) {
+				t.Fatalf("rejected session override launched runtime: %v", err)
+			}
+			got, err := os.ReadFile(globalSession)
+			if err != nil || string(got) != sentinel {
+				t.Fatalf("global session sentinel changed: bytes=%q err=%v", got, err)
+			}
+			entries, err := os.ReadDir(cache)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("session override refusal created managed state: %v", entries)
+			}
+		})
+	}
+}
+
+func TestRunPiPrintConfigKeepsManagedContinueAndResumeContained(t *testing.T) {
+	for _, mode := range []string{"--continue", "--resume"} {
+		t.Run(mode, func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+			configDir := filepath.Join(project, ".agents", ".configs")
+			mustMkdir(t, configDir)
+			runtimeSentinel := filepath.Join(t.TempDir(), "runtime-sentinel")
+			mustWrite(t, runtimeSentinel, "#!/bin/sh\necho launched > \"$0.launched\"\n")
+			if err := os.Chmod(runtimeSentinel, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mustWrite(t, filepath.Join(configDir, "project-config.toml"), mainTestPiConfig(runtimeSentinel, 18024))
+			t.Setenv("PATH", mainTestOfficialPiAsset(t))
+			t.Setenv("HOME", home)
+			t.Setenv(callerCWDEnv, project)
+
+			output := captureStdout(t, func() {
+				if err := runPi([]string{"--print-config", mode}); err != nil {
+					t.Fatalf("runPi print %s: %v", mode, err)
+				}
+			})
+			var plan infra.PrimarySessionLaunchPlan
+			decodeSingleJSONDocument(t, output, &plan)
+			if plan.Pi == nil || plan.Pi.State == nil || plan.Pi.State.SessionsDir == "" {
+				t.Fatalf("managed state missing: %#v", plan.Pi)
+			}
+			if !strings.Contains(plan.Pi.State.SessionsDir, filepath.Join("agents-infra", "pi", plan.Pi.State.ProjectStateKey, plan.Pi.State.ProfileStateKey, "sessions")) {
+				t.Fatalf("session path is not hash-contained: %q", plan.Pi.State.SessionsDir)
+			}
+			if !slices.Contains(plan.LaunchVariants.Interactive.Argv, mode) || slices.Contains(plan.LaunchVariants.Interactive.Argv, "--session-dir") {
+				t.Fatalf("managed %s argv=%q", mode, plan.LaunchVariants.Interactive.Argv)
+			}
+			if _, err := os.Stat(runtimeSentinel + ".launched"); !os.IsNotExist(err) {
+				t.Fatalf("print config launched runtime: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunPiNativePassthroughOnlyOnPolicyAbsence(t *testing.T) {
+	project, bin := t.TempDir(), t.TempDir()
+	record := filepath.Join(t.TempDir(), "record")
+	pi := filepath.Join(bin, "pi")
+	mustWrite(t, pi, "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\" > \"$PI_RECORD\"\n")
+	if err := os.Chmod(pi, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("PI_RECORD", record)
+	t.Setenv(callerCWDEnv, project)
+	if err := runPi([]string{"native", "args"}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalProject, err := infra.CanonicalProjectDir(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := canonicalProject + "\nnative\nargs\n"
+	if string(body) != want {
+		t.Fatalf("native passthrough=%q want=%q", body, want)
+	}
+	config := filepath.Join(project, ".agents", ".configs", "project-config.toml")
+	mustMkdir(t, filepath.Dir(config))
+	mustWrite(t, config, "[agents.pi.primary_session\nprofile = \"broken\"\n")
+	if err := runPi([]string{"must-not-run"}); err == nil {
+		t.Fatal("malformed Pi policy fell back to native passthrough")
+	}
+	if err := os.Remove(config); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(config, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPi([]string{"must-not-run-on-read-failure"}); err == nil {
+		t.Fatal("Pi policy read failure fell back to native passthrough")
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("Pi policy read failure executed native Pi: %v", err)
+	}
+}
+
+func TestRunComposePiMalformedPolicyPrecedesMissingExecutable(t *testing.T) {
+	project := t.TempDir()
+	config := filepath.Join(project, ".agents", ".configs", "project-config.toml")
+	mustMkdir(t, filepath.Dir(config))
+	mustWrite(t, config, "[agents.pi.primary_session\nprofile = \"broken\"\n")
+	t.Setenv("PATH", t.TempDir())
+	var composeErr error
+	output := captureStdout(t, func() {
+		composeErr = runCompose([]string{"--mode", "primary-session", "--agent", "pi", "--project", project, "--schema-version", "1", "--json"})
+	})
+	if composeErr == nil {
+		t.Fatal("malformed Pi policy composed")
+	}
+	var envelope infra.PrimarySessionLaunchPlanErrorEnvelope
+	decodeSingleJSONDocument(t, output, &envelope)
+	if envelope.Error.Code != infra.PrimarySessionErrorInvalidProjectConfiguration {
+		t.Fatalf("error precedence=%#v", envelope.Error)
+	}
+}
+
+func mainTestPiConfig(runtime string, port int) string {
+	return fmt.Sprintf(`
+[agents.pi.primary_session]
+profile = "profile"
+pi_compatibility = %q
+[agents.pi.profiles.profile]
+provider = "local-provider"
+model = "Model"
+base_url = "http://127.0.0.1:%d/v1"
+api = "openai-completions"
+reasoning = false
+input = ["text"]
+context_window = 8192
+max_tokens = 1024
+thinking = "off"
+requested_capabilities = ["text", "tools"]
+[agents.pi.profiles.profile.compat]
+supports_developer_role = false
+[agents.pi.profiles.profile.runtime]
+executable = %q
+argv = ["serve", "--model", "Model", "--host", "127.0.0.1", "--port", "%d"]
+readiness_path = "/models"
+startup_timeout_seconds = 5
+shutdown_timeout_seconds = 2
+`, infra.PiCompatibilityV0842DarwinARM64, port, runtime, port)
+}
+
+func mainTestOfficialPiAsset(t *testing.T) string {
+	t.Helper()
+	root, _ := filepath.Abs("../../.temp/TASK-260817-2h8hn4/pi-standalone-darwin-arm64-0.84.2/pi")
+	if _, err := os.Stat(filepath.Join(root, "pi")); err != nil {
+		t.Skipf("official Pi asset unavailable: %v", err)
+	}
+	return root
 }
 
 func TestRunPrepareEmitsOneV1Document(t *testing.T) {

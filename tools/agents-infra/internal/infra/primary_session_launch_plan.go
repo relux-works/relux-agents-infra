@@ -39,6 +39,13 @@ type PrimarySessionLaunchPlan struct {
 	Resolved         PrimarySessionResolved         `json:"resolved"`
 	RequiredEnvNames []string                       `json:"required_env_names"`
 	Sources          []PrimarySessionSource         `json:"sources"`
+	Pi               *PiLaunchPlanDetails           `json:"pi,omitempty"`
+	Sidecars         *PrimarySessionSidecars        `json:"sidecars,omitempty"`
+	Capabilities     *PiCapabilityPlan              `json:"capabilities,omitempty"`
+}
+
+type PrimarySessionSidecars struct {
+	LocalModel PiRuntimePlan `json:"local_model"`
 }
 
 type PrimarySessionLaunchVariants struct {
@@ -88,13 +95,14 @@ type PrimarySessionManagedClientVariant struct {
 }
 
 type PrimarySessionResolved struct {
-	Model     PrimarySessionResolvedString `json:"model"`
-	Reasoning PrimarySessionResolvedString `json:"reasoning"`
-	Yolo      PrimarySessionResolvedBool   `json:"yolo"`
-	Sandbox   PrimarySessionResolvedString `json:"sandbox"`
-	Profile   PrimarySessionResolvedString `json:"profile"`
-	Approval  PrimarySessionResolvedString `json:"approval"`
-	MCP       PrimarySessionResolvedMCP    `json:"mcp"`
+	Model           PrimarySessionResolvedString `json:"model"`
+	Reasoning       PrimarySessionResolvedString `json:"reasoning"`
+	Yolo            PrimarySessionResolvedBool   `json:"yolo"`
+	Sandbox         PrimarySessionResolvedString `json:"sandbox"`
+	Profile         PrimarySessionResolvedString `json:"profile"`
+	Approval        PrimarySessionResolvedString `json:"approval"`
+	MCP             PrimarySessionResolvedMCP    `json:"mcp"`
+	PiCompatibility PrimarySessionResolvedString `json:"pi_compatibility,omitempty"`
 }
 
 // PrimarySessionResolvedString reports one resolved policy field with
@@ -165,7 +173,7 @@ func (e *PrimarySessionComposeError) Unwrap() error { return e.Err }
 // provider without launching anything. lookPath resolves the provider
 // executable and defaults to exec.LookPath; tests inject a fake.
 func BuildPrimarySessionLaunchPlan(provider, projectDir, homeDir string, userArgs []string, producer ChildLaunchCompositionProducer, lookPath func(string) (string, error)) (PrimarySessionLaunchPlan, error) {
-	if provider != "codex" && provider != "claude" {
+	if provider != "codex" && provider != "claude" && provider != "pi" {
 		return PrimarySessionLaunchPlan{}, &PrimarySessionComposeError{
 			Code: PrimarySessionErrorInvalidProjectConfiguration,
 			Err:  fmt.Errorf("unsupported provider %q", provider),
@@ -181,11 +189,14 @@ func BuildPrimarySessionLaunchPlan(provider, projectDir, homeDir string, userArg
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}
-	executable, err := lookPath(provider)
-	if err != nil {
-		return PrimarySessionLaunchPlan{}, &PrimarySessionComposeError{
-			Code: PrimarySessionErrorProviderExecutableNotFound,
-			Err:  fmt.Errorf("find %s executable: %w", provider, err),
+	executable := ""
+	if provider != "pi" {
+		executable, err = lookPath(provider)
+		if err != nil {
+			return PrimarySessionLaunchPlan{}, &PrimarySessionComposeError{
+				Code: PrimarySessionErrorProviderExecutableNotFound,
+				Err:  fmt.Errorf("find %s executable: %w", provider, err),
+			}
 		}
 	}
 
@@ -208,12 +219,18 @@ func BuildPrimarySessionLaunchPlan(provider, projectDir, homeDir string, userArg
 		err = buildCodexPrimarySessionLaunchPlan(&result, canonicalProjectDir, homeDir, userArgs)
 	case "claude":
 		err = buildClaudePrimarySessionLaunchPlan(&result, canonicalProjectDir, homeDir, userArgs)
+	case "pi":
+		err = buildPiPrimarySessionLaunchPlan(&result, canonicalProjectDir, homeDir, userArgs, lookPath)
 	}
 	if err != nil {
 		code := PrimarySessionErrorInvalidProjectConfiguration
 		var argErr *ProviderArgumentError
 		if errors.As(err, &argErr) {
 			code = PrimarySessionErrorInvalidProviderArguments
+		}
+		var piErr *PiLaunchError
+		if errors.As(err, &piErr) {
+			code = piErr.Code
 		}
 		return PrimarySessionLaunchPlan{}, &PrimarySessionComposeError{
 			Code: code,

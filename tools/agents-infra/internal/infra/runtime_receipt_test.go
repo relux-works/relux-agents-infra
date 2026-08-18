@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -71,6 +72,170 @@ func TestVerifyInstalledRuntimeRefusesLauncherWhoseBackendDisappeared(t *testing
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q missing %q", err, want)
 		}
+	}
+}
+
+func TestVerifyInstalledRuntimeRefusesMissingAndDriftedPiInfraAlias(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(t *testing.T, layout Layout)
+		want   string
+	}{
+		{
+			name: "missing alias",
+			mutate: func(t *testing.T, layout Layout) {
+				if err := os.Remove(filepath.Join(layout.BinDir, piInfraWrapperName(runtime.GOOS))); err != nil {
+					t.Fatalf("Remove(pi-infra): %v", err)
+				}
+			},
+			want: "no generated pi-infra launcher",
+		},
+		{
+			name: "drifted alias target",
+			mutate: func(t *testing.T, layout Layout) {
+				path := filepath.Join(layout.BinDir, piInfraWrapperName(runtime.GOOS))
+				mustWrite(t, path, strings.ReplaceAll(piInfraWrapperBody(runtime.GOOS, piInfraTargetName(layout.Mode, runtime.GOOS)), piInfraTargetName(layout.Mode, runtime.GOOS), "other-infra"))
+			},
+			want: "has drifted from the managed",
+		},
+		{
+			name: "byte-identical symlink alias",
+			mutate: func(t *testing.T, layout Layout) {
+				path := filepath.Join(layout.BinDir, piInfraWrapperName(runtime.GOOS))
+				external := filepath.Join(t.TempDir(), piInfraWrapperName(runtime.GOOS))
+				mustWrite(t, external, string(mustReadRuntimeFile(t, path)))
+				if err := os.Remove(path); err != nil {
+					t.Fatalf("Remove(pi-infra): %v", err)
+				}
+				if err := os.Symlink(external, path); err != nil {
+					t.Fatalf("Symlink(pi-infra): %v", err)
+				}
+			},
+			want: "pi-infra launcher",
+		},
+		{
+			name: "missing sibling target",
+			mutate: func(t *testing.T, layout Layout) {
+				if err := os.Remove(filepath.Join(layout.BinDir, piInfraTargetName(layout.Mode, runtime.GOOS))); err != nil {
+					t.Fatalf("Remove(agents-infra): %v", err)
+				}
+			},
+			want: "pi-infra launcher target is missing",
+		},
+		{
+			name: "byte-identical symlink sibling target",
+			mutate: func(t *testing.T, layout Layout) {
+				path := filepath.Join(layout.BinDir, piInfraTargetName(layout.Mode, runtime.GOOS))
+				external := filepath.Join(t.TempDir(), piInfraTargetName(layout.Mode, runtime.GOOS))
+				mustWrite(t, external, string(mustReadRuntimeFile(t, path)))
+				if err := os.Remove(path); err != nil {
+					t.Fatalf("Remove(agents-infra): %v", err)
+				}
+				if err := os.Symlink(external, path); err != nil {
+					t.Fatalf("Symlink(agents-infra): %v", err)
+				}
+			},
+			want: "pi-infra launcher target is not a regular file",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := seedSourceRepo(t)
+			project := t.TempDir()
+			layout, err := LocalLayout(source, project)
+			if err != nil {
+				t.Fatalf("LocalLayout: %v", err)
+			}
+			if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+				t.Fatalf("Setup: %v", err)
+			}
+			test.mutate(t, layout)
+			err = VerifyInstalledRuntime(layout)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("VerifyInstalledRuntime error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func mustReadRuntimeFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	return data
+}
+
+func TestSetupRepairsPiInfraAliasDrift(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	aliasPath := filepath.Join(layout.BinDir, piInfraWrapperName(runtime.GOOS))
+	mustWrite(t, aliasPath, "drifted alias\n")
+	if err := VerifyInstalledRuntime(layout); err == nil {
+		t.Fatal("VerifyInstalledRuntime accepted drifted pi-infra alias")
+	}
+	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+		t.Fatalf("Setup repair: %v", err)
+	}
+	if err := VerifyInstalledRuntime(layout); err != nil {
+		t.Fatalf("VerifyInstalledRuntime after setup repair: %v", err)
+	}
+}
+
+func TestVerifyInstalledRuntimeRefusesIncorrectGlobalPiInfraTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable identity probe")
+	}
+	source := seedSourceRepo(t)
+	home := t.TempDir()
+	layout, err := GlobalLayout(source, home)
+	if err != nil {
+		t.Fatalf("GlobalLayout: %v", err)
+	}
+	seedGlobalAgentsInfraTarget(t, layout)
+	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	target := filepath.Join(layout.BinDir, piInfraTargetName(ModeGlobal, runtime.GOOS))
+	mustWrite(t, target, "#!/usr/bin/env sh\nexit 0\n")
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatalf("Chmod(%s): %v", target, err)
+	}
+	err = VerifyInstalledRuntime(layout)
+	if err == nil || !strings.Contains(err.Error(), "does not start as agents-infra") || !strings.Contains(err.Error(), "does not identify it as agents-infra") {
+		t.Fatalf("VerifyInstalledRuntime error = %v, want incorrect global target refusal", err)
+	}
+}
+
+func TestVerifyInstalledRuntimeRefusesPiCatalogManifestDrift(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	manifest := filepath.Join(layout.AgentsDir, "tools", "agents-infra", "internal", "infra", "pi-v0.84.2-darwin-arm64-tree-manifest.txt")
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("ReadFile(manifest): %v", err)
+	}
+	data[0] ^= 1
+	if err := os.WriteFile(manifest, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(manifest): %v", err)
+	}
+	err = VerifyInstalledRuntime(layout)
+	if err == nil || !strings.Contains(err.Error(), "release-tree catalog") || !strings.Contains(err.Error(), "has drifted") {
+		t.Fatalf("VerifyInstalledRuntime error = %v, want catalog drift refusal", err)
 	}
 }
 
@@ -167,6 +332,8 @@ func TestSetupRefusesToMintAReceiptForARuntimeItDidNotFinishInstalling(t *testin
 	mustMkdir(t, filepath.Join(layout.AgentsDir, ".rules"))
 	mustWrite(t, filepath.Join(layout.AgentsDir, ".instructions", "INSTRUCTIONS.md"), "# Instructions\n")
 	mustWrite(t, filepath.Join(layout.AgentsDir, ".instructions", "AGENTS.md"), "# Agents\n")
+	mustWrite(t, filepath.Join(layout.AgentsDir, "SKILL.md"), "# relux-agents-infra\n")
+	mustWrite(t, filepath.Join(layout.AgentsDir, "README.md"), "# relux-agents-infra\n")
 
 	err = Setup(Options{Layout: layout, NoSync: true, Stdout: io.Discard})
 	if err == nil {

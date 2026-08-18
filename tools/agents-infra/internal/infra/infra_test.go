@@ -165,6 +165,74 @@ func TestAgentsAttachmentsUnixWrapperPreservesGoRunUsageExitCode(t *testing.T) {
 	}
 }
 
+func TestPiInfraWrapperBodyForWindowsUsesExactSiblingTarget(t *testing.T) {
+	body := piInfraWrapperBody("windows", "agents-infra.exe")
+	for _, want := range []string{
+		`if not exist "%DIR%agents-infra.exe"`,
+		`"%DIR%agents-infra.exe" pi %*`,
+		"exit /b %ERRORLEVEL%",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("windows pi-infra wrapper missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "agents-infra pi %*") {
+		t.Fatalf("windows pi-infra wrapper must not fall back through PATH:\n%s", body)
+	}
+}
+
+func TestPiInfraUnixWrapperPreservesCallerCWDAndEveryArgument(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell launcher test")
+	}
+	dir := t.TempDir()
+	launcher := filepath.Join(dir, "pi-infra")
+	target := filepath.Join(dir, "agents-infra")
+	mustWrite(t, launcher, piInfraWrapperBody(runtime.GOOS, "agents-infra"))
+	mustWrite(t, target, "#!/usr/bin/env sh\nprintf 'cwd=<%s>\\n' \"$PWD\"\nfor arg in \"$@\"; do printf 'arg=<%s>\\n' \"$arg\"; done\n")
+	for _, path := range []string{launcher, target} {
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatalf("Chmod(%s): %v", path, err)
+		}
+	}
+	caller := filepath.Join(t.TempDir(), "caller with spaces")
+	mustMkdir(t, caller)
+	args := []string{"--profile", "qwen", "--", "ordinary prompt", "--post-separator", "@literal"}
+	command := exec.Command(launcher, args...)
+	command.Dir = caller
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pi-infra: %v\n%s", err, output)
+	}
+	wantLines := []string{"cwd=<" + caller + ">", "arg=<pi>"}
+	for _, arg := range args {
+		wantLines = append(wantLines, "arg=<"+arg+">")
+	}
+	if got, want := strings.TrimSpace(string(output)), strings.Join(wantLines, "\n"); got != want {
+		t.Fatalf("delegation output:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestPiInfraUnixWrapperRefusesMissingSiblingTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell launcher test")
+	}
+	dir := t.TempDir()
+	launcher := filepath.Join(dir, "pi-infra")
+	mustWrite(t, launcher, piInfraWrapperBody(runtime.GOOS, "agents-infra"))
+	if err := os.Chmod(launcher, 0o755); err != nil {
+		t.Fatalf("Chmod(%s): %v", launcher, err)
+	}
+	output, err := exec.Command(launcher, "--", "prompt").CombinedOutput()
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 127 {
+		t.Fatalf("missing target error = %v, output:\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "missing managed target") || !strings.Contains(string(output), filepath.Join(dir, "agents-infra")) {
+		t.Fatalf("missing-target refusal lacks exact target:\n%s", output)
+	}
+}
+
 func TestSetupLocalCreatesInstalledRuntime(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
@@ -201,6 +269,9 @@ func TestSetupLocalCreatesInstalledRuntime(t *testing.T) {
 	assertRegularFile(t, filepath.Join(project, ".local", "bin", "agents-attachments"))
 	assertFileContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), `"$TARGET" attachments "$@"`)
 	assertFileNotContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), "python")
+	assertRegularFile(t, filepath.Join(project, ".local", "bin", piInfraWrapperName(runtime.GOOS)))
+	assertFileContains(t, filepath.Join(project, ".local", "bin", piInfraWrapperName(runtime.GOOS)), "agents-infra")
+	assertFileContains(t, filepath.Join(project, ".local", "bin", piInfraWrapperName(runtime.GOOS)), " pi ")
 
 	launcher := filepath.Join(project, ".local", "bin", "agents-infra")
 	data, err := os.ReadFile(launcher)
@@ -281,7 +352,8 @@ func TestSetupRemovesStaleRepoSkillSelfLinks(t *testing.T) {
 	assertNoPath(t, staleLink)
 	assertNoPath(t, staleClaudeLink)
 	assertNoPath(t, staleCodexLink)
-	assertSymlink(t, filepath.Join(project, ".agents", "skills", repoSkillName), filepath.Join(project, ".agents"))
+	assertSymlink(t, filepath.Join(project, ".agents", "skills", repoSkillName), filepath.Join(project, ".agents", ".skills", repoSkillName))
+	assertFileContains(t, filepath.Join(project, ".agents", ".skills", repoSkillName, "SKILL.md"), "relux-agents-infra")
 }
 
 func TestRefreshLinksKeepsCanonicalRepoSkillWhenStaleSelfLinkCannotBeRemoved(t *testing.T) {
@@ -315,7 +387,7 @@ func TestRefreshLinksKeepsCanonicalRepoSkillWhenStaleSelfLinkCannotBeRemoved(t *
 		t.Fatalf("RefreshLinks should tolerate permission-denied stale cleanup: %v\nlogs:\n%s", err, logs.String())
 	}
 
-	assertSymlink(t, filepath.Join(skillsDir, repoSkillName), filepath.Join(project, ".agents"))
+	assertSymlink(t, filepath.Join(skillsDir, repoSkillName), filepath.Join(project, ".agents", ".skills", repoSkillName))
 	assertSymlink(t, staleLink, filepath.Join(project, ".agents"))
 	assertNoPath(t, filepath.Join(project, ".claude", "skills", "legacy-agents-infra"))
 	assertNoPath(t, filepath.Join(project, ".codex", "skills", "legacy-agents-infra"))
@@ -590,13 +662,15 @@ func TestSetupGlobalDoesNotInstallCLIWrapper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GlobalLayout: %v", err)
 	}
+	seedGlobalAgentsInfraTarget(t, layout)
 
 	if err := Setup(Options{Layout: layout}); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	assertNoPath(t, filepath.Join(home, ".local", "bin", "agents-infra"))
+	assertRegularFile(t, filepath.Join(home, ".local", "bin", "agents-infra"))
 	assertNoPath(t, filepath.Join(home, ".local", "bin", "agents-infra.cmd"))
+	assertRegularFile(t, filepath.Join(home, ".local", "bin", "pi-infra"))
 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture)
 	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), modelAvailabilityPolicyFixture)
 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture)
@@ -611,6 +685,7 @@ func TestSetupGlobalRemovesStaleProjectConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GlobalLayout: %v", err)
 	}
+	seedGlobalAgentsInfraTarget(t, layout)
 	staleConfig := filepath.Join(home, ".agents", ".configs", projectConfigFileName)
 	mustMkdir(t, filepath.Dir(staleConfig))
 	mustWrite(t, staleConfig, "[mcp]\nenabled_servers = [\"figma\"]\n")
@@ -1028,6 +1103,7 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GlobalLayout: %v", err)
 	}
+	seedGlobalAgentsInfraTarget(t, layout)
 
 	if err := Setup(Options{Layout: layout}); err != nil {
 		t.Fatalf("Setup: %v", err)
@@ -1154,11 +1230,27 @@ args = ["--mcp"]
 	mustWrite(t, filepath.Join(root, ".rules", "default.rules"), "allow")
 	mustWrite(t, filepath.Join(root, ".skills", "skill-creator", "SKILL.md"), "creator")
 	mustWrite(t, filepath.Join(root, ".skills", "pdf", "SKILL.md"), "pdf")
+	mustWrite(t, filepath.Join(root, "SKILL.md"), "# relux-agents-infra\n")
+	mustWrite(t, filepath.Join(root, "README.md"), "# relux-agents-infra\n")
 	mustWrite(t, filepath.Join(root, ".gitignore"), "ignored")
 	mustWrite(t, filepath.Join(root, ".temp", "junk.txt"), "junk")
 	mustWrite(t, filepath.Join(root, ".task-board", "README.md"), "board")
 	mustWrite(t, filepath.Join(root, "task-board.config.json"), "{}")
 	return root
+}
+
+func seedGlobalAgentsInfraTarget(t *testing.T, layout Layout) {
+	t.Helper()
+	target := filepath.Join(layout.BinDir, piInfraTargetName(ModeGlobal, runtime.GOOS))
+	mustMkdir(t, filepath.Dir(target))
+	body := "global agents-infra target fixture\n"
+	if runtime.GOOS != "windows" {
+		body = "#!/usr/bin/env sh\nprintf '%s\\n' 'agents-infra fixture commit=none build_date=none'\n"
+	}
+	mustWrite(t, target, body)
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatalf("Chmod(%s): %v", target, err)
+	}
 }
 
 func mustDoctor(t *testing.T, layout Layout) Report {

@@ -1,0 +1,322 @@
+//go:build !windows
+
+package infra
+
+import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"syscall"
+
+	"golang.org/x/sys/unix"
+)
+
+var piStateKeyPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+type PiStatePaths struct {
+	CanonicalCacheRoot string `json:"canonical_cache_root"`
+	ProjectStateKey    string `json:"project_state_key"`
+	ProfileStateKey    string `json:"profile_state_key"`
+	Root               string `json:"root"`
+	AgentDir           string `json:"agent_dir"`
+	SessionsDir        string `json:"sessions_dir"`
+	ModelsJSON         string `json:"models_json"`
+	Lock               string `json:"lock"`
+}
+
+func exactStateKey(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+var piStateKey = exactStateKey
+
+func ResolvePiStatePaths(cacheRoot, canonicalProject, profileName string) (PiStatePaths, error) {
+	if cacheRoot == "" {
+		var err error
+		cacheRoot, err = os.UserCacheDir()
+		if err != nil {
+			return PiStatePaths{}, piError("profile_state_path_invalid", fmt.Errorf("resolve user cache directory: %w", err))
+		}
+	}
+	abs, err := filepath.Abs(cacheRoot)
+	if err != nil {
+		return PiStatePaths{}, piError("profile_state_path_invalid", err)
+	}
+	canonical, err := filepath.EvalSymlinks(filepath.Clean(abs))
+	if err != nil {
+		return PiStatePaths{}, piError("profile_state_path_invalid", fmt.Errorf("canonicalize cache root: %w", err))
+	}
+	info, err := os.Stat(canonical)
+	if err != nil || !info.IsDir() {
+		if err == nil {
+			err = errors.New("cache root is not a directory")
+		}
+		return PiStatePaths{}, piError("profile_state_path_invalid", err)
+	}
+	projectKey, profileKey := piStateKey(canonicalProject), piStateKey(profileName)
+	if !piStateKeyPattern.MatchString(projectKey) || !piStateKeyPattern.MatchString(profileKey) {
+		return PiStatePaths{}, piError("profile_state_path_invalid", errors.New("state key is not lowercase SHA-256 hex"))
+	}
+	suffix := filepath.Join("agents-infra", "pi", projectKey, profileKey)
+	if filepath.IsAbs(suffix) || len(splitCleanSuffix(suffix)) != 4 {
+		return PiStatePaths{}, piError("profile_state_path_invalid", errors.New("managed state suffix is invalid"))
+	}
+	root := filepath.Join(canonical, suffix)
+	rel, err := filepath.Rel(canonical, root)
+	if err != nil || rel != suffix {
+		return PiStatePaths{}, piError("profile_state_path_invalid", errors.New("managed state escaped canonical cache root"))
+	}
+	paths := PiStatePaths{CanonicalCacheRoot: canonical, ProjectStateKey: projectKey, ProfileStateKey: profileKey, Root: root, AgentDir: filepath.Join(root, "agent"), SessionsDir: filepath.Join(root, "sessions"), ModelsJSON: filepath.Join(root, "agent", "models.json"), Lock: filepath.Join(root, "session.lock")}
+	if err := validateExistingPiStateComponents(paths); err != nil {
+		return PiStatePaths{}, piError("profile_state_path_invalid", err)
+	}
+	return paths, nil
+}
+
+func validateExistingPiStateComponents(paths PiStatePaths) error {
+	rootFD, err := unix.Open(paths.CanonicalCacheRoot, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(rootFD)
+	fd := rootFD
+	for _, name := range []string{"agents-infra", "pi", paths.ProjectStateKey, paths.ProfileStateKey} {
+		next, openErr := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if fd != rootFD {
+			unix.Close(fd)
+		}
+		if errors.Is(openErr, syscall.ENOENT) {
+			return nil
+		}
+		if openErr != nil {
+			return openErr
+		}
+		fd = next
+	}
+	defer func() {
+		if fd != rootFD {
+			unix.Close(fd)
+		}
+	}()
+	for _, name := range []string{"agent", "sessions"} {
+		child, openErr := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if errors.Is(openErr, syscall.ENOENT) {
+			continue
+		}
+		if openErr != nil {
+			return openErr
+		}
+		unix.Close(child)
+	}
+	return nil
+}
+
+func ValidatePiStateKeyCollisions(profiles map[string]PiProfile) error {
+	seen := map[string]string{}
+	for name := range profiles {
+		key := piStateKey(name)
+		if other, ok := seen[key]; ok && other != name {
+			return piError("profile_state_key_collision", fmt.Errorf("profiles %q and %q share state key %s", other, name, key))
+		}
+		seen[key] = name
+	}
+	return nil
+}
+
+func splitCleanSuffix(path string) []string {
+	var out []string
+	for path != "." && path != string(filepath.Separator) {
+		dir, base := filepath.Split(path)
+		if base == "" || base == "." || base == ".." {
+			return nil
+		}
+		out = append([]string{base}, out...)
+		path = filepath.Clean(dir)
+	}
+	return out
+}
+
+// CreatePiStateTree creates every managed component relative to an already
+// opened canonical-cache-root descriptor. O_NOFOLLOW plus post-open fstat makes
+// component replacement/symlink attacks refusals rather than path traversal.
+func CreatePiStateTree(paths PiStatePaths) error {
+	rootFD, err := unix.Open(paths.CanonicalCacheRoot, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return piError("profile_state_path_invalid", err)
+	}
+	defer unix.Close(rootFD)
+	components := []string{"agents-infra", "pi", paths.ProjectStateKey, paths.ProfileStateKey, "agent", "sessions"}
+	fd := rootFD
+	for i, component := range components {
+		if i == 5 {
+			unix.Close(fd)
+			fd = rootFD
+			for _, c := range components[:4] {
+				next, openErr := openOrCreateDirAt(fd, c)
+				if fd != rootFD {
+					unix.Close(fd)
+				}
+				if openErr != nil {
+					return piError("profile_state_path_invalid", openErr)
+				}
+				fd = next
+			}
+		}
+		next, openErr := openOrCreateDirAt(fd, component)
+		if fd != rootFD {
+			unix.Close(fd)
+		}
+		if openErr != nil {
+			return piError("profile_state_path_invalid", openErr)
+		}
+		fd = next
+	}
+	if fd != rootFD {
+		unix.Close(fd)
+	}
+	return nil
+}
+
+func openOrCreateDirAt(parent int, name string) (int, error) {
+	fd, err := unix.Openat(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if errors.Is(err, syscall.ENOENT) {
+		if err = unix.Mkdirat(parent, name, 0o700); err != nil && !errors.Is(err, syscall.EEXIST) {
+			return -1, err
+		}
+		fd, err = unix.Openat(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	}
+	if err != nil {
+		return -1, err
+	}
+	if err := piRevalidateStateDir(fd); err != nil {
+		unix.Close(fd)
+		return -1, err
+	}
+	return fd, nil
+}
+
+var piRevalidateStateDir = func(fd int) error {
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return errors.New("managed state component is not a directory")
+	}
+	return nil
+}
+
+type PiProfileLock struct{ file *os.File }
+
+func AcquirePiProfileLock(paths PiStatePaths) (*PiProfileLock, error) {
+	rootFD, err := openPiProfileRoot(paths)
+	if err != nil {
+		return nil, piError("profile_state_path_invalid", err)
+	}
+	defer unix.Close(rootFD)
+	fd, err := unix.Openat(rootFD, "session.lock", unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, piError("profile_state_path_invalid", err)
+	}
+	f := os.NewFile(uintptr(fd), paths.Lock)
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1 {
+		if err == nil {
+			err = errors.New("session lock must be a single-link regular file")
+		}
+		f.Close()
+		return nil, piError("profile_state_path_invalid", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, piError("pi_profile_busy", err)
+		}
+		return nil, piError("profile_state_path_invalid", err)
+	}
+	return &PiProfileLock{file: f}, nil
+}
+func (l *PiProfileLock) Close() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+	_ = syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	return l.file.Close()
+}
+
+func WritePiModelsJSON(paths PiStatePaths, content []byte) error {
+	rootFD, err := openPiProfileRoot(paths)
+	if err != nil {
+		return piError("profile_state_path_invalid", err)
+	}
+	defer unix.Close(rootFD)
+	dirFD, err := unix.Openat(rootFD, "agent", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return piError("profile_state_path_invalid", err)
+	}
+	defer unix.Close(dirFD)
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return piError("profile_state_path_invalid", err)
+	}
+	temp := ".models.json.tmp-" + strconv.Itoa(os.Getpid()) + "-" + hex.EncodeToString(nonce[:])
+	fd, err := unix.Openat(dirFD, temp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return piError("profile_state_path_invalid", err)
+	}
+	f := os.NewFile(uintptr(fd), temp)
+	writeErr := error(nil)
+	if n, err := f.Write(content); err != nil || n != len(content) {
+		if err == nil {
+			err = errors.New("partial models.json write")
+		}
+		writeErr = err
+	}
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
+	closeErr := f.Close()
+	if writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		_ = unix.Unlinkat(dirFD, temp, 0)
+		return piError("profile_state_path_invalid", writeErr)
+	}
+	if err := unix.Renameat(dirFD, temp, dirFD, "models.json"); err != nil {
+		_ = unix.Unlinkat(dirFD, temp, 0)
+		return piError("profile_state_path_invalid", err)
+	}
+	if err := unix.Fsync(dirFD); err != nil {
+		return piError("profile_state_path_invalid", err)
+	}
+	return nil
+}
+
+func openPiProfileRoot(paths PiStatePaths) (int, error) {
+	rootFD, err := unix.Open(paths.CanonicalCacheRoot, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return -1, err
+	}
+	fd := rootFD
+	for _, name := range []string{"agents-infra", "pi", paths.ProjectStateKey, paths.ProfileStateKey} {
+		next, openErr := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if fd != rootFD {
+			unix.Close(fd)
+		}
+		if openErr != nil {
+			unix.Close(rootFD)
+			return -1, openErr
+		}
+		fd = next
+	}
+	unix.Close(rootFD)
+	return fd, nil
+}

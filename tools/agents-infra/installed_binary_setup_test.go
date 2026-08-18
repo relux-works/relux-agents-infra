@@ -1,11 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
 )
 
 // buildInstalledBinary produces the same artifact scripts/setup.sh drops into
@@ -91,6 +97,700 @@ func TestInstalledBinarySetupLocalResolvesSourceFromInstallState(t *testing.T) {
 	}
 }
 
+func TestInstalledBinarySetupLocalScrubsLiteralSourceDirAndAvoidsRepoSkillCycle(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
+	legacyArtifact := filepath.Join(source, "$AGENTS_INFRA_SOURCE_DIR", ".temp", "bin")
+	mustMkdir(t, legacyArtifact)
+	mustWrite(t, filepath.Join(legacyArtifact, "agents-infra-local"), "legacy build output")
+	nestedScratch := filepath.Join(source, "tools", "agents-infra", ".temp", "legacy-runtime")
+	mustMkdir(t, nestedScratch)
+	mustWrite(t, filepath.Join(nestedScratch, "stale"), "must not materialize")
+	safeSkillTarget := filepath.Join(source, ".skills", "safe-target")
+	mustMkdir(t, safeSkillTarget)
+	mustWrite(t, filepath.Join(safeSkillTarget, "SKILL.md"), "# safe target\n")
+	if err := os.Symlink("safe-target", filepath.Join(source, ".skills", "safe-link")); err != nil {
+		t.Skipf("cannot create narrowing-control skill symlink: %v", err)
+	}
+	nestedSafeTarget := filepath.Join(source, ".skills", "nested-safe", "target")
+	mustMkdir(t, nestedSafeTarget)
+	mustWrite(t, filepath.Join(nestedSafeTarget, "SKILL.md"), "# nested safe target\n")
+	if err := os.Symlink("target", filepath.Join(source, ".skills", "nested-safe", "link")); err != nil {
+		t.Skipf("cannot create nested narrowing-control skill symlink: %v", err)
+	}
+	dagDir := filepath.Join(source, ".skills", "contained-dag")
+	mustMkdir(t, dagDir)
+	for _, name := range []string{"left", "right"} {
+		if err := os.Symlink(filepath.Join("..", "safe-target"), filepath.Join(dagDir, name)); err != nil {
+			t.Skipf("cannot create contained DAG skill symlink: %v", err)
+		}
+	}
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, source)
+	project := t.TempDir()
+
+	output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project)
+	if err != nil {
+		t.Fatalf("installed binary setup local: %v\n%s", err, output)
+	}
+	literalDir := filepath.Join(project, ".agents", "$AGENTS_INFRA_SOURCE_DIR")
+	if _, statErr := os.Lstat(literalDir); !os.IsNotExist(statErr) {
+		t.Fatalf("setup retained literal source-dir artifact %s: %v", literalDir, statErr)
+	}
+	installedNestedScratch := filepath.Join(project, ".agents", "tools", "agents-infra", ".temp")
+	if _, statErr := os.Lstat(installedNestedScratch); !os.IsNotExist(statErr) {
+		t.Fatalf("setup retained nested source scratch %s: %v", installedNestedScratch, statErr)
+	}
+
+	agentsDir := filepath.Join(project, ".agents")
+	repoSkillLink := filepath.Join(agentsDir, "skills", "relux-agents-infra")
+	wantTarget := filepath.Join(agentsDir, ".skills", "relux-agents-infra")
+	rawTarget, err := os.Readlink(repoSkillLink)
+	if err != nil {
+		t.Fatalf("Readlink(%s): %v", repoSkillLink, err)
+	}
+	if !filepath.IsAbs(rawTarget) {
+		rawTarget = filepath.Join(filepath.Dir(repoSkillLink), rawTarget)
+	}
+	if got, want := filepath.Clean(rawTarget), filepath.Clean(wantTarget); got != want {
+		t.Fatalf("repository skill target = %s, want %s", got, want)
+	}
+	assertContainedAcyclicSymlinks(t, agentsDir)
+	if _, err := os.Stat(filepath.Join(agentsDir, ".skills", "safe-link", "SKILL.md")); err != nil {
+		t.Fatalf("safe contained source skill link did not survive setup: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(agentsDir, ".skills", "nested-safe", "link", "SKILL.md")); err != nil {
+		t.Fatalf("nested safe contained source skill link did not survive setup: %v", err)
+	}
+	for _, name := range []string{"left", "right"} {
+		if _, err := os.Stat(filepath.Join(agentsDir, ".skills", "contained-dag", name, "SKILL.md")); err != nil {
+			t.Fatalf("contained DAG skill link %s did not survive setup: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(repoSkillLink, "SKILL.md")); err != nil {
+		t.Fatalf("materialized repository skill is not readable through production link: %v", err)
+	}
+
+	find := exec.Command("find", "-L", agentsDir, "-maxdepth", "8", "-print")
+	findOutput, findErr := find.CombinedOutput()
+	if findErr != nil {
+		t.Fatalf("recursive-safe inspection failed: %v\n%s", findErr, findOutput)
+	}
+	if strings.Contains(string(findOutput), "skills/relux-agents-infra/skills/relux-agents-infra") {
+		t.Fatalf("recursive inspection re-entered the repository skill through itself:\n%s", findOutput)
+	}
+}
+
+func TestInstalledBinarySetupLocalRefusesContainedTransitiveSourceSkillCycleBeforeDestinationMutation(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
+	mustMkdir(t, filepath.Join(source, ".skills"))
+	cycleTarget := filepath.Join(source, "cycle-target")
+	mustMkdir(t, cycleTarget)
+	probe := filepath.Join(source, ".skills", "transitive-cycle-probe")
+	if err := os.Symlink(filepath.Join("..", "cycle-target"), probe); err != nil {
+		t.Skipf("cannot create transitive source skill link: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("..", ".skills", "transitive-cycle-probe"), filepath.Join(cycleTarget, "back")); err != nil {
+		t.Skipf("cannot close transitive source skill cycle: %v", err)
+	}
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, source)
+	project := t.TempDir()
+	preserved := filepath.Join(project, ".agents", "destination-must-remain-untouched")
+	mustMkdir(t, filepath.Dir(preserved))
+	mustWrite(t, preserved, "sentinel")
+
+	output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project)
+	if err == nil || !strings.Contains(output, "source skill links are not safe to materialize") || !strings.Contains(output, "transitive symlink cycle") {
+		t.Fatalf("setup local accepted contained transitive source skill cycle: %v\n%s", err, output)
+	}
+	if got := string(mustReadFile(t, preserved)); got != "sentinel" {
+		t.Fatalf("setup mutated destination before refusing transitive source cycle: %q", got)
+	}
+}
+
+func TestInstalledBinarySetupLocalRefusesUnsafeSourceSkillLinksBeforeDestinationMutation(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	for _, test := range []struct {
+		name       string
+		probe      string
+		target     func(source, outside string) string
+		wantOutput string
+	}{
+		{
+			name:  "absolute escape",
+			probe: "unsafe-probe",
+			target: func(_, outside string) string {
+				return outside
+			},
+			wantOutput: "absolute and would escape",
+		},
+		{
+			name:  "ancestor cycle",
+			probe: "unsafe-probe",
+			target: func(_, _ string) string {
+				return ".."
+			},
+			wantOutput: "points to itself or an ancestor",
+		},
+		{
+			name:  "nested absolute escape",
+			probe: filepath.Join("nested-probe", "unsafe-probe"),
+			target: func(_, outside string) string {
+				return outside
+			},
+			wantOutput: "absolute and would escape",
+		},
+		{
+			name:  "nested ancestor cycle",
+			probe: filepath.Join("nested-probe", "unsafe-probe"),
+			target: func(_, _ string) string {
+				return filepath.Join("..", "..")
+			},
+			wantOutput: "points to itself or an ancestor",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
+			skillsDir := filepath.Join(source, ".skills")
+			mustMkdir(t, skillsDir)
+			outside := filepath.Join(t.TempDir(), "outside-runtime")
+			mustMkdir(t, outside)
+			probe := filepath.Join(skillsDir, test.probe)
+			mustMkdir(t, filepath.Dir(probe))
+			if err := os.Symlink(test.target(source, outside), probe); err != nil {
+				t.Skipf("cannot create source skill symlink: %v", err)
+			}
+			configDir := filepath.Join(home, "config")
+			writeInstallState(t, configDir, source)
+			project := t.TempDir()
+			preserved := filepath.Join(project, ".agents", "destination-must-remain-untouched")
+			mustMkdir(t, filepath.Dir(preserved))
+			mustWrite(t, preserved, "sentinel")
+
+			output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project)
+			if err == nil || !strings.Contains(output, "source skill links are not safe to materialize") || !strings.Contains(output, test.wantOutput) {
+				t.Fatalf("setup local did not refuse unsafe source skill link: %v\n%s", err, output)
+			}
+			if got := string(mustReadFile(t, preserved)); got != "sentinel" {
+				t.Fatalf("setup mutated destination before refusing unsafe source link: %q", got)
+			}
+		})
+	}
+}
+
+func TestInstalledBinaryVerifyLocalRefusesUnsafeManagedSkillLinkDrift(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	for _, test := range []struct {
+		name       string
+		probe      string
+		target     func(project, outside string) string
+		wantOutput string
+	}{
+		{
+			name:  "absolute escape",
+			probe: "unsafe-probe",
+			target: func(_, outside string) string {
+				return outside
+			},
+			wantOutput: "escapes runtime containment",
+		},
+		{
+			name:  "ancestor cycle",
+			probe: "unsafe-probe",
+			target: func(_, _ string) string {
+				return ".."
+			},
+			wantOutput: "points to itself or an ancestor",
+		},
+		{
+			name:  "nested absolute escape",
+			probe: filepath.Join("nested-probe", "unsafe-probe"),
+			target: func(_, outside string) string {
+				return outside
+			},
+			wantOutput: "escapes runtime containment",
+		},
+		{
+			name:  "nested ancestor cycle",
+			probe: filepath.Join("nested-probe", "unsafe-probe"),
+			target: func(_, _ string) string {
+				return filepath.Join("..", "..")
+			},
+			wantOutput: "points to itself or an ancestor",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
+			configDir := filepath.Join(home, "config")
+			writeInstallState(t, configDir, source)
+			project := t.TempDir()
+			if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+				t.Fatalf("setup local control: %v\n%s", err, output)
+			}
+			outside := filepath.Join(t.TempDir(), "outside-runtime")
+			mustMkdir(t, outside)
+			probe := filepath.Join(project, ".agents", ".skills", test.probe)
+			mustMkdir(t, filepath.Dir(probe))
+			if err := os.Symlink(test.target(project, outside), probe); err != nil {
+				t.Skipf("cannot create installed skill symlink: %v", err)
+			}
+
+			output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
+			if err == nil || !strings.Contains(output, test.wantOutput) {
+				t.Fatalf("verify local accepted unsafe managed skill link: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func TestInstalledBinaryVerifyLocalRefusesContainedTransitiveManagedSkillCycle(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, source)
+	project := t.TempDir()
+	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("setup local control: %v\n%s", err, output)
+	}
+	agentsDir := filepath.Join(project, ".agents")
+	cycleTarget := filepath.Join(agentsDir, "cycle-target")
+	mustMkdir(t, cycleTarget)
+	probe := filepath.Join(agentsDir, ".skills", "transitive-cycle-probe")
+	if err := os.Symlink(filepath.Join("..", "cycle-target"), probe); err != nil {
+		t.Skipf("cannot create transitive installed skill link: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("..", ".skills", "transitive-cycle-probe"), filepath.Join(cycleTarget, "back")); err != nil {
+		t.Skipf("cannot close transitive installed skill cycle: %v", err)
+	}
+
+	output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
+	if err == nil || !strings.Contains(output, "transitive symlink cycle") {
+		t.Fatalf("verify local accepted contained transitive managed skill cycle: %v\n%s", err, output)
+	}
+}
+
+func TestInstalledBinaryVerifyLocalInspectsEveryManagedSkillSurface(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, source)
+	project := t.TempDir()
+	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("setup local control: %v\n%s", err, output)
+	}
+	outside := filepath.Join(t.TempDir(), "outside-runtime")
+	mustMkdir(t, outside)
+	for _, surface := range []string{
+		filepath.Join(project, ".agents", ".skills"),
+		filepath.Join(project, ".agents", "skills"),
+		filepath.Join(project, ".claude", "skills"),
+		filepath.Join(project, ".codex", "skills"),
+	} {
+		probe := filepath.Join(surface, "surface-escape-probe")
+		if err := os.Symlink(outside, probe); err != nil {
+			t.Skipf("cannot create installed skill symlink: %v", err)
+		}
+		output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
+		if err == nil || !strings.Contains(output, probe) || !strings.Contains(output, "escapes runtime containment") {
+			t.Fatalf("verify local did not inspect managed surface %s: %v\n%s", surface, err, output)
+		}
+		if err := os.Remove(probe); err != nil {
+			t.Fatalf("remove surface probe %s: %v", probe, err)
+		}
+	}
+}
+
+func TestInstalledBinaryVerifyLocalRecursesEveryManagedSkillPackage(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, source)
+	project := t.TempDir()
+	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("setup local control: %v\n%s", err, output)
+	}
+	out := filepath.Join(t.TempDir(), "outside-runtime")
+	mustMkdir(t, out)
+	for _, packageDir := range []string{
+		filepath.Join(project, ".agents", ".skills", "relux-agents-infra"),
+		filepath.Join(project, ".agents", "skills", "relux-agents-infra"),
+		filepath.Join(project, ".claude", "skills", "relux-agents-infra"),
+		filepath.Join(project, ".codex", "skills", "relux-agents-infra"),
+	} {
+		info, err := os.Lstat(packageDir)
+		if err != nil {
+			t.Fatalf("Lstat(%s): %v", packageDir, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if err := os.Remove(packageDir); err != nil {
+				t.Fatalf("remove managed package link %s: %v", packageDir, err)
+			}
+			mustMkdir(t, packageDir)
+		}
+		probe := filepath.Join(packageDir, "nested-probe", "escape")
+		mustMkdir(t, filepath.Dir(probe))
+		if err := os.Symlink(out, probe); err != nil {
+			t.Skipf("cannot create nested installed skill symlink: %v", err)
+		}
+		output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
+		if err == nil || !strings.Contains(output, probe) || !strings.Contains(output, "escapes runtime containment") {
+			t.Fatalf("verify local did not recurse through managed package %s: %v\n%s", packageDir, err, output)
+		}
+		if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+			t.Fatalf("setup local did not restore managed package after drift probe: %v\n%s", err, output)
+		}
+	}
+}
+
+func assertContainedAcyclicSymlinks(t *testing.T, root string) {
+	t.Helper()
+	root, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("Abs(%s): %v", root, err)
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", root, err)
+	}
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		target, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return err
+		}
+		target, err = filepath.Abs(target)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, target)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			t.Fatalf("managed skill symlink escapes runtime: %s -> %s", path, target)
+		}
+		pathAbs, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		pathRel, err := filepath.Rel(target, pathAbs)
+		if err == nil && pathRel != ".." && !strings.HasPrefix(pathRel, ".."+string(os.PathSeparator)) {
+			t.Fatalf("managed skill symlink points to its own ancestor: %s -> %s", path, target)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect managed symlinks under %s: %v", root, err)
+	}
+}
+
+func TestInstalledBinarySetupGlobalPiInfraPreservesCWDArgvAndRefusesDrift(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX production alias test")
+	}
+	built := buildInstalledBinary(t)
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".local", "bin")
+	mustMkdir(t, binDir)
+	installed := filepath.Join(binDir, "agents-infra")
+	binaryBytes, err := os.ReadFile(built)
+	if err != nil {
+		t.Fatalf("ReadFile(built binary): %v", err)
+	}
+	if err := os.WriteFile(installed, binaryBytes, 0o755); err != nil {
+		t.Fatalf("WriteFile(installed binary): %v", err)
+	}
+	configDir := filepath.Join(home, "config")
+	setupOutput, err := runInstalledBinary(t, installed, home, configDir, "setup", "global", "--source-dir", sourceRepoRoot(t))
+	if err != nil {
+		t.Fatalf("installed binary setup global: %v\n%s", err, setupOutput)
+	}
+	if verifyOutput, verifyErr := runInstalledBinary(t, installed, home, configDir, "verify", "global"); verifyErr != nil {
+		t.Fatalf("installed binary verify global: %v\n%s", verifyErr, verifyOutput)
+	}
+
+	fakeBin := t.TempDir()
+	fakePi := filepath.Join(fakeBin, "pi")
+	mustWrite(t, fakePi, "#!/usr/bin/env sh\nprintf 'cwd=<%s>\\n' \"$PWD\"\nfor arg in \"$@\"; do printf 'arg=<%s>\\n' \"$arg\"; done\n")
+	if err := os.Chmod(fakePi, 0o755); err != nil {
+		t.Fatalf("Chmod(fake pi): %v", err)
+	}
+	caller := filepath.Join(t.TempDir(), "caller with spaces")
+	mustMkdir(t, caller)
+	canonicalCaller, err := filepath.EvalSymlinks(caller)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(caller): %v", err)
+	}
+	args := []string{"--", "ordinary prompt", "--post-separator", "@literal"}
+	command := exec.Command(filepath.Join(binDir, "pi-infra"), args...)
+	command.Dir = caller
+	command.Env = append(os.Environ(),
+		"HOME="+home,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AGENTS_INFRA_CONFIG_DIR="+configDir,
+		"AGENTS_INFRA_SOURCE_DIR=",
+		"AGENTS_INFRA_CALLER_CWD=",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pi-infra production entry: %v\n%s", err, output)
+	}
+	wantLines := []string{"cwd=<" + canonicalCaller + ">"}
+	for _, arg := range args {
+		wantLines = append(wantLines, "arg=<"+arg+">")
+	}
+	if got, want := strings.TrimSpace(string(output)), strings.Join(wantLines, "\n"); got != want {
+		t.Fatalf("production delegation output:\n%s\nwant:\n%s", got, want)
+	}
+
+	aliasPath := filepath.Join(binDir, "pi-infra")
+	mustWrite(t, aliasPath, strings.ReplaceAll(string(mustReadFile(t, aliasPath)), "agents-infra", "other-infra"))
+	verifyOutput, verifyErr := runInstalledBinary(t, installed, home, configDir, "verify", "global")
+	if verifyErr == nil || !strings.Contains(verifyOutput, "pi-infra launcher") || !strings.Contains(verifyOutput, "has drifted") {
+		t.Fatalf("verify global did not refuse alias drift: %v\n%s", verifyErr, verifyOutput)
+	}
+}
+
+func TestInstalledBinarySetupLocalPiInfraRepairsModeAndSymlinkDrift(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX production alias type and mode test")
+	}
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, sourceRepoRoot(t))
+	project := t.TempDir()
+
+	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("installed binary setup local: %v\n%s", err, output)
+	}
+	aliasPath := filepath.Join(project, ".local", "bin", "pi-infra")
+	targetPath := filepath.Join(project, ".local", "bin", "agents-infra")
+
+	if err := os.Chmod(aliasPath, 0o644); err != nil {
+		t.Fatalf("Chmod(pi-infra): %v", err)
+	}
+	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("setup local did not repair alias mode: %v\n%s", err, output)
+	}
+	assertRegularExecutable := func(path string) {
+		t.Helper()
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatalf("Lstat(%s): %v", path, err)
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm() != 0o755 {
+			t.Fatalf("%s mode = %v, want regular 0755", path, info.Mode())
+		}
+	}
+	assertRegularExecutable(aliasPath)
+
+	externalAlias := filepath.Join(t.TempDir(), "pi-infra-copy")
+	if err := os.WriteFile(externalAlias, mustReadFile(t, aliasPath), 0o755); err != nil {
+		t.Fatalf("WriteFile(external alias): %v", err)
+	}
+	if err := os.Remove(aliasPath); err != nil {
+		t.Fatalf("Remove(pi-infra): %v", err)
+	}
+	if err := os.Symlink(externalAlias, aliasPath); err != nil {
+		t.Fatalf("Symlink(pi-infra): %v", err)
+	}
+	verifyOutput, verifyErr := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
+	if verifyErr == nil || !strings.Contains(verifyOutput, "pi-infra launcher") || !strings.Contains(verifyOutput, "is not a regular file") {
+		t.Fatalf("verify local accepted byte-identical symlink alias: %v\n%s", verifyErr, verifyOutput)
+	}
+	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("setup local did not repair symlink alias: %v\n%s", err, output)
+	}
+	assertRegularExecutable(aliasPath)
+
+	externalTarget := filepath.Join(t.TempDir(), "agents-infra-copy")
+	if err := os.WriteFile(externalTarget, mustReadFile(t, targetPath), 0o755); err != nil {
+		t.Fatalf("WriteFile(external target): %v", err)
+	}
+	if err := os.Remove(targetPath); err != nil {
+		t.Fatalf("Remove(agents-infra): %v", err)
+	}
+	if err := os.Symlink(externalTarget, targetPath); err != nil {
+		t.Fatalf("Symlink(agents-infra): %v", err)
+	}
+	verifyOutput, verifyErr = runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
+	if verifyErr == nil || !strings.Contains(verifyOutput, "pi-infra launcher target is not a regular file") {
+		t.Fatalf("verify local accepted byte-identical symlink target: %v\n%s", verifyErr, verifyOutput)
+	}
+}
+
+// Production call sites: the bootstrap-installed global pi-infra alias and the
+// setup-generated project-local pi-infra wrapper. Both must reach RunPi's
+// managed execution-environment gate before the configured runtime executable
+// can start.
+func TestInstalledPiLaunchersRejectExactEnvironmentNamesBeforeRuntimeSpawn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed Pi launch is supported only on darwin/arm64")
+	}
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+	configDir := filepath.Join(home, "config")
+	binDir := filepath.Join(home, ".local", "bin")
+	mustMkdir(t, binDir)
+	globalBinary := filepath.Join(binDir, "agents-infra")
+	if err := os.WriteFile(globalBinary, mustReadFile(t, binary), 0o755); err != nil {
+		t.Fatalf("install global binary fixture: %v", err)
+	}
+	if output, err := runInstalledBinary(t, globalBinary, home, configDir, "setup", "global", "--source-dir", sourceRepoRoot(t)); err != nil {
+		t.Fatalf("setup global fixture: %v\n%s", err, output)
+	}
+	project := t.TempDir()
+	if output, err := runInstalledBinary(t, globalBinary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("setup local fixture: %v\n%s", err, output)
+	}
+	runtimeMarker := filepath.Join(t.TempDir(), "runtime-started")
+	runtimeExecutable := filepath.Join(t.TempDir(), "runtime")
+	mustWrite(t, runtimeExecutable, "#!/usr/bin/env sh\nprintf started > "+strconv.Quote(runtimeMarker)+"\n")
+	if err := os.Chmod(runtimeExecutable, 0o755); err != nil {
+		t.Fatalf("Chmod(runtime fixture): %v", err)
+	}
+	configPath := filepath.Join(project, ".agents", ".configs", "project-config.toml")
+	mustWrite(t, configPath, mainTestPiConfig(runtimeExecutable, 18029))
+	piRoot := mainTestOfficialPiAsset(t)
+
+	surfaces := map[string]string{
+		"bootstrap global alias": filepath.Join(binDir, "pi-infra"),
+		"project local wrapper":  filepath.Join(project, ".local", "bin", "pi-infra"),
+	}
+	for surface, launcher := range surfaces {
+		t.Run(surface+"/clean control", func(t *testing.T) {
+			command := exec.Command(launcher)
+			command.Dir = project
+			command.Env = []string{
+				"HOME=" + home,
+				"PATH=" + piRoot + string(os.PathListSeparator) + os.Getenv("PATH"),
+				"AGENTS_INFRA_CONFIG_DIR=" + configDir,
+				"AGENTS_INFRA_SOURCE_DIR=",
+				"HF_TOKEN=credential-treated-separately",
+				"HF_HOME=/tmp/hf-cache",
+				"HUGGINGFACE_HUB_CACHE=/tmp/huggingface-hub-cache",
+				"TRANSFORMERS_CACHE=/tmp/transformers-cache",
+				"LLAMA_API_KEY_SUFFIX=not-the-exact-auth-control",
+				"UNRELATED_SERVICE_API_KEY=unrelated-control",
+				"GGML_METAL_PATH=unestablished-control",
+			}
+			command.Env = append(command.Env, sharedGoCacheEnv(t)...)
+			output, launchErr := command.CombinedOutput()
+			if _, err := os.Stat(runtimeMarker); err != nil {
+				t.Fatalf("installed %s clean control did not reach runtime backend initialization: launch=%v marker=%v\n%s", surface, launchErr, err, output)
+			}
+			if err := os.Remove(runtimeMarker); err != nil {
+				t.Fatalf("remove runtime control marker: %v", err)
+			}
+		})
+		for _, name := range []string{"HF_ENDPOINT", "MODEL_ENDPOINT", "GGML_BACKEND_PATH", "LLAMA_API_KEY"} {
+			t.Run(surface+"/"+name, func(t *testing.T) {
+				secret := "https://must-not-leak.invalid/" + strings.ToLower(name)
+				command := exec.Command(launcher)
+				command.Dir = project
+				command.Env = []string{
+					"HOME=" + home,
+					"PATH=" + piRoot + string(os.PathListSeparator) + os.Getenv("PATH"),
+					"AGENTS_INFRA_CONFIG_DIR=" + configDir,
+					"AGENTS_INFRA_SOURCE_DIR=",
+					name + "=" + secret,
+				}
+				command.Env = append(command.Env, sharedGoCacheEnv(t)...)
+				output, err := command.CombinedOutput()
+				if err == nil || !strings.Contains(string(output), "runtime-affecting environment name "+strconv.Quote(name)+" is denied") {
+					t.Fatalf("installed %s admitted %s: %v\n%s", surface, name, err, output)
+				}
+				if strings.Contains(string(output), secret) {
+					t.Fatalf("installed %s leaked %s value: %s", surface, name, output)
+				}
+				if _, statErr := os.Stat(runtimeMarker); !os.IsNotExist(statErr) {
+					t.Fatalf("installed %s started runtime before refusing %s: %v", surface, name, statErr)
+				}
+			})
+		}
+	}
+}
+
+// Production call site: the setup-generated .local/bin/agents-infra compose
+// entrypoint. This guards against an installed runtime carrying a parser that
+// reports base_url while launching a wildcard or different-port backend.
+func TestInstalledLocalAgentsInfraComposeRefusesPiRuntimeEndpointDivergence(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, sourceRepoRoot(t))
+	project := t.TempDir()
+	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("installed binary setup local: %v\n%s", err, output)
+	}
+	installed := filepath.Join(project, ".local", "bin", "agents-infra")
+	configPath := filepath.Join(project, ".agents", ".configs", "project-config.toml")
+	piRoot := mainTestOfficialPiAsset(t)
+	base := mainTestPiConfig("/bin/echo", 18021)
+	runCompose := func(config string) ([]byte, error) {
+		t.Helper()
+		mustWrite(t, configPath, config)
+		command := exec.Command(installed, "compose", "--mode", "primary-session", "--agent", "pi", "--project", project, "--schema-version", "1", "--json")
+		command.Env = append(os.Environ(),
+			"HOME="+home,
+			"PATH="+piRoot+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"AGENTS_INFRA_CONFIG_DIR="+configDir,
+			"AGENTS_INFRA_SOURCE_DIR=",
+			"AGENTS_INFRA_CALLER_CWD=",
+		)
+		command.Env = append(command.Env, sharedGoCacheEnv(t)...)
+		return command.CombinedOutput()
+	}
+
+	controlOutput, err := runCompose(base)
+	if err != nil {
+		t.Fatalf("installed production compose rejected exact endpoint control: %v\n%s", err, controlOutput)
+	}
+	var control infra.PrimarySessionLaunchPlan
+	if err := json.Unmarshal(controlOutput, &control); err != nil {
+		t.Fatalf("decode installed control plan: %v\n%s", err, controlOutput)
+	}
+	wantArgv := []string{"serve", "--model", "Model", "--host", "127.0.0.1", "--port", "18021"}
+	if control.Pi == nil || control.Pi.Runtime == nil || !slices.Equal(control.Pi.Runtime.Argv, wantArgv) {
+		t.Fatalf("installed exact endpoint control plan=%#v", control.Pi)
+	}
+
+	for name, mutant := range map[string]string{
+		"wildcard runtime bind": strings.Replace(base, `"--host", "127.0.0.1"`, `"--host", "0.0.0.0"`, 1),
+		"runtime port drift":    strings.Replace(base, `"--port", "18021"`, `"--port", "19021"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			output, err := runCompose(mutant)
+			if err == nil || !strings.Contains(string(output), `"code":"invalid_project_configuration"`) || !strings.Contains(string(output), ".runtime.argv") {
+				t.Fatalf("installed production compose admitted endpoint divergence: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	return data
+}
+
 // seedRuntimeSource writes a complete agents-infra source tree: the instruction
 // entrypoints, the config and rules trees, and the Go module the generated
 // launcher builds. Anything less is not a source tree, it is a tree that looks
@@ -102,9 +802,17 @@ func seedRuntimeSource(t *testing.T, dir string) string {
 	mustMkdir(t, filepath.Join(dir, ".rules"))
 	mustWrite(t, filepath.Join(dir, ".instructions", "INSTRUCTIONS.md"), "# Instructions\n")
 	mustWrite(t, filepath.Join(dir, ".instructions", "AGENTS.md"), "# Agents\n")
+	mustWrite(t, filepath.Join(dir, "SKILL.md"), "# relux-agents-infra\n")
+	mustWrite(t, filepath.Join(dir, "README.md"), "# relux-agents-infra\n")
 	mustMkdir(t, filepath.Join(dir, "tools", "agents-infra"))
 	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "go.mod"), "module example.com/agents-infra\n\ngo 1.22\n")
 	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "main.go"), runnableLauncherBackendMain)
+	manifest, err := os.ReadFile(filepath.Join(sourceRepoRoot(t), "tools", "agents-infra", "internal", "infra", "pi-v0.84.2-darwin-arm64-tree-manifest.txt"))
+	if err != nil {
+		t.Fatalf("read authoritative Pi manifest fixture: %v", err)
+	}
+	mustMkdir(t, filepath.Join(dir, "tools", "agents-infra", "internal", "infra"))
+	mustWrite(t, filepath.Join(dir, "tools", "agents-infra", "internal", "infra", "pi-v0.84.2-darwin-arm64-tree-manifest.txt"), string(manifest))
 	return dir
 }
 
@@ -236,8 +944,8 @@ func seedRealLauncherBackendWithoutItsPackages(t *testing.T, source string) {
 			t.Fatalf("the negative must keep %s in place, not remove it: %v", name, err)
 		}
 	}
-	if _, err := os.Lstat(filepath.Join(target, "internal")); !os.IsNotExist(err) {
-		t.Fatalf("the forged module must not carry internal packages: %v", err)
+	if _, err := os.Lstat(filepath.Join(target, "internal", "infra", "infra.go")); !os.IsNotExist(err) {
+		t.Fatalf("the forged module must not carry the internal Go package even though it retains the required Pi manifest: %v", err)
 	}
 }
 

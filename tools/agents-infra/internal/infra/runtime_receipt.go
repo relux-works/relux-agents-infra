@@ -166,7 +166,56 @@ func runtimeArtifactFailures(layout Layout) []string {
 			failures = append(failures, fmt.Sprintf("installed runtime is missing %s", asset.label()))
 		}
 	}
+	if failure := piCatalogManifestFailure(agentsDir); failure != "" {
+		failures = append(failures, failure)
+	}
+	failures = append(failures, managedSkillLinkFailures(layout)...)
+	failures = append(failures, piInfraLauncherFailures(layout)...)
 	return append(failures, launcherBackendFailures(layout)...)
+}
+
+func piInfraLauncherFailures(layout Layout) []string {
+	goos := runtime.GOOS
+	aliasPath := filepath.Join(layout.BinDir, piInfraWrapperName(goos))
+	targetName := piInfraTargetName(layout.Mode, goos)
+	wantBody := piInfraWrapperBody(goos, targetName)
+	info, err := os.Lstat(aliasPath)
+	switch {
+	case os.IsNotExist(err):
+		return []string{fmt.Sprintf("no generated pi-infra launcher at %s", aliasPath)}
+	case err != nil:
+		return []string{fmt.Sprintf("cannot inspect pi-infra launcher %s: %v", aliasPath, err)}
+	case !info.Mode().IsRegular():
+		return []string{fmt.Sprintf("pi-infra launcher %s is not a regular file", aliasPath)}
+	}
+	body, err := os.ReadFile(aliasPath)
+	switch {
+	case err != nil:
+		return []string{fmt.Sprintf("unreadable pi-infra launcher %s: %v", aliasPath, err)}
+	case string(body) != wantBody:
+		return []string{fmt.Sprintf("pi-infra launcher %s has drifted from the managed %s target", aliasPath, targetName)}
+	}
+	if goos != "windows" && info.Mode().Perm() != 0o755 {
+		return []string{fmt.Sprintf("pi-infra launcher %s mode is %04o, want 0755", aliasPath, info.Mode().Perm())}
+	}
+	targetPath := filepath.Join(layout.BinDir, targetName)
+	targetInfo, err := os.Lstat(targetPath)
+	switch {
+	case os.IsNotExist(err):
+		return []string{fmt.Sprintf("pi-infra launcher target is missing: %s", targetPath)}
+	case err != nil:
+		return []string{fmt.Sprintf("pi-infra launcher target cannot be read: %s: %v", targetPath, err)}
+	case !targetInfo.Mode().IsRegular():
+		return []string{fmt.Sprintf("pi-infra launcher target is not a regular file: %s", targetPath)}
+	case goos != "windows" && targetInfo.Mode().Perm()&0o111 == 0:
+		return []string{fmt.Sprintf("pi-infra launcher target is not executable: %s", targetPath)}
+	}
+	if layout.Mode == ModeGlobal && goos != "windows" {
+		if failure := installedAgentsInfraStartupFailure(targetPath); failure != "" {
+			return []string{fmt.Sprintf("pi-infra launcher target %s does not start as agents-infra: %s", targetPath, failure)}
+		}
+	}
+	return nil
 }
 
 // launcherBackendFailures checks the artifact installCLIWrapper actually wrote:

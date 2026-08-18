@@ -55,6 +55,8 @@ func run(args []string) error {
 		return runCodex(args[1:])
 	case "claude":
 		return runClaude(args[1:])
+	case "pi":
+		return runPi(args[1:])
 	case "version", "--version":
 		return runVersion()
 	case "help", "-h", "--help":
@@ -387,25 +389,62 @@ func runClaude(args []string) error {
 	return cmd.Run()
 }
 
+func runPi(args []string) error {
+	startDir := os.Getenv(callerCWDEnv)
+	if startDir == "" {
+		var err error
+		startDir, err = os.Getwd()
+		if err != nil {
+			return err
+		}
+	}
+	printConfig := false
+	filtered := make([]string, 0, len(args))
+	beforeDelimiter := true
+	for _, token := range args {
+		if beforeDelimiter && token == "--" {
+			beforeDelimiter = false
+			filtered = append(filtered, token)
+			continue
+		}
+		if beforeDelimiter && token == "--print-config" {
+			printConfig = true
+			continue
+		}
+		filtered = append(filtered, token)
+	}
+	if printConfig {
+		plan, err := infra.BuildPrimarySessionLaunchPlan("pi", startDir, "", filtered, infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}, nil)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(plan)
+	}
+	return infra.RunPi(infra.RunPiOptions{ProjectDir: startDir, Args: filtered, Environ: os.Environ(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+}
+
 func runCompose(args []string) error {
 	fs := flag.NewFlagSet("compose", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	mode := fs.String("mode", "child", "composition mode: child or primary-session")
-	agent := fs.String("agent", "", "agent provider: codex or claude")
+	agent := fs.String("agent", "", "agent provider: codex, claude, or pi")
 	projectDir := fs.String("project", "", "project directory used for composition")
 	schemaVersion := fs.Int("schema-version", 0, "composition contract schema version")
 	jsonOutput := fs.Bool("json", false, "emit one JSON contract document")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *agent != "codex" && *agent != "claude" {
-		return fmt.Errorf("compose requires --agent codex or --agent claude")
+	if *agent != "codex" && *agent != "claude" && *agent != "pi" {
+		return fmt.Errorf("compose requires --agent codex, claude, or pi")
 	}
 	if !*jsonOutput {
 		return fmt.Errorf("compose requires --json")
 	}
 	switch *mode {
 	case "child":
+		if *agent == "pi" {
+			return fmt.Errorf("child compose requires --agent codex or claude")
+		}
 	case "primary-session":
 		return runComposePrimarySession(*agent, *projectDir, *schemaVersion, fs.Args())
 	default:
@@ -600,11 +639,12 @@ func usageText() string {
   agents-infra verify global [--home-dir DIR]
   agents-infra verify local [PROJECT_DIR] [--project-dir DIR]
   agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json
-  agents-infra compose --mode primary-session --agent codex|claude --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]
+  agents-infra compose --mode primary-session --agent codex|claude|pi --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]
   agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json
   agents-infra attachments list|show|path|materialize|stage-images [...]
   agents-infra codex [--print-config] [-d|--danger|--yolo] [--] [CODEX_ARGS...]
   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
+  agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
 
 Source tree resolution for setup (first usable wins):
   1. --source-dir DIR

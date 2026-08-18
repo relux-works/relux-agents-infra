@@ -252,6 +252,7 @@ func TestSetupGlobalDoesNotRequireALauncherBackendBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GlobalLayout: %v", err)
 	}
+	seedGlobalAgentsInfraTarget(t, layout)
 
 	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
 		t.Fatalf("global Setup refused a source it does not build: %v", err)

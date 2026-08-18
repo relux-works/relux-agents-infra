@@ -20,6 +20,7 @@ const (
 	claudePrimarySessionField        = "agents.claude.primary_session"
 	claudePrimaryModelField          = claudePrimarySessionField + ".model"
 	claudePrimaryYoloModeField       = claudePrimarySessionField + ".yolo_mode"
+	piPrimarySessionField            = "agents.pi.primary_session"
 )
 
 // CodexPrimarySessionPolicy is the root-to-leaf composition of all discovered
@@ -84,6 +85,8 @@ type parsedProjectConfig struct {
 	EnabledMCPServers    []string
 	PrimarySession       CodexPrimarySessionSource
 	ClaudePrimarySession ClaudePrimarySessionSource
+	PiPrimarySession     PiPrimarySessionSource
+	PiProfiles           map[string]PiProfile
 }
 
 // ProjectConfigSource records all policy contributed by one project config.
@@ -93,6 +96,8 @@ type ProjectConfigSource struct {
 	EnabledServers       []string
 	CodexPrimarySession  CodexPrimarySessionSource
 	ClaudePrimarySession ClaudePrimarySessionSource
+	PiPrimarySession     PiPrimarySessionSource
+	PiProfiles           map[string]PiProfile
 }
 
 type compositeProjectConfig struct {
@@ -101,11 +106,14 @@ type compositeProjectConfig struct {
 	Sources              []ProjectConfigSource
 	PrimarySession       CodexPrimarySessionPolicy
 	ClaudePrimarySession ClaudePrimarySessionPolicy
+	PiPrimarySession     PiPrimarySessionPolicy
+	PiProfiles           map[string]PiProfile
 }
 
 func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath string) (compositeProjectConfig, error) {
 	composite := compositeProjectConfig{
-		EnabledBy: map[string][]string{},
+		EnabledBy:  map[string][]string{},
+		PiProfiles: map[string]PiProfile{},
 	}
 	enabledSeen := map[string]bool{}
 
@@ -131,9 +139,16 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
 			EnabledServers:       append([]string(nil), config.EnabledMCPServers...),
 			CodexPrimarySession:  cloneCodexPrimarySessionSource(config.PrimarySession),
 			ClaudePrimarySession: cloneClaudePrimarySessionSource(config.ClaudePrimarySession),
+			PiPrimarySession:     clonePiPrimarySessionSource(config.PiPrimarySession),
+			PiProfiles:           clonePiProfiles(config.PiProfiles),
 		})
 		composeCodexPrimarySession(&composite.PrimarySession, config.PrimarySession, path)
 		composeClaudePrimarySession(&composite.ClaudePrimarySession, config.ClaudePrimarySession, path)
+		composePiPrimarySession(&composite.PiPrimarySession, config.PiPrimarySession, path)
+		for name, profile := range config.PiProfiles {
+			profile.Source = path
+			composite.PiProfiles[name] = profile
+		}
 
 		for _, name := range config.EnabledMCPServers {
 			if !isBareTOMLKey(name) {
@@ -186,6 +201,10 @@ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
 		return parsedProjectConfig{}, err
 	}
 	config.ClaudePrimarySession, err = parseClaudePrimarySession(agents, path)
+	if err != nil {
+		return parsedProjectConfig{}, err
+	}
+	config.PiPrimarySession, config.PiProfiles, err = parsePiConfig(agents, path)
 	if err != nil {
 		return parsedProjectConfig{}, err
 	}

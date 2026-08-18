@@ -109,6 +109,22 @@ func launcherStartupFailure(sourceDir, binaryPath string) string {
 	return ""
 }
 
+func installedAgentsInfraStartupFailure(binaryPath string) string {
+	runCtx, cancelRun := context.WithTimeout(context.Background(), launcherStartupTimeout)
+	defer cancelRun()
+	probe := exec.CommandContext(runCtx, binaryPath, launcherStartupProbeArg)
+	probeOutput, probeErr := probe.CombinedOutput()
+	switch {
+	case runCtx.Err() != nil:
+		return fmt.Sprintf("`%s %s` did not answer within %s", binaryPath, launcherStartupProbeArg, launcherStartupTimeout)
+	case probeErr != nil:
+		return fmt.Sprintf("`%s %s` fails (%v):\n%s", binaryPath, launcherStartupProbeArg, probeErr, indentBuildOutput(probeOutput))
+	case !strings.Contains(string(probeOutput), launcherStartupIdentity):
+		return fmt.Sprintf("`%s %s` does not identify it as agents-infra (nothing matching %q in its output):\n%s", binaryPath, launcherStartupProbeArg, launcherStartupIdentity, indentBuildOutput(probeOutput))
+	}
+	return ""
+}
+
 // launcherBackendSourceFailure gates a candidate source tree on the runtime it
 // would install, before Setup is allowed to write the destination. The target's
 // bin dir does not exist yet at this point and must not be created by a run

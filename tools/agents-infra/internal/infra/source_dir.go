@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -55,6 +56,14 @@ var sourceAssets = []sourceAsset{
 		path:     ".rules",
 		consumer: "linked agent rules tree",
 	},
+	{
+		path:     "SKILL.md",
+		consumer: "materialized relux-agents-infra skill package",
+	},
+	{
+		path:     "README.md",
+		consumer: "relux-agents-infra skill reference",
+	},
 	// installCLIWrapper generates a launcher that builds this module; a source
 	// without it mints a runtime whose agents-infra command cannot start.
 	{
@@ -67,6 +76,25 @@ var sourceAssets = []sourceAsset{
 		consumer:        "Go module the generated agents-infra launcher builds",
 		launcherBackend: true,
 	},
+	{
+		path:     filepath.Join("tools", "agents-infra", "internal", "infra", "pi-v0.84.2-darwin-arm64-tree-manifest.txt"),
+		consumer: "authoritative 217-record managed Pi release-tree catalog",
+	},
+}
+
+const piCatalogManifestSourceSHA256 = "2f68ab1b3f28a9c4b8995f91984f8f47001a79735da7e57aa7fe6d223f90378b"
+
+func piCatalogManifestFailure(sourceDir string) string {
+	path := filepath.Join(sourceDir, "tools", "agents-infra", "internal", "infra", "pi-v0.84.2-darwin-arm64-tree-manifest.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("authoritative managed Pi release-tree catalog %s cannot be read completely: %v", path, err)
+	}
+	got := fmt.Sprintf("%x", sha256.Sum256(data))
+	if got != piCatalogManifestSourceSHA256 {
+		return fmt.Sprintf("authoritative managed Pi release-tree catalog %s has drifted: sha256 %s, want %s", path, got, piCatalogManifestSourceSHA256)
+	}
+	return ""
 }
 
 // SourceDirOrigin names where a source-tree candidate came from.
@@ -342,6 +370,9 @@ func evaluateSourceDirCandidate(candidate SourceDirAttempt, req SourceDirRequest
 		return candidate
 	}
 	candidate.Missing = MissingSourceDirAssets(candidate.Path)
+	if len(candidate.Missing) == 0 {
+		candidate.Reason = piCatalogManifestFailure(candidate.Path)
+	}
 	return candidate
 }
 
@@ -426,6 +457,10 @@ func requireLayoutSourceDir(layout Layout) error {
 	}
 	if missing := MissingSourceDirAssets(attempt.Path); len(missing) > 0 {
 		attempt.Missing = missing
+		return &SourceDirError{Mode: layout.Mode, Attempts: []SourceDirAttempt{attempt}}
+	}
+	if failure := piCatalogManifestFailure(attempt.Path); failure != "" {
+		attempt.Reason = failure
 		return &SourceDirError{Mode: layout.Mode, Attempts: []SourceDirAttempt{attempt}}
 	}
 	// The assets above are names; the launcher runs a build. Proving the build
