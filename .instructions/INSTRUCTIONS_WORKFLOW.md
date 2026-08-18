@@ -39,16 +39,30 @@
 
 ## Version Control
 
-* **Never commit or stage files automatically.**
-* When work is ready to commit, stop and ask for review.
-* An explicit user request to stage or commit the current scope is authorization; it is not an "automatic" commit. Inspect the exact diff, validate it, and carry out the requested commits without inventing an extra review boundary.
+* Committing is part of doing the work, not a separate permission to ask for. When a coherent scope is finished and validated, commit it. Do not stop and ask, and do not invent a review boundary that the repo's own workflow does not define — a task tracker or board that closes work by commits cannot close anything if every commit waits on a human.
+* Commit what you actually did. Inspect the exact diff first, and never sweep unrelated pre-existing changes into your commit — stage the paths your work touched, by name. See *Dirty Checkout Isolation* below.
+* **Pushing is not committing.** Publishing to a remote is outward-facing and stays an explicit ask unless the repo's workflow says otherwise.
 * **Never add Co-Authored-By lines** or any AI attribution to commits.
+
+### Commit message style
+
+Follow the repository's existing convention — read `git log` before writing the first message, and match what is already there. Absent a clear local convention, use the widely accepted form below, which is also what the strongest history in these repos already does:
+
+* **Subject:** imperative mood, capitalized, no trailing period, kept near 50 characters and under 72. Say what the change does in the domain's own language — `Carry trunk's three new providers onto the v3 admission contract`, not `Update files` and not `Fixed a bug`.
+* **No type prefixes** (`feat:`, `chore(scope):`) unless the repository already uses them consistently. A convention applied to a quarter of the history is not a convention; matching the majority style is better than importing one.
+* **Body:** blank line, then prose wrapped near 72 characters. Explain *why* the change is right and what it reconciles, not a restatement of the diff — the diff already says what changed. Prefer paragraphs over bullet lists for reasoning.
+* **Close with evidence** when the work has any: what was built, which suites ran, what is still failing and why it is not yours.
+* Mention tracked identifiers (task, story, bug) when the repository's history does.
+
+### Worktrees
+
 * When you need to work on multiple revisions, parallel fixes, or isolated experiments in the same repo, prefer **`git worktree`** over juggling branches in one checkout.
 * Place temporary worktrees under the project's **`.temp/`** directory, not next to the main checkout.
 * If the worktree is for a tracked task, place it under a task-scoped temp path using the task ID:
   * `.temp/<TASK-ID>/worktree/`
   * or `.temp/<TASK-ID>/<repo-name>-worktree/`
 * This keeps the main checkout stable while making task-local scratch state easy to find and clean up.
+* **A worktree does not follow trunk.** One cut before a merge stays behind it forever, so a suite that is green there may simply lack the code that fails on trunk. Check `git rev-list --count HEAD..main` before trusting any measurement taken inside one, and say which commit your evidence was gathered at. Fast-forwarding is safe only when the worktree is strictly behind with no commits of its own.
 
 ### Dirty Checkout Isolation
 

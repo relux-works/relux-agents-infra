@@ -427,7 +427,8 @@ Agent may use these tools freely.
 
 * Inspect diffs, config, repo state.
 * Agent may check git config to detect default branch and repo location.
-* **Never commit or stage files automatically.**
+* Agent may stage and commit its own finished, validated scope. Stage by path, never `-A` over a checkout holding unrelated changes. Message style and the push boundary are in `INSTRUCTIONS_WORKFLOW.md` → *Version Control*.
+* **Never run a repo-wide destructive git command.** `git checkout -- .`, `git restore .`, `git reset --hard`, `git clean -fd` and their equivalents discard uncommitted work that is not yours and cannot be recovered — in a shared checkout that is somebody else's unfinished task. Name single paths instead, and prefer a worktree when you need a clean tree.
 
 ### python / perl / make
 
@@ -714,15 +715,55 @@ When refactoring (e.g., ObjC → Swift):
 
 ## Version Control
 
-* **Never commit or stage files automatically.**
-* When work is ready to commit, stop and ask for review.
+* Committing is part of doing the work, not a separate permission to ask for. When a coherent scope is finished and validated, commit it. Do not stop and ask, and do not invent a review boundary that the repo's own workflow does not define — a task tracker or board that closes work by commits cannot close anything if every commit waits on a human.
+* Commit what you actually did. Inspect the exact diff first, and never sweep unrelated pre-existing changes into your commit — stage the paths your work touched, by name. See *Dirty Checkout Isolation* below.
+* **Pushing is not committing.** Publishing to a remote is outward-facing and stays an explicit ask unless the repo's workflow says otherwise.
 * **Never add Co-Authored-By lines** or any AI attribution to commits.
+
+### Commit message style
+
+Follow the repository's existing convention — read `git log` before writing the first message, and match what is already there. Absent a clear local convention, use the widely accepted form below, which is also what the strongest history in these repos already does:
+
+* **Subject:** imperative mood, capitalized, no trailing period, kept near 50 characters and under 72. Say what the change does in the domain's own language — `Carry trunk's three new providers onto the v3 admission contract`, not `Update files` and not `Fixed a bug`.
+* **No type prefixes** (`feat:`, `chore(scope):`) unless the repository already uses them consistently. A convention applied to a quarter of the history is not a convention; matching the majority style is better than importing one.
+* **Body:** blank line, then prose wrapped near 72 characters. Explain *why* the change is right and what it reconciles, not a restatement of the diff — the diff already says what changed. Prefer paragraphs over bullet lists for reasoning.
+* **Close with evidence** when the work has any: what was built, which suites ran, what is still failing and why it is not yours.
+* Mention tracked identifiers (task, story, bug) when the repository's history does.
+
+### Worktrees
+
 * When you need to work on multiple revisions, parallel fixes, or isolated experiments in the same repo, prefer **`git worktree`** over juggling branches in one checkout.
 * Place temporary worktrees under the project's **`.temp/`** directory, not next to the main checkout.
 * If the worktree is for a tracked task, place it under a task-scoped temp path using the task ID:
   * `.temp/<TASK-ID>/worktree/`
   * or `.temp/<TASK-ID>/<repo-name>-worktree/`
 * This keeps the main checkout stable while making task-local scratch state easy to find and clean up.
+* **A worktree does not follow trunk.** One cut before a merge stays behind it forever, so a suite that is green there may simply lack the code that fails on trunk. Check `git rev-list --count HEAD..main` before trusting any measurement taken inside one, and say which commit your evidence was gathered at. Fast-forwarding is safe only when the worktree is strictly behind with no commits of its own.
+
+### Dirty Checkout Isolation
+
+When the active checkout already contains changes that were not created for the
+current task:
+
+1. Inspect `git status --short` and the relevant diffs before editing.
+2. Preserve every pre-existing tracked and untracked change. Do not reset,
+   overwrite, stage, or silently absorb it into the current task.
+3. If the task can be implemented from `HEAD` without those changes, create a
+   task-scoped worktree under `.temp/<TASK-ID>/worktree/` and perform the task
+   there.
+4. Validate the isolated result in that worktree and export a reviewable patch
+   with `git diff --binary`.
+5. Before applying it to the main checkout, run `git apply --check` there and
+   inspect overlap with the pre-existing diff. Apply only when the two scopes
+   compose cleanly.
+6. Re-run relevant validation in the main checkout after integration. The main
+   checkout, not the isolated worktree, is the final source of truth.
+
+Do not create a worktree merely as ceremony for a clean, localized checkout.
+Use it when it materially isolates unrelated changes, concurrent revisions, or
+risky experiments. If the user explicitly asks to curate or commit the
+pre-existing changes too, first inspect and group them by coherent intent;
+isolation does not make foreign diffs part of the current task automatically.
 
 ---
 
@@ -733,6 +774,19 @@ When refactoring (e.g., ObjC → Swift):
 * Track progress in the same file.
 * Update/append to the existing plan — **don't create new task files each session**.
 * Purpose: resume smoothly if the session breaks.
+
+---
+
+## Primary Parent Goal Actualization
+
+* Apply this policy only in a primary parent session when `TASK_BOARD_RUN_ID` is absent and an active task-board is available.
+* On the first materially actionable user requirement, read `task-board goal get`. If no primary goal is active, create it with `task-board goal set-primary --objective TEXT --reason TEXT`. If one is active, update it with `task-board goal update --if-revision N --objective TEXT --reason TEXT` only when the concise, complete objective materially changed.
+* On every later user turn that materially adds, removes, or redirects requirements, recompute one complete objective that preserves every unresolved prior requirement and incorporates the changed intent. Update using the revision observed from the latest read.
+* Perform at most one successful primary-goal write per user turn. Skip status questions, confirmations, tool chatter, wording-only corrections, semantic no-ops, and other turns that do not change the goal.
+* On `primary_goal_revision_conflict`, re-read the active goal, merge the complete objective, and retry once with the new observed revision. Do not narrate routine successful synchronization; report only a persistent failure or conflict, or answer an explicit user request for goal state.
+* Never mutate the primary goal from a spawned run. Spawned owners use `task-board spawn goal`; a primary-goal update never silently expands, cancels, completes, or clears a spawned goal. When materially changed delivery scope must reach an existing owner, use the explicit spawn-goal upsert or reroute contract.
+* Version 1 does not invoke native Codex or Claude goal APIs and never clears the primary goal automatically when a session exits.
+* This is an instruction-only integration: agents-infra stores no task-board state and adds no task-board library dependency. The eligible primary parent calls the external `task-board` CLI.
 
 ---
 
