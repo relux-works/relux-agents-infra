@@ -69,6 +69,31 @@ th {
   font-weight: 700;
 }
 
+/* Keep table rows whole across page breaks.
+   Without this a row splits at the page boundary and its cells land on
+   different pages, leaving an empty column stub above the continuation. */
+table {
+  break-inside: auto;
+}
+
+thead {
+  display: table-header-group;
+}
+
+tfoot {
+  display: table-footer-group;
+}
+
+tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+th, td {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
 blockquote {
   margin: 0.8em 0 0.8em 1em;
   padding-left: 0.8em;
