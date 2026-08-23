@@ -1,0 +1,130 @@
+diff --git a/.configs/codex-config.toml b/.configs/codex-config.toml
+index 7dc00bc..7b94818 100644
+--- a/.configs/codex-config.toml
++++ b/.configs/codex-config.toml
+@@ -3,10 +3,6 @@ model_reasoning_effort = "xhigh"
+ service_tier = "default"
+ project_doc_max_bytes = 131072
+ 
+-[profiles.fast]
+-model = "gpt-5.5"
+-model_reasoning_effort = "xhigh"
+-
+ [projects."/Users/aagrigore1"]
+ trust_level = "trusted"
+ 
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 76fda0d..157bf00 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,13 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-24
++
++### 1753 — Fast-Profile Removal Meets Runtime Preservation Boundary
++- FINDING: Source `.configs/codex-config.toml` and both installed managed copies retain `[profiles.fast]`; the source-repository local copy also retains the withdrawn `service_tier = "fast"` state.
++- FINDING: Global installed config contains user-added trust entries and model selection absent from source; `setup global` would replace them from source, while `setup local` intentionally preserves existing `.agents/.configs/codex-config.toml` bytes.
++- DECISION: Remove the source profile and its README advertisement with production `Setup` regression coverage; validate supported installs on isolated destinations and defer live runtime synchronization until accepted source integration can preserve user-owned state explicitly.
++
+ ## 2026-08-18
+ 
+ ### 0504 — 503 Retry Accepted; Configured-Timeout Magnitude Still Unbound
+diff --git a/README.md b/README.md
+index 2b6812d..9723d5d 100644
+--- a/README.md
++++ b/README.md
+@@ -811,7 +811,6 @@ Inspect either provider invocation without launching an agent:
+ ```bash
+ cd /abs/path/to/project
+ agents-infra codex --print-config
+-agents-infra codex --print-config --profile fast
+ agents-infra codex --print-config --model gpt-5.6-terra -c 'model_reasoning_effort="xhigh"'
+ 
+ agents-infra claude --print-config
+@@ -1105,7 +1104,7 @@ Reference config with:
+ 
+ - Model: `gpt-5.5`
+ - Reasoning effort: `xhigh`
+-- Service tier: `default` (Standard). The named `fast` profile remains available for explicit model/reasoning selection; use `/fast on` for interactive Fast opt-in, and persistent Fast requires `service_tier = "fast"` with `[features].fast_mode = true`.
++- Service tier: `default` (Standard).
+ - Project docs byte limit: `131072`
+ - The approaching-rate-limit model switch reminder is suppressed with `[notice].hide_rate_limit_model_nudge = true` so Codex does not ask to move to a lower-credit model.
+ - As of the audited Codex CLI `0.144.1`, the separate safety-buffering chooser (`Retry with a faster model` / `Keep waiting`) has no supported `config.toml` setting for suppression, a default choice, or automatic waiting. It is runtime UI shown before agent instructions can act; terminal key automation or a patched Codex binary is intentionally out of scope.
+diff --git a/tools/agents-infra/internal/infra/infra_test.go b/tools/agents-infra/internal/infra/infra_test.go
+index 1a6c88d..1236158 100644
+--- a/tools/agents-infra/internal/infra/infra_test.go
++++ b/tools/agents-infra/internal/infra/infra_test.go
+@@ -1111,7 +1111,8 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
+ 
+ 	assertSymlink(t, filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".agents", ".configs", "codex-config.toml"))
+ 	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "hide_rate_limit_model_nudge = true")
+-	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "[profiles.fast]")
++	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "service_tier = \"default\"")
++	assertFileNotContains(t, filepath.Join(home, ".codex", "config.toml"), "[profiles.fast]")
+ 	report := mustDoctor(t, layout)
+ 	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
+ 		t.Fatalf("unexpected global Codex config doctor report: %+v", report)
+@@ -1216,7 +1217,7 @@ func seedSourceRepo(t *testing.T) string {
+ 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
+ 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n")
+ 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
+-	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\n\n[profiles.fast]\nmodel = \"gpt-5.5\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
++	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
+ 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
+ url = "https://mcp.figma.com/mcp"
+ 
+diff --git a/tools/agents-infra/setup_test.go b/tools/agents-infra/setup_test.go
+index a68bf15..4cb0ed8 100644
+--- a/tools/agents-infra/setup_test.go
++++ b/tools/agents-infra/setup_test.go
+@@ -5,8 +5,48 @@ import (
+ 	"path/filepath"
+ 	"strings"
+ 	"testing"
++
++	"github.com/pelletier/go-toml/v2"
+ )
+ 
++func TestSourceManagedCodexConfigUsesStandardTierWithoutFastProfile(t *testing.T) {
++	root := sourceRepoRoot(t)
++	path := filepath.Join(root, ".configs", "codex-config.toml")
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", path, err)
++	}
++
++	var config map[string]any
++	if err := toml.Unmarshal(data, &config); err != nil {
++		t.Fatalf("Unmarshal(%s): %v", path, err)
++	}
++	if got := config["service_tier"]; got != "default" {
++		t.Fatalf("service_tier = %#v, want default", got)
++	}
++	if profiles, ok := config["profiles"].(map[string]any); ok {
++		if _, found := profiles["fast"]; found {
++			t.Fatalf("source-managed Codex config still advertises profiles.fast: %#v", profiles["fast"])
++		}
++	}
++}
++
++func TestREADMEDoesNotAdvertiseRemovedCodexFastProfile(t *testing.T) {
++	path := filepath.Join(sourceRepoRoot(t), "README.md")
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", path, err)
++	}
++	for _, removed := range []string{
++		"agents-infra codex --print-config --profile fast",
++		"named `fast` profile remains available",
++	} {
++		if strings.Contains(string(data), removed) {
++			t.Fatalf("README.md still advertises removed fast profile with %q", removed)
++		}
++	}
++}
++
+ func TestRunSetupLocalAcceptsPrimaryFlagsAfterProjectDirectory(t *testing.T) {
+ 	source := sourceRepoRoot(t)
+ 	project := t.TempDir()
