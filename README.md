@@ -212,6 +212,13 @@ model, reasoning effort, service tier, trusted projects, and TUI notices are
 owned by the global `~/.codex/config.toml` link by default. This prevents stale
 project-local configs from silently overriding the current global model.
 
+Both global and local source sync refresh the managed
+`.agents/.configs/codex-config.toml` defaults while merging existing Codex
+user state: project trust decisions, TUI notice acknowledgements, and custom
+profiles other than the withdrawn `fast` profile. Source remains authoritative
+for model, reasoning, and `service_tier = "default"`. A malformed installed
+Codex config refuses synchronization without replacing that config.
+
 During local setup in the default `preserve` mode, agents-infra removes managed
 project-local Codex config artifacts it created: either the legacy symlink or a
 rendered managed regular file. A custom project-local config is left in place
@@ -811,7 +818,6 @@ Inspect either provider invocation without launching an agent:
 ```bash
 cd /abs/path/to/project
 agents-infra codex --print-config
-agents-infra codex --print-config --profile fast
 agents-infra codex --print-config --model gpt-5.6-terra -c 'model_reasoning_effort="xhigh"'
 
 agents-infra claude --print-config
@@ -1105,7 +1111,7 @@ Reference config with:
 
 - Model: `gpt-5.5`
 - Reasoning effort: `xhigh`
-- Service tier: `default` (Standard). The named `fast` profile remains available for explicit model/reasoning selection; use `/fast on` for interactive Fast opt-in, and persistent Fast requires `service_tier = "fast"` with `[features].fast_mode = true`.
+- Service tier: `default` (Standard).
 - Project docs byte limit: `131072`
 - The approaching-rate-limit model switch reminder is suppressed with `[notice].hide_rate_limit_model_nudge = true` so Codex does not ask to move to a lower-credit model.
 - As of the audited Codex CLI `0.144.1`, the separate safety-buffering chooser (`Retry with a faster model` / `Keep waiting`) has no supported `config.toml` setting for suppression, a default choice, or automatic waiting. It is runtime UI shown before agent instructions can act; terminal key automation or a patched Codex binary is intentionally out of scope.

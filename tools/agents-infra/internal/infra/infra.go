@@ -309,6 +309,9 @@ func syncRepo(layout Layout) error {
 		if err != nil {
 			return err
 		}
+		if filepath.ToSlash(rel) == managedCodexConfigRelativePath {
+			return syncManagedCodexConfig(path, dst, info.Mode())
+		}
 
 		if d.Type()&os.ModeSymlink != 0 {
 			target, err := os.Readlink(path)
@@ -366,7 +369,7 @@ func shouldPreserveExistingLocalConfig(mode Mode, rel, dst string) bool {
 		return false
 	}
 	switch filepath.ToSlash(rel) {
-	case ".configs/codex-config.toml", ".configs/claude-settings.json":
+	case ".configs/claude-settings.json":
 		return true
 	default:
 		return false
