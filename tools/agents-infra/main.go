@@ -57,6 +57,8 @@ func run(args []string) error {
 		return runClaude(args[1:])
 	case "pi":
 		return runPi(args[1:])
+	case "target":
+		return runTarget(args[1:])
 	case "version", "--version":
 		return runVersion()
 	case "help", "-h", "--help":
@@ -288,6 +290,22 @@ func runDoctor(args []string) error {
 			fmt.Fprintf(os.Stdout, "claude_primary_yolo_mode: %t\n", report.ClaudePrimarySession.YoloMode.Value)
 			fmt.Fprintf(os.Stdout, "claude_primary_yolo_mode_source: %s\n", claudePrimaryBoolSource(report.ClaudePrimarySession.YoloMode))
 		}
+		for _, target := range report.CanonicalTargets {
+			prefix := "canonical_" + strings.ReplaceAll(target.Entrypoint, "-", "_")
+			fmt.Fprintf(os.Stdout, "%s_target: %s\n", prefix, target.Name)
+			fmt.Fprintf(os.Stdout, "%s_entrypoint_source: %s\n", prefix, target.EntrypointSource)
+			fmt.Fprintf(os.Stdout, "%s_target_source: %s\n", prefix, target.TargetSource)
+			fmt.Fprintf(os.Stdout, "%s_vendor: %s\n", prefix, target.Vendor)
+			fmt.Fprintf(os.Stdout, "%s_environment: %s\n", prefix, target.Environment)
+			fmt.Fprintf(os.Stdout, "%s_model: %s\n", prefix, target.Model)
+			fmt.Fprintf(os.Stdout, "%s_reasoning: %s\n", prefix, target.Reasoning)
+			fmt.Fprintf(os.Stdout, "%s_profile: %s\n", prefix, target.Profile)
+			fmt.Fprintf(os.Stdout, "%s_profile_source: %s\n", prefix, target.ProfileSource)
+			fmt.Fprintf(os.Stdout, "%s_profile_provider: %s\n", prefix, target.ProfileProvider)
+			fmt.Fprintf(os.Stdout, "%s_profile_provider_source: %s\n", prefix, target.ProfileSource)
+			fmt.Fprintf(os.Stdout, "%s_endpoint: %s\n", prefix, target.Endpoint)
+			fmt.Fprintf(os.Stdout, "%s_endpoint_source: %s\n", prefix, target.ProfileSource)
+		}
 		if report.CodexConfigShadowsGlobal {
 			if report.CodexConfigGenerated {
 				fmt.Fprintf(os.Stdout, "codex_config_action: managed project-local .codex/config.toml is active; rendered from the installed Codex config without user-level profiles; use --codex-config=global to remove it if unintended\n")
@@ -423,29 +441,88 @@ func runPi(args []string) error {
 	return infra.RunPi(infra.RunPiOptions{ProjectDir: startDir, Args: filtered, Environ: os.Environ(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
 }
 
+func runTarget(args []string) error {
+	if len(args) == 0 {
+		return errors.New("target requires an entrypoint name")
+	}
+	entrypoint := args[0]
+	fs := flag.NewFlagSet("target "+entrypoint, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	printConfig := fs.Bool("print-config", false, "resolve and print the canonical target without launching")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	startDir := os.Getenv(callerCWDEnv)
+	if startDir == "" {
+		var err error
+		startDir, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("resolve target caller cwd: %w", err)
+		}
+	}
+	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
+	plan, err := infra.BuildCanonicalTargetLaunchPlan(entrypoint, startDir, "", fs.Args(), producer, nil)
+	if err != nil {
+		return err
+	}
+	if *printConfig {
+		fmt.Fprint(os.Stdout, infra.RenderCanonicalTargetLaunchPlan(plan))
+		return nil
+	}
+	if plan.Provider == "pi" {
+		return infra.RunPi(infra.RunPiOptions{
+			ProjectDir: plan.ProjectDir,
+			Args:       plan.TargetProviderArgs(),
+			Environ:    os.Environ(),
+			Stdin:      os.Stdin,
+			Stdout:     os.Stdout,
+			Stderr:     os.Stderr,
+		})
+	}
+	if _, err := infra.PreparePrimarySession(plan.Provider, plan.ProjectDir, producer); err != nil {
+		return fmt.Errorf("prepare canonical %s target project surface: %w", plan.Provider, err)
+	}
+	cmd := exec.Command(plan.Executable, plan.LaunchVariants.Interactive.Argv...)
+	cmd.Dir = plan.ProjectDir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func runCompose(args []string) error {
 	fs := flag.NewFlagSet("compose", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	mode := fs.String("mode", "child", "composition mode: child or primary-session")
 	agent := fs.String("agent", "", "agent provider: codex, claude, or pi")
+	entrypoint := fs.String("entrypoint", "", "canonical vendor entrypoint")
 	projectDir := fs.String("project", "", "project directory used for composition")
 	schemaVersion := fs.Int("schema-version", 0, "composition contract schema version")
 	jsonOutput := fs.Bool("json", false, "emit one JSON contract document")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *agent != "codex" && *agent != "claude" && *agent != "pi" {
-		return fmt.Errorf("compose requires --agent codex, claude, or pi")
-	}
 	if !*jsonOutput {
 		return fmt.Errorf("compose requires --json")
 	}
 	switch *mode {
 	case "child":
-		if *agent == "pi" {
+		if *entrypoint != "" {
+			return fmt.Errorf("child compose does not accept --entrypoint")
+		}
+		if *agent != "codex" && *agent != "claude" {
 			return fmt.Errorf("child compose requires --agent codex or claude")
 		}
 	case "primary-session":
+		if (*agent == "") == (*entrypoint == "") {
+			return fmt.Errorf("primary-session compose requires exactly one of --agent or --entrypoint")
+		}
+		if *entrypoint != "" {
+			return runComposeCanonicalTarget(*entrypoint, *projectDir, *schemaVersion, fs.Args())
+		}
+		if *agent != "codex" && *agent != "claude" && *agent != "pi" {
+			return fmt.Errorf("primary-session compose requires --agent codex, claude, or pi")
+		}
 		return runComposePrimarySession(*agent, *projectDir, *schemaVersion, fs.Args())
 	default:
 		return fmt.Errorf("compose requires --mode child or --mode primary-session")
@@ -476,6 +553,45 @@ func runCompose(args []string) error {
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(composition); err != nil {
 		return fmt.Errorf("encode child launch composition: %w", err)
+	}
+	return nil
+}
+
+func runComposeCanonicalTarget(entrypoint, projectDir string, schemaVersion int, userArgs []string) error {
+	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
+	canonicalProjectDir, err := infra.CanonicalProjectDir(projectDir)
+	if err != nil {
+		return err
+	}
+	provider := infra.CanonicalProviderForEntrypoint(entrypoint)
+	if schemaVersion != infra.PrimarySessionLaunchPlanSchemaVersion {
+		envelope := infra.NewPrimarySessionLaunchPlanErrorEnvelope(provider, canonicalProjectDir, producer, infra.PrimarySessionErrorUnsupportedSchemaVersion)
+		if err := json.NewEncoder(os.Stdout).Encode(envelope); err != nil {
+			return fmt.Errorf("encode canonical target error envelope: %w", err)
+		}
+		return fmt.Errorf("unsupported primary-session launch plan schema version %d", schemaVersion)
+	}
+	plan, err := infra.BuildCanonicalTargetLaunchPlan(entrypoint, canonicalProjectDir, "", userArgs, producer, nil)
+	if err != nil {
+		var targetErr *infra.CanonicalTargetError
+		var envelope infra.PrimarySessionLaunchPlanErrorEnvelope
+		if errors.As(err, &targetErr) {
+			envelope = infra.NewCanonicalTargetLaunchPlanErrorEnvelope(provider, canonicalProjectDir, producer, targetErr)
+		} else {
+			code := infra.PrimarySessionErrorInvalidProjectConfiguration
+			var composeErr *infra.PrimarySessionComposeError
+			if errors.As(err, &composeErr) {
+				code = composeErr.Code
+			}
+			envelope = infra.NewPrimarySessionLaunchPlanErrorEnvelope(provider, canonicalProjectDir, producer, code)
+		}
+		if encodeErr := json.NewEncoder(os.Stdout).Encode(envelope); encodeErr != nil {
+			return fmt.Errorf("encode canonical target error envelope: %w", encodeErr)
+		}
+		return fmt.Errorf("compose canonical target launch plan: %w", err)
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(plan); err != nil {
+		return fmt.Errorf("encode canonical target launch plan: %w", err)
 	}
 	return nil
 }
@@ -640,11 +756,13 @@ func usageText() string {
   agents-infra verify local [PROJECT_DIR] [--project-dir DIR]
   agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json
   agents-infra compose --mode primary-session --agent codex|claude|pi --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]
+  agents-infra compose --mode primary-session --entrypoint openai-infra|anthropic-infra|qwen-infra --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]
   agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json
   agents-infra attachments list|show|path|materialize|stage-images [...]
   agents-infra codex [--print-config] [-d|--danger|--yolo] [--] [CODEX_ARGS...]
   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
   agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
+  agents-infra target ENTRYPOINT [--print-config] [-- PROVIDER_ARGS...]
 
 Source tree resolution for setup (first usable wins):
   1. --source-dir DIR

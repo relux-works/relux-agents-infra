@@ -28,20 +28,40 @@ const (
 // owns the resulting process; agents-infra performs no launch and stays
 // board-agnostic.
 type PrimarySessionLaunchPlan struct {
-	Contract         string                         `json:"contract"`
-	SchemaVersion    int                            `json:"schema_version"`
-	Status           string                         `json:"status"`
-	Producer         ChildLaunchCompositionProducer `json:"producer"`
-	Provider         string                         `json:"provider"`
-	ProjectDir       string                         `json:"project_dir"`
-	Executable       string                         `json:"executable"`
-	LaunchVariants   PrimarySessionLaunchVariants   `json:"launch_variants"`
-	Resolved         PrimarySessionResolved         `json:"resolved"`
-	RequiredEnvNames []string                       `json:"required_env_names"`
-	Sources          []PrimarySessionSource         `json:"sources"`
-	Pi               *PiLaunchPlanDetails           `json:"pi,omitempty"`
-	Sidecars         *PrimarySessionSidecars        `json:"sidecars,omitempty"`
-	Capabilities     *PiCapabilityPlan              `json:"capabilities,omitempty"`
+	Contract           string                         `json:"contract"`
+	SchemaVersion      int                            `json:"schema_version"`
+	Status             string                         `json:"status"`
+	Producer           ChildLaunchCompositionProducer `json:"producer"`
+	Provider           string                         `json:"provider"`
+	Target             *PrimarySessionTarget          `json:"target,omitempty"`
+	ProjectDir         string                         `json:"project_dir"`
+	Executable         string                         `json:"executable"`
+	LaunchVariants     PrimarySessionLaunchVariants   `json:"launch_variants"`
+	Resolved           PrimarySessionResolved         `json:"resolved"`
+	RequiredEnvNames   []string                       `json:"required_env_names"`
+	Sources            []PrimarySessionSource         `json:"sources"`
+	Pi                 *PiLaunchPlanDetails           `json:"pi,omitempty"`
+	Sidecars           *PrimarySessionSidecars        `json:"sidecars,omitempty"`
+	Capabilities       *PiCapabilityPlan              `json:"capabilities,omitempty"`
+	targetProviderArgs []string
+}
+
+func (p PrimarySessionLaunchPlan) TargetProviderArgs() []string {
+	return append([]string(nil), p.targetProviderArgs...)
+}
+
+type PrimarySessionTarget struct {
+	Entrypoint       string  `json:"entrypoint"`
+	EntrypointSource string  `json:"entrypoint_source"`
+	Name             string  `json:"name"`
+	Source           string  `json:"source"`
+	Vendor           string  `json:"vendor"`
+	Environment      string  `json:"environment"`
+	Model            string  `json:"model"`
+	Reasoning        string  `json:"reasoning"`
+	Profile          *string `json:"profile"`
+	ProfileProvider  *string `json:"profile_provider"`
+	Endpoint         *string `json:"endpoint"`
 }
 
 type PrimarySessionSidecars struct {
@@ -95,14 +115,16 @@ type PrimarySessionManagedClientVariant struct {
 }
 
 type PrimarySessionResolved struct {
-	Model           PrimarySessionResolvedString `json:"model"`
-	Reasoning       PrimarySessionResolvedString `json:"reasoning"`
-	Yolo            PrimarySessionResolvedBool   `json:"yolo"`
-	Sandbox         PrimarySessionResolvedString `json:"sandbox"`
-	Profile         PrimarySessionResolvedString `json:"profile"`
-	Approval        PrimarySessionResolvedString `json:"approval"`
-	MCP             PrimarySessionResolvedMCP    `json:"mcp"`
-	PiCompatibility PrimarySessionResolvedString `json:"pi_compatibility,omitempty"`
+	Model           PrimarySessionResolvedString  `json:"model"`
+	Reasoning       PrimarySessionResolvedString  `json:"reasoning"`
+	Yolo            PrimarySessionResolvedBool    `json:"yolo"`
+	Sandbox         PrimarySessionResolvedString  `json:"sandbox"`
+	Profile         PrimarySessionResolvedString  `json:"profile"`
+	Approval        PrimarySessionResolvedString  `json:"approval"`
+	MCP             PrimarySessionResolvedMCP     `json:"mcp"`
+	PiCompatibility PrimarySessionResolvedString  `json:"pi_compatibility,omitempty"`
+	ProfileProvider *PrimarySessionResolvedString `json:"profile_provider,omitempty"`
+	Endpoint        *PrimarySessionResolvedString `json:"endpoint,omitempty"`
 }
 
 // PrimarySessionResolvedString reports one resolved policy field with
@@ -143,7 +165,9 @@ type PrimarySessionLaunchPlanErrorEnvelope struct {
 }
 
 type PrimarySessionLaunchPlanError struct {
-	Code string `json:"code"`
+	Code        string              `json:"code"`
+	Context     *TargetErrorContext `json:"context,omitempty"`
+	Remediation string              `json:"remediation,omitempty"`
 }
 
 func NewPrimarySessionLaunchPlanErrorEnvelope(provider, projectDir string, producer ChildLaunchCompositionProducer, code string) PrimarySessionLaunchPlanErrorEnvelope {
@@ -156,6 +180,14 @@ func NewPrimarySessionLaunchPlanErrorEnvelope(provider, projectDir string, produ
 		ProjectDir:    projectDir,
 		Error:         PrimarySessionLaunchPlanError{Code: code},
 	}
+}
+
+func NewCanonicalTargetLaunchPlanErrorEnvelope(provider, projectDir string, producer ChildLaunchCompositionProducer, targetErr *CanonicalTargetError) PrimarySessionLaunchPlanErrorEnvelope {
+	envelope := NewPrimarySessionLaunchPlanErrorEnvelope(provider, projectDir, producer, targetErr.Code)
+	context := targetErr.Context
+	envelope.Error.Context = &context
+	envelope.Error.Remediation = targetErr.Remediation
+	return envelope
 }
 
 // PrimarySessionComposeError carries the machine error code for the JSON

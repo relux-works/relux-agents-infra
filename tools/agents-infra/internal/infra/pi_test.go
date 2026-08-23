@@ -1482,11 +1482,37 @@ func piErrorCode(err error) string {
 }
 func officialPiAsset(t *testing.T) string {
 	t.Helper()
-	root, _ := filepath.Abs("../../../../.temp/TASK-260817-2h8hn4/pi-standalone-darwin-arm64-0.84.2/pi")
-	if _, err := os.Stat(filepath.Join(root, "pi")); err != nil {
-		t.Skipf("official Pi acceptance asset unavailable: %v", err)
+	repoRoot, _ := filepath.Abs("../../../..")
+	candidates := []string{filepath.Join(repoRoot, ".temp", "TASK-260817-2h8hn4", "pi-standalone-darwin-arm64-0.84.2", "pi")}
+	if primaryRoot := primaryCheckoutRootFromGitFile(filepath.Join(repoRoot, ".git")); primaryRoot != "" {
+		candidates = append(candidates, filepath.Join(primaryRoot, ".temp", "TASK-260817-2h8hn4", "pi-standalone-darwin-arm64-0.84.2", "pi"))
 	}
-	return root
+	for _, root := range candidates {
+		if _, err := os.Stat(filepath.Join(root, "pi")); err == nil {
+			return root
+		}
+	}
+	t.Skipf("official Pi acceptance asset unavailable in %v", candidates)
+	return ""
+}
+
+func primaryCheckoutRootFromGitFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(text, "gitdir:") {
+		return ""
+	}
+	gitDir := strings.TrimSpace(strings.TrimPrefix(text, "gitdir:"))
+	if gitDir == "" {
+		return ""
+	}
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(filepath.Dir(path), gitDir)
+	}
+	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Clean(gitDir))))
 }
 
 func cloneOfficialPiAsset(t *testing.T) string {
