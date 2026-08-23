@@ -1,21 +1,6 @@
 ---
 name: relux-agents-infra
 description: Shared agent infrastructure repo for Claude Code and Codex CLI. Use when updating global agent instructions, skills, symlink setup, tool configs, rules, or the generic agents attachments manifest contract and helper tooling.
-triggers:
-  - relux-agents-infra
-  - agents infra
-  - agent infrastructure
-  - shared agent config
-  - global agent instructions
-  - codex config
-  - claude settings
-  - setup symlinks
-  - agents attachments manifest
-  - attachments manifest
-  - агентская инфра
-  - конфиг агентов
-  - настройки codex
-  - настройки claude
 ---
 
 # relux-agents-infra
@@ -241,6 +226,71 @@ yolo is `false` from `default`. For complete troubleshooting and
 `.codex/config.toml` coexistence, see
 [README.md](README.md#project-primary-codex-session-policy).
 
+## Canonical vendor targets
+
+Use canonical targets when a project needs an explicit vendor/environment/model
+identity behind an installed vendor alias. Define complete atomic targets and
+exact mappings in contributing project configs:
+
+```toml
+[agents.targets.openai]
+vendor = "openai"
+environment = "codex"
+model = "gpt-5.6-sol"
+reasoning = "high"
+
+[agents.targets.anthropic]
+vendor = "anthropic"
+environment = "claude-code"
+model = "claude-opus-5"
+reasoning = "high"
+
+[agents.targets.qwen]
+vendor = "qwen"
+environment = "pi"
+model = "Qwen3.8-27B-MLX-8bit"
+reasoning = "off"
+profile = "qwen-3.8-27b-mlx-8bit"
+profile_provider = "local-qwen"
+endpoint = "http://127.0.0.1:18011/v1"
+
+[agents.entrypoints]
+openai-infra = "openai"
+anthropic-infra = "anthropic"
+qwen-infra = "qwen"
+```
+
+Only `openai/codex`, `anthropic/claude-code`, and `qwen/pi` are admitted.
+Qwen reuses an existing complete managed Pi profile: model and thinking must
+match it, optional provider/endpoint values are assertions, and effective
+provider/endpoint provenance remains the profile definition. A nearer target
+replaces the same name atomically; a nearer mapping replaces only that alias.
+
+Inspect without launching:
+
+```bash
+openai-infra --print-config
+anthropic-infra --print-config
+qwen-infra --print-config
+agents-infra compose --mode primary-session --entrypoint qwen-infra \
+  --project "$PWD" --schema-version 1 --json
+```
+
+Missing/malformed mappings, invalid tuples/profiles, and conflicting explicit
+identity selectors fail before provider/runtime side effects and carry source,
+field/identity, and remediation. Exact repeats are accepted. Pi model tokens
+are decoded as `model`, `provider/model`, `model:thinking`, or
+`provider/model:thinking`; divergent suffix/provider coordinates conflict.
+Codex aliases also lock `-c model=...` and `-c
+model_reasoning_effort=...` and always reject profile selectors.
+
+Canonical declarations never rewrite config and never become defaults for
+direct `agents-infra codex|claude|pi` or `pi-infra`; those commands retain
+legacy precedence. Alias schema-v1 plans add `target` and Qwen effective
+provider/endpoint fields, while legacy `--agent` plans keep their existing
+shape. See [README.md](README.md#canonical-vendor-target-entrypoints) for full
+field domains and diagnostics.
+
 Task-board spawn ceilings are documented by the separate
 [task-board spawn-ceiling contract](https://github.com/relux-works/skill-project-management/blob/main/.specs/project-agent-selection-policy.md#task-board-spawn-ceiling-contract).
 Do not add spawn ceilings, model ranks, or task-board resolver policy to
@@ -266,7 +316,9 @@ The alias preserves caller cwd and argv order/bytes and delegates only as
 drift, while setup's postcondition and `verify` reject missing/changed alias
 bytes or mode and a missing, wrong, or unusable sibling target. Both paths must
 themselves be regular files; a symlink is drift even when it resolves to
-byte-identical content. They also
+byte-identical content. Setup also installs and repairs the exact sibling-only
+`openai-infra`, `anthropic-infra`, and `qwen-infra` aliases, each delegating as
+`agents-infra target <exact-entrypoint>` with no embedded target policy. They also
 validate the authoritative source/installed manifest at
 `tools/agents-infra/internal/infra/pi-v0.84.2-darwin-arm64-tree-manifest.txt`
 with SHA-256

@@ -46,6 +46,110 @@ func TestSetupMintsReceiptAndVerifiesTheRuntimeItInstalled(t *testing.T) {
 	}
 }
 
+func TestSetupRepairsAndVerifyNarrowsEveryCanonicalTargetAlias(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX alias file-kind and executable-mode contract")
+	}
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	mutations := []struct {
+		entrypoint string
+		mutate     func(t *testing.T, path string)
+	}{
+		{
+			entrypoint: "openai-infra",
+			mutate: func(t *testing.T, path string) {
+				if err := os.Remove(path); err != nil {
+					t.Fatalf("Remove(%s): %v", path, err)
+				}
+			},
+		},
+		{
+			entrypoint: "anthropic-infra",
+			mutate: func(t *testing.T, path string) {
+				if err := os.Remove(path); err != nil {
+					t.Fatalf("Remove(%s): %v", path, err)
+				}
+				if err := os.Mkdir(path, 0o755); err != nil {
+					t.Fatalf("Mkdir(%s): %v", path, err)
+				}
+			},
+		},
+		{
+			entrypoint: "qwen-infra",
+			mutate: func(t *testing.T, path string) {
+				if err := os.Chmod(path, 0o644); err != nil {
+					t.Fatalf("Chmod(%s): %v", path, err)
+				}
+			},
+		},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.entrypoint, func(t *testing.T) {
+			path := filepath.Join(layout.BinDir, canonicalTargetWrapperName(mutation.entrypoint, runtime.GOOS))
+			mutation.mutate(t, path)
+			err := VerifyInstalledRuntime(layout)
+			if err == nil || !strings.Contains(err.Error(), mutation.entrypoint) {
+				t.Fatalf("VerifyInstalledRuntime error = %v, want %s-specific refusal", err, mutation.entrypoint)
+			}
+			if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+				t.Fatalf("Setup repair: %v", err)
+			}
+			if err := VerifyInstalledRuntime(layout); err != nil {
+				t.Fatalf("VerifyInstalledRuntime after %s repair: %v", mutation.entrypoint, err)
+			}
+		})
+	}
+}
+
+func TestCanonicalConfigurationFailurePreventsSetupAndVerifyMutation(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	configPath := writeCanonicalConfig(t, project, "[agents.targets.openai]\nvendor=7\n")
+	before := mustReadRuntimeFile(t, configPath)
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+
+	err = Setup(Options{Layout: layout, Stdout: io.Discard})
+	if err == nil || !strings.Contains(err.Error(), PrimarySessionErrorInvalidProjectConfiguration) || !strings.Contains(err.Error(), "agents.targets.openai.vendor") || !strings.Contains(err.Error(), configPath) || !strings.Contains(err.Error(), "Remediation:") {
+		t.Fatalf("Setup error = %v", err)
+	}
+	if got := mustReadRuntimeFile(t, configPath); string(got) != string(before) {
+		t.Fatalf("Setup rewrote project config: before=%q after=%q", before, got)
+	}
+	for _, entrypoint := range canonicalTargetLauncherNames {
+		if _, statErr := os.Lstat(filepath.Join(layout.BinDir, canonicalTargetWrapperName(entrypoint, runtime.GOOS))); !os.IsNotExist(statErr) {
+			t.Fatalf("Setup created %s before rejecting config: %v", entrypoint, statErr)
+		}
+	}
+
+	if err := os.Remove(configPath); err != nil {
+		t.Fatalf("Remove(%s): %v", configPath, err)
+	}
+	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+		t.Fatalf("baseline Setup: %v", err)
+	}
+	mustWrite(t, configPath, "[agents.targets.openai]\nvendor=7\n")
+	beforeVerify := mustReadRuntimeFile(t, configPath)
+	err = VerifyInstalledRuntime(layout)
+	if err == nil || !strings.Contains(err.Error(), "agents.targets.openai.vendor") || !strings.Contains(err.Error(), configPath) || !strings.Contains(err.Error(), "Remediation:") {
+		t.Fatalf("VerifyInstalledRuntime error = %v", err)
+	}
+	if got := mustReadRuntimeFile(t, configPath); string(got) != string(beforeVerify) {
+		t.Fatalf("VerifyInstalledRuntime rewrote project config: before=%q after=%q", beforeVerify, got)
+	}
+}
+
 // Negative: the generated launcher builds its recorded source dir on every
 // invocation. Once that source can no longer provide the backend, the runtime
 // is broken and verification must say so, even though every installed file is

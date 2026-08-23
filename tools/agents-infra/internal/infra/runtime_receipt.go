@@ -109,6 +109,11 @@ func absOrSelf(path string) string {
 // A receipt alone is not evidence — it is checked alongside the live artifacts
 // precisely so a copied or hand-written receipt cannot stand in for them.
 func VerifyInstalledRuntime(layout Layout) error {
+	if layout.Mode == ModeLocal {
+		if err := ValidateCanonicalProjectConfiguration(layout.RootDir, ""); err != nil {
+			return err
+		}
+	}
 	agentsDir := absOrSelf(layout.AgentsDir)
 	failures := verifyRuntimeReceipt(layout, agentsDir)
 	failures = append(failures, runtimeArtifactFailures(layout)...)
@@ -171,7 +176,43 @@ func runtimeArtifactFailures(layout Layout) []string {
 	}
 	failures = append(failures, managedSkillLinkFailures(layout)...)
 	failures = append(failures, piInfraLauncherFailures(layout)...)
+	failures = append(failures, canonicalTargetLauncherFailures(layout)...)
 	return append(failures, launcherBackendFailures(layout)...)
+}
+
+func canonicalTargetLauncherFailures(layout Layout) []string {
+	goos := runtime.GOOS
+	targetName := piInfraTargetName(layout.Mode, goos)
+	var failures []string
+	for _, entrypoint := range canonicalTargetLauncherNames {
+		aliasPath := filepath.Join(layout.BinDir, canonicalTargetWrapperName(entrypoint, goos))
+		wantBody := canonicalTargetWrapperBody(entrypoint, goos, targetName)
+		info, err := os.Lstat(aliasPath)
+		switch {
+		case os.IsNotExist(err):
+			failures = append(failures, fmt.Sprintf("no generated %s launcher at %s", entrypoint, aliasPath))
+			continue
+		case err != nil:
+			failures = append(failures, fmt.Sprintf("cannot inspect %s launcher %s: %v", entrypoint, aliasPath, err))
+			continue
+		case !info.Mode().IsRegular():
+			failures = append(failures, fmt.Sprintf("%s launcher %s is not a regular file", entrypoint, aliasPath))
+			continue
+		}
+		body, err := os.ReadFile(aliasPath)
+		switch {
+		case err != nil:
+			failures = append(failures, fmt.Sprintf("unreadable %s launcher %s: %v", entrypoint, aliasPath, err))
+			continue
+		case string(body) != wantBody:
+			failures = append(failures, fmt.Sprintf("%s launcher %s has drifted from canonical target dispatch", entrypoint, aliasPath))
+			continue
+		}
+		if goos != "windows" && info.Mode().Perm() != 0o755 {
+			failures = append(failures, fmt.Sprintf("%s launcher %s mode is %04o, want 0755", entrypoint, aliasPath, info.Mode().Perm()))
+		}
+	}
+	return failures
 }
 
 func piInfraLauncherFailures(layout Layout) []string {

@@ -544,6 +544,33 @@ func captureStdout(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stderr
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Pipe: %v", err)
+	}
+	os.Stderr = write
+	defer func() {
+		os.Stderr = original
+	}()
+
+	fn()
+
+	if err := write.Close(); err != nil {
+		t.Fatalf("Close stderr pipe writer: %v", err)
+	}
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, read); err != nil {
+		t.Fatalf("Copy stderr pipe: %v", err)
+	}
+	if err := read.Close(); err != nil {
+		t.Fatalf("Close stderr pipe reader: %v", err)
+	}
+	return buf.String()
+}
+
 func decodeSingleJSONDocument(t *testing.T, output string, destination any) {
 	t.Helper()
 	decoder := json.NewDecoder(strings.NewReader(output))
@@ -987,11 +1014,37 @@ shutdown_timeout_seconds = 2
 
 func mainTestOfficialPiAsset(t *testing.T) string {
 	t.Helper()
-	root, _ := filepath.Abs("../../.temp/TASK-260817-2h8hn4/pi-standalone-darwin-arm64-0.84.2/pi")
-	if _, err := os.Stat(filepath.Join(root, "pi")); err != nil {
-		t.Skipf("official Pi asset unavailable: %v", err)
+	repoRoot, _ := filepath.Abs("../..")
+	candidates := []string{filepath.Join(repoRoot, ".temp", "TASK-260817-2h8hn4", "pi-standalone-darwin-arm64-0.84.2", "pi")}
+	if primaryRoot := mainTestPrimaryCheckoutRootFromGitFile(filepath.Join(repoRoot, ".git")); primaryRoot != "" {
+		candidates = append(candidates, filepath.Join(primaryRoot, ".temp", "TASK-260817-2h8hn4", "pi-standalone-darwin-arm64-0.84.2", "pi"))
 	}
-	return root
+	for _, root := range candidates {
+		if _, err := os.Stat(filepath.Join(root, "pi")); err == nil {
+			return root
+		}
+	}
+	t.Skipf("official Pi asset unavailable in %v", candidates)
+	return ""
+}
+
+func mainTestPrimaryCheckoutRootFromGitFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(text, "gitdir:") {
+		return ""
+	}
+	gitDir := strings.TrimSpace(strings.TrimPrefix(text, "gitdir:"))
+	if gitDir == "" {
+		return ""
+	}
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(filepath.Dir(path), gitDir)
+	}
+	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Clean(gitDir))))
 }
 
 func TestRunPrepareEmitsOneV1Document(t *testing.T) {

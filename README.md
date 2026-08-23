@@ -25,6 +25,7 @@ agents-infra setup local /path/to/project
 agents-infra doctor global
 agents-infra doctor local /path/to/project
 agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json
+openai-infra --print-config
 pi-infra --print-config
 agents-infra version
 ```
@@ -45,11 +46,14 @@ The canonical interface after bootstrap is:
 - `agents-infra doctor global|local`
 - `agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json`
 - `agents-infra compose --mode primary-session --agent codex|claude|pi --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
+- `agents-infra compose --mode primary-session --entrypoint openai-infra|anthropic-infra|qwen-infra --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
+- `agents-infra target openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
 - `agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json`
 - `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
 - `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
 - `agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
 - `pi-infra [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+- `openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
 - `agents-infra version`
 
 Setup syncs the repo into `.agents`, treats `.skills/` as the authoritative
@@ -130,9 +134,11 @@ Two consequences worth knowing:
 `~/.local/bin/agents-infra` — so it makes no claim about a build and does not
 run one.
 
-Both setup modes install a sibling-only `pi-infra` launcher: global setup writes
+Both setup modes install sibling-only `pi-infra`, `openai-infra`,
+`anthropic-infra`, and `qwen-infra` launchers: global setup writes
 it beside the bootstrap-owned `agents-infra`, and local setup writes it beside
-the generated project launcher. It delegates as `agents-infra pi` without
+the generated project launcher. `pi-infra` delegates as `agents-infra pi`; the
+three vendor aliases delegate as `agents-infra target <exact-alias>` without
 changing the caller's working directory or argument bytes/order, including a
 literal wrapper delimiter and its following operands. It never searches `PATH`
 for a substitute target. Setup repairs a drifted managed alias; setup's
@@ -198,6 +204,7 @@ That creates a local runtime layout under the project root:
 - `.codex/`: thin Codex shim that points into `.agents`
 - `.local/bin/`: helper CLIs for the local setup, including `agents-infra`
 - `.local/bin/pi-infra`: managed sibling alias for `agents-infra pi`
+- `.local/bin/openai-infra`, `.local/bin/anthropic-infra`, `.local/bin/qwen-infra`: canonical target aliases
 
 Local setup reproduces the global runtime topology, not the global instruction
 content. It does not copy source `.instructions/` modules into the project.
@@ -730,6 +737,84 @@ remains provider-native. Codex fields never configure `agents-infra claude`,
 and Claude fields never configure `agents-infra codex`; `[mcp]` remains the one
 intentional provider-shared project section.
 
+### Canonical vendor target entrypoints
+
+Canonical targets are an additive, strict launch path for installed vendor
+aliases. They separate vendor identity from the provider harness and map each
+public entrypoint explicitly:
+
+```toml
+[agents.targets."openai-sol-high"]
+vendor = "openai"
+environment = "codex"
+model = "gpt-5.6-sol"
+reasoning = "high"
+
+[agents.targets."anthropic-opus-high"]
+vendor = "anthropic"
+environment = "claude-code"
+model = "claude-opus-5"
+reasoning = "high"
+
+[agents.targets."qwen-mlx-8bit"]
+vendor = "qwen"
+environment = "pi"
+model = "Qwen3.8-27B-MLX-8bit"
+reasoning = "off"
+profile = "qwen-3.8-27b-mlx-8bit"
+profile_provider = "local-qwen" # optional assertion
+endpoint = "http://127.0.0.1:18011/v1" # optional assertion
+
+[agents.entrypoints]
+openai-infra = "openai-sol-high"
+anthropic-infra = "anthropic-opus-high"
+qwen-infra = "qwen-mlx-8bit"
+```
+
+Only `openai/codex`, `anthropic/claude-code`, and `qwen/pi` are admitted.
+Claude reasoning is limited to `low`, `medium`, `high`, `xhigh`, and `max`;
+Pi uses its documented thinking levels; Codex accepts any non-empty reasoning
+token and leaves model/effort compatibility to Codex. A Qwen target must name
+an existing complete managed Pi profile with `api = "openai-completions"`.
+Its model and thinking must match the profile. Optional provider and endpoint
+fields are exact assertions; the effective qualified model, provider, and
+endpoint always come from the selected profile definition.
+
+Target definitions compose atomically from filesystem root to current working
+directory: a nearer complete target replaces the same exact name, and a nearer
+entrypoint mapping replaces that alias mapping. Missing mappings, unknown
+targets, malformed fields, alias/vendor disagreement, invalid Pi profiles, or
+conflicting identity selectors fail before provider/runtime side effects. No
+alias infers a target from legacy tables and no setup, verify, compose, print,
+or launch operation rewrites project configuration.
+
+Alias invocations identity-lock model and reasoning. Exact repeats are
+accepted; divergent repeats fail with `target_identity_conflict`. Codex also
+locks `-c model=...` and `-c model_reasoning_effort=...` and refuses profile
+selectors. Pi decodes `model`, `provider/model`, `model:thinking`, and
+`provider/model:thinking`, refusing a divergent provider or thinking suffix
+before the legacy Pi composer can normalize it.
+
+Inspect or compose the selected target without launching it:
+
+```bash
+openai-infra --print-config
+anthropic-infra --print-config
+qwen-infra --print-config
+
+agents-infra compose --mode primary-session \
+  --entrypoint qwen-infra --project "$PWD" --schema-version 1 --json \
+  -- --model 'local-qwen/Qwen3.8-27B-MLX-8bit:off'
+```
+
+Alias JSON plans retain schema version 1 and add `target`, plus Pi-only
+`resolved.profile_provider` and `resolved.endpoint` provenance. Legacy
+`compose --agent ...` plans omit those fields byte-for-byte. Direct
+`agents-infra codex`, `agents-infra claude`, `agents-infra pi`, and `pi-infra`
+keep their existing CLI/project/provider precedence; merely declaring targets
+does not change them. `doctor local` reports configured mappings and their
+resolved coordinates with sources.
+
 When launched from a project directory, `agents-infra codex` walks from the
 filesystem root to the current directory and reads each
 `.agents/.configs/project-config.toml` it finds. It parses every discovered
@@ -931,6 +1016,7 @@ rg -n "Primary Parent Goal Actualization" \
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
 | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi state under the user cache directory, attachment manifests/staged images, or printed diagnostics on stdout |
 | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+| `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
 | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
 | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
@@ -1447,8 +1533,9 @@ Before mutation, setup recursively validates every source-managed skill link it
 can materialize. Setup's postcondition and `verify` repeat that check across the
 managed installed surfaces. Links must remain contained, resolve successfully,
 and form an acyclic directory graph; multiple contained links may share a target
-when they form a DAG. Global provider-owned top-level skill packages remain
-outside this ownership boundary unless setup manages their name.
+when they form a DAG. Provider-owned top-level skill packages remain outside
+this ownership boundary unless setup manages their name, in both global and
+project-local runtimes.
 
 Project-local install example:
 
