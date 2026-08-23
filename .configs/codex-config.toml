@@ -3,10 +3,6 @@ model_reasoning_effort = "xhigh"
 service_tier = "default"
 project_doc_max_bytes = 131072
 
-[profiles.fast]
-model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-
 [projects."/Users/aagrigore1"]
 trust_level = "trusted"
 

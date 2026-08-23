@@ -107,6 +107,13 @@ Project-local instructions are an overlay, not a copy of global policy:
 
 Keep local agent runtime setup separate from Codex model/reasoning config.
 
+Every global or local source sync refreshes the managed
+`.agents/.configs/codex-config.toml` defaults while merging existing project
+trust decisions, TUI notice acknowledgements, and custom profiles other than
+the withdrawn `fast` profile. Source remains authoritative for model,
+reasoning, and service tier. Malformed installed TOML refuses synchronization
+without replacing that config.
+
 Default project-local setup should not create `.codex/config.toml`:
 
 ```bash

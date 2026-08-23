@@ -5,7 +5,47 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
+
+func TestSourceManagedCodexConfigUsesStandardTierWithoutFastProfile(t *testing.T) {
+	root := sourceRepoRoot(t)
+	path := filepath.Join(root, ".configs", "codex-config.toml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+
+	var config map[string]any
+	if err := toml.Unmarshal(data, &config); err != nil {
+		t.Fatalf("Unmarshal(%s): %v", path, err)
+	}
+	if got := config["service_tier"]; got != "default" {
+		t.Fatalf("service_tier = %#v, want default", got)
+	}
+	if profiles, ok := config["profiles"].(map[string]any); ok {
+		if _, found := profiles["fast"]; found {
+			t.Fatalf("source-managed Codex config still advertises profiles.fast: %#v", profiles["fast"])
+		}
+	}
+}
+
+func TestREADMEDoesNotAdvertiseRemovedCodexFastProfile(t *testing.T) {
+	path := filepath.Join(sourceRepoRoot(t), "README.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	for _, removed := range []string{
+		"agents-infra codex --print-config --profile fast",
+		"named `fast` profile remains available",
+	} {
+		if strings.Contains(string(data), removed) {
+			t.Fatalf("README.md still advertises removed fast profile with %q", removed)
+		}
+	}
+}
 
 func TestRunSetupLocalAcceptsPrimaryFlagsAfterProjectDirectory(t *testing.T) {
 	source := sourceRepoRoot(t)

@@ -3,6 +3,18 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-08-24
+
+### 1815 — Managed Codex Sync Preserves User State
+- ROOT CAUSE: `tools/agents-infra/internal/infra/infra.go:274` copied global Codex config wholesale and skipped the local copy wholesale; repeat setup therefore either erased user trust/TUI state or retained withdrawn managed defaults.
+- FIX: `Setup -> syncRepo -> syncManagedCodexConfig` now refreshes source-owned defaults, merges installed `projects`/`notice` and non-fast custom profiles, removes `profiles.fast`, and refuses malformed installed TOML without replacement.
+- EVIDENCE: Production-path global/local resync tests preserve trust, notice, and primary-session state while installing `service_tier = "default"`; malformed-existing-config coverage attacks the fallback boundary.
+
+### 1753 — Fast-Profile Removal Meets Runtime Preservation Boundary
+- FINDING: Source `.configs/codex-config.toml` and both installed managed copies retain `[profiles.fast]`; the source-repository local copy also retains the withdrawn `service_tier = "fast"` state.
+- FINDING: Global installed config contains user-added trust entries and model selection absent from source; `setup global` would replace them from source, while `setup local` intentionally preserves existing `.agents/.configs/codex-config.toml` bytes.
+- DECISION: Remove the source profile and its README advertisement with production `Setup` regression coverage; validate supported installs on isolated destinations and defer live runtime synchronization until accepted source integration can preserve user-owned state explicitly.
+
 ## 2026-08-18
 
 ### 0504 — 503 Retry Accepted; Configured-Timeout Magnitude Still Unbound
