@@ -62,12 +62,13 @@ spawn run completed: codex (run=RUN-260824-401d8e, pid=53333, exit=0)
 - [TASK-260824-293a0x_change-request_rev1.patch](file://TASK-260824-293a0x/TASK-260824-293a0x_change-request_rev1.patch) — Change Request CR-TASK-260824-293a0x-1 revision 1 candidate patch (repository_delta=present, 8 changed paths)
 - [TASK-260824-293a0x_spawn-log_-reviewer--reviewer--codex-_RUN-260824-401d8e.log](file://TASK-260824-293a0x/TASK-260824-293a0x_spawn-log_-reviewer--reviewer--codex-_RUN-260824-401d8e.log) — System spawn log captured by task-board
 - [TASK-260824-293a0x_review-verdict.md](file://TASK-260824-293a0x/TASK-260824-293a0x_review-verdict.md) — Independent Story-final CR review verdict
+- [installed-runtime-verification.md](file://TASK-260824-293a0x/installed-runtime-verification.md) — Installed global/local runtimes verified after fast-profile migration
 
 ## Created
 2026-08-24T15:40:47Z
 
 ## Last Update
-2026-08-23T20:55:00Z
+2026-08-24T16:01:09Z
 
 ## Assigned To
 [reviewer] reviewer (codex)
