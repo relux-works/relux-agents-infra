@@ -73,6 +73,14 @@ shutdown_timeout_seconds = 2
 %s`, name, PiCompatibilityV0842DarwinARM64, name, port, extraCaps, name, name, runtime, argv, dflashBlock)
 }
 
+func reasoningPiProfileTOML(name, runtime string, port int) string {
+	body := validPiProfileTOML(name, runtime, port, false)
+	body = strings.Replace(body, `reasoning = false`, `reasoning = true`, 1)
+	body = strings.Replace(body, `thinking = "off"`, `thinking = "medium"`, 1)
+	body = strings.Replace(body, `max_tokens_field = "max_tokens"`, "max_tokens_field = \"max_tokens\"\nthinking_format = \"qwen-chat-template\"", 1)
+	return body
+}
+
 func TestParsePiPolicyExactSchemaAndMuseDFlash(t *testing.T) {
 	for _, dflash := range []bool{false, true} {
 		cfg, err := parseProjectConfig([]byte(validPiProfileTOML("profile", "/bin/echo", 18011, dflash)), "/project/config.toml")
@@ -114,6 +122,8 @@ func TestParsePiPolicyRejectsMalformedUnsafeUnknownAndNarrowedInputs(t *testing.
 		"empty runtime argv":     strings.Replace(base, `argv = ["serve", "--model", "Model", "--host", "127.0.0.1", "--port", "18011"]`, `argv = []`, 1),
 		"NUL runtime argv":       strings.Replace(base, `argv = ["serve", "--model", "Model", "--host", "127.0.0.1", "--port", "18011"]`, `argv = ["\u0000"]`, 1),
 		"wrong api":              strings.Replace(base, `api = "openai-completions"`, `api = "openai-responses"`, 1),
+		"non-reasoning medium":   strings.Replace(base, `thinking = "off"`, `thinking = "medium"`, 1),
+		"wrong yolo type":        strings.Replace(base, "pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64), "pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64)+"\nyolo_mode = \"true\"", 1),
 		"capability overclaim":   strings.Replace(base, `["text", "tools"]`, `["dflash", "text", "tools"]`, 1),
 		"provider unicode slash": strings.Replace(base, "local-provider", "local∕provider", 1),
 	}
@@ -124,6 +134,86 @@ func TestParsePiPolicyRejectsMalformedUnsafeUnknownAndNarrowedInputs(t *testing.
 			}
 		})
 	}
+}
+
+func TestPiPrimaryYoloSafeDefaultAndNearestFalseMask(t *testing.T) {
+	piRoot := officialPiAsset(t)
+	home, parent := t.TempDir(), t.TempDir()
+	child := filepath.Join(parent, "child")
+	mustMkdir(t, child)
+	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+	t.Setenv("HOME", home)
+	lookPath := func(string) (string, error) { return filepath.Join(piRoot, "pi"), nil }
+
+	plan, err := BuildPrimarySessionLaunchPlan("pi", child, home, []string{"--version"}, ChildLaunchCompositionProducer{}, lookPath)
+	if err != nil {
+		t.Fatalf("safe default compose: %v", err)
+	}
+	if plan.Resolved.Yolo.Value || plan.Resolved.Yolo.Source != "default" || !reflect.DeepEqual(plan.LaunchVariants.Interactive.Argv, []string{"--version"}) {
+		t.Fatalf("safe default changed direct Pi behavior: yolo=%#v argv=%#v", plan.Resolved.Yolo, plan.LaunchVariants.Interactive.Argv)
+	}
+
+	parentBody := strings.Replace(
+		validPiProfileTOML("profile", "/bin/echo", 18011, false),
+		"pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64),
+		"pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64)+"\nyolo_mode = true",
+		1,
+	)
+	writePiProjectConfig(t, parent, parentBody)
+	childConfig := filepath.Join(child, ".agents", ".configs", projectConfigFileName)
+	mustMkdir(t, filepath.Dir(childConfig))
+	mustWrite(t, childConfig, "[agents.pi.primary_session]\nyolo_mode = false\n")
+	plan, err = BuildPrimarySessionLaunchPlan("pi", child, home, nil, ChildLaunchCompositionProducer{}, lookPath)
+	if err != nil {
+		t.Fatalf("nearest false mask: %v", err)
+	}
+	canonicalChildConfig, err := filepath.EvalSymlinks(childConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Resolved.Yolo.Value || !samePath(plan.Resolved.Yolo.Source, canonicalChildConfig) {
+		t.Fatalf("nearest false did not mask ancestor true: %#v", plan.Resolved.Yolo)
+	}
+}
+
+// Production call sites: BuildPrimarySessionLaunchPlan (non-launching compose)
+// and RunPi (direct launch). Both must reject before executable lookup so the
+// unsupported policy cannot fall through to native Pi or be mis-mapped to
+// Pi's unrelated --approve project-trust flag.
+func TestPiYoloTrueFailsClosedBeforeComposeOrLaunchLookup(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	config := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
+	mustMkdir(t, filepath.Dir(config))
+	mustWrite(t, config, "[agents.pi.primary_session]\nyolo_mode = true\n")
+	lookedUp := false
+	lookPath := func(string) (string, error) {
+		lookedUp = true
+		return "/must/not/run", nil
+	}
+
+	assertUnsupported := func(t *testing.T, err error) {
+		t.Helper()
+		if piErrorCode(err) != "pi_yolo_mode_unsupported" {
+			t.Fatalf("error = %v, want pi_yolo_mode_unsupported", err)
+		}
+		for _, want := range []string{piPrimarySessionField + ".yolo_mode=true", config, "--approve", "project-local input trust"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %q, want precise unsupported-capability detail %q", err, want)
+			}
+		}
+		if lookedUp {
+			t.Fatal("unsupported Pi yolo reached executable lookup")
+		}
+	}
+
+	t.Run("compose", func(t *testing.T) {
+		_, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, lookPath)
+		assertUnsupported(t, err)
+	})
+	t.Run("launch", func(t *testing.T) {
+		err := RunPi(RunPiOptions{ProjectDir: project, HomeDir: home, Environ: []string{"HOME=" + home}, LookPath: lookPath})
+		assertUnsupported(t, err)
+	})
 }
 
 func TestParsePiMuseRequiresExactUniqueNonOverlappingArgvSubsequences(t *testing.T) {

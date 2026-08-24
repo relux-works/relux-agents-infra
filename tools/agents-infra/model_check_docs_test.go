@@ -43,7 +43,8 @@ func TestBoundedModelCheckREADMEContractPinsSafetyAndExitSemantics(t *testing.T)
 		fmt.Sprintf("| `%d` | Provider JSONL is malformed or an otherwise successful process produced an incomplete agent lifecycle. |", infra.ModelCheckExitMalformedStream),
 		fmt.Sprintf("| `%d` | One or more `--expect-tool` or `--expect-text` assertions were not observed. |", infra.ModelCheckExitExpectationFailed),
 		fmt.Sprintf("| `%d` | A tool execution completed with `isError=true`; this takes precedence over unmet expectations. |", infra.ModelCheckExitToolFailure),
-		"Because the checker always supplies Pi `--approve`, its tool calls execute unattended inside the caller's project",
+		"The checker supplies Pi `--approve` only to load reviewed project-local inputs.",
+		"Pi tools have no separate native approval policy, so this is not a yolo selection",
 	}
 	requireModelCheckDocFragments(t, "README.md", readme, wants)
 }
@@ -59,7 +60,8 @@ func TestReluxAgentsInfraSkillPinsBoundedModelCheckerWorkflow(t *testing.T) {
 		"--target qwen-infra",
 		"--output-dir .temp/model-check/qwen-skill-discovery-01",
 		"Always choose a fresh task-scoped output directory because existing evidence is never overwritten",
-		"forces JSON print/no-session mode and Pi `--approve`, so tool calls execute unattended in the caller's project",
+		"forces JSON print/no-session mode and Pi `--approve` so reviewed project-local inputs are loaded",
+		"Pi has no separate native tool-execution approval policy, so `--approve` is not a yolo control",
 		fmt.Sprintf(
 			"The default deadline is `%s`, with an accepted Go duration range of `%s..%s`.",
 			modelCheckDocDuration(infra.DefaultModelCheckDeadline),

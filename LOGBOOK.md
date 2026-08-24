@@ -5,6 +5,18 @@
 
 ## 2026-08-25
 
+### 2022 — Qwen Thinking Is Native, Pi Yolo Is Not
+- MILESTONE: Canonical Qwen non-`off` reasoning now requires a reasoning-capable Pi profile with `qwen-chat-template`; source-backed `medium` composes to native `--thinking medium`.
+- FIX: `agents.pi.primary_session.yolo_mode` composes with nearest-field precedence, defaults safely to false, and rejects true before executable lookup or launch with `pi_yolo_mode_unsupported` because pinned Pi exposes no unattended tool policy.
+- EVIDENCE: Full Go tests, vet, Darwin and Windows builds, and non-launching compose/print checks exit 0; narrowing the yolo gate and Qwen thinking-format gate makes their production-entrypoint tests fail with exit 1 before exact restoration.
+- SCOPE: `TASK-260825-kpky8f`; no Pi runtime launch or external model execution.
+
+### 2009 — Pi Approve Is Project Trust, Not Yolo
+- FINDING: Pinned Pi `0.84.2` parses `--approve` into `projectTrustOverride`; its docs define the flag only as one-run trust for project-local files and expose no native unattended tool-execution policy.
+- FINDING: Qwen thinking is native when the generated model has `reasoning=true`, `compat.thinkingFormat=qwen-chat-template`, and launch argv selects `--thinking medium`; Pi then sends `chat_template_kwargs.enable_thinking=true` with `preserve_thinking=true`.
+- DECISION: `agents.pi.primary_session.yolo_mode=true` must fail before executable lookup or launch; it must never map to `--approve`. Omitted/false remains the compatible safe policy.
+- SCOPE: `TASK-260825-kpky8f`; Pi config parsing, primary-session compose/launch gates, Qwen target validation, tests, README, and `SKILL.md`.
+
 ### 1449 — Model-check Operator Contract Is Executably Pinned
 - REGRESSION: The bounded model-check README and skill sections could be deleted while the full uncached Go suite remained green, so unattended `--approve`, evidence, timeout, cleanup, and exit semantics had no drift guard.
 - FIX: Dedicated doc-contract tests pin both sections, derive deadline and exit fragments from production constants, and cover exact artifacts, modes, overwrite refusal, read-evidence limits, cleanup, and exit-5 precedence.

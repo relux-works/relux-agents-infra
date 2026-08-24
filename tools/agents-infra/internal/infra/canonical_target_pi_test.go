@@ -3,6 +3,7 @@
 package infra
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -14,7 +15,7 @@ func canonicalQwenTargetTOML(assertProvider, assertEndpoint bool) string {
 		"vendor=\"qwen\"\n" +
 		"environment=\"pi\"\n" +
 		"model=\"Model\"\n" +
-		"reasoning=\"off\"\n" +
+		"reasoning=\"medium\"\n" +
 		"profile=\"profile\"\n"
 	if assertProvider {
 		body += "profile_provider=\"local-provider\"\n"
@@ -31,14 +32,14 @@ func canonicalQwenProject(t *testing.T, body string) (project, home, configPath,
 	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
 	piRoot := officialPiAsset(t)
 	piPath = filepath.Join(piRoot, "pi")
-	configPath = writeCanonicalConfig(t, project, validPiProfileTOML("profile", "/bin/echo", 18011, false)+body)
+	configPath = writeCanonicalConfig(t, project, reasoningPiProfileTOML("profile", "/bin/echo", 18011)+body)
 	return
 }
 
 func TestCanonicalQwenPlanProvesProfileDerivedIdentityAndEndpointInvariants(t *testing.T) {
 	project, home, configPath, piPath := canonicalQwenProject(t, canonicalQwenTargetTOML(true, true))
 	plan, err := BuildCanonicalTargetLaunchPlan("qwen-infra", project, home,
-		[]string{"--model", "local-provider/Model:off", "--provider=local-provider", "--thinking", "off", "--endpoint", "http://127.0.0.1:18011/v1", "--api-key=secret"},
+		[]string{"--model", "local-provider/Model:medium", "--provider=local-provider", "--thinking", "medium", "--endpoint", "http://127.0.0.1:18011/v1", "--api-key=secret"},
 		ChildLaunchCompositionProducer{}, func(string) (string, error) { return piPath, nil })
 	if err != nil {
 		t.Fatalf("BuildCanonicalTargetLaunchPlan: %v", err)
@@ -58,12 +59,28 @@ func TestCanonicalQwenPlanProvesProfileDerivedIdentityAndEndpointInvariants(t *t
 	if plan.Pi == nil || plan.Pi.Runtime == nil || plan.Pi.Runtime.Endpoint != *plan.Resolved.Endpoint.Value {
 		t.Fatalf("runtime endpoint invariant = %#v", plan.Pi)
 	}
-	if plan.Resolved.Reasoning.Value == nil || *plan.Resolved.Reasoning.Value != "off" || !samePath(plan.Resolved.Reasoning.Source, configPath) {
+	if plan.Resolved.Reasoning.Value == nil || *plan.Resolved.Reasoning.Value != "medium" || !samePath(plan.Resolved.Reasoning.Source, configPath) {
 		t.Fatalf("profile reasoning = %#v", plan.Resolved.Reasoning)
 	}
-	wantArgs := []string{"--provider", "local-provider", "--model", "Model", "--thinking", "off", "--api-key", "<redacted>"}
+	wantArgs := []string{"--provider", "local-provider", "--model", "Model", "--thinking", "medium", "--api-key", "<redacted>"}
 	if !reflect.DeepEqual(plan.LaunchVariants.Interactive.Argv, wantArgs) {
 		t.Fatalf("normalized Pi argv = %#v, want %#v", plan.LaunchVariants.Interactive.Argv, wantArgs)
+	}
+	resolved, err := ResolveCanonicalTarget("qwen-infra", project, home)
+	if err != nil {
+		t.Fatalf("ResolveCanonicalTarget: %v", err)
+	}
+	modelsJSON, err := GeneratePiModelsJSON(*resolved.Profile)
+	if err != nil {
+		t.Fatalf("GeneratePiModelsJSON: %v", err)
+	}
+	var models piModelsDocument
+	if err := json.Unmarshal(modelsJSON, &models); err != nil {
+		t.Fatalf("decode generated models.json: %v", err)
+	}
+	generated := models.Providers["local-provider"].Models[0]
+	if !generated.Reasoning || generated.Compat["thinkingFormat"] != "qwen-chat-template" {
+		t.Fatalf("generated Pi model cannot activate Qwen thinking: %#v", generated)
 	}
 	rendered := RenderCanonicalTargetLaunchPlan(plan)
 	for _, want := range []string{"effective_model: local-provider/Model", "effective_profile_provider: local-provider", "effective_endpoint: http://127.0.0.1:18011/v1", `  - "--api-key"`, `  - "<redacted>"`} {
@@ -88,7 +105,7 @@ func TestCanonicalQwenAcceptsOperatorProviderWithoutLiteralLocalQwen(t *testing.
 }
 
 func TestCanonicalQwenProfileAssertionsFailClosed(t *testing.T) {
-	baseProfile := validPiProfileTOML("profile", "/bin/echo", 18011, false)
+	baseProfile := reasoningPiProfileTOML("profile", "/bin/echo", 18011)
 	baseTarget := canonicalQwenTargetTOML(true, true)
 	tests := []struct {
 		name      string
@@ -98,7 +115,10 @@ func TestCanonicalQwenProfileAssertionsFailClosed(t *testing.T) {
 	}{
 		{name: "non openai api", body: strings.Replace(baseProfile, `api = "openai-completions"`, `api = "anthropic-messages"`, 1) + baseTarget, wantCode: PrimarySessionErrorInvalidProjectConfiguration, wantField: "agents.pi.profiles.profile.api"},
 		{name: "model mismatch", body: baseProfile + strings.Replace(baseTarget, `model="Model"`, `model="Other"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.model"},
-		{name: "reasoning mismatch", body: baseProfile + strings.Replace(baseTarget, `reasoning="off"`, `reasoning="high"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.reasoning"},
+		{name: "reasoning mismatch", body: baseProfile + strings.Replace(baseTarget, `reasoning="medium"`, `reasoning="off"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.reasoning"},
+		{name: "profile cannot reason", body: strings.Replace(baseProfile, `reasoning = true`, `reasoning = false`, 1) + baseTarget, wantCode: PrimarySessionErrorInvalidProjectConfiguration, wantField: "agents.pi.profiles.profile.reasoning"},
+		{name: "missing qwen thinking format", body: strings.Replace(baseProfile, "thinking_format = \"qwen-chat-template\"\n", "", 1) + baseTarget, wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.pi.profiles.profile.compat.thinking_format"},
+		{name: "wrong qwen thinking format", body: strings.Replace(baseProfile, `thinking_format = "qwen-chat-template"`, `thinking_format = "qwen"`, 1) + baseTarget, wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.pi.profiles.profile.compat.thinking_format"},
 		{name: "provider assertion mismatch", body: baseProfile + strings.Replace(baseTarget, `profile_provider="local-provider"`, `profile_provider="other"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.profile_provider"},
 		{name: "endpoint assertion mismatch", body: baseProfile + strings.Replace(baseTarget, `endpoint="http://127.0.0.1:18011/v1"`, `endpoint="http://127.0.0.1:18012/v1"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.endpoint"},
 		{name: "unknown profile", body: baseProfile + strings.Replace(baseTarget, `profile="profile"`, `profile="missing"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.profile"},
@@ -120,9 +140,9 @@ func TestCanonicalQwenCompositeModelAndCoordinatesAreIdentityLocked(t *testing.T
 	exact := [][]string{
 		{"--model", "Model"},
 		{"--model", "local-provider/Model"},
-		{"--model", "Model:off"},
-		{"--model", "local-provider/Model:off"},
-		{"--profile=profile", "--provider", "local-provider", "--thinking=off"},
+		{"--model", "Model:medium"},
+		{"--model", "local-provider/Model:medium"},
+		{"--profile=profile", "--provider", "local-provider", "--thinking=medium"},
 	}
 	for _, args := range exact {
 		if _, err := BuildCanonicalTargetLaunchPlan("qwen-infra", project, home, args, ChildLaunchCompositionProducer{}, func(string) (string, error) { return piPath, nil }); err != nil {
@@ -132,9 +152,9 @@ func TestCanonicalQwenCompositeModelAndCoordinatesAreIdentityLocked(t *testing.T
 	conflicts := [][]string{
 		{"--model", "Model:high"},
 		{"--model", "local-provider/Model:high"},
-		{"--model", "other/Model:off"},
+		{"--model", "other/Model:medium"},
 		{"--provider", "other"},
-		{"--thinking", "high"},
+		{"--thinking", "off"},
 		{"--profile", "other"},
 		{"--endpoint", "http://127.0.0.1:18012/v1"},
 	}
@@ -171,7 +191,7 @@ func TestDoctorReportsCanonicalQwenTargetAndProfileProvenance(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	project := filepath.Join(root, "nested")
 	mustMkdir(t, project)
-	profileConfig := writeCanonicalConfig(t, root, validPiProfileTOML("profile", "/bin/echo", 18011, false))
+	profileConfig := writeCanonicalConfig(t, root, reasoningPiProfileTOML("profile", "/bin/echo", 18011))
 	targetConfig := writeCanonicalConfig(t, project, canonicalQwenTargetTOML(false, false))
 	t.Setenv("HOME", home)
 	layout, err := LocalLayout("", project)
