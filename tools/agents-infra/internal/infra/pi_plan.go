@@ -115,6 +115,9 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	for _, source := range composite.Sources {
 		result.Sources = append(result.Sources, PrimarySessionSource{Kind: "project_config", Path: source.Path})
 	}
+	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
+		return err
+	}
 	override, err := ExtractPiProfileOverride(userArgs)
 	if err != nil {
 		return err
@@ -139,7 +142,7 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 		result.Resolved.Reasoning = PrimarySessionResolvedString{Source: "native"}
 		result.Resolved.Profile = PrimarySessionResolvedString{Source: "native"}
 		result.Resolved.PiCompatibility = PrimarySessionResolvedString{Source: "native"}
-		result.Resolved.Yolo = PrimarySessionResolvedBool{Source: "not_applicable"}
+		result.Resolved.Yolo = resolvedPiYolo(composite.PiPrimarySession)
 		result.Resolved.Sandbox = PrimarySessionResolvedString{Source: "not_applicable"}
 		result.Resolved.Approval = PrimarySessionResolvedString{Source: "not_applicable"}
 		result.Pi = &PiLaunchPlanDetails{Managed: false}
@@ -186,7 +189,7 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	result.Resolved.Reasoning = resolvedStringValue(profile.Thinking, profile.Source)
 	result.Resolved.Profile = resolvedStringValue(selected, selectedSource)
 	result.Resolved.PiCompatibility = resolvedStringValue(composite.PiPrimarySession.PiCompatibility.Value, composite.PiPrimarySession.PiCompatibility.Source)
-	result.Resolved.Yolo = PrimarySessionResolvedBool{Source: "not_applicable"}
+	result.Resolved.Yolo = resolvedPiYolo(composite.PiPrimarySession)
 	result.Resolved.Sandbox = PrimarySessionResolvedString{Source: "not_applicable"}
 	result.Resolved.Approval = PrimarySessionResolvedString{Source: "not_applicable"}
 	details := &PiLaunchPlanDetails{Managed: true, LogicalProfile: selected, ProfileSource: selectedSource, PiCompatibilitySource: composite.PiPrimarySession.PiCompatibility.Source, State: &state, ModelsJSON: PiGeneratedCatalog{Path: state.ModelsJSON, SHA256: hex.EncodeToString(modelsSum[:])}, PiIdentity: &identity,

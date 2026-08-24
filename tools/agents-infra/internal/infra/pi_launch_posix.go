@@ -70,6 +70,9 @@ func RunPi(opts RunPiOptions) error {
 	if err != nil {
 		return piError("invalid_project_configuration", err)
 	}
+	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
+		return err
+	}
 	override, err := ExtractPiProfileOverride(opts.Args)
 	if err != nil {
 		return err

@@ -63,9 +63,10 @@ for launch, validation, or cleanup failure, `2` on deadline expiry, `3` for a
 malformed or incomplete JSONL stream, `4` for unmet tool/text expectations,
 and `5` when the model reports a failed tool execution. Raw provider output is
 kept in mode-`0600` files inside the mode-`0700` evidence directory; terminal
-output is sanitized. The command passes Pi `--approve`, so tool calls run
-unattended in the caller's project directory; use only a reviewed target and a
-controlled prompt. See [Bounded model behavior checks](#bounded-model-behavior-checks)
+output is sanitized. The command passes Pi `--approve` so reviewed
+project-local inputs are loaded for that run. Pi has no separate native
+tool-execution approval policy, so this flag is not a yolo control; use only a
+reviewed target and a controlled prompt. See [Bounded model behavior checks](#bounded-model-behavior-checks)
 for the full evidence, timeout, and cleanup contract.
 
 Setup syncs the repo into `.agents`, treats `.skills/` as the authoritative
@@ -420,17 +421,18 @@ The cycle-10 reference policy is exactly:
 [agents.pi.primary_session]
 profile = "qwen-3.8-27b"
 pi_compatibility = "github-release:earendil-works/pi@v0.84.2:darwin-arm64#sha256-c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65"
+yolo_mode = false
 
 [agents.pi.profiles."qwen-3.8-27b"]
 provider = "local-qwen"
 model = "Qwen-3.8-27B"
 base_url = "http://127.0.0.1:18011/v1"
 api = "openai-completions"
-reasoning = false
+reasoning = true
 input = ["text"]
 context_window = 131072
 max_tokens = 16384
-thinking = "off"
+thinking = "medium"
 requested_capabilities = ["text", "tools"]
 
 [agents.pi.profiles."qwen-3.8-27b".compat]
@@ -490,12 +492,21 @@ not automate benchmarks.
 
 Configs compose from filesystem root to cwd. The nearest explicit
 `primary_session.profile` wins unless wrapper `--profile NAME` selects a
-profile; `pi_compatibility` has nearest-field precedence and no CLI override.
+profile; `pi_compatibility` and `yolo_mode` have nearest-field precedence and
+no CLI override. An explicit child `yolo_mode = false` masks an inherited
+`true`.
 One child definition of the same exact decoded profile name atomically replaces
 the ancestor definition—profile fields never merge—while a child may select a
 complete ancestor profile. Unreadable, malformed, partial, or unknown-field
 policy is a failure, not policy absence; only genuine absence enables native Pi
 passthrough.
+
+Pinned Pi `0.84.2` exposes no native unattended tool-execution policy.
+Its `--approve`/`-a` flag controls only one-run trust for project-local files;
+it is not a permission bypass. Therefore omitted or explicit
+`yolo_mode = false` preserves Pi behavior, while `yolo_mode = true` fails
+before executable lookup or launch with `pi_yolo_mode_unsupported`. Never map
+Pi yolo to `--approve`.
 
 Profile-name identity is its exact post-TOML-decoding UTF-8 bytes. There is no
 normalization, case folding, trimming, path cleaning, or lossy sanitization.
@@ -748,9 +759,10 @@ Exit semantics are stable and ordered:
 
 Provider stdout/stderr is never mirrored to the terminal. Sanitized summaries
 redact recognized secret shapes, but an operator must still inspect them before
-attaching or publishing evidence. Because the checker always supplies Pi
-`--approve`, its tool calls execute unattended inside the caller's project;
-keep prompts bounded and run only reviewed targets in controlled projects.
+attaching or publishing evidence. The checker supplies Pi `--approve` only to
+load reviewed project-local inputs. Pi tools have no separate native approval
+policy, so this is not a yolo selection; keep prompts bounded and run only
+reviewed targets in controlled projects.
 
 #### Security boundary, diagnostics, and failures
 
@@ -855,7 +867,7 @@ reasoning = "high"
 vendor = "qwen"
 environment = "pi"
 model = "Qwen3.8-27B-MLX-8bit"
-reasoning = "off"
+reasoning = "medium"
 profile = "qwen-3.8-27b-mlx-8bit"
 profile_provider = "local-qwen" # optional assertion
 endpoint = "http://127.0.0.1:18011/v1" # optional assertion
@@ -871,7 +883,11 @@ Claude reasoning is limited to `low`, `medium`, `high`, `xhigh`, and `max`;
 Pi uses its documented thinking levels; Codex accepts any non-empty reasoning
 token and leaves model/effort compatibility to Codex. A Qwen target must name
 an existing complete managed Pi profile with `api = "openai-completions"`.
-Its model and thinking must match the profile. Optional provider and endpoint
+Its model and thinking must match the profile. A non-`off` Qwen target also
+requires profile `reasoning = true` and
+`compat.thinking_format = "qwen-chat-template"`; pinned Pi then carries the
+selected native level as `--thinking medium` and enables the Qwen chat-template
+thinking path. Optional provider and endpoint
 fields are exact assertions; the effective qualified model, provider, and
 endpoint always come from the selected profile definition.
 

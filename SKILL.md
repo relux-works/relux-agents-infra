@@ -249,7 +249,7 @@ reasoning = "high"
 vendor = "qwen"
 environment = "pi"
 model = "Qwen3.8-27B-MLX-8bit"
-reasoning = "off"
+reasoning = "medium"
 profile = "qwen-3.8-27b-mlx-8bit"
 profile_provider = "local-qwen"
 endpoint = "http://127.0.0.1:18011/v1"
@@ -262,7 +262,10 @@ qwen-infra = "qwen"
 
 Only `openai/codex`, `anthropic/claude-code`, and `qwen/pi` are admitted.
 Qwen reuses an existing complete managed Pi profile: model and thinking must
-match it, optional provider/endpoint values are assertions, and effective
+match it. Non-`off` reasoning additionally requires profile `reasoning = true`
+and `compat.thinking_format = "qwen-chat-template"`, so pinned Pi carries the
+level through `--thinking` and enables Qwen chat-template thinking. Optional
+provider/endpoint values are assertions, and effective
 provider/endpoint provenance remains the profile definition. A nearer target
 replaces the same name atomically; a nearer mapping replaces only that alias.
 
@@ -371,6 +374,13 @@ standalone Pi tree check both initially and immediately before Pi spawn. It
 never attaches or silently falls back to another runtime, port, profile, model,
 listener, or Muse target-only decoding.
 
+Pinned Pi `0.84.2` has no native unattended tool-execution policy.
+`--approve`/`-a` controls only one-run trust for project-local files and must
+never be used as a yolo translation. In `[agents.pi.primary_session]`, omitted
+or explicit `yolo_mode = false` preserves Pi behavior; nearest false masks an
+inherited true. Explicit `yolo_mode = true` fails before executable lookup or
+launch with `pi_yolo_mode_unsupported`.
+
 Managed launch refuses the exact llama.cpp model-origin environment names
 `HF_ENDPOINT` and `MODEL_ENDPOINT` before runtime spawn and reports only the
 name, never the value. Treat tokens and cache-location variables separately
@@ -444,8 +454,9 @@ agents-infra model-check \
 `--target` must be a canonical entrypoint resolving to a managed local Pi
 profile. `--expect-tool` and `--expect-text` are repeatable; tool names match
 exactly, while text matches only the final assistant response. The checker
-forces JSON print/no-session mode and Pi `--approve`, so tool calls execute
-unattended in the caller's project. Use a reviewed target, a controlled project,
+forces JSON print/no-session mode and Pi `--approve` so reviewed project-local
+inputs are loaded. Pi has no separate native tool-execution approval policy, so
+`--approve` is not a yolo control. Use a reviewed target, a controlled project,
 and a bounded prompt.
 
 The default deadline is `5m`, with an accepted Go duration range of

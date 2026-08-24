@@ -218,6 +218,14 @@ func validateResolvedPiTarget(target ProjectTarget, profiles map[string]PiProfil
 			Err:         errors.New("canonical Qwen target assertion does not match the selected managed Pi profile"),
 		}
 	}
+	profileMismatch := func(field, remediation string) error {
+		return &CanonicalTargetError{
+			Code:        PrimarySessionErrorInvalidTarget,
+			Context:     TargetErrorContext{Target: target.Name, Profile: profileName, Field: "agents.pi.profiles." + profileName + "." + field, Source: profile.Source},
+			Remediation: remediation,
+			Err:         errors.New("canonical Qwen target profile cannot provide the requested native Pi thinking behavior"),
+		}
+	}
 	if profile.API != "openai-completions" {
 		return mismatch("profile", "select a managed Pi profile whose api is exactly openai-completions")
 	}
@@ -226,6 +234,14 @@ func validateResolvedPiTarget(target ProjectTarget, profiles map[string]PiProfil
 	}
 	if target.Reasoning != profile.Thinking {
 		return mismatch("reasoning", "set target reasoning to the selected profile thinking value exactly")
+	}
+	if target.Reasoning != "off" {
+		if !profile.Reasoning {
+			return profileMismatch("reasoning", "set the selected managed Pi profile reasoning field to true")
+		}
+		if profile.Compat.ThinkingFormat == nil || *profile.Compat.ThinkingFormat != "qwen-chat-template" {
+			return profileMismatch("compat.thinking_format", "set the selected Qwen profile thinking_format to qwen-chat-template")
+		}
 	}
 	if target.ProfileProvider != nil && *target.ProfileProvider != profile.Provider {
 		return mismatch("profile_provider", "remove the optional assertion or set it to the selected profile provider exactly")
