@@ -72,6 +72,7 @@ type RunPiOptions struct {
 	Signals    <-chan os.Signal
 	Context    context.Context
 	Report     *PiRunReport
+	Standalone *PiStandaloneRequest
 }
 
 func RunPi(opts RunPiOptions) error {
@@ -99,15 +100,30 @@ func RunPi(opts RunPiOptions) error {
 	if err != nil {
 		return piError("invalid_project_configuration", err)
 	}
-	effectiveArgs, err := applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
-	if err != nil {
-		return err
+	effectiveArgs := opts.Args
+	managed := false
+	if opts.Standalone != nil {
+		if err := validatePiStandaloneRequest(*opts.Standalone, opts.Args); err != nil {
+			return err
+		}
+		if err := validatePiStandalonePolicy(composite.PiStandaloneSession); err != nil {
+			return err
+		}
+		if _, _, _, err := resolvePiStandaloneSelection(composite, *opts.Standalone); err != nil {
+			return err
+		}
+		managed = true
+	} else {
+		effectiveArgs, err = applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
+		if err != nil {
+			return err
+		}
+		override, err := ExtractPiProfileOverride(effectiveArgs)
+		if err != nil {
+			return err
+		}
+		managed = override != nil || composite.PiPrimarySession.Profile.Present
 	}
-	override, err := ExtractPiProfileOverride(effectiveArgs)
-	if err != nil {
-		return err
-	}
-	managed := override != nil || composite.PiPrimarySession.Profile.Present
 	if managed {
 		if opts.Report != nil {
 			opts.Report.Managed = true

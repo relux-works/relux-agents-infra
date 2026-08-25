@@ -257,6 +257,10 @@ func ResolveCanonicalTarget(entrypoint, projectDir, homeDir string) (ResolvedCan
 	if err != nil {
 		return ResolvedCanonicalTarget{}, err
 	}
+	return resolveCanonicalTargetFromComposite(entrypoint, composite)
+}
+
+func resolveCanonicalTargetFromComposite(entrypoint string, composite compositeProjectConfig) (ResolvedCanonicalTarget, error) {
 	mapping, ok := composite.Entrypoints[entrypoint]
 	if !ok {
 		return ResolvedCanonicalTarget{}, &CanonicalTargetError{

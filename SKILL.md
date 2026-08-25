@@ -390,6 +390,25 @@ project `AGENTS.md`, skills, extensions, and other reviewed local resources to
 load without a trust prompt. Explicit `--no-approve`/`-na` conflicts with yolo
 and fails closed.
 
+For an autonomous board-agnostic worker, use the separate explicit contract:
+
+```toml
+[agents.pi.standalone_session]
+yolo_mode = true
+tool_allowlist = ["read", "bash", "edit", "write", "grep", "find", "ls"]
+```
+
+Inspect it with `qwen-infra spawn --prompt "..." --print-config`, then launch
+with `qwen-infra spawn --prompt "..." --deadline 10m`. This path owns
+`--no-approve --no-extensions --tools <exact-list> --mode json --no-session
+--print`, closes stdin, rejects every caller Pi argument, preserves the
+profile's configured thinking level, and gives each worker independent random
+client state and a separate Pi process group. When runtime sharing is enabled,
+workers share only the verified runtime through leases. Never add raw RPC,
+implicit extensions, caller overrides, root/sudo execution, or task-board run
+identity to this primitive. Task-board integration is intentionally deferred
+to an adapter that can consume the standalone command later.
+
 Managed launch refuses the exact llama.cpp model-origin environment names
 `HF_ENDPOINT` and `MODEL_ENDPOINT` before runtime spawn and reports only the
 name, never the value. Treat tokens and cache-location variables separately
