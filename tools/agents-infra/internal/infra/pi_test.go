@@ -4,6 +4,7 @@ package infra
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1285,7 +1286,7 @@ func TestPiRuntimeReadinessDoesNotFollowRedirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	childWait := &piProcessWait{done: make(chan struct{})}
-	if err := waitPiRuntimeReady(nil, redirect.URL, "Model", child, childWait, time.Second); piErrorCode(err) != "runtime_readiness_invalid" {
+	if err := waitPiRuntimeReady(context.Background(), nil, redirect.URL, "Model", child, childWait, time.Second); piErrorCode(err) != "runtime_readiness_invalid" {
 		t.Fatalf("readiness followed redirect away from exact configured URL: %v", err)
 	}
 }
@@ -1716,6 +1717,41 @@ func assertPiLockReleased(t *testing.T, project, cache, profile string) {
 	}
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProcessGroupCleanupStateReflectsLiveAndReapedGroups(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "exec /bin/sleep 60")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	reaped := false
+	t.Cleanup(func() {
+		if reaped {
+			return
+		}
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
+
+	if got := processGroupCleanupState(pid, nil); got != "failed" {
+		t.Fatalf("live process group cleanup state = %q, want failed", got)
+	}
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill process group: %v", err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("SIGKILLed process unexpectedly exited successfully")
+	}
+	reaped = true
+
+	if got := processGroupCleanupState(pid, nil); got != "confirmed" {
+		t.Fatalf("reaped process group cleanup state = %q, want confirmed", got)
+	}
+	if got := processGroupCleanupState(pid, errors.New("SIGKILL escalation")); got != "confirmed_after_sigkill" {
+		t.Fatalf("reaped escalated process group cleanup state = %q, want confirmed_after_sigkill", got)
 	}
 }
 
