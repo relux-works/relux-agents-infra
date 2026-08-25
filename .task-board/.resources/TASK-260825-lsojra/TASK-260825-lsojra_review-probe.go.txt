@@ -1,0 +1,71 @@
+//go:build darwin
+
+package infra
+
+import (
+	"bytes"
+	"os"
+	"testing"
+	"time"
+)
+
+// REVIEW PROBE: is the named shape mutant actually installed as the decoder at
+// the production runtime-launch entry point? Drive one process under
+// AGENTS_INFRA_SHARED_SHAPE_MUTANT=unknown_ignored with a frame carrying an
+// unknown member. That mutant, by its own row, ignores unknown members, so an
+// installed mutant must ADMIT this frame and reach execve.
+func TestReviewProbeShapeMutantInstalledAtProductionEntry(t *testing.T) {
+	fixture := newSharedLauncherFixture(t)
+	_ = os.Remove(fixture.marker)
+	run := startSharedLauncherRunWithEnv(t, fixture, true, sharedShapeMutantEnv+"=unknown_ignored")
+	valid := rawSharedLauncherFrame(t, validSharedLauncherFrame(fixture, run.command.Process.Pid))
+	forged := bytes.Replace(valid, []byte{'{'}, []byte(`{"future_extension":true,`), 1)
+	run.authorize(t, forged)
+	reached := false
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(fixture.marker); err == nil {
+			reached = true
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	waitErr := run.wait(t, 2*time.Second)
+	t.Logf("PROBE unknown_ignored: reached_execve=%t wait=%v stderr=%q", reached, waitErr, run.stderr.String())
+	if !reached {
+		t.Fatalf("mutant unknown_ignored was NOT installed at the production entry: the unmutated gate refused the frame")
+	}
+}
+
+// REVIEW PROBE B: the harness cannot even select reject_all_probe at the
+// production entry, so §12.3.1's own negative is decoder-only there.
+func TestReviewProbeRejectAllAtProductionEntry(t *testing.T) {
+	fixture := newSharedLauncherFixture(t)
+	_ = os.Remove(fixture.marker)
+	run := startSharedLauncherRunWithEnv(t, fixture, true, sharedShapeMutantEnv+"=reject_all_probe")
+	waitErr := run.wait(t, 3*time.Second)
+	t.Logf("PROBE reject_all_probe at production entry: wait=%v stderr=%q", waitErr, run.stderr.String())
+}
+
+// PROBE C patch applied to a scratch copy of the package (not to the candidate):
+//
+//   pi_shared_shape_oracle_test.go, authMutantAllowed:
+//     case "wire_cleared_probe":
+//         // Reproduces review RUN-260825-86b7d5's F1 defect exactly: the
+//         // predicate consults a field the production decode path does not supply.
+//         return member.wire != ""
+//
+//   pi_shared_shape_oracle_test.go, authShapeMutants:
+//     {"wire_cleared_probe", authAdmits, nil},
+//
+// Then:
+//   go test ./internal/infra \
+//     -run 'TestReviewProbeShapeMutantInstalledAtProductionEntry|TestReviewProbeRejectAllAtProductionEntry|TestSharedRuntimeEveryShapeMutantAdmitsPlainValidFrameAtProductionEntry/wire_cleared_probe' \
+//     -count=1 -v
+//
+// Observed:
+//   PROBE unknown_ignored: reached_execve=false wait=exit status 1
+//     stderr={"code":"protocol_violation","reason":"frame_unknown_field","mismatch_field":"future_extension",...}
+//   --- FAIL: TestReviewProbeShapeMutantInstalledAtProductionEntry (3.13s)
+//   PROBE reject_all_probe at production entry: wait=exit status 1 stderr="unknown shape mutant \"reject_all_probe\"\n"
+//   --- PASS: TestSharedRuntimeEveryShapeMutantAdmitsPlainValidFrameAtProductionEntry/wire_cleared_probe (0.33s)

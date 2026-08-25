@@ -1,0 +1,34 @@
+# TASK-260826-fcu5pe reviewer mutation log — RUN-260826-c56491 (CR rev3)
+
+Rule: a kill requires go build ./... exit 0, go test exit 1, AND the expected named test/subtest emitting its own Action=fail.
+Scratch tree: /tmp/rev3-mut. Candidate worktree never modified.
+
+c01_composite_all_admission        failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/announced_client_pid_zero_narrowing; TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/client_executable_same_inode_wrong_device; TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/client_zombie_narrowing; TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/empty_profile_digest; TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/empty_runtime_key; TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/future_protocol_version_range_narrowing; TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/peer_uid_root_narrowing; TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/descriptor_three_is_a_socket_rather_than_a_fifo
+m01_uid_delete                     failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/peer_uid_root_narrowing
+m02_uid_narrow_root                failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/peer_uid_root_narrowing
+m03_pid_delete                     failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/announced_client_pid_zero_narrowing
+m04_pid_narrow_zero                failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/announced_client_pid_zero_narrowing
+m05_live_delete                    failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/client_zombie_narrowing
+m06_exec_delete                    failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/client_executable_same_inode_wrong_device
+m07_exec_narrow_ino_only           failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/client_executable_same_inode_wrong_device
+m08_proto_delete                   failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/future_protocol_version_range_narrowing
+m09_proto_narrow_lt                failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/future_protocol_version_range_narrowing
+m10_rtkey_delete                   failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/empty_runtime_key
+m11_rtkey_narrow_empty             failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/empty_runtime_key
+m12_digest_delete                  failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/empty_profile_digest
+m13_digest_narrow_empty            failing_named_subtests=TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness/empty_profile_digest
+m14_draining_delete                failing_named_subtests=TestSharedBrokerAcquireLeaseRefusesDrainingBeforeGrant
+m15_framebound_delete              failing_named_subtests=TestSharedBrokerProductionConnectionRejectsWireFrameBoundWidening
+m16_framebound_widen               failing_named_subtests=TestSharedBrokerProductionConnectionRejectsWireFrameBoundWidening
+m17_recompute_delete               failing_named_subtests=TestRunSharedRuntimeBrokerRefusesRecomputedRuntimeKeyAtProductionEntry
+m18_recompute_narrow_prefix        failing_named_subtests=TestRunSharedRuntimeBrokerRefusesRecomputedRuntimeKeyAtProductionEntry
+m19_reclaim_uid_delete             failing_named_subtests=TestReclaimSharedRuntimeRejectsUIDAndPGIDGateNarrowingBeforeSignal/reclaim_uid_root_narrowing
+m20_reclaim_uid_narrow_root        failing_named_subtests=TestReclaimSharedRuntimeRejectsUIDAndPGIDGateNarrowingBeforeSignal/reclaim_uid_root_narrowing
+m21_reclaim_pgid_delete            failing_named_subtests=TestReclaimSharedRuntimeRejectsUIDAndPGIDGateNarrowingBeforeSignal/reclaim_pgid_zero_narrowing
+m22_reclaim_pgid_narrow_zero       failing_named_subtests=TestReclaimSharedRuntimeRejectsUIDAndPGIDGateNarrowingBeforeSignal/reclaim_pgid_zero_narrowing
+s01_stop_exec_identity_delete      failing_named_subtests=TestSharedRuntimeForceStopRefusesForgedBrokerIdentityWithoutSignal
+s02_stop_uid_narrow_root           failing_named_subtests=NONE
+
+Summary: 22/22 broker-admission/reclaim delete-or-narrow mutants KILLED by the named witness.
+Composite c01 (9 admission comparisons neutralised in one build, full package): exit 1, killed by 9 named subtests (rev2 recorded this composite as exit 0).
+s01 stopRecordedSharedRuntime exec-identity delete: KILLED. s02 stop uid root narrowing: SURVIVED (observationally equivalent; see verdict 6.2).

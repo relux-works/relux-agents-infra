@@ -1,0 +1,20 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 738036f..328d1f0 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,15 @@
+ 
+ ## 2026-08-25
+ 
++### 2340 — The Rule-1 Production Control Ran the Unmutated Gate
++- FINDING: Review `RUN-260825-bd12e8` of `TASK-260825-lsojra` (implementation of spec revision 9). §12.3.1 rule 1 requires every shape mutant to be shown admitting the plain valid frame **at the production `runtime-launch` entry**, one process per mutant. The candidate spawns those 18 processes. None of them runs its mutant: `TestMain` (`tools/agents-infra/internal/infra/pi_shared_integration_test.go:56`) installs a `sharedAuthorizationDecode` wrapper that decodes the delivered bytes with the **specified** decoder, then evaluates `authMutantVerdict` against a **constant, harness-built** plain frame. The mutant is never the decoder; the bytes never meet it.
++- ROOT CAUSE: The mutant predicates decide on per-member facts — `unknown_by_wire_form` and `dup_keyed_on_wire_form` key on wire spelling — and the production decode path keeps none: `sharedAuthDecodeEvidence.DecodedKeys` is `[]string`. Honest wiring was not expressible against the shipped evidence struct, so a constant stood in for the frame.
++- FINDING: Reproduced at the real entry point, three probes. **P-A:** under `unknown_ignored`, a frame carrying `future_extension` is refused `frame_unknown_field` instead of admitted — the row says that mutant ignores unknown members, so an installed mutant must reach `execve`. **P-B:** `reject_all_probe` is not selectable at the production entry at all; `TestMain`'s allowlist exits 1 with `unknown shape mutant`, so §12.3.1's own negative is decoder-only where the spec requires both layers. **P-C:** a mutant reproducing `RUN-260825-86b7d5` F1 verbatim — a predicate reading a field production never supplies — passes the production control **green**.
++- FINDING: The focused suite reran green at `fc0c69e` (`ok 4.337s`, exit 0) with the control inert. Same shape as the defect revision 9 was written to close, one level up: the obligation added to catch a fake mutant is itself satisfied by a fake.
++- NOTE: `repository_delta=empty` on `CR-TASK-260825-lsojra-1` is a Change Request base-capture artifact, not an empty producer run — `fc0c69e^{tree}` **is** the candidate tree and the producer's three commits landed inside `RUN-260825-304bfa`'s window. The reviewable work is the committed range.
++- FINDING: Verified sound and not to be disturbed by the rework: the 13-gate client attestation including gate 3b and `p_stat != SZOMB`, the B12 step-4 multiset-equality decoder over decoder-yielded names, the 398-frame oracle differential, `protocol_version` 6, and the top-level `runtime status|stop|broker|runtime-launch` surface.
++- STATUS: `TASK-260825-lsojra` routed to `to-dev`; verdict and probes attached as `TASK-260825-lsojra_review-verdict.md` and `TASK-260825-lsojra_review-probe.go.txt`.
++
+ ### 2245 — A Mutation Harness's Controls Are Gates Too
+ - REGRESSION: The fifth review found the corpus, the oracle and the decoder sound, and one **mutant** not the mutant its row described. `unknown_by_wire_form` was documented as matching the allowlist against a member's wire spelling; it was wired through `isAllowedName(m.name, mutant)`, which rebuilds a `frameMember` from the decoded name and therefore clears `wire`. The empty wire string matched no allowed literal, so it refused **every member of every frame**. It was still reported KILLED — by 48 witnesses that were all ordinary *valid* frames beginning `arity/schema/x1` — and its `blind` label was a table boolean nothing executed.
+ - ROOT CAUSE: Revision 8's kill condition was `disagrees with the oracle on at least one frame`, and a reject-all fake disagrees on every accepted frame. The witness count was not just non-zero, it was large, and no rule was in a position to read that as the tell it was.

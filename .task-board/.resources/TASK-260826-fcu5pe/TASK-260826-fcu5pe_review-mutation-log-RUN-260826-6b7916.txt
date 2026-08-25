@@ -1,0 +1,79 @@
+TASK-260826-fcu5pe reviewer mutation log — CR-TASK-260826-fcu5pe-2 rev2
+Reviewer run: RUN-260826-6b7916
+Method: copy tools/agents-infra to a scratch dir, patch ONE comparison, go build ./... (compile
+        failure = invalid mutant, discarded), then go test ./internal/infra -count=1 -run <regex>.
+        A kill is only counted when the EXPECTED named subtest is the failing one.
+Candidate: 63bd5381aafa86212f40bbd3aada0acb71fb4b6d tree 685a204677ec4b137415cbded9441d50902fbde6
+
+== per-mutant result :: first failing subtest ==
+b01_broker_peer_uid_delete                           SURVIVED (suite green)
+b02_broker_clientpid_delete                          SURVIVED (suite green)
+b03_broker_client_live_delete                        SURVIVED (suite green)
+b04_broker_client_exec_delete                        SURVIVED (suite green)
+b05_broker_protocol_delete                           SURVIVED (suite green)
+b06_broker_runtime_key_delete                        SURVIVED (suite green)
+b07_broker_profile_digest_delete                     SURVIVED (suite green)
+b08_lease_limit_off_by_one                           --- FAIL: TestSharedRuntimeStarterPolicyGovernsLeaseLimitStatusAndCleanup (1.12s)
+b09_draining_delete                                  SURVIVED (suite green)
+b10_wire_frame_bound_delete                          SURVIVED (suite green)
+c01_peer_uid_delete                                  --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/peer_uid_root_narrowing (0.68s)
+c02_peer_uid_root_narrow                             --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/peer_uid_root_narrowing (1.12s)
+c03_peer_live_delete                                 --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/peer_zombie_narrowing (0.86s)
+c04_broker_exec_delete                               --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/broker_executable_same_inode_wrong_device (0.68s)
+c05_broker_exec_ino_only                             --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/broker_executable_same_inode_wrong_device (0.78s)
+c06_broker_build_delete                              --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/broker_build_same_inode_wrong_device (0.88s)
+c07_broker_starttime_delete                          --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/broker_start_time_zero (0.70s)
+c08_protocol_delete                                  --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/future_protocol_version_range_narrowing (0.67s)
+c09_protocol_future_narrow                           --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/future_protocol_version_range_narrowing (1.13s)
+c10_runtime_key_delete                               --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/empty_runtime_key (1.11s)
+c11_runtime_key_empty_ok                             --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/empty_runtime_key (0.66s)
+c12_profile_digest_delete                            --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/profile_digest (0.66s)
+c13_endpoint_delete                                  --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/empty_endpoint (0.70s)
+c14_endpoint_empty_ok                                --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/empty_endpoint (0.71s)
+c15_runtime_exec_delete                              --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/runtime_executable_same_inode_wrong_device (0.70s)
+c16_runtime_uid_root_narrow                          --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/runtime_process_uid_root_narrowing (0.67s)
+c17_runtime_starttime_delete                         --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/runtime_process_start_time_zero (1.11s)
+c18_runtime_execpath_delete                          --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/runtime_process_empty_executable_path (0.91s)
+c19_runtime_argv_delete                              --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/runtime_process_argv (0.67s)
+c20_runtime_live_delete                              --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/runtime_zombie_narrowing (0.90s)
+c21_model_delete                                     --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/model_discovery (0.67s)
+c22_report_hardcoded_13                              SURVIVED (suite green)
+c23_report_drop_one_gate                             --- FAIL: TestConnectAndAttestSharedRuntimeReportsOnlyTheExactPassedGateSet (0.70s)
+c24_composite_endpoint_delete_plus_frozen_report     --- FAIL: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/empty_endpoint (0.67s)
+l01_fifo_delete                                      --- FAIL: TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/descriptor_three_is_a_socket_rather_than_a_fifo (4.19s)
+l02_recomputed_key_delete                            --- FAIL: TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/runtime_key_argument_differs_from_recomputed_profile (3.03s)
+l03_trailing_content_delete                          --- FAIL: TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/content_follows_the_authorization_frame (3.03s)
+l04_frame_bound_delete                               --- FAIL: TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/authorization_frame_is_one_byte_over_the_bound (3.04s)
+l05_launcher_pid_zero_ok                             --- FAIL: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/launcher_pid_zero (3.00s)
+l06_exec_plan_empty_ok                               --- FAIL: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/exec_plan_digest_empty (3.00s)
+l07_schema_delete                                    --- FAIL: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/schema (3.00s)
+l08_protocol_delete                                  --- FAIL: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/protocol_version (3.00s)
+l09_runtime_key_frame_delete                         --- FAIL: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/runtime_key (3.00s)
+l10_frame_bound_off_by_one                           --- FAIL: TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/authorization_frame_is_one_byte_over_the_bound (3.04s)
+r01_reclaim_uid_delete                               SURVIVED (suite green)
+r02_reclaim_pgid_delete                              SURVIVED (suite green)
+r03_reclaim_shape_delete                             --- FAIL: TestSharedRuntimeReclamationRefusesUnknownShapeAndReapsVerifiedGroup (0.00s)
+r04_broker_key_recompute_delete                      SURVIVED (suite green)
+r05_session_leader_delete                            --- FAIL: TestSharedRuntimeAdHocBrokerSelfGateAndForeignListener/not_session_leader (0.03s)
+
+== composite b99: nine broker-admission comparisons deleted in one build ==
+  peer uid, hello.ClientPID vs LOCAL_PEERPID, client liveness, client executable inode,
+  protocol version, runtime key, profile digest, acquireLease draining, wire 65536-byte bound
+  run 1: exit 1 — only failure was the load-flaky launcher positive control (see below)
+  run 2: exit 0 — ok internal/infra 87.026s   => SURVIVED
+
+== launcher positive-control flake ==
+  pi_shared_launcher_test.go:424 / :339  waitForSharedTest(t, 3*time.Second, ...)
+  idle machine: 0 failures in 8 consecutive launcher-suite runs
+  under mutation load: observed in baseline, b01, b03, l03, r01, r04, and b99 run 1
+
+== clean-candidate validation (reviewer-run, worktree clean throughout) ==
+  gofmt -l .                                             empty
+  git diff --check                                       exit 0
+  go vet ./...                                           exit 0
+  go build ./... (darwin)                                exit 0
+  GOOS=linux GOARCH=amd64 go build ./...                 exit 0
+  GOOS=windows GOARCH=amd64 go build ./...               exit 0
+  go test ./internal/infra -count=1                      exit 0  142.538s
+  go test . ./internal/attachments -count=1              exit 0  69.401s / 1.227s
+  go test -race ./internal/infra -run '^(TestShared|TestConnectAndAttestSharedRuntime)'  exit 0  37.763s

@@ -1,0 +1,13 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index fcba0b2..e745abf 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -6,7 +6,7 @@
+ ## 2026-08-26
+ 
+ ### 0958 — Close Executable Identity Mirror Witnesses
+-- ROOT CAUSE: Four production `Dev != … || Ino != …` gates had wrong-device witnesses but no same-device/wrong-inode witness; three inode-removal mutants survived and the force-stop gate was killed only incidentally by a foreign-binary test.
++- ROOT CAUSE: Three production `Dev != … || Ino != …` gates had wrong-device witnesses but no same-device/wrong-inode witness; `sharedRuntimeBrokerCandidates` had neither witness, three inode-removal mutants survived, and the force-stop gate was killed only incidentally by a foreign-binary test.
+ - REVIEW FINDING: Revision 1's event-driven launcher control proved that the target ran but dropped the live assertion that the authorized launcher PID itself `execve`d the target; replacing `unix.Exec` with fork+exec therefore left the launcher suite green.
+ - FIX: Named production-entry witnesses now cover broker admission, client attestation, broker-candidate scanning, and force-stop before signal; client, broker, and launcher exact-version gates also refuse the below-current direction.
+ - FIX: Launcher positive controls consume a target-emitted stdout event instead of a 15s marker-poll deadline. After the exact-version event, the control kernel-inspects the original launcher PID and requires its executable path to equal the target, restoring the `execve` witness without restoring wall-clock polling.

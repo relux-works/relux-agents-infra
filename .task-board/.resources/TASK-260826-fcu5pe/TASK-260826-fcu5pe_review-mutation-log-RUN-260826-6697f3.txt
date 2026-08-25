@@ -1,0 +1,116 @@
+TASK-260826-fcu5pe — reviewer mutation log — RUN-260826-6697f3 — CR rev4 (tree e2951b27)
+Method: copy module/repo to scratch, patch exactly one predicate, go build ./... (compile
+failure => invalid mutant, discarded), then go test. A kill counts only when the expected
+NAMED test/subtest emits its own failure; exit code alone was never accepted. Survivors were
+escalated to the whole package and then to the whole module.
+
+SURFACE A — client attestation chain (pi_shared_client_darwin.go, connectAndAttestSharedRuntime)
+mask ^TestConnectAndAttestSharedRuntime unless noted
+----------------------------------------------------------------------------------
+a01    KILLED            21.5s  client peer_uid
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/peer_uid_root_narrowing
+a02    KILLED            29.7s  client peer liveness
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/peer_zombie_narrowing
+a03    KILLED            22.1s  client broker_executable dev+ino
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/broker_executable_same_inode_wrong_device
+a04    KILLED            22.9s  client broker_build identity
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/broker_build_same_inode_wrong_device
+a05    KILLED            23.9s  client broker_start_time
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/broker_start_time_zero
+a06    KILLED            19.4s  client protocol_version
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/future_protocol_version_range_narrowing
+a07    KILLED            19.2s  client runtime_key
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/empty_runtime_key
+a08    SURVIVED          19.5s  client profile_digest
+a09    KILLED            20.1s  client endpoint
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/empty_endpoint
+a10    KILLED            20.3s  client runtime_executable
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/runtime_executable_same_inode_wrong_device
+a11    KILLED            24.8s  client runtime_process argv
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/runtime_process_argv
+a12    KILLED            23.9s  client runtime_process start_time
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/runtime_process_start_time_zero
+a13    COMPILE_FAIL         -s  
+a14    KILLED            27.8s  client model_discovery
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/model_discovery
+a15    SURVIVED          24.7s  client hello_ok completeness
+a16    KILLED            25.2s  client passed-gate set integrity
+       killed-by: TestConnectAndAttestSharedRuntimeReportsOnlyTheExactPassedGateSet
+a08f   SURVIVED         139.4s  client profile_digest (FULL PKG)
+a15f   SURVIVED         205.7s  client hello_ok effective_sharing nil (FULL PKG)
+a13b   KILLED            28.0s  client runtime_liveness narrowing
+       killed-by: TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/runtime_zombie_narrowing
+L1     KILLED            12.7s  launcher fd3 FIFO guard
+       killed-by: TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/descriptor_three_is_a_socket_rather_than_a_fifo
+L2     SURVIVED           8.1s  launcher recomputed runtime key
+L3     KILLED            11.1s  launcher launcher_pid comparison
+       killed-by: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/launcher_pid_zero
+L4     KILLED            25.6s  launcher exec_plan_digest comparison
+       killed-by: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/exec_plan_digest_empty
+       killed-by: TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/descriptor_three_is_a_socket_rather_than_a_fifo
+L5     KILLED            11.3s  launcher protocol_version comparison
+       killed-by: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/protocol_version
+L6     KILLED            22.6s  launcher schema comparison
+       killed-by: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/valid
+L7     KILLED            22.7s  launcher runtime_key comparison
+       killed-by: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/valid
+L8     KILLED            25.5s  launcher auth frame byte bound
+       killed-by: TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/valid
+       killed-by: TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/authorization_frame_is_one_byte_over_the_bound
+L9     KILLED            11.0s  launcher trailing content after frame
+       killed-by: TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/content_follows_the_authorization_frame
+O1     SURVIVED           6.2s  stopRecorded broker argv
+O2     SURVIVED           6.2s  stopRecorded broker start time
+O3     SURVIVED           7.9s  stopRecorded broker exec identity dev
+O4     KILLED             6.8s  owner_unidentifiable never signalled
+       killed-by: TestSharedRuntimeHeldLockWithoutRecordIsReportedAndNeverSignalled
+O5     SURVIVED           6.5s  recorded broker liveness start time
+L2f    SURVIVED         143.3s  launcher recomputed runtime key
+O1f    SURVIVED         145.6s  stopRecorded broker argv
+O2f    SURVIVED         136.6s  stopRecorded broker start time
+O3f    SURVIVED         211.1s  stopRecorded broker exec identity dev
+O5f    SURVIVED         216.3s  recorded broker liveness start time
+
+----------------------------------------------------------------------------------
+RECHECK (harness calibration, see verdict section 8)
+L6 / L7 were initially scored KILLED by the driver because it accepted any named failure.
+Both 'kills' were the positive control subtest 'valid', which those mutations cannot affect
+(they only widen a comparison that the valid frame already satisfies). Re-run with subtest
+inspection on a pristine whole-repo scratch tree:
+  L6 (schema empty exemption)      run1 exit=0 no failures ; run2 exit=0 no failures  -> SURVIVED
+  L7 (runtime_key empty exemption) run1 exit=0 no failures ;
+                                   run2 exit=1 only .../descriptor_three_is_a_socket_rather_than_a_fifo
+                                   at 15.02s = sharedLauncherPositiveControlTimeout.
+                                   That subtest refuses at unix.Fstat(3) before any frame is
+                                   read, so the mutation is unreachable in it -> flake, not a
+                                   kill -> SURVIVED
+  pristine control: go test ./internal/infra -run '^TestSharedRuntimeLauncher' x6 -> exit 0 x6
+
+----------------------------------------------------------------------------------
+COMPOSITE — six comparisons neutralised in one build, whole repo scratch /tmp/rev4-full
+  operator :442  -> reduced to uid + live()   (argv and start time dropped)
+  operator :454  -> Ino only                  (Dev dropped)
+  operator :403  -> start time dropped from sharedRecordedBrokerIsLive
+  client   :387  -> profile_digest exempts the empty value
+  client   :370  -> EffectiveSharing == nil clause dropped
+  launcher :45   -> recomputed runtime key compared on first 8 characters
+
+  go build ./...          -> BUILD_OK
+  go test ./... -count=1  -> COMPOSITE_EXIT=0
+    ok  	github.com/relux-works/relux-agents-infra/tools/agents-infra	124.276s
+    ok  	github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/attachments	3.652s
+    ok  	github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra	201.938s
+
+  pristine baseline of the same scratch tree, for calibration:
+    ok  	github.com/relux-works/relux-agents-infra/tools/agents-infra	108.375s
+    ok  	github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/attachments	1.802s
+    ok  	github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra	259.454s
+
+----------------------------------------------------------------------------------
+NOTE ON AN EARLIER, DISCARDED COMPOSITE
+A first composite run used a module-only scratch tree (/tmp/rev4-mut, tools/agents-infra
+extracted without the repo root). The root package went red with 13 failures — every one a
+missing README.md / SKILL.md / .configs / .instructions source-tree fixture, none of them
+shared-runtime tests. Classified RED_WRONG_TEST and discarded; the composite was redone on a
+whole-repo scratch tree whose pristine baseline is green. Recorded so the discarded run is not
+mistaken for a kill.

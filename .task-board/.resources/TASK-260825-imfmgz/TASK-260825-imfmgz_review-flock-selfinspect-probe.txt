@@ -1,0 +1,25 @@
+# Reviewer probe — can a broker verify it holds an INHERITED flock?
+# host: darwin 25.5.0 arm64, go1.25.5
+# Motivation: spec section 6 requires the broker to exit broker_lock_not_inherited
+# if the inherited descriptor "is missing or unlocked". The producer's attached
+# probe covers flock HANDOFF across fork+exec, not flock SELF-INSPECTION.
+
+=== RUN   TestSelfInspectInheritedFlock
+    A same-fd re-lock while held: err=<nil>  (nil => cannot distinguish held from unheld)
+    B second-fd same-process lock while held: err=resource temporarily unavailable  (EWOULDBLOCK => detectable)
+    C second-fd lock on an UNHELD file: err=<nil>  (nil expected -- control, negative case distinguishes)
+    D F_GETLK against a flock-held file: err=<nil> type=3 pid=-1 (F_UNLCK=2)  (POSIX record locks cannot observe a BSD flock)
+--- PASS: TestSelfInspectInheritedFlock (0.00s)
+PASS
+
+Conclusion:
+- The obvious implementation of the spec's gate (re-lock the inherited fd with
+  LOCK_EX|LOCK_NB) ALWAYS succeeds and therefore always passes. The gate as
+  written admits what it must reject.
+- A working mechanism exists (B): open a SECOND descriptor to broker.lock and
+  attempt LOCK_EX|LOCK_NB. flock locks are per open file description, so the
+  second descriptor conflicts even within the same process. (C) proves the
+  unheld case is distinguishable.
+- fcntl F_GETLK (D) is not a usable substitute.
+
+Probe source: reviewer-authored Go test, same shape as the producer's probe.
