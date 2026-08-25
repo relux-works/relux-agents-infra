@@ -23,8 +23,19 @@ type PiLaunchPlanDetails struct {
 	ModelsJSON            PiGeneratedCatalog   `json:"models_json,omitempty"`
 	PiIdentity            *PiExecutionIdentity `json:"pi_identity,omitempty"`
 	Runtime               *PiRuntimePlan       `json:"runtime,omitempty"`
+	SharedRuntime         *PiSharedRuntimePlan `json:"shared_runtime,omitempty"`
 	Capabilities          *PiCapabilityPlan    `json:"capabilities,omitempty"`
 	DFlash                *PiDFlashPlan        `json:"dflash,omitempty"`
+}
+type PiSharedRuntimePlan struct {
+	Mode          string             `json:"mode"`
+	RuntimeKey    string             `json:"runtime_key"`
+	ProfileDigest string             `json:"profile_digest"`
+	Paths         SharedRuntimePaths `json:"paths"`
+	Configured    PiRuntimeSharing   `json:"configured"`
+	Broker        struct {
+		Observed string `json:"observed"`
+	} `json:"broker"`
 }
 
 type PiGeneratedCatalog struct {
@@ -195,6 +206,17 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	details := &PiLaunchPlanDetails{Managed: true, LogicalProfile: selected, ProfileSource: selectedSource, PiCompatibilitySource: composite.PiPrimarySession.PiCompatibility.Source, State: &state, ModelsJSON: PiGeneratedCatalog{Path: state.ModelsJSON, SHA256: hex.EncodeToString(modelsSum[:])}, PiIdentity: &identity,
 		Runtime:      &PiRuntimePlan{Executable: profile.Runtime.Executable, Argv: append([]string(nil), profile.Runtime.Argv...), Source: profile.Source, Endpoint: profile.BaseURL, ReadinessURL: strings.TrimSuffix(profile.BaseURL, "/v1") + "/v1" + profile.Runtime.ReadinessPath, StartupTimeoutSeconds: profile.Runtime.StartupTimeoutSeconds, ShutdownTimeoutSeconds: profile.Runtime.ShutdownTimeoutSeconds, ExecutableState: execState, Ownership: "direct-child-process-group"},
 		Capabilities: &PiCapabilityPlan{Requested: append([]string(nil), profile.RequestedCapabilities...), Verified: []string{}, Verification: "not-claimed"}}
+	if profile.Runtime.Sharing != nil && profile.Runtime.Sharing.Mode == "shared" {
+		runtimeKey, profileDigest := SharedRuntimeKey(profile)
+		paths, err := ResolveSharedRuntimePaths("", runtimeKey)
+		if err != nil {
+			return err
+		}
+		shared := &PiSharedRuntimePlan{Mode: "shared", RuntimeKey: runtimeKey, ProfileDigest: profileDigest, Paths: paths, Configured: *profile.Runtime.Sharing}
+		shared.Broker.Observed = "not-inspected"
+		details.SharedRuntime = shared
+		details.Runtime.Ownership = "broker-owned-process-group"
+	}
 	if profile.Runtime.DFlash != nil {
 		d := profile.Runtime.DFlash
 		details.DFlash = &PiDFlashPlan{Status: "configured-unverified", TargetModel: d.TargetModel, DraftModel: d.DraftModel, TargetArgv: append([]string(nil), d.TargetArgv...), DraftArgv: append([]string(nil), d.DraftArgv...)}

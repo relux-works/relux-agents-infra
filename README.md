@@ -53,6 +53,8 @@ The canonical interface after bootstrap is:
 - `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
 - `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
 - `agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+- `agents-infra runtime status [--project DIR] [--profile NAME] [--json]`
+- `agents-infra runtime stop [--project DIR] [--profile NAME] [--force] [--timeout SECONDS]`
 - `pi-infra [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
 - `openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
 - `agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]`
@@ -450,6 +452,16 @@ readiness_path = "/models"
 startup_timeout_seconds = 120
 shutdown_timeout_seconds = 10
 
+# Optional. If this table is absent, the existing exclusive direct-child
+# runtime behavior is unchanged. If present, every field is required.
+[agents.pi.profiles."qwen-3.8-27b".runtime.sharing]
+mode = "shared"
+linger_seconds = 15
+max_leases = 8
+heartbeat_interval_seconds = 5
+lease_stale_seconds = 30
+broker_start_timeout_seconds = 160
+
 [agents.pi.profiles."muse-glimmer-30b-dflash"]
 provider = "local-muse"
 model = "Muse-Glimmer-30B"
@@ -487,6 +499,33 @@ The model names, runtime executable, argv, ports, limits, and timeouts are
 operator-supplied deployment inputs. agents-infra does not acquire, convert,
 quantize, license, size, or securely distribute models or runtimes, and it does
 not automate benchmarks.
+
+`runtime.sharing` is an explicit, strict opt-in. Its table has no field
+defaults: unknown or missing members fail closed, `mode` is `exclusive` or
+`shared`, the heartbeat interval must be below the stale-reporting threshold,
+and the broker-start timeout must cover startup, shutdown, and 30 seconds of
+coordination overhead. `mode = "exclusive"` uses the established direct-child
+path. `mode = "shared"` gives each tracked RUN its own Pi state, session, lock,
+and process group while byte-identical profiles can lease one broker-owned MLX
+runtime across independent launcher sessions and project roots.
+
+The first broker fixes the effective sharing policy for its lifetime. Inspect
+both configured and effective values, the attested broker/runtime identities,
+and live leases without starting or connecting from `pi --print-config`:
+
+```bash
+agents-infra pi --print-config --profile qwen-3.8-27b
+agents-infra runtime status --profile qwen-3.8-27b
+agents-infra runtime status --profile qwen-3.8-27b --json
+agents-infra runtime stop --profile qwen-3.8-27b
+agents-infra runtime stop --profile qwen-3.8-27b --force --timeout 30
+```
+
+Ordinary stop refuses while leases are active. Forced stop first attests a
+reachable broker; if rendezvous is unavailable, it verifies the recorded
+broker against the kernel before signalling it and reuses the broker's strict
+orphan-reclamation checks. A held election lock without an attributable owner
+is reported as `starting-unverified` and is never guessed or signalled.
 
 #### Composition, identity, and CLI precedence
 
@@ -1125,7 +1164,7 @@ rg -n "Primary Parent Goal Actualization" \
 | Tool | Purpose | Command | Outputs |
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
-| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
 | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
 | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |

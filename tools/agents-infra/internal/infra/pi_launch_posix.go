@@ -124,6 +124,9 @@ func RunPi(opts RunPiOptions) error {
 	if err != nil {
 		return err
 	}
+	if profile.Runtime.Sharing != nil && profile.Runtime.Sharing.Mode == "shared" {
+		return runSharedPiSession(opts, project, selected, profile, argsPlan, identity, runtimeIdentity)
+	}
 	state, err := ResolvePiStatePaths(opts.CacheRoot, project, selected)
 	if err != nil {
 		return err
