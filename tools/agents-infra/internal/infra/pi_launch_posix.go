@@ -35,11 +35,13 @@ type RunPiOptions struct {
 	Signals    <-chan os.Signal
 	Context    context.Context
 	Report     *PiRunReport
+	Standalone *PiStandaloneRequest
 }
 
 var (
-	piListen      = net.Listen
-	piExecCommand = exec.Command
+	piListen          = net.Listen
+	piExecCommand     = exec.Command
+	piTerminalFDProbe = piTerminalFD
 )
 
 func RunPi(opts RunPiOptions) error {
@@ -70,19 +72,33 @@ func RunPi(opts RunPiOptions) error {
 	if err != nil {
 		return piError("invalid_project_configuration", err)
 	}
-	effectiveArgs, err := applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
-	if err != nil {
-		return err
-	}
-	override, err := ExtractPiProfileOverride(effectiveArgs)
-	if err != nil {
-		return err
-	}
+	effectiveArgs := opts.Args
 	selected := ""
-	if override != nil {
-		selected = *override
-	} else if composite.PiPrimarySession.Profile.Present {
-		selected = composite.PiPrimarySession.Profile.Value
+	if opts.Standalone != nil {
+		if err := validatePiStandaloneRequest(*opts.Standalone, opts.Args); err != nil {
+			return err
+		}
+		if err := validatePiStandalonePolicy(composite.PiStandaloneSession); err != nil {
+			return err
+		}
+		selected, _, _, err = resolvePiStandaloneSelection(composite, *opts.Standalone)
+		if err != nil {
+			return err
+		}
+	} else {
+		effectiveArgs, err = applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
+		if err != nil {
+			return err
+		}
+		override, extractErr := ExtractPiProfileOverride(effectiveArgs)
+		if extractErr != nil {
+			return extractErr
+		}
+		if override != nil {
+			selected = *override
+		} else if composite.PiPrimarySession.Profile.Present {
+			selected = composite.PiPrimarySession.Profile.Value
+		}
 	}
 	piPath, err := opts.LookPath("pi")
 	if err != nil {
@@ -104,7 +120,12 @@ func RunPi(opts RunPiOptions) error {
 	if err := ValidatePiStateKeyCollisions(composite.PiProfiles); err != nil {
 		return err
 	}
-	argsPlan, err := BuildManagedPiArguments(effectiveArgs, selected, profile)
+	var argsPlan PiArgumentPlan
+	if opts.Standalone != nil {
+		argsPlan, err = BuildStandalonePiArguments(opts.Args, profile, composite.PiStandaloneSession, opts.Standalone.Prompt)
+	} else {
+		argsPlan, err = BuildManagedPiArguments(effectiveArgs, selected, profile)
+	}
 	if err != nil {
 		return err
 	}
@@ -128,7 +149,22 @@ func RunPi(opts RunPiOptions) error {
 	if profile.Runtime.Sharing != nil && profile.Runtime.Sharing.Mode == "shared" {
 		return runSharedPiSession(opts, project, selected, profile, argsPlan, identity, runtimeIdentity)
 	}
-	state, err := ResolvePiStatePaths(opts.CacheRoot, project, selected)
+	var state PiStatePaths
+	if opts.Standalone != nil {
+		runID := opts.Standalone.ClientRunID
+		if runID == "" {
+			runID, err = newPiStandaloneRunID()
+			if err != nil {
+				return err
+			}
+			standalone := *opts.Standalone
+			standalone.ClientRunID = runID
+			opts.Standalone = &standalone
+		}
+		state, err = ResolvePiClientStatePaths(opts.CacheRoot, project, selected, runID)
+	} else {
+		state, err = ResolvePiStatePaths(opts.CacheRoot, project, selected)
+	}
 	if err != nil {
 		return err
 	}
@@ -265,10 +301,15 @@ func RunPi(opts RunPiOptions) error {
 	piCmd := piExecCommand(identity.Entrypoint, argsPlan.Argv...)
 	piCmd.Dir = project
 	piCmd.Env = managedEnv
-	piCmd.Stdin = opts.Stdin
+	foreground := false
+	if opts.Standalone == nil {
+		piCmd.Stdin = opts.Stdin
+		foreground = configurePiProcessTerminal(piCmd, opts.Stdin)
+	} else {
+		piCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
 	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
-	foreground := configurePiProcessTerminal(piCmd, opts.Stdin)
 	if err := piCmd.Start(); err != nil {
 		sessionLog.event("pi_start_failed", map[string]any{"error": err.Error()})
 		_ = cleanupRuntime()
@@ -407,7 +448,7 @@ func piProcessWriter(mu *sync.Mutex, writer io.Writer) io.Writer {
 }
 
 func configurePiProcessTerminal(cmd *exec.Cmd, stdin io.Reader) bool {
-	if fd, ok := piTerminalFD(stdin); ok {
+	if fd, ok := piTerminalFDProbe(stdin); ok {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Foreground: true, Ctty: fd}
 		return true
 	}

@@ -5,6 +5,31 @@
 
 ## 2026-08-26
 
+### 1528 — Standalone Must Not Probe Interactive Terminal Ownership
+- ROOT CAUSE: Current main's foreground-terminal composition preserved closed standalone stdin but still passed caller stdin to `configurePiProcessTerminal`, so a TTY caller could set `Foreground`/`Ctty` on a non-interactive worker.
+- FIX: `tools/agents-infra/internal/infra/pi_launch_posix.go` and `pi_shared_client_darwin.go` now configure stdin and terminal foreground only for interactive launches; standalone keeps a separate process group.
+- EVIDENCE: `TestRunPiStandaloneExclusiveWorkerClosesReadableStdin` and `TestRunPiStandaloneConcurrentWorkersShareOnlyRuntimeAndCrashCleanupPreservesPeer` supply readable stdin plus forced-positive terminal probes and require EOF with zero probe calls through the exclusive and shared production launches. Narrowing either interactive branch makes its named witness fail; exact restoration returns both to exit 0. Fresh merge `eaefc6f` contains current main `355a156` as its second parent.
+- SCOPE: `TASK-260826-h934tg`; semantic merge reconciliation only, no task-board adapter, allowlist widening, or privilege change.
+
+### 1411 — Standalone Stdin And Interactive Terminal Semantics Compose
+- FINDING: Current main adds primary-session `--approve` resolution and preserves direct terminal writers; the accepted standalone worker independently requires caller-argument refusal and closed stdin.
+- DECISION: `RunPi` applies primary-session yolo only outside standalone mode, uses `piProcessWriter` for both modes, and attaches stdin only for interactive Pi. Shared and exclusive production paths use the same split.
+- EVIDENCE: `TestRunPiStandaloneExclusiveWorkerClosesReadableStdin` and `TestRunPiStandaloneConcurrentWorkersShareOnlyRuntimeAndCrashCleanupPreservesPeer` discriminate terminal-probe and stdin isolation at the exclusive and shared production launches; primary-yolo isolation is witnessed by `TestRunPiStandaloneNeverInheritsPrimarySessionProjectTrust`. Merge `eaefc6f` contains current main `355a156`; full Go tests, vet, and Darwin/Linux/Windows builds exit 0 on the reconciled tree.
+- SCOPE: `TASK-260826-h934tg`; merge-only reconciliation, no task-board adapter or allowlist expansion.
+
+### 1335 — Standalone Stdin Isolation Needs A Readable Witness
+- ROOT CAUSE: Standalone launch tests left `RunPiOptions.Stdin` nil, so deleting the exclusive and shared stdin guards still gave child Pi processes EOF through `os/exec` defaults.
+- FIX: `tools/agents-infra/internal/infra/pi_standalone_shared_test.go` supplies non-empty readers through both production launch paths and requires each child to observe EOF.
+- EVIDENCE: Narrowing `pi_launch_posix.go` and `pi_shared_client_darwin.go` one at a time makes the named exclusive/shared tests exit 1 with `StdinEOF:false`; exact restoration returns each to exit 0.
+- STATUS: Reviewer revision-1 F1 addressed without changing the standalone-now, task-board-adapter-later boundary.
+
+### 1248 — Standalone Pi YOLO Is A Separate Primitive
+- DECISION: Unattended local-Qwen workers use `[agents.pi.standalone_session]`, not interactive `[agents.pi.primary_session].yolo_mode` and not a task-board runtime adapter.
+- AUTHORIZATION: The launcher requires explicit `yolo_mode = true` plus an exact non-empty built-in tool allowlist, owns `--no-approve --no-extensions --tools ... --mode json --no-session --print`, closes stdin, and refuses caller Pi arguments before launch.
+- SECURITY: Project trust remains declined; extensions cannot replace allowed built-ins; raw RPC is excluded because direct RPC `bash` bypasses the model `tool_call` hook; execution stays at the calling user's privilege.
+- LIFECYCLE: Every spawn has its own Pi process group and random hash-contained client state. Concurrent workers may lease one verified shared MLX runtime, and one worker's exit or crash cannot tear down a live peer.
+- SCOPE: The primitive is board-agnostic now. Task-board adoption remains a later adapter over this command.
+
 ### 0958 — Close Executable Identity Mirror Witnesses
 - ROOT CAUSE: Three production `Dev != … || Ino != …` gates had wrong-device witnesses but no same-device/wrong-inode witness; `sharedRuntimeBrokerCandidates` had neither witness, three inode-removal mutants survived, and the force-stop gate was killed only incidentally by a foreign-binary test.
 - REVIEW FINDING: Revision 1's event-driven launcher control proved that the target ran but dropped the live assertion that the authorized launcher PID itself `execve`d the target; replacing `unix.Exec` with fork+exec therefore left the launcher suite green.
@@ -52,6 +77,17 @@
 
 ## 2026-08-25
 
+### 2352 — Pi Privilege And Tracked Spawn Stay Separate
+- FINDING: task-board built-in `qwen` runs the `qwen-code` harness; `spawn.runtimes` adds bindings to shipped adapters and cannot create a Pi harness.
+- DECISION: agents-infra Pi authorization is necessary but not sufficient for tracked task-board spawn; skill-agents-management/task-board needs a shipped Pi adapter and end-to-end spawn tests.
+- DECISION: No sudo/root path belongs in the unattended grant. Only a separately approved, root-owned helper with a closed typed capability API is acceptable if privileged operations are later required.
+- SCOPE: `TASK-260825-1q1987`; `.research/260825_pi-unattended-tool-authorization.md` Sections 6.1 and 8.1.
+
+### 2346 — Pi Unattended Authorization Is Launch-Time Policy
+- FINDING: Pi `0.84.2` and current upstream autoexecute active model tools; `--approve` controls project-local input loading, while strict `--tools` selection and the central `tool_call` hook are the actual enforcement surfaces.
+- ANOMALY: Direct RPC `bash` bypasses `tool_call`, and documented skill `allowed-tools` has no source/test consumer in either inspected snapshot.
+- DECISION: For tracked Pi, agents-infra should require explicit yolo plus an exact allowlist, emit `--tools --no-extensions --no-approve`, refuse raw RPC bash exposure, and retain OS isolation; no Pi fork or policy extension is needed for the coarse unattended grant.
+- EVIDENCE: `TASK-260825-1q1987`; pinned binary probes and both upstream blocked-tool regression tests; `.research/260825_pi-unattended-tool-authorization.md`.
 ### 2245 — A Mutation Harness's Controls Are Gates Too
 - REGRESSION: The fifth review found the corpus, the oracle and the decoder sound, and one **mutant** not the mutant its row described. `unknown_by_wire_form` was documented as matching the allowlist against a member's wire spelling; it was wired through `isAllowedName(m.name, mutant)`, which rebuilds a `frameMember` from the decoded name and therefore clears `wire`. The empty wire string matched no allowed literal, so it refused **every member of every frame**. It was still reported KILLED — by 48 witnesses that were all ordinary *valid* frames beginning `arity/schema/x1` — and its `blind` label was a table boolean nothing executed.
 - ROOT CAUSE: Revision 8's kill condition was `disagrees with the oracle on at least one frame`, and a reject-all fake disagrees on every accepted frame. The witness count was not just non-zero, it was large, and no rule was in a position to read that as the tell it was.

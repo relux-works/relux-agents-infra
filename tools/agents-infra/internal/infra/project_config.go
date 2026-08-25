@@ -22,6 +22,7 @@ const (
 	claudePrimaryModelField          = claudePrimarySessionField + ".model"
 	claudePrimaryYoloModeField       = claudePrimarySessionField + ".yolo_mode"
 	piPrimarySessionField            = "agents.pi.primary_session"
+	piStandaloneSessionField         = "agents.pi.standalone_session"
 	targetsField                     = "agents.targets"
 	entrypointsField                 = "agents.entrypoints"
 )
@@ -116,6 +117,7 @@ type parsedProjectConfig struct {
 	PrimarySession       CodexPrimarySessionSource
 	ClaudePrimarySession ClaudePrimarySessionSource
 	PiPrimarySession     PiPrimarySessionSource
+	PiStandaloneSession  PiStandaloneSessionSource
 	PiProfiles           map[string]PiProfile
 	Targets              map[string]ProjectTarget
 	Entrypoints          map[string]string
@@ -129,6 +131,7 @@ type ProjectConfigSource struct {
 	CodexPrimarySession  CodexPrimarySessionSource
 	ClaudePrimarySession ClaudePrimarySessionSource
 	PiPrimarySession     PiPrimarySessionSource
+	PiStandaloneSession  PiStandaloneSessionSource
 	PiProfiles           map[string]PiProfile
 	Targets              map[string]ProjectTarget
 	Entrypoints          map[string]string
@@ -141,6 +144,7 @@ type compositeProjectConfig struct {
 	PrimarySession       CodexPrimarySessionPolicy
 	ClaudePrimarySession ClaudePrimarySessionPolicy
 	PiPrimarySession     PiPrimarySessionPolicy
+	PiStandaloneSession  PiStandaloneSessionPolicy
 	PiProfiles           map[string]PiProfile
 	Targets              map[string]ProjectTarget
 	Entrypoints          map[string]ProjectEntrypoint
@@ -178,6 +182,7 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
 			CodexPrimarySession:  cloneCodexPrimarySessionSource(config.PrimarySession),
 			ClaudePrimarySession: cloneClaudePrimarySessionSource(config.ClaudePrimarySession),
 			PiPrimarySession:     clonePiPrimarySessionSource(config.PiPrimarySession),
+			PiStandaloneSession:  clonePiStandaloneSessionSource(config.PiStandaloneSession),
 			PiProfiles:           clonePiProfiles(config.PiProfiles),
 			Targets:              cloneProjectTargets(config.Targets),
 			Entrypoints:          cloneStringMap(config.Entrypoints),
@@ -185,6 +190,7 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
 		composeCodexPrimarySession(&composite.PrimarySession, config.PrimarySession, path)
 		composeClaudePrimarySession(&composite.ClaudePrimarySession, config.ClaudePrimarySession, path)
 		composePiPrimarySession(&composite.PiPrimarySession, config.PiPrimarySession, path)
+		composePiStandaloneSession(&composite.PiStandaloneSession, config.PiStandaloneSession, path)
 		for name, profile := range config.PiProfiles {
 			profile.Source = path
 			composite.PiProfiles[name] = profile
@@ -245,7 +251,7 @@ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
 	if err != nil {
 		return parsedProjectConfig{}, err
 	}
-	config.PiPrimarySession, config.PiProfiles, err = parsePiConfig(agents, path)
+	config.PiPrimarySession, config.PiStandaloneSession, config.PiProfiles, err = parsePiConfig(agents, path)
 	if err != nil {
 		return parsedProjectConfig{}, err
 	}

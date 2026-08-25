@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -472,6 +473,9 @@ func runClaude(args []string) error {
 }
 
 func runPi(args []string) error {
+	if len(args) > 0 && args[0] == "spawn" {
+		return runPiStandaloneCLI("", args[1:])
+	}
 	startDir := os.Getenv(callerCWDEnv)
 	if startDir == "" {
 		var err error
@@ -503,6 +507,47 @@ func runPi(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(plan)
 	}
 	return infra.RunPi(infra.RunPiOptions{ProjectDir: startDir, Args: filtered, Environ: os.Environ(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+}
+
+func runPiStandaloneCLI(entrypoint string, args []string) error {
+	fs := flag.NewFlagSet("pi spawn", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	prompt := fs.String("prompt", "", "single unattended worker prompt")
+	printConfig := fs.Bool("print-config", false, "resolve and print the standalone launch plan without launching")
+	deadline := fs.Duration("deadline", 30*time.Minute, "total standalone worker deadline (maximum 30m)")
+	if err := fs.Parse(args); err != nil {
+		return &infra.PiStandaloneFailure{Code: "pi_standalone_cli_invalid", Err: err}
+	}
+	if len(fs.Args()) != 0 {
+		return &infra.PiStandaloneFailure{Code: "pi_standalone_cli_invalid", Err: errors.New("standalone Pi does not accept positional arguments")}
+	}
+	if *deadline <= 0 || *deadline > 30*time.Minute {
+		return &infra.PiStandaloneFailure{Code: "pi_standalone_deadline_invalid", Err: errors.New("standalone Pi deadline must be within (0, 30m]")}
+	}
+	startDir := callerProjectDir()
+	request := infra.PiStandaloneRequest{Prompt: *prompt, Entrypoint: entrypoint}
+	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
+	if *printConfig {
+		plan, err := infra.BuildPiStandaloneLaunchPlan(startDir, "", request, producer, nil)
+		if err != nil {
+			return infra.WrapPiStandaloneFailure(err)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(plan); err != nil {
+			return &infra.PiStandaloneFailure{Code: "pi_standalone_output_failed", Err: err}
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *deadline)
+	defer cancel()
+	err := infra.RunPi(infra.RunPiOptions{
+		ProjectDir: startDir,
+		Environ:    os.Environ(),
+		Stdout:     os.Stdout,
+		Stderr:     os.Stderr,
+		Context:    ctx,
+		Standalone: &request,
+	})
+	return infra.WrapPiStandaloneFailure(err)
 }
 
 func runRuntime(args []string) error {
@@ -604,6 +649,9 @@ func runTarget(args []string) error {
 		return errors.New("target requires an entrypoint name")
 	}
 	entrypoint := args[0]
+	if len(args) > 1 && args[1] == "spawn" {
+		return runPiStandaloneCLI(entrypoint, args[2:])
+	}
 	fs := flag.NewFlagSet("target "+entrypoint, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	printConfig := fs.Bool("print-config", false, "resolve and print the canonical target without launching")
@@ -920,9 +968,11 @@ func usageText() string {
   agents-infra codex [--print-config] [-d|--danger|--yolo] [--] [CODEX_ARGS...]
   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
   agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
+  agents-infra pi spawn --prompt TEXT [--deadline DURATION] [--print-config]
   agents-infra runtime status [--project DIR] [--profile NAME] [--json]
   agents-infra runtime stop [--project DIR] [--profile NAME] [--force] [--timeout SECONDS]
   agents-infra target ENTRYPOINT [--print-config] [-- PROVIDER_ARGS...]
+  agents-infra target qwen-infra spawn --prompt TEXT [--deadline DURATION] [--print-config]
   agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]
 
 Source tree resolution for setup (first usable wins):

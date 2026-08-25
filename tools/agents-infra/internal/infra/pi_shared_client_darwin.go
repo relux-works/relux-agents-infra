@@ -540,6 +540,16 @@ func checkSharedRuntimeModel(client *http.Client, endpoint, model string) error 
 
 func runSharedPiSession(opts RunPiOptions, project, profileName string, profile PiProfile, argsPlan PiArgumentPlan, piIdentity PiExecutionIdentity, runtimeIdentity runtimeExecutableIdentity) error {
 	runID := environmentValue(opts.Environ, "TASK_BOARD_RUN_ID")
+	if opts.Standalone != nil {
+		runID = opts.Standalone.ClientRunID
+		if runID == "" {
+			var err error
+			runID, err = newPiStandaloneRunID()
+			if err != nil {
+				return err
+			}
+		}
+	}
 	state, err := ResolvePiClientStatePaths(opts.CacheRoot, project, profileName, runID)
 	if err != nil {
 		return err
@@ -552,6 +562,9 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 		if runID != "" {
 			var launch *PiLaunchError
 			if errors.As(err, &launch) && launch.Code == "pi_profile_busy" {
+				if opts.Standalone != nil {
+					return piError("pi_profile_busy", errors.New("standalone Pi client state is already in use"))
+				}
 				return piError("pi_profile_busy", fmt.Errorf("TASK_BOARD_RUN_ID %q already owns its client state", runID))
 			}
 		}
@@ -632,11 +645,16 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 	piCmd := piExecCommand(piIdentity.Entrypoint, argsPlan.Argv...)
 	piCmd.Dir = project
 	piCmd.Env = managedEnv
-	piCmd.Stdin = opts.Stdin
+	foreground := false
+	if opts.Standalone == nil {
+		piCmd.Stdin = opts.Stdin
+		foreground = configurePiProcessTerminal(piCmd, opts.Stdin)
+	} else {
+		piCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	outputMu := new(sync.Mutex)
 	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
 	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
-	foreground := configurePiProcessTerminal(piCmd, opts.Stdin)
 	if err := piCmd.Start(); err != nil {
 		sessionLog.event("pi_start_failed", map[string]any{"error": err.Error()})
 		return piError("pi_start_failed", err)

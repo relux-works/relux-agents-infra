@@ -33,6 +33,7 @@ const (
 	sharedFirstGraceEnv   = "AGENTS_INFRA_SHARED_FIRST_GRACE_MS"
 	sharedShapeMutantEnv  = "AGENTS_INFRA_SHARED_SHAPE_MUTANT"
 	sharedTestProfileName = "profile"
+	standalonePiHelperArg = "standalone-pi-helper"
 )
 
 // TestMain lets the test binary exercise the broker and runtime-launch entry
@@ -40,6 +41,31 @@ const (
 // still forks and execs these exact entry points; only argument routing belongs
 // to the harness.
 func TestMain(m *testing.M) {
+	if len(os.Args) >= 4 && os.Args[1] == standalonePiHelperArg {
+		stdinProbe := make([]byte, 1)
+		count, stdinErr := os.Stdin.Read(stdinProbe)
+		info := map[string]any{
+			"pid":          os.Getpid(),
+			"argv":         append([]string(nil), os.Args[4:]...),
+			"agent_dir":    os.Getenv("PI_CODING_AGENT_DIR"),
+			"sessions_dir": os.Getenv("PI_CODING_AGENT_SESSION_DIR"),
+			"stdin_eof":    count == 0 && errors.Is(stdinErr, io.EOF),
+		}
+		data, err := json.Marshal(info)
+		if err == nil {
+			err = os.WriteFile(os.Args[2], data, 0o600)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		for {
+			if _, err := os.Stat(os.Args[3]); err == nil {
+				os.Exit(0)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 	if os.Getenv(sharedCandidateHelper) == "1" {
 		fmt.Fprintln(os.Stdout, "candidate-ready")
 		_, _ = io.Copy(io.Discard, os.Stdin)
