@@ -101,6 +101,94 @@ func TestParsePiPolicyExactSchemaAndMuseDFlash(t *testing.T) {
 	}
 }
 
+func sharedPiProfileTOML(name, runtime string, port int) string {
+	return validPiProfileTOML(name, runtime, port, false) + fmt.Sprintf(`
+[agents.pi.profiles.%q.runtime.sharing]
+mode = "shared"
+linger_seconds = 0
+max_leases = 8
+heartbeat_interval_seconds = 15
+lease_stale_seconds = 60
+broker_start_timeout_seconds = 40
+`, name)
+}
+
+func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
+	exclusive, err := parseProjectConfig([]byte(validPiProfileTOML("profile", "/bin/echo", 18011, false)), "/project/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exclusive.PiProfiles["profile"].Runtime.Sharing != nil {
+		t.Fatal("absent runtime.sharing changed the exclusive profile")
+	}
+
+	sharedBody := sharedPiProfileTOML("profile", "/bin/echo", 18011)
+	shared, err := parseProjectConfig([]byte(sharedBody), "/project/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 8, HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 40}
+	if got := shared.PiProfiles["profile"].Runtime.Sharing; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sharing=%#v want=%#v", got, want)
+	}
+
+	tests := map[string]string{
+		"unknown field":              strings.Replace(sharedBody, `mode = "shared"`, "mode = \"shared\"\nsurprise = 1", 1),
+		"missing mode":               strings.Replace(sharedBody, "mode = \"shared\"\n", "", 1),
+		"missing linger":             strings.Replace(sharedBody, "linger_seconds = 0\n", "", 1),
+		"missing max leases":         strings.Replace(sharedBody, "max_leases = 8\n", "", 1),
+		"missing heartbeat":          strings.Replace(sharedBody, "heartbeat_interval_seconds = 15\n", "", 1),
+		"missing stale":              strings.Replace(sharedBody, "lease_stale_seconds = 60\n", "", 1),
+		"missing broker timeout":     strings.Replace(sharedBody, "broker_start_timeout_seconds = 40\n", "", 1),
+		"unknown mode":               strings.Replace(sharedBody, `mode = "shared"`, `mode = "automatic"`, 1),
+		"negative linger":            strings.Replace(sharedBody, "linger_seconds = 0", "linger_seconds = -1", 1),
+		"zero max leases":            strings.Replace(sharedBody, "max_leases = 8", "max_leases = 0", 1),
+		"heartbeat equals stale":     strings.Replace(sharedBody, "heartbeat_interval_seconds = 15", "heartbeat_interval_seconds = 60", 1),
+		"broker timeout below bound": strings.Replace(sharedBody, "broker_start_timeout_seconds = 40", "broker_start_timeout_seconds = 36", 1),
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseProjectConfig([]byte(body), "/project/config.toml"); err == nil {
+				t.Fatal("strict runtime.sharing parser admitted invalid input")
+			}
+		})
+	}
+}
+
+func TestPiPrintConfigReportsSharedRuntimeWithoutInspectingOrCreatingIt(t *testing.T) {
+	piRoot := officialPiAsset(t)
+	project := t.TempDir()
+	home, err := os.MkdirTemp("/tmp", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	cache := filepath.Join(home, "Library", "Caches")
+	mustMkdir(t, cache)
+	t.Setenv("HOME", home)
+	writePiProjectConfig(t, project, sharedPiProfileTOML("profile", "/bin/echo", 18011))
+
+	plan, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, func(string) (string, error) {
+		return filepath.Join(piRoot, "pi"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Pi == nil || plan.Pi.SharedRuntime == nil {
+		t.Fatalf("shared runtime diagnostics absent: %#v", plan.Pi)
+	}
+	shared := plan.Pi.SharedRuntime
+	if shared.Mode != "shared" || shared.RuntimeKey == "" || shared.ProfileDigest == "" || shared.Broker.Observed != "not-inspected" {
+		t.Fatalf("shared runtime diagnostics incomplete: %#v", shared)
+	}
+	if plan.Pi.Runtime == nil || plan.Pi.Runtime.Ownership != "broker-owned-process-group" {
+		t.Fatalf("runtime ownership=%#v", plan.Pi.Runtime)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "agents-infra", "pi-runtimes")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("print config created or inspected shared runtime state: %v", err)
+	}
+}
+
 func TestParsePiPolicyRejectsMalformedUnsafeUnknownAndNarrowedInputs(t *testing.T) {
 	base := validPiProfileTOML("profile", "/bin/echo", 18011, false)
 	tests := map[string]string{

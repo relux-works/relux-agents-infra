@@ -68,6 +68,16 @@ type PiRuntime struct {
 	StartupTimeoutSeconds  int
 	ShutdownTimeoutSeconds int
 	DFlash                 *PiDFlash
+	Sharing                *PiRuntimeSharing
+}
+
+type PiRuntimeSharing struct {
+	Mode                      string `json:"mode"`
+	LingerSeconds             int    `json:"linger_seconds"`
+	MaxLeases                 int    `json:"max_leases"`
+	HeartbeatIntervalSeconds  int    `json:"heartbeat_interval_seconds"`
+	LeaseStaleSeconds         int    `json:"lease_stale_seconds"`
+	BrokerStartTimeoutSeconds int    `json:"broker_start_timeout_seconds"`
 }
 
 type PiDFlash struct {
@@ -263,7 +273,7 @@ func parsePiCompat(table map[string]any, field string) (PiCompat, error) {
 }
 
 func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
-	if err := rejectUnknownFields(table, field, "executable", "argv", "readiness_path", "startup_timeout_seconds", "shutdown_timeout_seconds", "dflash"); err != nil {
+	if err := rejectUnknownFields(table, field, "executable", "argv", "readiness_path", "startup_timeout_seconds", "shutdown_timeout_seconds", "dflash", "sharing"); err != nil {
 		return PiRuntime{}, err
 	}
 	var r PiRuntime
@@ -308,7 +318,55 @@ func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
 		}
 		r.DFlash = &d
 	}
+	if raw, ok := table["sharing"]; ok {
+		sharingTable, ok := raw.(map[string]any)
+		if !ok {
+			return r, fieldError(field+".sharing", fmt.Errorf("expected table, got %T", raw))
+		}
+		sharing, parseErr := parsePiRuntimeSharing(sharingTable, field+".sharing", r)
+		if parseErr != nil {
+			return r, parseErr
+		}
+		r.Sharing = &sharing
+	}
 	return r, nil
+}
+
+func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime) (PiRuntimeSharing, error) {
+	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds"); err != nil {
+		return PiRuntimeSharing{}, err
+	}
+	var sharing PiRuntimeSharing
+	var err error
+	if sharing.Mode, err = requiredString(table, "mode"); err != nil {
+		return sharing, fieldError(field+".mode", err)
+	}
+	if sharing.Mode != "exclusive" && sharing.Mode != "shared" {
+		return sharing, fieldError(field+".mode", errors.New("must equal exclusive or shared"))
+	}
+	if sharing.LingerSeconds, err = requiredNonNegativeInt(table, "linger_seconds"); err != nil {
+		return sharing, fieldError(field+".linger_seconds", err)
+	}
+	if sharing.MaxLeases, err = requiredPositiveInt(table, "max_leases"); err != nil {
+		return sharing, fieldError(field+".max_leases", err)
+	}
+	if sharing.HeartbeatIntervalSeconds, err = requiredPositiveInt(table, "heartbeat_interval_seconds"); err != nil {
+		return sharing, fieldError(field+".heartbeat_interval_seconds", err)
+	}
+	if sharing.LeaseStaleSeconds, err = requiredPositiveInt(table, "lease_stale_seconds"); err != nil {
+		return sharing, fieldError(field+".lease_stale_seconds", err)
+	}
+	if sharing.HeartbeatIntervalSeconds >= sharing.LeaseStaleSeconds {
+		return sharing, fieldError(field+".heartbeat_interval_seconds", errors.New("must be less than lease_stale_seconds"))
+	}
+	if sharing.BrokerStartTimeoutSeconds, err = requiredPositiveInt(table, "broker_start_timeout_seconds"); err != nil {
+		return sharing, fieldError(field+".broker_start_timeout_seconds", err)
+	}
+	minimum := runtime.StartupTimeoutSeconds + runtime.ShutdownTimeoutSeconds + 30
+	if sharing.BrokerStartTimeoutSeconds < minimum {
+		return sharing, fieldError(field+".broker_start_timeout_seconds", fmt.Errorf("must be at least runtime startup + shutdown + 30 seconds (%d)", minimum))
+	}
+	return sharing, nil
 }
 
 func parsePiDFlash(table map[string]any, field string, runtimeArgv []string) (PiDFlash, error) {
@@ -512,6 +570,20 @@ func requiredPositiveInt(table map[string]any, key string) (int, error) {
 	}
 	return int(n), nil
 }
+func requiredNonNegativeInt(table map[string]any, key string) (int, error) {
+	v, ok := table[key]
+	if !ok {
+		return 0, errors.New("required field is absent")
+	}
+	n, ok := v.(int64)
+	if !ok {
+		return 0, fmt.Errorf("expected integer, got %T", v)
+	}
+	if n < 0 || int64(int(n)) != n {
+		return 0, errors.New("must be a non-negative platform integer")
+	}
+	return int(n), nil
+}
 func requiredStringArray(table map[string]any, key string) ([]string, error) {
 	v, ok := table[key]
 	if !ok {
@@ -575,6 +647,13 @@ func clonePiPrimarySessionSource(s PiPrimarySessionSource) PiPrimarySessionSourc
 func clonePiProfiles(in map[string]PiProfile) map[string]PiProfile {
 	out := map[string]PiProfile{}
 	for k, v := range in {
+		v.Input = append([]string(nil), v.Input...)
+		v.RequestedCapabilities = append([]string(nil), v.RequestedCapabilities...)
+		v.Runtime.Argv = append([]string(nil), v.Runtime.Argv...)
+		if v.Runtime.Sharing != nil {
+			sharing := *v.Runtime.Sharing
+			v.Runtime.Sharing = &sharing
+		}
 		out[k] = v
 	}
 	return out
