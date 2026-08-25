@@ -3,6 +3,50 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-08-25
+
+### 1449 — Model-check Operator Contract Is Executably Pinned
+- REGRESSION: The bounded model-check README and skill sections could be deleted while the full uncached Go suite remained green, so unattended `--approve`, evidence, timeout, cleanup, and exit semantics had no drift guard.
+- FIX: Dedicated doc-contract tests pin both sections, derive deadline and exit fragments from production constants, and cover exact artifacts, modes, overwrite refusal, read-evidence limits, cleanup, and exit-5 precedence.
+- EVIDENCE: Narrowing the README precedence clause and the skill's failed-read-versus-absence rule made their named uncached tests fail with exit 1; byte-for-byte restoration and the unmutated tests then passed.
+- SCOPE: `TASK-260825-39ycg2`; no model-check runtime behavior changed.
+
+### 1409 — Qwen Skill Read Proved Before Deadline
+- FINDING: Installed `agents-infra model-check` observed a completed non-error `read` of `$HOME/.agents/skills/relux-agents-infra/SKILL.md` through the real `qwen-infra` target.
+- ANOMALY: The `5m` smoke timed out with exit `2` after `300192ms`; the response marker was unmet and the valid event stream remained incomplete.
+- EVIDENCE: Both owned process-group cleanup states are `confirmed`; sanitized outcome belongs to `TASK-260825-39ycg2`, while raw JSONL/stderr remain local mode-`0600` evidence.
+- DECISION: Skill discovery/read is proven; final-response behavior is not. Do not treat the absent marker as no skill read or the successful read as an overall passing check.
+
+### 1340 — Load Fixtures Must Own Their Process Cleanup
+- ANOMALY: Reviewer cycle 2 left eight busy-loop load-fixture processes in one process group after timing-flake diagnosis.
+- EVIDENCE: Orchestrator terminated the exact fixture PIDs and verified the process group empty before rework continued.
+- DECISION: Do not reproduce the unbounded load loop; cold-start stability uses an early PID marker, 2s deadline headroom, and six uncached production-entrypoint repetitions.
+- SCOPE: Review fixture only; no production process leak observed.
+
+### 1338 — Exit-Code Interfaces Need Nominal Ownership
+- REGRESSION: `main` matched any `ExitCode() int`, so provider `*exec.ExitError` values changed established Codex, Claude, and target CLI exits outside model-check scope.
+- FIX: `tools/agents-infra/main.go` recognizes only `*infra.ModelCheckFailure`; a production-binary Codex child exiting 42 must leave the wrapper at legacy exit 1.
+- EVIDENCE: Reintroducing the structural interface makes `TestMainKeepsProviderChildFailuresAtLegacyExitOne` fail with observed exit 42.
+- SCOPE: `TASK-260825-rtmcsw`; model-check retains its documented exits 1–5.
+
+### 1338 — Cleanup Attestation Must Observe Live OS State
+- ROOT CAUSE: Synthetic pending/failed report tests proved only the evaluator; a constant `processGroupCleanupState = confirmed` producer survived the suite.
+- FIX: `tools/agents-infra/internal/infra/pi_test.go` probes a live process group as failed and the same reaped group as confirmed; the cold-start fixture writes its PID before heavy imports.
+- EVIDENCE: The constant-confirmed mutant fails the named producer test; the readiness deadline case passes 6/6 uncached runs.
+- SCOPE: `TASK-260825-rtmcsw`; no external model or runtime download.
+
+### 1300 — Model Check Gates Need Boundary Proof
+- REGRESSION: A fixed prompt and universally true cleanup attestation both survived the original positive production suite.
+- FIX: `tools/agents-infra/model_check_main_test.go` captures the provider request body; `internal/infra/model_check_test.go` pins pending/failed cleanup to exit 1.
+- EVIDENCE: Narrowed prompt, cleanup, deadline, raw-overwrite, and non-managed-target mutants each fail a named production or lifecycle test.
+- SCOPE: `TASK-260825-rtmcsw`; no external model download.
+
+### 1210 — Bounded Checks Need Process-Group Evidence
+- ROOT CAUSE: Managed `RunPi` bounded only signal and runtime cleanup; normal Pi completion waited for the leader and exposed no machine-readable proof that either owned process group was gone.
+- FIX: `tools/agents-infra/internal/infra/pi_launch_posix.go:239` routes Pi and runtime through bounded TERM-to-SIGKILL group cleanup; `internal/infra/model_check.go:144` records sanitized cleanup state with every behavior-check outcome.
+- EVIDENCE: Production-binary timeout fixture leaves both an ignore-TERM `bash` descendant and runtime descendant; the command exits with the timeout code, reports cleanup confirmed, and direct PID probes return `ESRCH` for every recorded process.
+- SCOPE: `TASK-260825-rtmcsw`; no duplicate shell launcher or external model download.
+
 ## 2026-08-24
 
 ### 2152 — Local Setup Honors Provider-Owned Skill Links

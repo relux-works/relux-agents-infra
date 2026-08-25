@@ -3,6 +3,7 @@
 package infra
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,8 @@ type RunPiOptions struct {
 	LookPath   func(string) (string, error)
 	HTTPClient *http.Client
 	Signals    <-chan os.Signal
+	Context    context.Context
+	Report     *PiRunReport
 }
 
 var (
@@ -40,6 +43,13 @@ var (
 )
 
 func RunPi(opts RunPiOptions) error {
+	if opts.Report != nil {
+		*opts.Report = newPiRunReport()
+		defer finishPiRunReport(opts.Report)
+	}
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
 	project, err := CanonicalProjectDir(opts.ProjectDir)
 	if err != nil {
 		return err
@@ -76,6 +86,9 @@ func RunPi(opts RunPiOptions) error {
 	}
 	if selected == "" {
 		return runPiProcess(piPath, opts.Args, project, opts.Environ, opts.Stdin, opts.Stdout, opts.Stderr, false)
+	}
+	if opts.Report != nil {
+		opts.Report.Managed = true
 	}
 	if !composite.PiPrimarySession.PiCompatibility.Present {
 		return piError("invalid_project_configuration", errors.New("managed Pi profile requires pi_compatibility"))
@@ -136,6 +149,12 @@ func RunPi(opts RunPiOptions) error {
 		}
 		return piError("runtime_executable_invalid", err)
 	}
+	if err := opts.Context.Err(); err != nil {
+		if opts.Report != nil {
+			opts.Report.DeadlineExceeded = errors.Is(err, context.DeadlineExceeded)
+		}
+		return piError("pi_deadline_exceeded", err)
+	}
 
 	runtimeCmd := exec.Command(profile.Runtime.Executable, profile.Runtime.Argv...)
 	runtimeCmd.Dir = project
@@ -148,9 +167,16 @@ func RunPi(opts RunPiOptions) error {
 	if err := runtimeCmd.Start(); err != nil {
 		return piError("runtime_start_failed", err)
 	}
+	if opts.Report != nil {
+		opts.Report.RuntimeProcessGroupCleanup = "pending"
+	}
 	runtimeWait := waitForPiProcess(runtimeCmd)
 	cleanupRuntime := func() error {
-		return terminateProcessGroup(runtimeCmd.Process.Pid, runtimeWait, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
+		err := terminateProcessGroup(runtimeCmd.Process.Pid, runtimeWait, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
+		if opts.Report != nil {
+			opts.Report.RuntimeProcessGroupCleanup = processGroupCleanupState(runtimeCmd.Process.Pid, err)
+		}
+		return err
 	}
 	cleaned := false
 	defer func() {
@@ -162,7 +188,10 @@ func RunPi(opts RunPiOptions) error {
 	if profile.Runtime.DFlash != nil {
 		wantModel = profile.Runtime.DFlash.TargetModel
 	}
-	if err := waitPiRuntimeReady(opts.HTTPClient, profile.BaseURL+profile.Runtime.ReadinessPath, wantModel, runtimeCmd.Process, runtimeWait, time.Duration(profile.Runtime.StartupTimeoutSeconds)*time.Second); err != nil {
+	if err := waitPiRuntimeReady(opts.Context, opts.HTTPClient, profile.BaseURL+profile.Runtime.ReadinessPath, wantModel, runtimeCmd.Process, runtimeWait, time.Duration(profile.Runtime.StartupTimeoutSeconds)*time.Second); err != nil {
+		if opts.Report != nil {
+			opts.Report.DeadlineExceeded = errors.Is(err, context.DeadlineExceeded)
+		}
 		cleanupErr := cleanupRuntime()
 		cleaned = true
 		if cleanupErr != nil {
@@ -213,8 +242,22 @@ func RunPi(opts RunPiOptions) error {
 		cleaned = true
 		return piError("pi_start_failed", err)
 	}
-	piDone := make(chan error, 1)
-	go func() { piDone <- piCmd.Wait() }()
+	if opts.Report != nil {
+		opts.Report.PiProcessGroupCleanup = "pending"
+	}
+	piWait := waitForPiProcess(piCmd)
+	piCleaned := false
+	cleanupPi := func(first syscall.Signal) error {
+		if piCleaned {
+			return nil
+		}
+		err := terminateProcessGroupWithSignal(piCmd.Process.Pid, piWait, first, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
+		piCleaned = true
+		if opts.Report != nil {
+			opts.Report.PiProcessGroupCleanup = processGroupCleanupState(piCmd.Process.Pid, err)
+		}
+		return err
+	}
 	signals := opts.Signals
 	var ownedSignals chan os.Signal
 	if signals == nil {
@@ -223,9 +266,11 @@ func RunPi(opts RunPiOptions) error {
 		defer signal.Stop(ownedSignals)
 		signals = ownedSignals
 	}
+	contextDone := opts.Context.Done()
 	var result error
 	select {
-	case result = <-piDone:
+	case <-piWait.done:
+		result = piWait.err
 		select {
 		case <-runtimeWait.done:
 			result = piError("runtime_exited_early", fmt.Errorf("runtime child exited before Pi session ended: %v", runtimeWait.err))
@@ -235,7 +280,7 @@ func RunPi(opts RunPiOptions) error {
 			}
 		}
 	case <-runtimeWait.done:
-		terminatePiGroup(piCmd.Process.Pid, piDone, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
+		_ = cleanupPi(syscall.SIGTERM)
 		cleanupErr := cleanupRuntime()
 		cleaned = true
 		if cleanupErr != nil {
@@ -243,8 +288,22 @@ func RunPi(opts RunPiOptions) error {
 		}
 		result = piError("runtime_exited_early", fmt.Errorf("runtime child exited during Pi session: %v", runtimeWait.err))
 	case sig := <-signals:
-		_ = syscall.Kill(-piCmd.Process.Pid, sig.(syscall.Signal))
-		result = waitPiGroup(piCmd.Process.Pid, piDone, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
+		forward := syscall.SIGTERM
+		if received, ok := sig.(syscall.Signal); ok {
+			forward = received
+		}
+		result = cleanupPi(forward)
+	case <-contextDone:
+		if opts.Report != nil {
+			opts.Report.DeadlineExceeded = errors.Is(opts.Context.Err(), context.DeadlineExceeded)
+		}
+		_ = cleanupPi(syscall.SIGTERM)
+		result = piError("pi_deadline_exceeded", opts.Context.Err())
+	}
+	if !piCleaned {
+		if cleanupErr := cleanupPi(syscall.SIGTERM); cleanupErr != nil && result == nil {
+			result = cleanupErr
+		}
 	}
 	if !cleaned {
 		if cleanupErr := cleanupRuntime(); cleanupErr != nil {
@@ -286,25 +345,6 @@ func (w *piSynchronizedWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.writer.Write(p)
-}
-
-func terminatePiGroup(pid int, done <-chan error, timeout time.Duration) {
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
-	_ = waitPiGroup(pid, done, timeout)
-}
-func waitPiGroup(pid int, done <-chan error, timeout time.Duration) error {
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(timeout):
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
-		select {
-		case err := <-done:
-			return err
-		case <-time.After(time.Second):
-			return errors.New("Pi process group could not be reaped")
-		}
-	}
 }
 
 type runtimeExecutableIdentity struct {
@@ -349,7 +389,10 @@ func preflightPiListener(baseURL string) error {
 	return listener.Close()
 }
 
-func waitPiRuntimeReady(client *http.Client, endpoint, model string, child *os.Process, childWait *piProcessWait, timeout time.Duration) error {
+func waitPiRuntimeReady(ctx context.Context, client *http.Client, endpoint, model string, child *os.Process, childWait *piProcessWait, timeout time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if client == nil {
 		client = &http.Client{
 			Timeout:   time.Second,
@@ -365,6 +408,8 @@ func waitPiRuntimeReady(client *http.Client, endpoint, model string, child *os.P
 	defer ticker.Stop()
 	for {
 		select {
+		case <-ctx.Done():
+			return piError("pi_deadline_exceeded", ctx.Err())
 		case <-childWait.done:
 			return piError("runtime_exited_early", fmt.Errorf("runtime exited before readiness: %v", childWait.err))
 		case <-deadline.C:
@@ -373,8 +418,15 @@ func waitPiRuntimeReady(client *http.Client, endpoint, model string, child *os.P
 			if err := child.Signal(syscall.Signal(0)); err != nil {
 				return piError("runtime_exited_early", err)
 			}
-			resp, err := client.Get(endpoint)
+			request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+			if requestErr != nil {
+				return piError("runtime_readiness_invalid", requestErr)
+			}
+			resp, err := client.Do(request)
 			if err != nil {
+				if ctx.Err() != nil {
+					return piError("pi_deadline_exceeded", ctx.Err())
+				}
 				continue
 			}
 			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -408,10 +460,14 @@ func waitPiRuntimeReady(client *http.Client, endpoint, model string, child *os.P
 }
 
 func terminateProcessGroup(pid int, wait *piProcessWait, timeout time.Duration) error {
+	return terminateProcessGroupWithSignal(pid, wait, syscall.SIGTERM, timeout)
+}
+
+func terminateProcessGroupWithSignal(pid int, wait *piProcessWait, first syscall.Signal, timeout time.Duration) error {
 	if err := syscall.Kill(-pid, syscall.Signal(0)); errors.Is(err, syscall.ESRCH) {
 		return waitForPiProcessDrain(wait, time.Second)
 	}
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	_ = syscall.Kill(-pid, first)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if err := syscall.Kill(-pid, syscall.Signal(0)); errors.Is(err, syscall.ESRCH) {
@@ -427,6 +483,17 @@ func terminateProcessGroup(pid int, wait *piProcessWait, timeout time.Duration) 
 		return err
 	}
 	return piError("runtime_shutdown_timeout", errors.New("runtime group required SIGKILL"))
+}
+
+func processGroupCleanupState(pid int, cleanupErr error) string {
+	err := syscall.Kill(-pid, syscall.Signal(0))
+	if errors.Is(err, syscall.ESRCH) {
+		if cleanupErr == nil {
+			return "confirmed"
+		}
+		return "confirmed_after_sigkill"
+	}
+	return "failed"
 }
 
 func waitForPiProcessDrain(wait *piProcessWait, timeout time.Duration) error {

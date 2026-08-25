@@ -24,11 +24,16 @@ const callerCWDEnv = "AGENTS_INFRA_CALLER_CWD"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		code := 1
 		if code, ok := attachments.ExitCode(err); ok {
 			os.Exit(code)
 		}
+		var modelCheckFailure *infra.ModelCheckFailure
+		if errors.As(err, &modelCheckFailure) {
+			code = modelCheckFailure.ExitCode()
+		}
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(code)
 	}
 }
 
@@ -59,6 +64,8 @@ func run(args []string) error {
 		return runPi(args[1:])
 	case "target":
 		return runTarget(args[1:])
+	case "model-check":
+		return runModelCheck(args[1:])
 	case "version", "--version":
 		return runVersion()
 	case "help", "-h", "--help":
@@ -66,6 +73,56 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usageText())
 	}
+}
+
+type repeatedStringFlag []string
+
+func (f *repeatedStringFlag) String() string { return strings.Join(*f, ",") }
+func (f *repeatedStringFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
+func runModelCheck(args []string) error {
+	fs := flag.NewFlagSet("model-check", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	target := fs.String("target", "", "configured canonical entrypoint, for example qwen-infra")
+	prompt := fs.String("prompt", "", "behavior-check prompt")
+	outputDir := fs.String("output-dir", "", "explicit evidence output directory")
+	deadline := fs.Duration("deadline", infra.DefaultModelCheckDeadline, "bounded execution deadline")
+	var expectedTools repeatedStringFlag
+	var expectedText repeatedStringFlag
+	fs.Var(&expectedTools, "expect-tool", "required tool name; repeat for multiple expectations")
+	fs.Var(&expectedText, "expect-text", "required final-response substring; repeat for multiple expectations")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) != 0 {
+		return fmt.Errorf("model-check does not accept positional arguments: %q", fs.Args())
+	}
+	startDir := os.Getenv(callerCWDEnv)
+	if startDir == "" {
+		var err error
+		startDir, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("resolve model-check caller cwd: %w", err)
+		}
+	}
+	summary, err := infra.RunModelCheck(infra.ModelCheckOptions{
+		ProjectDir:    startDir,
+		Target:        *target,
+		Prompt:        *prompt,
+		OutputDir:     *outputDir,
+		Deadline:      *deadline,
+		ExpectedTools: append([]string(nil), expectedTools...),
+		ExpectedText:  append([]string(nil), expectedText...),
+		Environ:       os.Environ(),
+		Producer:      infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit},
+	})
+	if summary.SchemaVersion != 0 {
+		fmt.Fprint(os.Stdout, infra.RenderModelCheckSummary(summary))
+	}
+	return err
 }
 
 func runAttachments(args []string) error {
@@ -763,6 +820,7 @@ func usageText() string {
   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
   agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
   agents-infra target ENTRYPOINT [--print-config] [-- PROVIDER_ARGS...]
+  agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]
 
 Source tree resolution for setup (first usable wins):
   1. --source-dir DIR

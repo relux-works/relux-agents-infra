@@ -413,6 +413,60 @@ smoke procedure, full error list, and security limitations are authoritative in
 [README.md](README.md#managed-pi-local-model-operator-contract). Start every Pi
 incident with `pi-infra --print-config`, then `agents-infra verify local "$PWD"`.
 
+### Bounded model checker
+
+Use the installed checker when a managed local-model claim must be reproduced
+through the production canonical-target and managed Pi entrypoint: deployment
+smokes, tool-use checks, and skill-discovery checks. It complements static
+`--print-config` and `verify`; it is not a unit-test substitute, capability
+attestation, or proof derived from a model's unsupported self-report.
+
+Run setup and static compatibility checks first, then execute the checker from
+the project the model should inspect. Always choose a fresh task-scoped output
+directory because existing evidence is never overwritten:
+
+```bash
+agents-infra setup global --source-dir /path/to/relux-agents-infra
+agents-infra verify global
+
+cd /abs/path/to/project
+qwen-infra --print-config
+
+agents-infra model-check \
+  --target qwen-infra \
+  --prompt 'Discover the applicable installed skill for updating shared agent infrastructure. Use the read tool to read its SKILL.md. Reply with RELUX_SKILL_READ_CONFIRMED and one source-of-truth rule learned from that file.' \
+  --output-dir .temp/model-check/qwen-skill-discovery-01 \
+  --deadline 5m \
+  --expect-tool read \
+  --expect-text RELUX_SKILL_READ_CONFIRMED
+```
+
+`--target` must be a canonical entrypoint resolving to a managed local Pi
+profile. `--expect-tool` and `--expect-text` are repeatable; tool names match
+exactly, while text matches only the final assistant response. The checker
+forces JSON print/no-session mode and Pi `--approve`, so tool calls execute
+unattended in the caller's project. Use a reviewed target, a controlled project,
+and a bounded prompt.
+
+The default deadline is `5m`, with an accepted Go duration range of
+`1ms..30m`. Timeout cancels the run and performs bounded cleanup of the owned
+Pi/runtime process groups before return; it is exit `2`. Inspect
+`cleanup_confirmed` and both cleanup states rather than assuming success. Other
+exits are `0` pass, `1` execution/validation/cleanup failure, `3`
+malformed/incomplete JSONL, `4` unmet expectations, and `5` failed tool
+execution. See the README's
+[bounded-check contract](README.md#bounded-model-behavior-checks) for exact
+precedence and artifact semantics.
+
+Treat `events.jsonl` and `stderr.log` as sensitive raw mode-`0600` evidence.
+Use the bounded, sanitized `summary.json` and `summary.txt` for normal handoff
+after inspecting them. A `read` expectation proves only that a read tool ran;
+claim skill discovery only when the raw event stream shows a completed,
+non-error read whose argument resolves to the installed
+`relux-agents-infra/SKILL.md`. Preserve a sanitized projection of that event,
+not the raw stream. A response marker alone is self-reported evidence, and a
+failed/partial read is failure or unknown, never absence.
+
 ## MCP server policy
 
 MCP servers managed by agents-infra are project-local opt-in. Agents-infra does
