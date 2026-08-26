@@ -33,9 +33,10 @@ agents-infra version
 ```
 
 `setup.sh` and `setup.ps1` are bootstrap wrappers. They delegate into
-`scripts/setup.sh` and `scripts/setup.ps1`, build a real `agents-infra` binary
-with version metadata, install it into the user-local bin directory, write
-install-state metadata, and then immediately run `agents-infra setup global`.
+`scripts/setup.sh` and `scripts/setup.ps1`, build the `agents-infra` launcher
+and the separate `model-harness` runtime binary with version metadata, install
+them into the user-local bin directory, write install-state metadata, and then
+immediately run `agents-infra setup global`.
 
 Install-state metadata lives under the standard user config directory:
 
@@ -62,6 +63,9 @@ The canonical interface after bootstrap is:
 - `qwen-infra spawn --prompt TEXT [--deadline DURATION] [--print-config]`
 - `agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]`
 - `agents-infra version`
+- `model-harness render PROFILE --host 127.0.0.1 --port PORT --json [--config PATH]`
+- `model-harness doctor PROFILE --host 127.0.0.1 --port PORT [--config PATH]`
+- `model-harness run PROFILE --host 127.0.0.1 --port PORT [--config PATH]`
 
 `model-check` exits `0` when the managed check and all expectations pass, `1`
 for launch, validation, or cleanup failure, `2` on deadline expiry, `3` for a
@@ -502,6 +506,64 @@ The model names, runtime executable, argv, ports, limits, and timeouts are
 operator-supplied deployment inputs. agents-infra does not acquire, convert,
 quantize, license, size, or securely distribute models or runtimes, and it does
 not automate benchmarks.
+
+`model-harness` is the machine-facing runtime boundary for new deployments. It
+lives in this repository as a separate binary so it can later move to its own
+repository without changing the agent-facing contract. Its config is separate
+from `project-config.toml` and defaults to the platform user config directory:
+
+- macOS: `~/Library/Application Support/model-harness/config.toml`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/model-harness/config.toml`
+
+`MODEL_HARNESS_CONFIG` or `--config /absolute/path` selects another file. A
+local profile replaces exact `{host}` and `{port}` argv tokens and starts the
+backend without a shell:
+
+```toml
+[profiles.qwen-local]
+mode = "local"
+executable = "/absolute/path/to/python"
+argv = ["-c", "from mlx_lm.server import main; main()", "--model", "/models/Qwen", "--host", "{host}", "--port", "{port}"]
+```
+
+A remote profile starts the same CLI over SSH and forwards the remote loopback
+endpoint to local loopback:
+
+```toml
+[profiles.qwen-remote]
+mode = "ssh"
+ssh_target = "dedicated-mac"
+remote_executable = "/Users/remote/.local/bin/model-harness"
+remote_config = "/Users/remote/.config/model-harness/config.toml"
+remote_profile = "qwen-tiny"
+remote_host = "127.0.0.1"
+remote_port = 18011
+```
+
+Both presented endpoints are strictly `127.0.0.1`. The remote backend also
+binds only to its loopback interface; SSH is the transport and access-control
+boundary. Remote runs force a dedicated SSH PTY so disconnect delivers HUP to
+the foreground remote process group instead of orphaning a model server. The
+MVP intentionally refuses direct LAN/public exposure of MLX or llama.cpp HTTP
+servers.
+
+Inspect before launch:
+
+```bash
+model-harness render qwen-local --host 127.0.0.1 --port 18011 --json
+model-harness doctor qwen-remote --host 127.0.0.1 --port 18011
+```
+
+An agents-infra Pi profile can use the harness without a new launcher mode:
+
+```toml
+[agents.pi.profiles."qwen-harness".runtime]
+executable = "/Users/example/.local/bin/model-harness"
+argv = ["run", "qwen-local", "--host", "127.0.0.1", "--port", "18011"]
+readiness_path = "/models"
+startup_timeout_seconds = 120
+shutdown_timeout_seconds = 10
+```
 
 `runtime.sharing` is an explicit, strict opt-in. Its table has no field
 defaults: unknown or missing members fail closed, `mode` is `exclusive` or
@@ -1224,8 +1286,9 @@ rg -n "Primary Parent Goal Actualization" \
 
 | Tool | Purpose | Command | Outputs |
 |------|---------|---------|---------|
-| `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
+| `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
 | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+| `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT` | Exact side-effect-free launch-plan JSON, readiness diagnostics, or a foreground backend/SSH process owned by `agents-infra` |
 | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
 | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |

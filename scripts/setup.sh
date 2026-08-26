@@ -4,7 +4,9 @@ set -euo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BINARY_NAME="agents-infra"
+MODEL_HARNESS_BINARY_NAME="model-harness"
 BUILD_OUTPUT="$SOURCE_DIR/.temp/bin/$BINARY_NAME"
+MODEL_HARNESS_BUILD_OUTPUT="$SOURCE_DIR/.temp/bin/$MODEL_HARNESS_BINARY_NAME"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 WITH_PDF_TOOLS=0
 CONFIG_DIR="${AGENTS_INFRA_CONFIG_DIR:-}"
@@ -28,7 +30,7 @@ usage() {
 Usage: scripts/setup.sh [options]
 
 Options:
-  --bin-dir PATH       Install the agents-infra binary into PATH (default: $HOME/.local/bin)
+  --bin-dir PATH       Install agents-infra and model-harness into PATH (default: $HOME/.local/bin)
   --with-pdf-tools     Install optional PDF toolchain (pandoc, weasyprint, poppler)
   --help, -h           Show this help
 
@@ -181,13 +183,23 @@ build_cli() {
   mkdir -p "$(dirname "$BUILD_OUTPUT")"
   go -C "$SOURCE_DIR/tools/agents-infra" build -trimpath -ldflags "$BUILD_LDFLAGS" -o "$BUILD_OUTPUT" .
   green "Built: $BUILD_OUTPUT"
+
+  green "Building $MODEL_HARNESS_BINARY_NAME ..."
+  go -C "$SOURCE_DIR/tools/agents-infra" build -trimpath -ldflags "$BUILD_LDFLAGS" -o "$MODEL_HARNESS_BUILD_OUTPUT" ./cmd/model-harness
+  green "Built: $MODEL_HARNESS_BUILD_OUTPUT"
 }
 
 install_binary() {
-  local dest="$BIN_DIR/$BINARY_NAME"
-  local tmp="$dest.tmp.$$"
   mkdir -p "$BIN_DIR"
-  cp "$BUILD_OUTPUT" "$tmp"
+  install_one_binary "$BUILD_OUTPUT" "$BIN_DIR/$BINARY_NAME"
+  install_one_binary "$MODEL_HARNESS_BUILD_OUTPUT" "$BIN_DIR/$MODEL_HARNESS_BINARY_NAME"
+}
+
+install_one_binary() {
+  local source="$1"
+  local dest="$2"
+  local tmp="$dest.tmp.$$"
+  cp "$source" "$tmp"
   chmod +x "$tmp"
   mv -f "$tmp" "$dest"
   green "Installed binary: $dest"
@@ -230,8 +242,11 @@ ensure_user_path() {
 
 verify_install() {
   local dest="$BIN_DIR/$BINARY_NAME"
+  local model_harness_dest="$BIN_DIR/$MODEL_HARNESS_BINARY_NAME"
   [[ -x "$dest" ]] || { red "Missing installed binary: $dest"; exit 1; }
+  [[ -x "$model_harness_dest" ]] || { red "Missing installed binary: $model_harness_dest"; exit 1; }
   "$dest" version >/dev/null
+  "$model_harness_dest" version >/dev/null
   "$dest" setup global --source-dir "$SOURCE_DIR" >/dev/null
   "$dest" doctor global >/dev/null
   green "Verified binary and global setup"
