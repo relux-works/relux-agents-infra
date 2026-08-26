@@ -27,6 +27,7 @@ type PiStatePaths struct {
 	Root               string `json:"root"`
 	AgentDir           string `json:"agent_dir"`
 	SessionsDir        string `json:"sessions_dir"`
+	LogsDir            string `json:"logs_dir"`
 	ModelsJSON         string `json:"models_json"`
 	Lock               string `json:"lock"`
 	components         []string
@@ -94,7 +95,7 @@ func resolvePiClientStatePaths(cacheRoot, canonicalProject, profileName, runID s
 	if err != nil || rel != suffix {
 		return PiStatePaths{}, piError("profile_state_path_invalid", errors.New("managed state escaped canonical cache root"))
 	}
-	paths := PiStatePaths{CanonicalCacheRoot: canonical, ProjectStateKey: projectKey, ProfileStateKey: profileKey, RunStateKey: runKey, Root: root, AgentDir: filepath.Join(root, "agent"), SessionsDir: filepath.Join(root, "sessions"), ModelsJSON: filepath.Join(root, "agent", "models.json"), Lock: filepath.Join(root, lockName), components: components}
+	paths := PiStatePaths{CanonicalCacheRoot: canonical, ProjectStateKey: projectKey, ProfileStateKey: profileKey, RunStateKey: runKey, Root: root, AgentDir: filepath.Join(root, "agent"), SessionsDir: filepath.Join(root, "sessions"), LogsDir: filepath.Join(root, "logs"), ModelsJSON: filepath.Join(root, "agent", "models.json"), Lock: filepath.Join(root, lockName), components: components}
 	if err := validateExistingPiStateComponents(paths); err != nil {
 		return PiStatePaths{}, piError("profile_state_path_invalid", err)
 	}
@@ -126,7 +127,7 @@ func validateExistingPiStateComponents(paths PiStatePaths) error {
 			unix.Close(fd)
 		}
 	}()
-	for _, name := range []string{"agent", "sessions"} {
+	for _, name := range []string{"agent", "sessions", "logs"} {
 		child, openErr := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if errors.Is(openErr, syscall.ENOENT) {
 			continue
@@ -190,7 +191,7 @@ func CreatePiStateTree(paths PiStatePaths) error {
 			unix.Close(fd)
 		}
 	}()
-	for _, childName := range []string{"agent", "sessions"} {
+	for _, childName := range []string{"agent", "sessions", "logs"} {
 		child, openErr := openOrCreateDirAt(fd, childName)
 		if openErr != nil {
 			return piError("profile_state_path_invalid", openErr)

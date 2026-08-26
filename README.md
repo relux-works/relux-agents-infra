@@ -583,8 +583,8 @@ or mutate Pi settings, auth, or trust. An uninspectable value is `unknown` or an
 error, never absence. The plan reports exact sources, normalized Pi argv,
 runtime executable/argv and static state, loopback readiness URL, timeouts,
 generated `models.json` digest/path, catalog identity, requested capabilities,
-and hash-only state/lock paths. Secret values and arbitrary environment values
-are omitted.
+and hash-only state/lock/log paths. Secret values and arbitrary environment
+values are omitted.
 
 The emitted contract is `agents-infra.primary-session-launch-plan` schema 1
 with provider `pi`. `launch_variants.interactive.argv` is the exact normalized
@@ -602,8 +602,18 @@ Let `profile_bytes` be the exact UTF-8 profile-name bytes. The profile key is
 <canonical-cache-root>/agents-infra/pi/<64-hex-project-key>/<64-hex-profile-key>/
   agent/models.json
   sessions/
+  logs/<UTC-start>-<random>.jsonl
   session.lock
 ```
+
+Each managed launch creates a distinct mode-`0600` lifecycle log. It records
+session/runtime/Pi start, PID and process-group identity, runtime readiness,
+foreground-terminal ownership, exit or received signal, and bounded cleanup.
+It never records environment values, API keys, or prompt/argument contents.
+Pi's own conversation and tool transcript remains in `sessions/`; the launcher
+log exists to diagnose orchestration failures such as a TUI child stopped by
+terminal job control. The launcher prints the exact log path before starting
+Pi, and `PiRunReport.session_log` carries it for managed callers.
 
 The canonical cache root is a successfully resolved absolute
 `os.UserCacheDir()`. Raw profile text is never a path component. `/`, `\\`,
