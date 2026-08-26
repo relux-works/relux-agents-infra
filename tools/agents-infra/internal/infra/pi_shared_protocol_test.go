@@ -13,6 +13,13 @@ import (
 	"testing"
 )
 
+func TestSharedRuntimeListenerBusyHasNominalBrokerExitCode(t *testing.T) {
+	code, ok := SharedRuntimeExitCode(sharedRuntimeError("runtime_listener_occupied", errors.New("busy")))
+	if !ok || code != sharedRuntimeExitListenerBusy {
+		t.Fatalf("listener-busy exit=(%d,%t) want=(%d,true)", code, ok, sharedRuntimeExitListenerBusy)
+	}
+}
+
 func TestSharedRuntimeDigestsExcludeSharingAndCoverTheExecutionPlan(t *testing.T) {
 	profile := mustParsedPiProfile(t, false)
 	profile.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 1, HeartbeatIntervalSeconds: 1, LeaseStaleSeconds: 2, BrokerStartTimeoutSeconds: 40}

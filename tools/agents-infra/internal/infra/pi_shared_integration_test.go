@@ -408,6 +408,109 @@ broker_start_timeout_seconds = 40
 	}, "final release did not reap the shared runtime and remove owner state")
 }
 
+func TestSharedRuntimeAcquisitionRetriesListenerHandoff(t *testing.T) {
+	testRoot, err := os.MkdirTemp("/tmp", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(testRoot) })
+	project := filepath.Join(testRoot, "project")
+	home := filepath.Join(testRoot, "home")
+	cache := filepath.Join(home, "Library", "Caches")
+	for _, directory := range []string{project, cache} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	runtimeExecutable := buildSharedFakeRuntime(t, testRoot)
+	bodyForPIDFile := func(pidFile string) string {
+		body := validPiProfileWithArgv(t, sharedTestProfileName, runtimeExecutable, port, []string{"serve", "--model", "Model", "--pid-file", pidFile}, 5)
+		return body + fmt.Sprintf(`
+[agents.pi.profiles.%q.runtime.sharing]
+mode = "shared"
+linger_seconds = 1
+max_leases = 4
+heartbeat_interval_seconds = 1
+lease_stale_seconds = 5
+broker_start_timeout_seconds = 40
+`, sharedTestProfileName)
+	}
+	writePiProjectConfig(t, project, bodyForPIDFile(filepath.Join(testRoot, "runtime-a.pid")))
+	firstResolved, err := resolveSharedProfile(project, home, cache, sharedTestProfileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateSharedRuntimeTree(firstResolved.Paths); err != nil {
+		t.Fatal(err)
+	}
+	firstState, err := ResolvePiClientStatePaths(cache, project, sharedTestProfileName, "RUN-listener-handoff-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreatePiStateTree(firstState); err != nil {
+		t.Fatal(err)
+	}
+	firstLease, err := acquireSharedRuntimeLease(firstResolved, firstState, "RUN-listener-handoff-a", append(os.Environ(), "HOME="+home), nil, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRuntimePID := firstLease.runtime.PID
+	firstLease.close()
+	waitForSharedTest(t, 3*time.Second, func() bool {
+		record, present, readErr := readSharedBrokerRecord(firstResolved.Paths.BrokerState)
+		return readErr == nil && present && record.State == "lingering"
+	}, "first runtime did not enter linger")
+
+	writePiProjectConfig(t, project, bodyForPIDFile(filepath.Join(testRoot, "runtime-b.pid")))
+	secondResolved, err := resolveSharedProfile(project, home, cache, sharedTestProfileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstResolved.RuntimeKey == secondResolved.RuntimeKey {
+		t.Fatal("profile drift did not change the runtime key")
+	}
+	if err := CreateSharedRuntimeTree(secondResolved.Paths); err != nil {
+		t.Fatal(err)
+	}
+	secondState, err := ResolvePiClientStatePaths(cache, project, sharedTestProfileName, "RUN-listener-handoff-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreatePiStateTree(secondState); err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := acquireSharedRuntimeLease(secondResolved, secondState, "RUN-listener-handoff-b", append(os.Environ(), "HOME="+home), nil, context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRuntimePID := secondLease.runtime.PID
+	logData, err := os.ReadFile(secondResolved.Paths.BrokerLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(logData, []byte(`"code":"runtime_listener_occupied"`)) {
+		t.Fatalf("broker log did not record the bounded listener handoff retry: %s", logData)
+	}
+	if secondRuntimePID == 0 || secondRuntimePID == firstRuntimePID {
+		t.Fatal("listener handoff acquired no runtime")
+	}
+	secondLease.close()
+	waitForSharedTest(t, 5*time.Second, func() bool {
+		_, present, readErr := readSharedBrokerRecord(secondResolved.Paths.BrokerState)
+		firstObservation, firstErr := inspectSharedProcessKernel(firstRuntimePID)
+		secondObservation, secondErr := inspectSharedProcessKernel(secondRuntimePID)
+		firstGone := sharedProcessGone(firstErr) || (firstErr == nil && !firstObservation.live())
+		secondGone := sharedProcessGone(secondErr) || (secondErr == nil && !secondObservation.live())
+		return readErr == nil && !present && firstGone && secondGone
+	}, "listener handoff did not reap both runtime generations")
+}
+
 func TestSharedRuntimeOperatorStopRefusesActiveLeasesThenForceDrains(t *testing.T) {
 	testRoot, err := os.MkdirTemp("/tmp", "x")
 	if err != nil {

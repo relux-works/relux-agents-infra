@@ -5,6 +5,11 @@
 
 ## 2026-08-27
 
+### 0127 — Profile Drift Can Outlive Its Runtime Key
+- ROOT CAUSE: Changing the managed Qwen profile changed its runtime key while the previous broker still held the fixed listener through 15 seconds of linger plus bounded runtime shutdown; the new-key broker exited `runtime_listener_occupied`, so two immediate restarts failed and the third succeeded after handoff.
+- FIX: `tools/agents-infra/internal/infra/pi_shared_client_darwin.go` retries only the broker's nominal listener-busy exit for at most configured linger plus shutdown and two seconds; it never attaches to, adopts, or signals the occupying listener.
+- EVIDENCE: `TestSharedRuntimeAcquisitionRetriesListenerHandoff` holds the endpoint across the first real broker attempt, releases it inside the bounded window, then requires acquisition through a newly owned runtime; the existing foreign-listener broker refusal remains green.
+
 ### 0103 — Capacity Checks Should Spend Tokens On Prefill
 - DECISION: `model-harness stress` validates local-host context capacity with a calibrated synthetic prompt and bounded output instead of waiting for long generation.
 - FIX: The local profile owns prompt, output, startup, request, and sampling bounds; the versioned report records observed tokens, timing, baseline/peak process RSS, host memory, and target tolerance.
