@@ -28,28 +28,38 @@ type Document struct {
 }
 
 type Profile struct {
-	Mode             string   `toml:"mode"`
-	Executable       string   `toml:"executable,omitempty"`
-	Argv             []string `toml:"argv,omitempty"`
-	SSHExecutable    string   `toml:"ssh_executable,omitempty"`
-	SSHTarget        string   `toml:"ssh_target,omitempty"`
-	RemoteExecutable string   `toml:"remote_executable,omitempty"`
-	RemoteConfig     string   `toml:"remote_config,omitempty"`
-	RemoteProfile    string   `toml:"remote_profile,omitempty"`
-	RemoteHost       string   `toml:"remote_host,omitempty"`
-	RemotePort       int      `toml:"remote_port,omitempty"`
+	Mode             string        `toml:"mode"`
+	Executable       string        `toml:"executable,omitempty"`
+	Argv             []string      `toml:"argv,omitempty"`
+	SSHExecutable    string        `toml:"ssh_executable,omitempty"`
+	SSHTarget        string        `toml:"ssh_target,omitempty"`
+	RemoteExecutable string        `toml:"remote_executable,omitempty"`
+	RemoteConfig     string        `toml:"remote_config,omitempty"`
+	RemoteProfile    string        `toml:"remote_profile,omitempty"`
+	RemoteHost       string        `toml:"remote_host,omitempty"`
+	RemotePort       int           `toml:"remote_port,omitempty"`
+	Stress           *StressPolicy `toml:"stress,omitempty"`
+}
+
+type StressPolicy struct {
+	PromptTokens               int `toml:"prompt_tokens" json:"prompt_tokens"`
+	MaxOutputTokens            int `toml:"max_output_tokens" json:"max_output_tokens"`
+	StartupTimeoutSeconds      int `toml:"startup_timeout_seconds" json:"startup_timeout_seconds"`
+	RequestTimeoutSeconds      int `toml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	SampleIntervalMilliseconds int `toml:"sample_interval_milliseconds" json:"sample_interval_milliseconds"`
 }
 
 type Plan struct {
-	Contract      string      `json:"contract"`
-	SchemaVersion int         `json:"schema_version"`
-	Config        string      `json:"config"`
-	Profile       string      `json:"profile"`
-	Mode          string      `json:"mode"`
-	Executable    string      `json:"executable"`
-	Argv          []string    `json:"argv"`
-	Endpoint      string      `json:"endpoint"`
-	Remote        *RemotePlan `json:"remote,omitempty"`
+	Contract      string        `json:"contract"`
+	SchemaVersion int           `json:"schema_version"`
+	Config        string        `json:"config"`
+	Profile       string        `json:"profile"`
+	Mode          string        `json:"mode"`
+	Executable    string        `json:"executable"`
+	Argv          []string      `json:"argv"`
+	Endpoint      string        `json:"endpoint"`
+	Remote        *RemotePlan   `json:"remote,omitempty"`
+	Stress        *StressPolicy `json:"stress,omitempty"`
 }
 
 type RemotePlan struct {
@@ -115,6 +125,7 @@ func Resolve(configPath, profileName, host string, port int) (Plan, error) {
 		Profile:       profileName,
 		Mode:          profile.Mode,
 		Endpoint:      "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/v1",
+		Stress:        profile.Stress,
 	}
 	switch profile.Mode {
 	case "local":
@@ -212,6 +223,9 @@ func validateProfile(name string, profile Profile) error {
 		if profile.SSHExecutable != "" || profile.SSHTarget != "" || profile.RemoteExecutable != "" || profile.RemoteConfig != "" || profile.RemoteProfile != "" || profile.RemoteHost != "" || profile.RemotePort != 0 {
 			return fmt.Errorf("profile %q: local mode cannot declare remote fields", name)
 		}
+		if err := validateStressPolicy(name, profile.Stress); err != nil {
+			return err
+		}
 	case "ssh":
 		if profile.Executable != "" || len(profile.Argv) != 0 {
 			return fmt.Errorf("profile %q: ssh mode cannot declare executable or argv", name)
@@ -240,8 +254,33 @@ func validateProfile(name string, profile Profile) error {
 		if profile.RemotePort < 1 || profile.RemotePort > 65535 {
 			return fmt.Errorf("profile %q: remote_port must be between 1 and 65535", name)
 		}
+		if profile.Stress != nil {
+			return fmt.Errorf("profile %q: stress is currently supported only for local mode", name)
+		}
 	default:
 		return fmt.Errorf("profile %q: mode must equal local or ssh", name)
+	}
+	return nil
+}
+
+func validateStressPolicy(name string, policy *StressPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	if policy.PromptTokens < 1024 || policy.PromptTokens > 1_000_000 {
+		return fmt.Errorf("profile %q: stress.prompt_tokens must be between 1024 and 1000000", name)
+	}
+	if policy.MaxOutputTokens < 1 || policy.MaxOutputTokens > 4096 {
+		return fmt.Errorf("profile %q: stress.max_output_tokens must be between 1 and 4096", name)
+	}
+	if policy.StartupTimeoutSeconds < 1 || policy.StartupTimeoutSeconds > 3600 {
+		return fmt.Errorf("profile %q: stress.startup_timeout_seconds must be between 1 and 3600", name)
+	}
+	if policy.RequestTimeoutSeconds < 1 || policy.RequestTimeoutSeconds > 86400 {
+		return fmt.Errorf("profile %q: stress.request_timeout_seconds must be between 1 and 86400", name)
+	}
+	if policy.SampleIntervalMilliseconds < 50 || policy.SampleIntervalMilliseconds > 10000 {
+		return fmt.Errorf("profile %q: stress.sample_interval_milliseconds must be between 50 and 10000", name)
 	}
 	return nil
 }

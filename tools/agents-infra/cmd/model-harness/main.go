@@ -24,13 +24,13 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: model-harness run|render|doctor|version")
+		return errors.New("usage: model-harness run|render|doctor|stress|version")
 	}
 	switch args[0] {
 	case "version", "--version", "-v":
 		fmt.Printf("model-harness %s (%s, %s)\n", Version, Commit, BuildDate)
 		return nil
-	case "run", "render", "doctor":
+	case "run", "render", "doctor", "stress":
 		return runProfileCommand(args[0], args[1:])
 	case "help", "--help", "-h":
 		printUsage()
@@ -80,6 +80,15 @@ func runProfileCommand(action string, args []string) error {
 			return errors.New("doctor does not accept --json")
 		}
 		return modelharness.Doctor(plan, os.Stdout, os.Stderr)
+	case "stress":
+		if !*jsonOutput {
+			return errors.New("stress requires --json")
+		}
+		report, stressErr := modelharness.Stress(plan, os.Stderr)
+		if encodeErr := modelharness.EncodeStressReport(os.Stdout, report); encodeErr != nil {
+			return encodeErr
+		}
+		return stressErr
 	default:
 		return fmt.Errorf("unsupported action %q", action)
 	}
@@ -90,5 +99,6 @@ func printUsage() {
   model-harness run PROFILE --host 127.0.0.1 --port PORT [--config PATH]
   model-harness render PROFILE --host 127.0.0.1 --port PORT --json [--config PATH]
   model-harness doctor PROFILE --host 127.0.0.1 --port PORT [--config PATH]
+  model-harness stress PROFILE --host 127.0.0.1 --port PORT --json [--config PATH]
   model-harness version`)
 }

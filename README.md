@@ -448,7 +448,7 @@ requested_capabilities = ["text", "tools"]
 # is merged into the isolated Pi settings before every launch.
 [agents.pi.profiles."qwen-3.8-27b".compaction]
 enabled = true
-reserve_tokens = 24576
+compact_at_tokens = 106496
 keep_recent_tokens = 8192
 
 [agents.pi.profiles."qwen-3.8-27b".compat]
@@ -511,8 +511,9 @@ draft_argv = ["--draft", "Muse-Glimmer-30B-DFlash"]
 
 The model names, runtime executable, argv, ports, limits, and timeouts are
 operator-supplied deployment inputs. agents-infra does not acquire, convert,
-quantize, license, size, or securely distribute models or runtimes, and it does
-not automate benchmarks.
+quantize, license, size, or securely distribute models or runtimes. Its bounded
+synthetic prefill probe is a host-capacity check, not a throughput, quality, or
+production benchmark.
 
 `model-harness` is the machine-facing runtime boundary for new deployments. It
 lives in this repository as a separate binary so it can later move to its own
@@ -531,7 +532,24 @@ backend without a shell:
 mode = "local"
 executable = "/absolute/path/to/python"
 argv = ["-c", "from mlx_lm.server import main; main()", "--model", "/models/Qwen", "--host", "{host}", "--port", "{port}"]
+
+[profiles.qwen-local.stress]
+prompt_tokens = 50000
+max_output_tokens = 1
+startup_timeout_seconds = 120
+request_timeout_seconds = 600
+sample_interval_milliseconds = 250
 ```
+
+All stress bounds are explicit profile policy. `model-harness stress` refuses
+profiles without this table and currently supports local mode only. It starts
+the reviewed backend on an unoccupied loopback endpoint, discovers the exact
+model ID, calibrates a repeated synthetic token unit against real API usage,
+prefills approximately `prompt_tokens`, requests only `max_output_tokens`, and
+samples the backend process RSS. Its versioned JSON report contains observed
+tokens, target delta/tolerance, startup and prefill time, baseline/peak RSS,
+physical host memory, and peak RSS as a percentage of host memory. The runtime
+is killed and reaped before the command returns, including failure paths.
 
 A remote profile starts the same CLI over SSH and forwards the remote loopback
 endpoint to local loopback:
@@ -559,6 +577,7 @@ Inspect before launch:
 ```bash
 model-harness render qwen-local --host 127.0.0.1 --port 18011 --json
 model-harness doctor qwen-remote --host 127.0.0.1 --port 18011
+model-harness stress qwen-local --host 127.0.0.1 --port 18011 --json
 ```
 
 An agents-infra Pi profile can use the harness without a new launcher mode:
@@ -581,16 +600,19 @@ path. `mode = "shared"` gives each tracked RUN its own Pi state, session, lock,
 and process group while byte-identical profiles can lease one broker-owned MLX
 runtime across independent launcher sessions and project roots.
 
-`compaction` is also an explicit, strict opt-in. `reserve_tokens` must be at
-least `max_tokens`; its sum with `keep_recent_tokens` must be below
-`context_window`. Pi starts automatic compaction when current context exceeds
-`context_window - reserve_tokens`, then preserves approximately
-`keep_recent_tokens` of the newest conversation while summarizing older work.
-Smaller retained tails and a larger reserve are appropriate for local models
-that must keep one session alive across many days. agents-infra merges only
-the configured `compaction` object into the profile's isolated
-`agent/settings.json`, preserving unrelated Pi preferences, and fails without
-overwriting when the existing settings file is malformed or unsafe.
+`compaction` is also an explicit, strict opt-in. Configure exactly one threshold:
+prefer the operator-facing `compact_at_tokens`, or retain the Pi-native
+`reserve_tokens` compatibility form. agents-infra derives the other value as
+`context_window - threshold`. The resulting reserve must be at least
+`max_tokens`, and `keep_recent_tokens` must be below the compaction threshold.
+Pi starts automatic compaction when current context exceeds the configured
+threshold, then preserves approximately `keep_recent_tokens` of the newest
+conversation while summarizing older work. Smaller retained tails and an
+earlier threshold are appropriate for local models that must keep one session
+alive across many days. agents-infra writes Pi's native `reserveTokens` and
+`keepRecentTokens` fields into the profile's isolated `agent/settings.json`,
+preserving unrelated Pi preferences, and fails without overwriting when the
+existing settings file is malformed or unsafe.
 
 The first broker fixes the effective sharing policy for its lifetime. Inspect
 both configured and effective values, the attested broker/runtime identities,
@@ -1339,7 +1361,7 @@ rg -n "Primary Parent Goal Actualization" \
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
 | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
-| `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT` | Exact side-effect-free launch-plan JSON, readiness diagnostics, or a foreground backend/SSH process owned by `agents-infra` |
+| `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
 | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
 | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |

@@ -86,7 +86,7 @@ func compactionPiProfileTOML(name, runtime string, port int) string {
 	return validPiProfileTOML(name, runtime, port, false) + fmt.Sprintf(`
 [agents.pi.profiles.%q.compaction]
 enabled = true
-reserve_tokens = 2048
+compact_at_tokens = 6144
 keep_recent_tokens = 2048
 `, name)
 }
@@ -125,19 +125,28 @@ func TestParsePiCompactionIsStrictAndProfileScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := &PiCompaction{Enabled: true, ReserveTokens: 2048, KeepRecentTokens: 2048}
+	want := &PiCompaction{Enabled: true, CompactAtTokens: 6144, ReserveTokens: 2048, KeepRecentTokens: 2048}
 	if got := with.PiProfiles["profile"].Compaction; !reflect.DeepEqual(got, want) {
 		t.Fatalf("compaction=%#v want=%#v", got, want)
 	}
+	legacyBody := strings.Replace(body, "compact_at_tokens = 6144", "reserve_tokens = 2048", 1)
+	legacy, err := parseProjectConfig([]byte(legacyBody), "/project/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := legacy.PiProfiles["profile"].Compaction; !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy reserve compaction=%#v want=%#v", got, want)
+	}
 
 	tests := map[string]string{
-		"unknown field":          strings.Replace(body, "enabled = true", "enabled = true\nsurprise = 1", 1),
-		"missing enabled":        strings.Replace(body, "enabled = true\n", "", 1),
-		"missing reserve":        strings.Replace(body, "reserve_tokens = 2048\n", "", 1),
-		"missing kept":           strings.Replace(body, "keep_recent_tokens = 2048\n", "", 1),
-		"reserve below output":   strings.Replace(body, "reserve_tokens = 2048", "reserve_tokens = 512", 1),
-		"reserve reaches window": strings.Replace(body, "reserve_tokens = 2048", "reserve_tokens = 8192", 1),
-		"sum reaches window":     strings.Replace(body, "keep_recent_tokens = 2048", "keep_recent_tokens = 6144", 1),
+		"unknown field":               strings.Replace(body, "enabled = true", "enabled = true\nsurprise = 1", 1),
+		"missing enabled":             strings.Replace(body, "enabled = true\n", "", 1),
+		"missing threshold":           strings.Replace(body, "compact_at_tokens = 6144\n", "", 1),
+		"both threshold forms":        strings.Replace(body, "compact_at_tokens = 6144", "compact_at_tokens = 6144\nreserve_tokens = 2048", 1),
+		"missing kept":                strings.Replace(body, "keep_recent_tokens = 2048\n", "", 1),
+		"compact leaves short output": strings.Replace(body, "compact_at_tokens = 6144", "compact_at_tokens = 7680", 1),
+		"compact reaches window":      strings.Replace(body, "compact_at_tokens = 6144", "compact_at_tokens = 8192", 1),
+		"kept reaches compact":        strings.Replace(body, "keep_recent_tokens = 2048", "keep_recent_tokens = 6144", 1),
 	}
 	for name, invalid := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -253,7 +262,7 @@ func TestPiPrintConfigReportsManagedCompactionWithoutCreatingState(t *testing.T)
 	if plan.Pi == nil || plan.Pi.Settings == nil || plan.Pi.Settings.Compaction == nil {
 		t.Fatalf("managed compaction diagnostics absent: %#v", plan.Pi)
 	}
-	if got := plan.Pi.Settings.Compaction; !reflect.DeepEqual(got, &PiCompaction{Enabled: true, ReserveTokens: 2048, KeepRecentTokens: 2048}) {
+	if got := plan.Pi.Settings.Compaction; !reflect.DeepEqual(got, &PiCompaction{Enabled: true, CompactAtTokens: 6144, ReserveTokens: 2048, KeepRecentTokens: 2048}) {
 		t.Fatalf("compaction diagnostics=%#v", got)
 	}
 	if plan.Pi.Settings.Path != plan.Pi.State.SettingsJSON {
@@ -737,7 +746,7 @@ func TestWritePiCompactionSettingsPreservesUnrelatedPreferences(t *testing.T) {
 	if err := os.WriteFile(paths.SettingsJSON, existing, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	want := &PiCompaction{Enabled: true, ReserveTokens: 4096, KeepRecentTokens: 2048}
+	want := &PiCompaction{Enabled: true, CompactAtTokens: 8192, ReserveTokens: 4096, KeepRecentTokens: 2048}
 	if err := WritePiCompactionSettings(paths, want); err != nil {
 		t.Fatal(err)
 	}
@@ -746,14 +755,18 @@ func TestWritePiCompactionSettingsPreservesUnrelatedPreferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	var document struct {
-		LastChangelogVersion string       `json:"lastChangelogVersion"`
-		Theme                string       `json:"theme"`
-		Compaction           PiCompaction `json:"compaction"`
+		LastChangelogVersion string `json:"lastChangelogVersion"`
+		Theme                string `json:"theme"`
+		Compaction           struct {
+			Enabled          bool `json:"enabled"`
+			ReserveTokens    int  `json:"reserveTokens"`
+			KeepRecentTokens int  `json:"keepRecentTokens"`
+		} `json:"compaction"`
 	}
 	if err := json.Unmarshal(content, &document); err != nil {
 		t.Fatal(err)
 	}
-	if document.LastChangelogVersion != "0.84.2" || document.Theme != "dark" || !reflect.DeepEqual(document.Compaction, *want) {
+	if document.LastChangelogVersion != "0.84.2" || document.Theme != "dark" || !document.Compaction.Enabled || document.Compaction.ReserveTokens != want.ReserveTokens || document.Compaction.KeepRecentTokens != want.KeepRecentTokens || bytes.Contains(content, []byte("compactAtTokens")) {
 		t.Fatalf("merged settings=%#v", document)
 	}
 	if info, err := os.Stat(paths.SettingsJSON); err != nil || info.Mode().Perm() != 0o600 {
