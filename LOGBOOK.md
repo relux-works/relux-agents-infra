@@ -5,6 +5,11 @@
 
 ## 2026-08-27
 
+### 0144 — Historical Test Fixtures Survived As Orphans
+- ANOMALY: Ten `/tmp/pi-*/fake-runtime` fixtures from earlier standalone/review tests remained reparented to PID 1 for 9–12 hours, each holding a random loopback listener; today's full and focused suites created no additional leak.
+- FIX: Exact verified fixture process groups were terminated and all ten listeners disappeared; the active Qwen broker, harness, MLX server, Pi client, and port 18011 remained live.
+- STATUS: Cleanup complete. The originating interrupted or mutant test runs are not attributable from surviving process metadata; monitor future suites rather than claiming a source regression from historical orphans alone.
+
 ### 0139 — Binary Replacement Is Also A Runtime Handoff
 - FINDING: Installing a new agents-infra inode while a shared runtime remains live makes new clients correctly refuse the old broker's executable identity; without a transient path, the first post-upgrade restart still requires manual waiting even after listener handoff retry is fixed.
 - FIX: Client acquisition treats only `broker_executable_identity_mismatch` as a bounded wait-and-retry handoff alongside the nominal listener-busy broker exit; persistent mismatch remains fail-closed and no old process is attached or signalled.
