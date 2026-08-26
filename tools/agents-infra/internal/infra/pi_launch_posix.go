@@ -70,10 +70,11 @@ func RunPi(opts RunPiOptions) error {
 	if err != nil {
 		return piError("invalid_project_configuration", err)
 	}
-	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
+	effectiveArgs, err := applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
+	if err != nil {
 		return err
 	}
-	override, err := ExtractPiProfileOverride(opts.Args)
+	override, err := ExtractPiProfileOverride(effectiveArgs)
 	if err != nil {
 		return err
 	}
@@ -88,7 +89,7 @@ func RunPi(opts RunPiOptions) error {
 		return piError("provider_executable_not_found", err)
 	}
 	if selected == "" {
-		return runPiProcess(piPath, opts.Args, project, opts.Environ, opts.Stdin, opts.Stdout, opts.Stderr, false)
+		return runPiProcess(piPath, effectiveArgs, project, opts.Environ, opts.Stdin, opts.Stdout, opts.Stderr, false)
 	}
 	if opts.Report != nil {
 		opts.Report.Managed = true
@@ -103,7 +104,7 @@ func RunPi(opts RunPiOptions) error {
 	if err := ValidatePiStateKeyCollisions(composite.PiProfiles); err != nil {
 		return err
 	}
-	argsPlan, err := BuildManagedPiArguments(opts.Args, selected, profile)
+	argsPlan, err := BuildManagedPiArguments(effectiveArgs, selected, profile)
 	if err != nil {
 		return err
 	}
@@ -240,8 +241,8 @@ func RunPi(opts RunPiOptions) error {
 	piCmd.Dir = project
 	piCmd.Env = managedEnv
 	piCmd.Stdin = opts.Stdin
-	piCmd.Stdout = newPiSynchronizedWriter(outputMu, opts.Stdout)
-	piCmd.Stderr = newPiSynchronizedWriter(outputMu, opts.Stderr)
+	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
+	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
 	piCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := piCmd.Start(); err != nil {
 		_ = cleanupRuntime()
@@ -345,6 +346,16 @@ func newPiSynchronizedWriter(mu *sync.Mutex, writer io.Writer) io.Writer {
 		return nil
 	}
 	return &piSynchronizedWriter{mu: mu, writer: writer}
+}
+
+// Preserve terminal file descriptors for the interactive Pi child. Wrapping
+// an *os.File in a generic io.Writer makes os/exec insert a pipe, which causes
+// Pi to see stdout/stderr as non-TTY and exit immediately with status 0.
+func piProcessWriter(mu *sync.Mutex, writer io.Writer) io.Writer {
+	if file, ok := writer.(*os.File); ok {
+		return file
+	}
+	return newPiSynchronizedWriter(mu, writer)
 }
 
 func (w *piSynchronizedWriter) Write(p []byte) (int, error) {

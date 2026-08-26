@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -265,43 +266,36 @@ func TestPiPrimaryYoloSafeDefaultAndNearestFalseMask(t *testing.T) {
 }
 
 // Production call sites: BuildPrimarySessionLaunchPlan (non-launching compose)
-// and RunPi (direct launch). Both must reject before executable lookup so the
-// unsupported policy cannot fall through to native Pi or be mis-mapped to
-// Pi's unrelated --approve project-trust flag.
-func TestPiYoloTrueFailsClosedBeforeComposeOrLaunchLookup(t *testing.T) {
+// and RunPi (direct launch). Pi has no per-tool approval policy, so primary
+// yolo means one-run project trust and must compose exactly one --approve.
+func TestPiYoloTrueComposesProjectTrust(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	config := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
 	mustMkdir(t, filepath.Dir(config))
 	mustWrite(t, config, "[agents.pi.primary_session]\nyolo_mode = true\n")
-	lookedUp := false
-	lookPath := func(string) (string, error) {
-		lookedUp = true
-		return "/must/not/run", nil
+	plan, err := BuildPrimarySessionLaunchPlan("pi", project, home, []string{"--approve"}, ChildLaunchCompositionProducer{}, func(string) (string, error) { return "/bin/echo", nil })
+	if err != nil {
+		t.Fatalf("compose yolo: %v", err)
 	}
-
-	assertUnsupported := func(t *testing.T, err error) {
-		t.Helper()
-		if piErrorCode(err) != "pi_yolo_mode_unsupported" {
-			t.Fatalf("error = %v, want pi_yolo_mode_unsupported", err)
-		}
-		for _, want := range []string{piPrimarySessionField + ".yolo_mode=true", config, "--approve", "project-local input trust"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("error = %q, want precise unsupported-capability detail %q", err, want)
-			}
-		}
-		if lookedUp {
-			t.Fatal("unsupported Pi yolo reached executable lookup")
-		}
+	if !plan.Resolved.Yolo.Value || !samePath(plan.Resolved.Yolo.Source, config) {
+		t.Fatalf("resolved yolo = %#v", plan.Resolved.Yolo)
 	}
+	if got := strings.Join(plan.LaunchVariants.Interactive.Argv, " "); got != "--approve" {
+		t.Fatalf("interactive argv = %q, want exactly one --approve", got)
+	}
+	if _, err := applyPiPrimarySessionYolo([]string{"--no-approve"}, PiPrimarySessionPolicy{YoloMode: PiPolicyBoolValue{Value: true, Present: true, Source: config}}); piErrorCode(err) != "invalid_provider_arguments" {
+		t.Fatalf("conflicting no-approve error = %v", err)
+	}
+}
 
-	t.Run("compose", func(t *testing.T) {
-		_, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, lookPath)
-		assertUnsupported(t, err)
-	})
-	t.Run("launch", func(t *testing.T) {
-		err := RunPi(RunPiOptions{ProjectDir: project, HomeDir: home, Environ: []string{"HOME=" + home}, LookPath: lookPath})
-		assertUnsupported(t, err)
-	})
+func TestPiProcessWriterPreservesFileDescriptors(t *testing.T) {
+	if got := piProcessWriter(new(sync.Mutex), os.Stdout); got != os.Stdout {
+		t.Fatalf("terminal file descriptor was wrapped as %T", got)
+	}
+	buffer := new(bytes.Buffer)
+	if _, ok := piProcessWriter(new(sync.Mutex), buffer).(*piSynchronizedWriter); !ok {
+		t.Fatal("non-file writer did not keep synchronized fan-in")
+	}
 }
 
 func TestParsePiMuseRequiresExactUniqueNonOverlappingArgvSubsequences(t *testing.T) {

@@ -374,12 +374,14 @@ standalone Pi tree check both initially and immediately before Pi spawn. It
 never attaches or silently falls back to another runtime, port, profile, model,
 listener, or Muse target-only decoding.
 
-Pinned Pi `0.84.2` has no native unattended tool-execution policy.
-`--approve`/`-a` controls only one-run trust for project-local files and must
-never be used as a yolo translation. In `[agents.pi.primary_session]`, omitted
-or explicit `yolo_mode = false` preserves Pi behavior; nearest false masks an
-inherited true. Explicit `yolo_mode = true` fails before executable lookup or
-launch with `pi_yolo_mode_unsupported`.
+Pinned Pi `0.84.2` has no per-tool approval prompt: enabled tools execute
+directly. `--approve`/`-a` controls one-run trust for project-local files. In
+`[agents.pi.primary_session]`, omitted or explicit `yolo_mode = false`
+preserves native project-trust behavior; nearest false masks an inherited
+true. Effective `yolo_mode = true` injects exactly one `--approve`, allowing
+project `AGENTS.md`, skills, extensions, and other reviewed local resources to
+load without a trust prompt. Explicit `--no-approve`/`-na` conflicts with yolo
+and fails closed.
 
 Managed launch refuses the exact llama.cpp model-origin environment names
 `HF_ENDPOINT` and `MODEL_ENDPOINT` before runtime spawn and reports only the

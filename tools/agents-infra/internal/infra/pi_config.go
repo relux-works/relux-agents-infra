@@ -659,20 +659,6 @@ func clonePiProfiles(in map[string]PiProfile) map[string]PiProfile {
 	return out
 }
 
-func validatePiPrimarySessionYolo(policy PiPrimarySessionPolicy) error {
-	if !policy.YoloMode.Present || !policy.YoloMode.Value {
-		return nil
-	}
-	return piError(
-		"pi_yolo_mode_unsupported",
-		fmt.Errorf(
-			"%s.yolo_mode=true from %s is unsupported by pinned Pi v0.84.2: --approve controls project-local input trust, not unattended tool execution; omit yolo_mode or set it to false",
-			piPrimarySessionField,
-			policy.YoloMode.Source,
-		),
-	)
-}
-
 func resolvedPiYolo(policy PiPrimarySessionPolicy) PrimarySessionResolvedBool {
 	if policy.YoloMode.Present {
 		return PrimarySessionResolvedBool{Value: policy.YoloMode.Value, Source: policy.YoloMode.Source}
