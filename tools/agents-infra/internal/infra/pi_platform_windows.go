@@ -98,10 +98,11 @@ func RunPi(opts RunPiOptions) error {
 	if err != nil {
 		return piError("invalid_project_configuration", err)
 	}
-	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
+	effectiveArgs, err := applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
+	if err != nil {
 		return err
 	}
-	override, err := ExtractPiProfileOverride(opts.Args)
+	override, err := ExtractPiProfileOverride(effectiveArgs)
 	if err != nil {
 		return err
 	}
@@ -116,7 +117,7 @@ func RunPi(opts RunPiOptions) error {
 	if err != nil {
 		return piError("provider_executable_not_found", err)
 	}
-	cmd := exec.Command(path, opts.Args...)
+	cmd := exec.Command(path, effectiveArgs...)
 	cmd.Dir = project
 	cmd.Env = opts.Environ
 	cmd.Stdin = opts.Stdin

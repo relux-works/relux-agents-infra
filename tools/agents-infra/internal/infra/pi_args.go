@@ -12,6 +12,33 @@ type PiArgumentPlan struct {
 	DiagnosticArgv  []string
 }
 
+// applyPiPrimarySessionYolo turns the shared primary-session yolo policy into
+// Pi's one-run project trust override. Pi does not prompt for individual tool
+// calls; --approve only suppresses the project-local resource trust prompt so
+// AGENTS.md, skills, extensions, and other reviewed project inputs can load.
+func applyPiPrimarySessionYolo(args []string, policy PiPrimarySessionPolicy) ([]string, error) {
+	result := append([]string(nil), args...)
+	if !policy.YoloMode.Present || !policy.YoloMode.Value {
+		return result, nil
+	}
+	approved := false
+	for _, token := range result {
+		if token == "--" {
+			break
+		}
+		switch token {
+		case "--approve", "-a":
+			approved = true
+		case "--no-approve", "-na":
+			return nil, piError("invalid_provider_arguments", fmt.Errorf("%s.yolo_mode=true from %s conflicts with %s", piPrimarySessionField, policy.YoloMode.Source, token))
+		}
+	}
+	if approved {
+		return result, nil
+	}
+	return append([]string{"--approve"}, result...), nil
+}
+
 func ExtractPiProfileOverride(args []string) (*string, error) {
 	var selected *string
 	set := func(value string) error {

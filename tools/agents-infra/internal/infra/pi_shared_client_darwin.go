@@ -616,8 +616,8 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 	piCmd.Env = managedEnv
 	piCmd.Stdin = opts.Stdin
 	outputMu := new(sync.Mutex)
-	piCmd.Stdout = newPiSynchronizedWriter(outputMu, opts.Stdout)
-	piCmd.Stderr = newPiSynchronizedWriter(outputMu, opts.Stderr)
+	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
+	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
 	piCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := piCmd.Start(); err != nil {
 		return piError("pi_start_failed", err)

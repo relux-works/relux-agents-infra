@@ -540,19 +540,20 @@ complete ancestor profile. Unreadable, malformed, partial, or unknown-field
 policy is a failure, not policy absence; only genuine absence enables native Pi
 passthrough.
 
-Pinned Pi `0.84.2` exposes no native unattended tool-execution policy.
-Its `--approve`/`-a` flag controls only one-run trust for project-local files;
-it is not a permission bypass. Therefore omitted or explicit
-`yolo_mode = false` preserves Pi behavior, while `yolo_mode = true` fails
-before executable lookup or launch with `pi_yolo_mode_unsupported`. Never map
-Pi yolo to `--approve`.
+Pinned Pi `0.84.2` exposes no per-tool approval policy: enabled tools execute
+without a confirmation prompt. Its `--approve`/`-a` flag controls one-run trust
+for project-local files. Therefore omitted or explicit `yolo_mode = false`
+preserves native project-trust behavior, while `yolo_mode = true` injects
+exactly one `--approve` so project `AGENTS.md`, skills, extensions, and other
+reviewed local resources load without a trust prompt. Explicit
+`--no-approve`/`-na` conflicts with effective yolo and fails closed.
 
 Profile-name identity is its exact post-TOML-decoding UTF-8 bytes. There is no
 normalization, case folding, trimming, path cleaning, or lossy sanitization.
 Explicit `--provider`, `--model`, and `--thinking` must resolve to the exact
-managed identity; equal repeats normalize and conflicts fail. `--api-key` and
-Pi's approval flags retain native precedence, but diagnostics redact the key
-and the wrapper injects no approval. Wrapper-recognized equal forms normalize
+managed identity; equal repeats normalize and conflicts fail. `--api-key` is
+redacted in diagnostics, and an explicit `--approve` remains idempotent with
+effective yolo. Wrapper-recognized equal forms normalize
 to Pi's pinned spaced syntax. Options cannot consume a value across the removed
 delimiter; ambiguous unknown flags and option-looking message suffixes fail.
 The resulting argv has one provider/model selection, no fake separator, no

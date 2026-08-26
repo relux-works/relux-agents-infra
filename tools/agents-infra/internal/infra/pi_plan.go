@@ -126,10 +126,11 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	for _, source := range composite.Sources {
 		result.Sources = append(result.Sources, PrimarySessionSource{Kind: "project_config", Path: source.Path})
 	}
-	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
+	effectiveArgs, err := applyPiPrimarySessionYolo(userArgs, composite.PiPrimarySession)
+	if err != nil {
 		return err
 	}
-	override, err := ExtractPiProfileOverride(userArgs)
+	override, err := ExtractPiProfileOverride(effectiveArgs)
 	if err != nil {
 		return err
 	}
@@ -146,8 +147,8 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 			return piError("provider_executable_not_found", findErr)
 		}
 		result.Executable = piPath
-		result.LaunchVariants.Interactive.Argv = append([]string(nil), userArgs...)
-		result.LaunchVariants.ManagedHost = PrimarySessionManagedHostVariant{Kind: PrimarySessionManagedHostKindPiPTY, Argv: append([]string(nil), userArgs...)}
+		result.LaunchVariants.Interactive.Argv = append([]string(nil), effectiveArgs...)
+		result.LaunchVariants.ManagedHost = PrimarySessionManagedHostVariant{Kind: PrimarySessionManagedHostKindPiPTY, Argv: append([]string(nil), effectiveArgs...)}
 		result.LaunchVariants.ManagedClient.Argv = []string{}
 		result.Resolved.Model = PrimarySessionResolvedString{Source: "native"}
 		result.Resolved.Reasoning = PrimarySessionResolvedString{Source: "native"}
@@ -169,7 +170,7 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	if err := ValidatePiStateKeyCollisions(composite.PiProfiles); err != nil {
 		return err
 	}
-	argsPlan, err := BuildManagedPiArguments(userArgs, selected, profile)
+	argsPlan, err := BuildManagedPiArguments(effectiveArgs, selected, profile)
 	if err != nil {
 		return err
 	}
