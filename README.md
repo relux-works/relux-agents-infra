@@ -534,6 +534,13 @@ The first broker fixes the effective sharing policy for its lifetime. Inspect
 both configured and effective values, the attested broker/runtime identities,
 and live leases without starting or connecting from `pi --print-config`:
 
+When a profile change produces a new runtime identity while the previous
+shared runtime is still releasing the same fixed listener, acquisition retries
+the broker's structured `runtime_listener_occupied` exit for at most the
+configured linger plus shutdown timeout and a two-second handoff grace. The
+client never connects to, adopts, or signals the occupying listener; a listener
+that remains occupied after that bounded window still fails closed.
+
 ```bash
 agents-infra pi --print-config --profile qwen-3.8-27b
 agents-infra runtime status --profile qwen-3.8-27b

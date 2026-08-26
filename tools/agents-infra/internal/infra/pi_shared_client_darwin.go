@@ -126,9 +126,15 @@ func acquireSharedRuntimeLease(resolved sharedResolvedProfile, state PiStatePath
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	deadline := time.Now().Add(time.Duration(resolved.Sharing.BrokerStartTimeoutSeconds) * time.Second)
+	startedAt := time.Now()
+	deadline := startedAt.Add(time.Duration(resolved.Sharing.BrokerStartTimeoutSeconds) * time.Second)
+	listenerRetryDeadline := startedAt.Add(sharedRuntimeListenerRetryWindow(resolved))
+	if listenerRetryDeadline.After(deadline) {
+		listenerRetryDeadline = deadline
+	}
 	backoff := 25 * time.Millisecond
 	electionBackoff := 2 * time.Second
+	listenerBackoff := 250 * time.Millisecond
 	nextAttempt := time.Now()
 	electionLostSeen := false
 	transientRetries := 0
@@ -177,6 +183,13 @@ func acquireSharedRuntimeLease(resolved sharedResolvedProfile, state PiStatePath
 					electionBackoff *= 2
 					if electionBackoff > 30*time.Second {
 						electionBackoff = 30 * time.Second
+					}
+				} else if exitCode == sharedRuntimeExitListenerBusy && time.Now().Before(listenerRetryDeadline) {
+					brokerChild = nil
+					nextAttempt = time.Now().Add(listenerBackoff)
+					listenerBackoff *= 2
+					if listenerBackoff > 2*time.Second {
+						listenerBackoff = 2 * time.Second
 					}
 				} else if exitCode == 0 {
 					brokerChild = nil
@@ -232,6 +245,13 @@ func acquireSharedRuntimeLease(resolved sharedResolvedProfile, state PiStatePath
 			backoff = 250 * time.Millisecond
 		}
 	}
+}
+
+func sharedRuntimeListenerRetryWindow(resolved sharedResolvedProfile) time.Duration {
+	const handoffGrace = 2 * time.Second
+	linger := time.Duration(resolved.Sharing.LingerSeconds) * time.Second
+	shutdown := time.Duration(resolved.Profile.Runtime.ShutdownTimeoutSeconds) * time.Second
+	return linger + shutdown + handoffGrace
 }
 
 type sharedConnectError struct{ err error }

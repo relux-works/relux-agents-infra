@@ -29,6 +29,7 @@ const (
 	sharedRuntimeProfileSchema    = "agents-infra.pi.shared-runtime.profile.v1"
 	sharedRuntimeKeySchema        = "agents-infra.pi.shared-runtime.v1"
 	sharedRuntimeExitElectionLost = 75
+	sharedRuntimeExitListenerBusy = 76
 	sharedRuntimeMaxFrameBytes    = 65536
 )
 
@@ -87,6 +88,9 @@ func SharedRuntimeExitCode(err error) (int, bool) {
 	}
 	if shared.Code == "broker_election_lost" {
 		return sharedRuntimeExitElectionLost, true
+	}
+	if shared.Code == "runtime_listener_occupied" {
+		return sharedRuntimeExitListenerBusy, true
 	}
 	return 1, true
 }
