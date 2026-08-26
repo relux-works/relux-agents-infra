@@ -374,6 +374,13 @@ standalone Pi tree check both initially and immediately before Pi spawn. It
 never attaches or silently falls back to another runtime, port, profile, model,
 listener, or Muse target-only decoding.
 
+Every managed Pi launch creates a distinct mode-`0600` lifecycle JSONL under
+the profile's hash-contained `logs/` directory and prints its path before Pi
+starts. Record only orchestration evidence: lifecycle events, PID/PGID,
+readiness, foreground-terminal ownership, exit/signal, and cleanup state. Never
+record environment values, API keys, or prompt/argument contents. Pi's own
+conversation and tool transcript remains separately under `sessions/`.
+
 Pinned Pi `0.84.2` has no per-tool approval prompt: enabled tools execute
 directly. `--approve`/`-a` controls one-run trust for project-local files. In
 `[agents.pi.primary_session]`, omitted or explicit `yolo_mode = false`

@@ -140,6 +140,22 @@ func RunPi(opts RunPiOptions) error {
 		return err
 	}
 	defer lock.Close()
+	sessionLog, err := openPiSessionLog(state)
+	if err != nil {
+		return err
+	}
+	defer sessionLog.close()
+	if opts.Report != nil {
+		opts.Report.SessionLog = sessionLog.path
+	}
+	sessionLog.event("session_start", map[string]any{
+		"project": project, "profile": selected, "provider": profile.Provider,
+		"model": profile.Model, "thinking": profile.Thinking,
+		"transcript_dir": state.SessionsDir,
+	})
+	if opts.Stderr != nil {
+		fmt.Fprintf(opts.Stderr, "agents-infra: Pi session log: %s\n", sessionLog.path)
+	}
 	models, err := GeneratePiModelsJSON(profile)
 	if err != nil {
 		return err
@@ -172,16 +188,23 @@ func RunPi(opts RunPiOptions) error {
 	runtimeCmd.Stderr = runtimeOutput
 	runtimeCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := runtimeCmd.Start(); err != nil {
+		sessionLog.event("runtime_start_failed", map[string]any{"error": err.Error()})
 		return piError("runtime_start_failed", err)
 	}
+	sessionLog.event("runtime_started", piProcessIdentityFields(runtimeCmd.Process.Pid))
 	if opts.Report != nil {
 		opts.Report.RuntimeProcessGroupCleanup = "pending"
 	}
 	runtimeWait := waitForPiProcess(runtimeCmd)
 	cleanupRuntime := func() error {
 		err := terminateProcessGroup(runtimeCmd.Process.Pid, runtimeWait, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
+		fields := map[string]any{"state": processGroupCleanupState(runtimeCmd.Process.Pid, err)}
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		sessionLog.event("runtime_cleanup", fields)
 		if opts.Report != nil {
-			opts.Report.RuntimeProcessGroupCleanup = processGroupCleanupState(runtimeCmd.Process.Pid, err)
+			opts.Report.RuntimeProcessGroupCleanup = fields["state"].(string)
 		}
 		return err
 	}
@@ -196,6 +219,7 @@ func RunPi(opts RunPiOptions) error {
 		wantModel = profile.Runtime.DFlash.TargetModel
 	}
 	if err := waitPiRuntimeReady(opts.Context, opts.HTTPClient, profile.BaseURL+profile.Runtime.ReadinessPath, wantModel, runtimeCmd.Process, runtimeWait, time.Duration(profile.Runtime.StartupTimeoutSeconds)*time.Second); err != nil {
+		sessionLog.event("runtime_readiness_failed", map[string]any{"error": err.Error()})
 		if opts.Report != nil {
 			opts.Report.DeadlineExceeded = errors.Is(err, context.DeadlineExceeded)
 		}
@@ -206,6 +230,7 @@ func RunPi(opts RunPiOptions) error {
 		}
 		return err
 	}
+	sessionLog.event("runtime_ready", map[string]any{"endpoint": profile.BaseURL, "model": wantModel})
 	select {
 	case <-runtimeWait.done:
 		cleanupErr := cleanupRuntime()
@@ -243,12 +268,16 @@ func RunPi(opts RunPiOptions) error {
 	piCmd.Stdin = opts.Stdin
 	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
 	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
-	piCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	foreground := configurePiProcessTerminal(piCmd, opts.Stdin)
 	if err := piCmd.Start(); err != nil {
+		sessionLog.event("pi_start_failed", map[string]any{"error": err.Error()})
 		_ = cleanupRuntime()
 		cleaned = true
 		return piError("pi_start_failed", err)
 	}
+	piFields := piProcessIdentityFields(piCmd.Process.Pid)
+	piFields["foreground"] = foreground
+	sessionLog.event("pi_started", piFields)
 	if opts.Report != nil {
 		opts.Report.PiProcessGroupCleanup = "pending"
 	}
@@ -259,9 +288,14 @@ func RunPi(opts RunPiOptions) error {
 			return nil
 		}
 		err := terminateProcessGroupWithSignal(piCmd.Process.Pid, piWait, first, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
+		fields := map[string]any{"signal": first.String(), "state": processGroupCleanupState(piCmd.Process.Pid, err)}
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		sessionLog.event("pi_cleanup", fields)
 		piCleaned = true
 		if opts.Report != nil {
-			opts.Report.PiProcessGroupCleanup = processGroupCleanupState(piCmd.Process.Pid, err)
+			opts.Report.PiProcessGroupCleanup = fields["state"].(string)
 		}
 		return err
 	}
@@ -278,6 +312,11 @@ func RunPi(opts RunPiOptions) error {
 	select {
 	case <-piWait.done:
 		result = piWait.err
+		fields := map[string]any{}
+		if result != nil {
+			fields["error"] = result.Error()
+		}
+		sessionLog.event("pi_exited", fields)
 		select {
 		case <-runtimeWait.done:
 			result = piError("runtime_exited_early", fmt.Errorf("runtime child exited before Pi session ended: %v", runtimeWait.err))
@@ -287,6 +326,7 @@ func RunPi(opts RunPiOptions) error {
 			}
 		}
 	case <-runtimeWait.done:
+		sessionLog.event("runtime_exited_early", map[string]any{"error": fmt.Sprint(runtimeWait.err)})
 		_ = cleanupPi(syscall.SIGTERM)
 		cleanupErr := cleanupRuntime()
 		cleaned = true
@@ -295,12 +335,14 @@ func RunPi(opts RunPiOptions) error {
 		}
 		result = piError("runtime_exited_early", fmt.Errorf("runtime child exited during Pi session: %v", runtimeWait.err))
 	case sig := <-signals:
+		sessionLog.event("signal_received", map[string]any{"signal": sig.String()})
 		forward := syscall.SIGTERM
 		if received, ok := sig.(syscall.Signal); ok {
 			forward = received
 		}
 		result = cleanupPi(forward)
 	case <-contextDone:
+		sessionLog.event("context_done", map[string]any{"error": opts.Context.Err().Error()})
 		if opts.Report != nil {
 			opts.Report.DeadlineExceeded = errors.Is(opts.Context.Err(), context.DeadlineExceeded)
 		}
@@ -319,6 +361,12 @@ func RunPi(opts RunPiOptions) error {
 		}
 		cleaned = true
 	}
+	endFields := map[string]any{"status": "ok"}
+	if result != nil {
+		endFields["status"] = "error"
+		endFields["error"] = result.Error()
+	}
+	sessionLog.event("session_end", endFields)
 	return result
 }
 
@@ -356,6 +404,15 @@ func piProcessWriter(mu *sync.Mutex, writer io.Writer) io.Writer {
 		return file
 	}
 	return newPiSynchronizedWriter(mu, writer)
+}
+
+func configurePiProcessTerminal(cmd *exec.Cmd, stdin io.Reader) bool {
+	if fd, ok := piTerminalFD(stdin); ok {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Foreground: true, Ctty: fd}
+		return true
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return false
 }
 
 func (w *piSynchronizedWriter) Write(p []byte) (int, error) {

@@ -558,6 +558,22 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 		return err
 	}
 	defer lock.Close()
+	sessionLog, err := openPiSessionLog(state)
+	if err != nil {
+		return err
+	}
+	defer sessionLog.close()
+	if opts.Report != nil {
+		opts.Report.SessionLog = sessionLog.path
+	}
+	sessionLog.event("session_start", map[string]any{
+		"mode": "shared", "project": project, "profile": profileName,
+		"provider": profile.Provider, "model": profile.Model,
+		"thinking": profile.Thinking, "transcript_dir": state.SessionsDir,
+	})
+	if opts.Stderr != nil {
+		fmt.Fprintf(opts.Stderr, "agents-infra: Pi session log: %s\n", sessionLog.path)
+	}
 	models, err := GeneratePiModelsJSON(profile)
 	if err != nil {
 		return err
@@ -586,12 +602,14 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 	}
 	lease, err := acquireSharedRuntimeLease(resolved, state, runID, opts.Environ, opts.HTTPClient, opts.Context)
 	if err != nil {
+		sessionLog.event("shared_runtime_acquire_failed", map[string]any{"error": err.Error()})
 		if opts.Report != nil {
 			opts.Report.DeadlineExceeded = errors.Is(err, context.DeadlineExceeded)
 		}
 		return err
 	}
 	defer lease.close()
+	sessionLog.event("shared_runtime_acquired", map[string]any{"lease_id": lease.lease.LeaseID})
 
 	if current, err := inspectRuntimeExecutable(profile.Runtime.Executable); err != nil || current != runtimeIdentity {
 		if err == nil {
@@ -618,10 +636,14 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 	outputMu := new(sync.Mutex)
 	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
 	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
-	piCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	foreground := configurePiProcessTerminal(piCmd, opts.Stdin)
 	if err := piCmd.Start(); err != nil {
+		sessionLog.event("pi_start_failed", map[string]any{"error": err.Error()})
 		return piError("pi_start_failed", err)
 	}
+	piFields := piProcessIdentityFields(piCmd.Process.Pid)
+	piFields["foreground"] = foreground
+	sessionLog.event("pi_started", piFields)
 	if opts.Report != nil {
 		opts.Report.PiProcessGroupCleanup = "pending"
 	}
@@ -632,9 +654,14 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 			return nil
 		}
 		err := terminateProcessGroupWithSignal(piCmd.Process.Pid, piWait, first, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
+		fields := map[string]any{"signal": first.String(), "state": processGroupCleanupState(piCmd.Process.Pid, err)}
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		sessionLog.event("pi_cleanup", fields)
 		piCleaned = true
 		if opts.Report != nil {
-			opts.Report.PiProcessGroupCleanup = processGroupCleanupState(piCmd.Process.Pid, err)
+			opts.Report.PiProcessGroupCleanup = fields["state"].(string)
 		}
 		return err
 	}
@@ -651,18 +678,26 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 	select {
 	case <-piWait.done:
 		result = piWait.err
+		fields := map[string]any{}
+		if result != nil {
+			fields["error"] = result.Error()
+		}
+		sessionLog.event("pi_exited", fields)
 	case brokerErr := <-brokerDone:
 		if brokerErr == nil {
 			brokerErr = sharedRuntimeError("broker_terminated", errors.New("broker closed the lease"))
 		}
+		sessionLog.event("shared_runtime_terminated", map[string]any{"error": brokerErr.Error()})
 		result = brokerErr
 	case received := <-signals:
+		sessionLog.event("signal_received", map[string]any{"signal": received.String()})
 		forward := syscall.SIGTERM
 		if signalValue, ok := received.(syscall.Signal); ok {
 			forward = signalValue
 		}
 		result = cleanupPi(forward)
 	case <-opts.Context.Done():
+		sessionLog.event("context_done", map[string]any{"error": opts.Context.Err().Error()})
 		if opts.Report != nil {
 			opts.Report.DeadlineExceeded = errors.Is(opts.Context.Err(), context.DeadlineExceeded)
 		}
@@ -673,5 +708,11 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 			return cleanupErr
 		}
 	}
+	endFields := map[string]any{"status": "ok"}
+	if result != nil {
+		endFields["status"] = "error"
+		endFields["error"] = result.Error()
+	}
+	sessionLog.event("session_end", endFields)
 	return result
 }

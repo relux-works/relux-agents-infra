@@ -298,6 +298,56 @@ func TestPiProcessWriterPreservesFileDescriptors(t *testing.T) {
 	}
 }
 
+func TestPiSessionLogsAreDistinctContainedAndPrivate(t *testing.T) {
+	cache := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	mustMkdir(t, project)
+	state, err := ResolvePiStatePaths(cache, project, "profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreatePiStateTree(state); err != nil {
+		t.Fatal(err)
+	}
+	first, err := openPiSessionLog(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.event("pi_started", map[string]any{"pid": 42, "foreground": true})
+	firstPath := first.path
+	first.close()
+	second, err := openPiSessionLog(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath := second.path
+	second.close()
+	if firstPath == secondPath {
+		t.Fatalf("per-launch logs collided at %s", firstPath)
+	}
+	for _, path := range []string{firstPath, secondPath} {
+		if filepath.Dir(path) != state.LogsDir {
+			t.Fatalf("log escaped contained directory: %s", path)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("log mode = %04o, want 0600", info.Mode().Perm())
+		}
+	}
+	data, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"event":"pi_started"`, `"foreground":true`, `"pid":42`} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Fatalf("session log %q missing %q", data, want)
+		}
+	}
+}
+
 func TestParsePiMuseRequiresExactUniqueNonOverlappingArgvSubsequences(t *testing.T) {
 	base := validPiProfileTOML("profile", "/bin/echo", 18011, true)
 	tests := []string{
