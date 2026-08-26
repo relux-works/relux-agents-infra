@@ -5,6 +5,11 @@
 
 ## 2026-08-27
 
+### 0139 — Binary Replacement Is Also A Runtime Handoff
+- FINDING: Installing a new agents-infra inode while a shared runtime remains live makes new clients correctly refuse the old broker's executable identity; without a transient path, the first post-upgrade restart still requires manual waiting even after listener handoff retry is fixed.
+- FIX: Client acquisition treats only `broker_executable_identity_mismatch` as a bounded wait-and-retry handoff alongside the nominal listener-busy broker exit; persistent mismatch remains fail-closed and no old process is attached or signalled.
+- EVIDENCE: `TestSharedRuntimeAcquisitionRetriesExecutableUpgradeHandoff` serves from a copied old executable, removes it during acquisition, and requires a current-executable broker plus a distinct runtime. The foreign-listener regression now uses a random port and cannot skip behind a live Qwen on 18011.
+
 ### 0127 — Profile Drift Can Outlive Its Runtime Key
 - ROOT CAUSE: Changing the managed Qwen profile changed its runtime key while the previous broker still held the fixed listener through 15 seconds of linger plus bounded runtime shutdown; the new-key broker exited `runtime_listener_occupied`, so two immediate restarts failed and the third succeeded after handoff.
 - FIX: `tools/agents-infra/internal/infra/pi_shared_client_darwin.go` retries only the broker's nominal listener-busy exit for at most configured linger plus shutdown and two seconds; it never attaches to, adopts, or signals the occupying listener.
