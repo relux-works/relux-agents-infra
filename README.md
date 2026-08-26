@@ -444,6 +444,13 @@ max_tokens = 16384
 thinking = "medium"
 requested_capabilities = ["text", "tools"]
 
+# Optional. If present, every field is required. This profile-managed policy
+# is merged into the isolated Pi settings before every launch.
+[agents.pi.profiles."qwen-3.8-27b".compaction]
+enabled = true
+reserve_tokens = 24576
+keep_recent_tokens = 8192
+
 [agents.pi.profiles."qwen-3.8-27b".compat]
 supports_developer_role = false
 supports_reasoning_effort = false
@@ -573,6 +580,17 @@ coordination overhead. `mode = "exclusive"` uses the established direct-child
 path. `mode = "shared"` gives each tracked RUN its own Pi state, session, lock,
 and process group while byte-identical profiles can lease one broker-owned MLX
 runtime across independent launcher sessions and project roots.
+
+`compaction` is also an explicit, strict opt-in. `reserve_tokens` must be at
+least `max_tokens`; its sum with `keep_recent_tokens` must be below
+`context_window`. Pi starts automatic compaction when current context exceeds
+`context_window - reserve_tokens`, then preserves approximately
+`keep_recent_tokens` of the newest conversation while summarizing older work.
+Smaller retained tails and a larger reserve are appropriate for local models
+that must keep one session alive across many days. agents-infra merges only
+the configured `compaction` object into the profile's isolated
+`agent/settings.json`, preserving unrelated Pi preferences, and fails without
+overwriting when the existing settings file is malformed or unsafe.
 
 The first broker fixes the effective sharing policy for its lifetime. Inspect
 both configured and effective values, the attested broker/runtime identities,
@@ -712,6 +730,7 @@ Let `profile_bytes` be the exact UTF-8 profile-name bytes. The profile key is
 ```text
 <canonical-cache-root>/agents-infra/pi/<64-hex-project-key>/<64-hex-profile-key>/
   agent/models.json
+  agent/settings.json  # present/managed when profile compaction is configured
   sessions/
   logs/<UTC-start>-<random>.jsonl
   session.lock
@@ -725,6 +744,27 @@ Pi's own conversation and tool transcript remains in `sessions/`; the launcher
 log exists to diagnose orchestration failures such as a TUI child stopped by
 terminal job control. The launcher prints the exact log path before starting
 Pi, and `PiRunReport.session_log` carries it for managed callers.
+
+Resume from the same canonical project directory so the project/profile state
+keys resolve to the same isolated session directory:
+
+```bash
+cd /the/original/project
+
+# Continue the newest session directly.
+qwen-infra -- --continue
+
+# Open Pi's session selector.
+qwen-infra -- --resume
+
+# Resume one exact session ID from the JSONL filename.
+qwen-infra -- --session 01a03e8e-7c6d-7973-876a-a392202cdd57
+```
+
+The first `--` belongs to the canonical-target launcher and is not forwarded.
+Compaction is lossy only for active model context: Pi retains the complete
+conversation/tool JSONL, so resume does not require restating the task. A
+different cwd or profile intentionally resolves another isolated session tree.
 
 The canonical cache root is a successfully resolved absolute
 `os.UserCacheDir()`. Raw profile text is never a path component. `/`, `\\`,
@@ -780,10 +820,11 @@ Missing, partial, raced, or changed point-of-use reads fail.
 
 #### Runtime lifecycle, capabilities, and operator verification
 
-After all static gates, launch acquires the profile lock, atomically writes only
-the isolated `agent/models.json` as `0600`, and preserves profile-local
-settings, trust, auth, and sessions without reading or writing normal
-`~/.pi/agent`. It exclusively preflights the exact loopback port and refuses an
+After all static gates, launch acquires the profile lock, atomically writes the
+isolated `agent/models.json` as `0600`, and, when configured, safely merges the
+profile compaction policy into isolated `agent/settings.json`. It preserves
+unrelated profile-local settings, trust, auth, and sessions without reading or
+writing normal `~/.pi/agent`. It exclusively preflights the exact loopback port and refuses an
 occupied listener without connecting. It then closes the probe, rechecks the
 runtime path, and starts `[runtime.executable] + runtime.argv` directly as a
 direct child leading a new owned process group.

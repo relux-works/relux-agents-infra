@@ -337,6 +337,16 @@ anchored no-follow containment contract. Do not add raw profile-name path
 components, shared locks for byte-distinct names, a fallback for read/path
 failure, or project-controlled catalog evidence.
 
+Long-lived local-model profiles may define a strict optional
+`[agents.pi.profiles.<name>.compaction]` table with required `enabled`,
+`reserve_tokens`, and `keep_recent_tokens` fields. Require
+`reserve_tokens >= max_tokens` and
+`reserve_tokens + keep_recent_tokens < context_window`. agents-infra merges
+only that object into the isolated profile `agent/settings.json` before launch,
+preserving unrelated Pi preferences and the existing `sessions/` history.
+Use an earlier threshold and a smaller retained tail for sessions expected to
+live for days; do not rely on overflow recovery as the normal compaction path.
+
 Use this order for every new or changed deployment:
 
 ```bash
@@ -380,6 +390,20 @@ starts. Record only orchestration evidence: lifecycle events, PID/PGID,
 readiness, foreground-terminal ownership, exit/signal, and cleanup state. Never
 record environment values, API keys, or prompt/argument contents. Pi's own
 conversation and tool transcript remains separately under `sessions/`.
+
+Restore only from the same canonical project directory and logical profile so
+the hash-contained state keys match. Canonical `qwen-infra` provider arguments
+follow its target delimiter:
+
+```bash
+qwen-infra -- --continue
+qwen-infra -- --resume
+qwen-infra -- --session SESSION_ID
+```
+
+`--continue` selects the newest transcript, `--resume` opens Pi's selector, and
+`--session` accepts a plain ID inside the managed session directory. Managed Pi
+continues to reject filesystem-shaped session selectors.
 
 Pinned Pi `0.84.2` has no per-tool approval prompt: enabled tools execute
 directly. `--approve`/`-a` controls one-run trust for project-local files. In

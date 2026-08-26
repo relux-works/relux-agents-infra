@@ -21,11 +21,16 @@ type PiLaunchPlanDetails struct {
 	PiCompatibilitySource string               `json:"pi_compatibility_source,omitempty"`
 	State                 *PiStatePaths        `json:"state,omitempty"`
 	ModelsJSON            PiGeneratedCatalog   `json:"models_json,omitempty"`
+	Settings              *PiSettingsPlan      `json:"settings,omitempty"`
 	PiIdentity            *PiExecutionIdentity `json:"pi_identity,omitempty"`
 	Runtime               *PiRuntimePlan       `json:"runtime,omitempty"`
 	SharedRuntime         *PiSharedRuntimePlan `json:"shared_runtime,omitempty"`
 	Capabilities          *PiCapabilityPlan    `json:"capabilities,omitempty"`
 	DFlash                *PiDFlashPlan        `json:"dflash,omitempty"`
+}
+type PiSettingsPlan struct {
+	Path       string        `json:"path"`
+	Compaction *PiCompaction `json:"compaction,omitempty"`
 }
 type PiSharedRuntimePlan struct {
 	Mode          string             `json:"mode"`
@@ -207,6 +212,10 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	details := &PiLaunchPlanDetails{Managed: true, LogicalProfile: selected, ProfileSource: selectedSource, PiCompatibilitySource: composite.PiPrimarySession.PiCompatibility.Source, State: &state, ModelsJSON: PiGeneratedCatalog{Path: state.ModelsJSON, SHA256: hex.EncodeToString(modelsSum[:])}, PiIdentity: &identity,
 		Runtime:      &PiRuntimePlan{Executable: profile.Runtime.Executable, Argv: append([]string(nil), profile.Runtime.Argv...), Source: profile.Source, Endpoint: profile.BaseURL, ReadinessURL: strings.TrimSuffix(profile.BaseURL, "/v1") + "/v1" + profile.Runtime.ReadinessPath, StartupTimeoutSeconds: profile.Runtime.StartupTimeoutSeconds, ShutdownTimeoutSeconds: profile.Runtime.ShutdownTimeoutSeconds, ExecutableState: execState, Ownership: "direct-child-process-group"},
 		Capabilities: &PiCapabilityPlan{Requested: append([]string(nil), profile.RequestedCapabilities...), Verified: []string{}, Verification: "not-claimed"}}
+	if profile.Compaction != nil {
+		compaction := *profile.Compaction
+		details.Settings = &PiSettingsPlan{Path: state.SettingsJSON, Compaction: &compaction}
+	}
 	if profile.Runtime.Sharing != nil && profile.Runtime.Sharing.Mode == "shared" {
 		runtimeKey, profileDigest := SharedRuntimeKey(profile)
 		paths, err := ResolveSharedRuntimePaths("", runtimeKey)

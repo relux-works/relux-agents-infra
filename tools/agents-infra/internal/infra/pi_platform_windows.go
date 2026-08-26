@@ -50,6 +50,7 @@ type PiStatePaths struct {
 	SessionsDir        string `json:"sessions_dir"`
 	LogsDir            string `json:"logs_dir"`
 	ModelsJSON         string `json:"models_json"`
+	SettingsJSON       string `json:"settings_json"`
 	Lock               string `json:"lock"`
 }
 
