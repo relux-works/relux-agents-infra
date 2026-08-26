@@ -66,9 +66,16 @@ type PiProfile struct {
 	MaxTokens             int
 	Thinking              string
 	RequestedCapabilities []string
+	Compaction            *PiCompaction
 	Compat                PiCompat
 	Runtime               PiRuntime
 	Source                string
+}
+
+type PiCompaction struct {
+	Enabled          bool `json:"enabled"`
+	ReserveTokens    int  `json:"reserveTokens"`
+	KeepRecentTokens int  `json:"keepRecentTokens"`
 }
 
 type PiCompat struct {
@@ -194,7 +201,7 @@ func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, 
 func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) {
 	field := "agents.pi.profiles." + name
 	if err := rejectUnknownFields(table, field,
-		"provider", "model", "base_url", "api", "reasoning", "input", "context_window", "max_tokens", "thinking", "requested_capabilities", "compat", "runtime"); err != nil {
+		"provider", "model", "base_url", "api", "reasoning", "input", "context_window", "max_tokens", "thinking", "requested_capabilities", "compaction", "compat", "runtime"); err != nil {
 		return PiProfile{}, projectConfigFieldError(path, errField(err), err)
 	}
 	var p PiProfile
@@ -250,6 +257,17 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 	if p.RequestedCapabilities, err = requiredStringArray(table, "requested_capabilities"); err != nil {
 		return p, projectConfigFieldError(path, field+".requested_capabilities", err)
 	}
+	if raw, ok := table["compaction"]; ok {
+		compactionTable, ok := raw.(map[string]any)
+		if !ok {
+			return p, projectConfigFieldError(path, field+".compaction", fmt.Errorf("expected table, got %T", raw))
+		}
+		compaction, parseErr := parsePiCompaction(compactionTable, field+".compaction", p.ContextWindow, p.MaxTokens)
+		if parseErr != nil {
+			return p, projectConfigFieldError(path, errField(parseErr), parseErr)
+		}
+		p.Compaction = &compaction
+	}
 	compatTable, present, tableErr := projectConfigTable(table, "compat", field+".compat")
 	if tableErr != nil || !present {
 		if tableErr == nil {
@@ -284,6 +302,33 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 		return p, projectConfigFieldError(path, field+".runtime.dflash.target_model", errors.New("must equal profile model"))
 	}
 	return p, nil
+}
+
+func parsePiCompaction(table map[string]any, field string, contextWindow, maxTokens int) (PiCompaction, error) {
+	if err := rejectUnknownFields(table, field, "enabled", "reserve_tokens", "keep_recent_tokens"); err != nil {
+		return PiCompaction{}, err
+	}
+	var compaction PiCompaction
+	var err error
+	if compaction.Enabled, err = requiredBool(table, "enabled"); err != nil {
+		return compaction, fieldError(field+".enabled", err)
+	}
+	if compaction.ReserveTokens, err = requiredPositiveInt(table, "reserve_tokens"); err != nil {
+		return compaction, fieldError(field+".reserve_tokens", err)
+	}
+	if compaction.KeepRecentTokens, err = requiredPositiveInt(table, "keep_recent_tokens"); err != nil {
+		return compaction, fieldError(field+".keep_recent_tokens", err)
+	}
+	if compaction.ReserveTokens < maxTokens {
+		return compaction, fieldError(field+".reserve_tokens", errors.New("must be at least max_tokens"))
+	}
+	if compaction.ReserveTokens >= contextWindow {
+		return compaction, fieldError(field+".reserve_tokens", errors.New("must be less than context_window"))
+	}
+	if compaction.KeepRecentTokens+compaction.ReserveTokens >= contextWindow {
+		return compaction, fieldError(field+".keep_recent_tokens", errors.New("plus reserve_tokens must be less than context_window"))
+	}
+	return compaction, nil
 }
 
 func parsePiCompat(table map[string]any, field string) (PiCompat, error) {

@@ -594,6 +594,9 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 	if err := WritePiModelsJSON(state, models); err != nil {
 		return err
 	}
+	if err := WritePiCompactionSettings(state, profile.Compaction); err != nil {
+		return err
+	}
 	runtimeKey, profileDigest := SharedRuntimeKey(profile)
 	paths, err := ResolveSharedRuntimePaths(opts.CacheRoot, runtimeKey)
 	if err != nil {

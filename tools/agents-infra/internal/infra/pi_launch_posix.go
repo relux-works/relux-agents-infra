@@ -199,6 +199,9 @@ func RunPi(opts RunPiOptions) error {
 	if err := WritePiModelsJSON(state, models); err != nil {
 		return err
 	}
+	if err := WritePiCompactionSettings(state, profile.Compaction); err != nil {
+		return err
+	}
 	if err := preflightPiListener(profile.BaseURL); err != nil {
 		return err
 	}

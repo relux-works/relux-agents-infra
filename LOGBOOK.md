@@ -5,6 +5,13 @@
 
 ## 2026-08-26
 
+### 2328 — One Compact-And-Retry Is Not A Weekly Session Policy
+- ROOT CAUSE: The failed local-Qwen turn had already compacted once at 43,248 tokens; its retry still began with 36,394 input tokens because Pi retained the default 20k recent tail, then generated 8,514 tokens and hit the 50k window. Pi intentionally attempted no second recovery compaction in the same turn.
+- FINDING: The same session had completed earlier compactions at 40,119 and 43,248 tokens. Compaction itself did not regress; the retained post-compaction context was too large for one pathological turn.
+- FIX: Managed Pi profiles may carry strict source-managed compaction policy. agents-infra merges it into isolated `agent/settings.json` without changing project/profile state keys or overwriting unrelated Pi preferences.
+- DECISION: The 50k local-Qwen profile compacts near 26k and retains 8k recent tokens, preserving full history in session JSONL while reserving enough space for long local-model responses.
+- RECOVERY: From the same cwd/profile, canonical restore is `qwen-infra -- --continue`, `qwen-infra -- --resume`, or `qwen-infra -- --session SESSION_ID`.
+
 ### 1528 — Standalone Must Not Probe Interactive Terminal Ownership
 - ROOT CAUSE: Current main's foreground-terminal composition preserved closed standalone stdin but still passed caller stdin to `configurePiProcessTerminal`, so a TTY caller could set `Foreground`/`Ctty` on a non-interactive worker.
 - FIX: `tools/agents-infra/internal/infra/pi_launch_posix.go` and `pi_shared_client_darwin.go` now configure stdin and terminal foreground only for interactive launches; standalone keeps a separate process group.
