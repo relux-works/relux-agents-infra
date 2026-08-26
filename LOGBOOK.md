@@ -3,6 +3,18 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-08-27
+
+### 0103 — Capacity Checks Should Spend Tokens On Prefill
+- DECISION: `model-harness stress` validates local-host context capacity with a calibrated synthetic prompt and bounded output instead of waiting for long generation.
+- FIX: The local profile owns prompt, output, startup, request, and sampling bounds; the versioned report records observed tokens, timing, baseline/peak process RSS, host memory, and target tolerance.
+- SAFETY: Stress refuses occupied endpoints and non-local profiles, emits no synthetic content, and kills/reaps its runtime on success or failure.
+
+### 0053 — Put The Compaction Threshold In Policy
+- FINDING: The local Qwen model declares a 262,144-token native limit and uses full KV cache on 16 of 64 hybrid layers; a 75k managed window is within the model contract and the 64GB host's intended operating range.
+- DECISION: The root local-Qwen profile uses a 75k context window, compacts at an explicit 50k threshold, retains 8k recent tokens, and leaves a 25k response/safety reserve.
+- FIX: `tools/agents-infra/internal/infra/pi_config.go` accepts operator-facing `compact_at_tokens`, derives Pi-native `reserveTokens`, and retains mutually exclusive `reserve_tokens` compatibility.
+
 ## 2026-08-26
 
 ### 2328 — One Compact-And-Retry Is Not A Weekly Session Policy

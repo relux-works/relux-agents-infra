@@ -28,6 +28,30 @@ argv = ["serve", "--host", "{host}", "--port", "{port}"]
 	}
 }
 
+func TestResolveLocalStressPolicy(t *testing.T) {
+	config := writeConfig(t, `
+[profiles.qwen-local]
+mode = "local"
+executable = "/bin/echo"
+argv = ["serve", "--host", "{host}", "--port", "{port}"]
+
+[profiles.qwen-local.stress]
+prompt_tokens = 50000
+max_output_tokens = 1
+startup_timeout_seconds = 120
+request_timeout_seconds = 600
+sample_interval_milliseconds = 250
+`)
+	plan, err := Resolve(config, "qwen-local", "127.0.0.1", 18011)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &StressPolicy{PromptTokens: 50000, MaxOutputTokens: 1, StartupTimeoutSeconds: 120, RequestTimeoutSeconds: 600, SampleIntervalMilliseconds: 250}
+	if !reflect.DeepEqual(plan.Stress, want) {
+		t.Fatalf("stress policy=%#v want=%#v", plan.Stress, want)
+	}
+}
+
 func TestResolveSSHProfile(t *testing.T) {
 	config := writeConfig(t, `
 [profiles.qwen-remote]
@@ -102,6 +126,39 @@ argv = ["--host", "{host}", "--port", "{port}"]
 shell = true
 `,
 			want: "strict mode",
+		},
+		{
+			name: "incomplete stress policy",
+			body: `
+[profiles.local]
+mode = "local"
+executable = "/bin/echo"
+argv = ["--host", "{host}", "--port", "{port}"]
+
+[profiles.local.stress]
+prompt_tokens = 50000
+`,
+			want: "stress.max_output_tokens",
+		},
+		{
+			name: "ssh stress policy",
+			body: `
+[profiles.remote]
+mode = "ssh"
+ssh_target = "host"
+remote_executable = "/bin/model-harness"
+remote_profile = "tiny"
+remote_host = "127.0.0.1"
+remote_port = 18011
+
+[profiles.remote.stress]
+prompt_tokens = 50000
+max_output_tokens = 1
+startup_timeout_seconds = 120
+request_timeout_seconds = 600
+sample_interval_milliseconds = 250
+`,
+			want: "stress is currently supported only for local mode",
 		},
 	}
 	for _, test := range tests {
