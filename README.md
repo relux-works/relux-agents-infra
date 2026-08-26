@@ -620,10 +620,13 @@ and live leases without starting or connecting from `pi --print-config`:
 
 When a profile change produces a new runtime identity while the previous
 shared runtime is still releasing the same fixed listener, acquisition retries
-the broker's structured `runtime_listener_occupied` exit for at most the
-configured linger plus shutdown timeout and a two-second handoff grace. The
-client never connects to, adopts, or signals the occupying listener; a listener
-that remains occupied after that bounded window still fails closed.
+the broker's structured `runtime_listener_occupied` exit. The same bounded
+handoff applies when an installed agents-infra upgrade leaves an older broker
+inode alive long enough to refuse the new client with
+`broker_executable_identity_mismatch`. Both retries last at most the configured
+linger plus shutdown timeout and a two-second handoff grace. The client never
+adopts or signals the old or occupying runtime; a refusal that persists after
+that bounded window still fails closed.
 
 ```bash
 agents-infra pi --print-config --profile qwen-3.8-27b

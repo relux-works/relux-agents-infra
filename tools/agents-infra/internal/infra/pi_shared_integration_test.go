@@ -511,6 +511,119 @@ broker_start_timeout_seconds = 40
 	}, "listener handoff did not reap both runtime generations")
 }
 
+func TestSharedRuntimeAcquisitionRetriesExecutableUpgradeHandoff(t *testing.T) {
+	testRoot, err := os.MkdirTemp("/tmp", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(testRoot) })
+	project := filepath.Join(testRoot, "project")
+	home := filepath.Join(testRoot, "home")
+	cache := filepath.Join(home, "Library", "Caches")
+	for _, directory := range []string{project, cache} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	runtimeExecutable := buildSharedFakeRuntime(t, testRoot)
+	body := validPiProfileWithArgv(t, sharedTestProfileName, runtimeExecutable, port, []string{"serve", "--model", "Model", "--pid-file", filepath.Join(testRoot, "runtime.pid")}, 5)
+	body += fmt.Sprintf(`
+[agents.pi.profiles.%q.runtime.sharing]
+mode = "shared"
+linger_seconds = 1
+max_leases = 4
+heartbeat_interval_seconds = 1
+lease_stale_seconds = 5
+broker_start_timeout_seconds = 40
+`, sharedTestProfileName)
+	writePiProjectConfig(t, project, body)
+	resolved, err := resolveSharedProfile(project, home, cache, sharedTestProfileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateSharedRuntimeTree(resolved.Paths); err != nil {
+		t.Fatal(err)
+	}
+	state, err := ResolvePiClientStatePaths(cache, project, sharedTestProfileName, "RUN-executable-handoff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreatePiStateTree(state); err != nil {
+		t.Fatal(err)
+	}
+
+	oldExecutable := filepath.Join(testRoot, "old-agents-infra")
+	oldBytes, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldExecutable, oldBytes, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldBroker := exec.Command(oldExecutable, "runtime", "broker", "--runtime-key", resolved.RuntimeKey, "--profile-project", project, "--profile", sharedTestProfileName)
+	oldBroker.Env = append(os.Environ(), "HOME="+home)
+	oldBroker.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	oldOutput := new(bytes.Buffer)
+	oldBroker.Stdout = oldOutput
+	oldBroker.Stderr = oldOutput
+	if err := oldBroker.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if oldBroker.ProcessState == nil {
+			_ = syscall.Kill(-oldBroker.Process.Pid, syscall.SIGKILL)
+			_ = oldBroker.Wait()
+		}
+	})
+	var oldRuntimePID int
+	waitForSharedTest(t, 10*time.Second, func() bool {
+		record, present, readErr := readSharedBrokerRecord(resolved.Paths.BrokerState)
+		if readErr != nil || !present || record.State != "serving" || record.Runtime == nil {
+			return false
+		}
+		oldRuntimePID = record.Runtime.PID
+		return true
+	}, "old executable broker did not reach serving")
+
+	oldStopped := make(chan error, 1)
+	go func() {
+		timer := time.NewTimer(350 * time.Millisecond)
+		defer timer.Stop()
+		<-timer.C
+		if err := oldBroker.Process.Signal(syscall.SIGTERM); err != nil {
+			oldStopped <- err
+			return
+		}
+		oldStopped <- oldBroker.Wait()
+	}()
+	lease, err := acquireSharedRuntimeLease(resolved, state, "RUN-executable-handoff", append(os.Environ(), "HOME="+home), nil, context.Background())
+	if err != nil {
+		t.Fatalf("executable handoff acquisition: %v; old broker output=%s", err, oldOutput)
+	}
+	newRuntimePID := lease.runtime.PID
+	if err := <-oldStopped; err != nil {
+		t.Fatalf("old executable broker stop: %v; output=%s", err, oldOutput)
+	}
+	if newRuntimePID == 0 || newRuntimePID == oldRuntimePID {
+		t.Fatalf("executable handoff runtime pid=%d old=%d", newRuntimePID, oldRuntimePID)
+	}
+	lease.close()
+	waitForSharedTest(t, 5*time.Second, func() bool {
+		_, present, readErr := readSharedBrokerRecord(resolved.Paths.BrokerState)
+		oldObservation, oldErr := inspectSharedProcessKernel(oldRuntimePID)
+		newObservation, newErr := inspectSharedProcessKernel(newRuntimePID)
+		oldGone := sharedProcessGone(oldErr) || (oldErr == nil && !oldObservation.live())
+		newGone := sharedProcessGone(newErr) || (newErr == nil && !newObservation.live())
+		return readErr == nil && !present && oldGone && newGone
+	}, "executable handoff did not reap both runtime generations")
+}
+
 func TestSharedRuntimeOperatorStopRefusesActiveLeasesThenForceDrains(t *testing.T) {
 	testRoot, err := os.MkdirTemp("/tmp", "x")
 	if err != nil {
@@ -914,6 +1027,10 @@ func TestSharedRuntimeForceStopAbsentCleansStaleLeaseMirrors(t *testing.T) {
 }
 
 func newSharedIntegrationProfile(t *testing.T) (project, home, cache string, resolved sharedResolvedProfile) {
+	return newSharedIntegrationProfileAtPort(t, 18011)
+}
+
+func newSharedIntegrationProfileAtPort(t *testing.T, port int) (project, home, cache string, resolved sharedResolvedProfile) {
 	t.Helper()
 	root, err := os.MkdirTemp("/tmp", "x")
 	if err != nil {
@@ -928,7 +1045,7 @@ func newSharedIntegrationProfile(t *testing.T) (project, home, cache string, res
 			t.Fatal(err)
 		}
 	}
-	writePiProjectConfig(t, project, sharedPiProfileTOML("profile", "/bin/echo", 18011))
+	writePiProjectConfig(t, project, sharedPiProfileTOML("profile", "/bin/echo", port))
 	resolved, err = resolveSharedProfile(project, home, cache, "profile")
 	if err != nil {
 		t.Fatal(err)
@@ -1347,7 +1464,13 @@ func launchSharedRecordedBrokerCandidate(t *testing.T, lockPath string) (*exec.C
 }
 
 func TestSharedRuntimeAdHocBrokerSelfGateAndForeignListener(t *testing.T) {
-	project, home, _, resolved := newSharedIntegrationProfile(t)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	project, home, _, resolved := newSharedIntegrationProfileAtPort(t, port)
 	args := []string{"runtime", "broker", "--runtime-key", resolved.RuntimeKey, "--profile-project", project, "--profile", "profile"}
 
 	t.Run("not_session_leader", func(t *testing.T) {
@@ -1362,11 +1485,6 @@ func TestSharedRuntimeAdHocBrokerSelfGateAndForeignListener(t *testing.T) {
 		}
 	})
 
-	listener, err := net.Listen("tcp4", "127.0.0.1:18011")
-	if err != nil {
-		t.Skipf("test endpoint unavailable: %v", err)
-	}
-	defer listener.Close()
 	t.Run("attractive_foreign_listener", func(t *testing.T) {
 		command := exec.Command(os.Args[0], args...)
 		command.Env = append(os.Environ(), "HOME="+home)
