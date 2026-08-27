@@ -1,0 +1,18 @@
+{
+  "maxTimeToFirstTokenRatio": 1.1,
+  "minPrefillThroughputRatio": 0.9,
+  "minDecodeThroughputRatio": 0.9,
+  "maxPeakFootprintRatio": 1.1,
+  "paritySuccessScenarios": [
+    "short_prompt",
+    "long_prompt_8k",
+    "context_75k",
+    "tool_call",
+    "stability_soak"
+  ],
+  "scoredScenarios": [
+    "short_prompt",
+    "long_prompt_8k"
+  ],
+  "maxPromptTokenSkewRatio": 1.1
+}

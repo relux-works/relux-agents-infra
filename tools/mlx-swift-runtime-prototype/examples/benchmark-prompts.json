@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "comment": "Pinned prompt suite for the Python-vs-Swift runtime comparison. This file's SHA-256 is recorded as promptSuiteDigest in every run record, so a comparison across two different prompt suites is refused rather than reported. Long prompts are built by repeating filler_paragraph so the file stays readable while the token counts stay reproducible: the paragraph is 37 tokens under this model's tokenizer.",
+  "filler_paragraph": "The maintenance log records that the coolant loop was flushed, the intake manifold resealed, and the telemetry uplink recalibrated against the reference clock before the vehicle was returned to service. ",
+  "system_prompt": "You are a terse maintenance assistant. Answer in one short sentence.",
+  "scenarios": {
+    "short_prompt": {
+      "kind": "single",
+      "prompt": "List three routine checks a maintenance technician performs on a coolant loop.",
+      "max_tokens": 256
+    },
+    "long_prompt_8k": {
+      "kind": "single",
+      "prefix_repeats": 215,
+      "prompt": "Using only the maintenance log above, name the three systems that were serviced.",
+      "max_tokens": 256
+    },
+    "context_75k": {
+      "kind": "single",
+      "prefix_repeats": 2027,
+      "prompt": "Using only the maintenance log above, name the three systems that were serviced.",
+      "max_tokens": 16
+    },
+    "tool_call": {
+      "kind": "tool",
+      "prompt": "What is the current coolant pressure on vehicle 7? Use the tool.",
+      "max_tokens": 256,
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "read_coolant_pressure",
+            "description": "Read the current coolant loop pressure for a vehicle.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "vehicle_id": {
+                  "type": "integer",
+                  "description": "Numeric vehicle identifier."
+                }
+              },
+              "required": ["vehicle_id"]
+            }
+          }
+        }
+      ]
+    },
+    "multiturn_prefix_reuse": {
+      "kind": "multiturn",
+      "prefix_repeats": 215,
+      "turns": [
+        "Using only the maintenance log above, name the first system that was serviced.",
+        "Using only the maintenance log above, name the second system that was serviced.",
+        "Using only the maintenance log above, name the third system that was serviced."
+      ],
+      "max_tokens": 64
+    },
+    "stability_soak": {
+      "kind": "soak",
+      "iterations": 20,
+      "prompt_template": "Maintenance ticket {index}: describe one check for the coolant loop, in one sentence.",
+      "max_tokens": 64
+    }
+  }
+}
