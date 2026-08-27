@@ -44,6 +44,14 @@
 * **Pushing is not committing.** Publishing to a remote is outward-facing and stays an explicit ask unless the repo's workflow says otherwise.
 * **Never add Co-Authored-By lines** or any AI attribution to commits.
 
+### Canonical pull-request delivery
+
+* When a hosted repository supports pull requests or merge requests, use a non-default branch and the canonical **branch → PR/MR → review → green checks → merge** flow by default. Do not push directly to the default branch merely because it is faster.
+* When publication and merge are within the current authorization, the agent that owns the change owns the complete delivery lifecycle: push the branch, open the PR/MR, inspect the complete remote diff and current checks, submit a real review verdict through the hosting platform, and merge only after that review accepts the change and all required checks pass.
+* Use the platform's actual review mechanism so repository history accurately represents the pull-request and code-review work. GitHub does not allow an author to approve their own pull request; in that case submit a comment review containing the verdict, and never invent another identity or misrepresent approval.
+* A direct default-branch push is an exception only when the user or repository workflow explicitly requires it, or when the remote has no review workflow. A stricter repository-local PR/MR-only rule always wins. If the canonical flow is required but authentication, policy, or hosting constraints prevent it, report the exact blocker instead of silently falling back to a direct push.
+* This section governs the shape of remote publication. It does not grant commit, push, review, or merge authority, and it does not replace task-board commit confirmation or repository-specific acceptance gates.
+
 ### Commit message style
 
 Follow the repository's existing convention — read `git log` before writing the first message, and match what is already there. Absent a clear local convention, use the widely accepted form below, which is also what the strongest history in these repos already does:
