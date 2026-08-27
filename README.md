@@ -533,6 +533,13 @@ mode = "local"
 executable = "/absolute/path/to/python"
 argv = ["-c", "from mlx_lm.server import main; main()", "--model", "/models/Qwen", "--host", "{host}", "--port", "{port}"]
 
+[profiles.qwen-local.supervision]
+fatal_output_substrings = ["RuntimeError: [metal::malloc] Resource limit ("]
+restart_on_failure = true
+max_restarts = 3
+restart_window_seconds = 3600
+restart_delay_milliseconds = 1000
+
 [profiles.qwen-local.stress]
 prompt_tokens = 50000
 max_output_tokens = 1
@@ -540,6 +547,31 @@ startup_timeout_seconds = 120
 request_timeout_seconds = 600
 sample_interval_milliseconds = 250
 ```
+
+Local supervision is an explicit fail-closed policy. The harness forwards the
+child's stdout and stderr unchanged while matching literal fatal substrings,
+kills a runtime that remains listening after a fatal background-thread error,
+and starts a fresh child within the configured rolling restart budget. A normal
+zero exit is never restarted. `restart_on_failure` additionally covers an
+unexpected non-zero child exit. Supervision is configured on the remote
+machine's local profile rather than on the local SSH forwarding profile.
+
+As of 2026-08-27, the released `mlx-lm 0.31.3` predates the upstream fix for
+the Qwen3.5 `ArraysCache` Metal buffer-object leak. A reproducible temporary
+installation can pin the merged upstream fix without replacing the released
+environment:
+
+```bash
+pipx install \
+  --suffix=-qwenfix \
+  --python python3.14 \
+  'git+https://github.com/ml-explore/mlx-lm.git@11a6ce75589f59809d6d79b28efa03c50896c18b'
+```
+
+Point the local profile's `executable` at the resulting absolute
+`mlx_lm-qwenfix.server` path. Remove this temporary pin after a released
+`mlx-lm` version containing upstream PR #1632 has passed the same capacity and
+long-session checks.
 
 All stress bounds are explicit profile policy. `model-harness stress` refuses
 profiles without this table and currently supports local mode only. It starts
@@ -1362,6 +1394,7 @@ rg -n "Primary Parent Goal Actualization" \
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
 | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
 | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+| `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
 | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
 | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |

@@ -28,17 +28,18 @@ type Document struct {
 }
 
 type Profile struct {
-	Mode             string        `toml:"mode"`
-	Executable       string        `toml:"executable,omitempty"`
-	Argv             []string      `toml:"argv,omitempty"`
-	SSHExecutable    string        `toml:"ssh_executable,omitempty"`
-	SSHTarget        string        `toml:"ssh_target,omitempty"`
-	RemoteExecutable string        `toml:"remote_executable,omitempty"`
-	RemoteConfig     string        `toml:"remote_config,omitempty"`
-	RemoteProfile    string        `toml:"remote_profile,omitempty"`
-	RemoteHost       string        `toml:"remote_host,omitempty"`
-	RemotePort       int           `toml:"remote_port,omitempty"`
-	Stress           *StressPolicy `toml:"stress,omitempty"`
+	Mode             string             `toml:"mode"`
+	Executable       string             `toml:"executable,omitempty"`
+	Argv             []string           `toml:"argv,omitempty"`
+	SSHExecutable    string             `toml:"ssh_executable,omitempty"`
+	SSHTarget        string             `toml:"ssh_target,omitempty"`
+	RemoteExecutable string             `toml:"remote_executable,omitempty"`
+	RemoteConfig     string             `toml:"remote_config,omitempty"`
+	RemoteProfile    string             `toml:"remote_profile,omitempty"`
+	RemoteHost       string             `toml:"remote_host,omitempty"`
+	RemotePort       int                `toml:"remote_port,omitempty"`
+	Stress           *StressPolicy      `toml:"stress,omitempty"`
+	Supervision      *SupervisionPolicy `toml:"supervision,omitempty"`
 }
 
 type StressPolicy struct {
@@ -49,17 +50,26 @@ type StressPolicy struct {
 	SampleIntervalMilliseconds int `toml:"sample_interval_milliseconds" json:"sample_interval_milliseconds"`
 }
 
+type SupervisionPolicy struct {
+	FatalOutputSubstrings    []string `toml:"fatal_output_substrings" json:"fatal_output_substrings"`
+	RestartOnFailure         bool     `toml:"restart_on_failure" json:"restart_on_failure"`
+	MaxRestarts              int      `toml:"max_restarts" json:"max_restarts"`
+	RestartWindowSeconds     int      `toml:"restart_window_seconds" json:"restart_window_seconds"`
+	RestartDelayMilliseconds int      `toml:"restart_delay_milliseconds" json:"restart_delay_milliseconds"`
+}
+
 type Plan struct {
-	Contract      string        `json:"contract"`
-	SchemaVersion int           `json:"schema_version"`
-	Config        string        `json:"config"`
-	Profile       string        `json:"profile"`
-	Mode          string        `json:"mode"`
-	Executable    string        `json:"executable"`
-	Argv          []string      `json:"argv"`
-	Endpoint      string        `json:"endpoint"`
-	Remote        *RemotePlan   `json:"remote,omitempty"`
-	Stress        *StressPolicy `json:"stress,omitempty"`
+	Contract      string             `json:"contract"`
+	SchemaVersion int                `json:"schema_version"`
+	Config        string             `json:"config"`
+	Profile       string             `json:"profile"`
+	Mode          string             `json:"mode"`
+	Executable    string             `json:"executable"`
+	Argv          []string           `json:"argv"`
+	Endpoint      string             `json:"endpoint"`
+	Remote        *RemotePlan        `json:"remote,omitempty"`
+	Stress        *StressPolicy      `json:"stress,omitempty"`
+	Supervision   *SupervisionPolicy `json:"supervision,omitempty"`
 }
 
 type RemotePlan struct {
@@ -126,6 +136,7 @@ func Resolve(configPath, profileName, host string, port int) (Plan, error) {
 		Mode:          profile.Mode,
 		Endpoint:      "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/v1",
 		Stress:        profile.Stress,
+		Supervision:   profile.Supervision,
 	}
 	switch profile.Mode {
 	case "local":
@@ -226,6 +237,9 @@ func validateProfile(name string, profile Profile) error {
 		if err := validateStressPolicy(name, profile.Stress); err != nil {
 			return err
 		}
+		if err := validateSupervisionPolicy(name, profile.Supervision); err != nil {
+			return err
+		}
 	case "ssh":
 		if profile.Executable != "" || len(profile.Argv) != 0 {
 			return fmt.Errorf("profile %q: ssh mode cannot declare executable or argv", name)
@@ -257,8 +271,35 @@ func validateProfile(name string, profile Profile) error {
 		if profile.Stress != nil {
 			return fmt.Errorf("profile %q: stress is currently supported only for local mode", name)
 		}
+		if profile.Supervision != nil {
+			return fmt.Errorf("profile %q: supervision is currently supported only for local mode", name)
+		}
 	default:
 		return fmt.Errorf("profile %q: mode must equal local or ssh", name)
+	}
+	return nil
+}
+
+func validateSupervisionPolicy(name string, policy *SupervisionPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	if len(policy.FatalOutputSubstrings) < 1 || len(policy.FatalOutputSubstrings) > 16 {
+		return fmt.Errorf("profile %q: supervision.fatal_output_substrings must contain between 1 and 16 entries", name)
+	}
+	for _, marker := range policy.FatalOutputSubstrings {
+		if marker == "" || len(marker) > 512 || strings.IndexByte(marker, 0) >= 0 {
+			return fmt.Errorf("profile %q: supervision.fatal_output_substrings entries must be non-empty, at most 512 bytes, and NUL-free", name)
+		}
+	}
+	if policy.MaxRestarts < 1 || policy.MaxRestarts > 100 {
+		return fmt.Errorf("profile %q: supervision.max_restarts must be between 1 and 100", name)
+	}
+	if policy.RestartWindowSeconds < 1 || policy.RestartWindowSeconds > 86400 {
+		return fmt.Errorf("profile %q: supervision.restart_window_seconds must be between 1 and 86400", name)
+	}
+	if policy.RestartDelayMilliseconds < 0 || policy.RestartDelayMilliseconds > 60000 {
+		return fmt.Errorf("profile %q: supervision.restart_delay_milliseconds must be between 0 and 60000", name)
 	}
 	return nil
 }
