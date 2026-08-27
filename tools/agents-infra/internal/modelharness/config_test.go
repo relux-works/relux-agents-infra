@@ -52,6 +52,36 @@ sample_interval_milliseconds = 250
 	}
 }
 
+func TestResolveLocalSupervisionPolicy(t *testing.T) {
+	config := writeConfig(t, `
+[profiles.qwen-local]
+mode = "local"
+executable = "/bin/echo"
+argv = ["serve", "--host", "{host}", "--port", "{port}"]
+
+[profiles.qwen-local.supervision]
+fatal_output_substrings = ["Resource limit (499000) exceeded", "Exception in thread"]
+restart_on_failure = true
+max_restarts = 3
+restart_window_seconds = 3600
+restart_delay_milliseconds = 1000
+`)
+	plan, err := Resolve(config, "qwen-local", "127.0.0.1", 18011)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &SupervisionPolicy{
+		FatalOutputSubstrings:    []string{"Resource limit (499000) exceeded", "Exception in thread"},
+		RestartOnFailure:         true,
+		MaxRestarts:              3,
+		RestartWindowSeconds:     3600,
+		RestartDelayMilliseconds: 1000,
+	}
+	if !reflect.DeepEqual(plan.Supervision, want) {
+		t.Fatalf("supervision policy=%#v want=%#v", plan.Supervision, want)
+	}
+}
+
 func TestResolveSSHProfile(t *testing.T) {
 	config := writeConfig(t, `
 [profiles.qwen-remote]
@@ -159,6 +189,41 @@ request_timeout_seconds = 600
 sample_interval_milliseconds = 250
 `,
 			want: "stress is currently supported only for local mode",
+		},
+		{
+			name: "empty fatal output substring",
+			body: `
+[profiles.local]
+mode = "local"
+executable = "/bin/echo"
+argv = ["--host", "{host}", "--port", "{port}"]
+
+[profiles.local.supervision]
+fatal_output_substrings = [""]
+max_restarts = 3
+restart_window_seconds = 3600
+restart_delay_milliseconds = 1000
+`,
+			want: "fatal_output_substrings",
+		},
+		{
+			name: "ssh supervision policy",
+			body: `
+[profiles.remote]
+mode = "ssh"
+ssh_target = "host"
+remote_executable = "/bin/model-harness"
+remote_profile = "tiny"
+remote_host = "127.0.0.1"
+remote_port = 18011
+
+[profiles.remote.supervision]
+fatal_output_substrings = ["fatal"]
+max_restarts = 3
+restart_window_seconds = 3600
+restart_delay_milliseconds = 1000
+`,
+			want: "supervision is currently supported only for local mode",
 		},
 	}
 	for _, test := range tests {
