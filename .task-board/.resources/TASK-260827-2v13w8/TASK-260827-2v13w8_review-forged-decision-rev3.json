@@ -1,0 +1,65 @@
+{
+  "accepted" : true,
+  "blockers" : [
+
+  ],
+  "declaredAsymmetries" : [
+
+  ],
+  "deltas" : [
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 512,
+      "candidate" : 512,
+      "metric" : "prompt_tokens",
+      "ratio" : 1,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 1,
+      "candidate" : 1,
+      "metric" : "time_to_first_token_seconds",
+      "ratio" : 1,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 100,
+      "candidate" : 100,
+      "metric" : "prefill_tokens_per_second",
+      "ratio" : 1,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 10,
+      "candidate" : 10,
+      "metric" : "decode_tokens_per_second",
+      "ratio" : 1,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 29000000000,
+      "candidate" : 29000000000,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 1,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 29000000000,
+      "candidate" : 29000000000,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 1,
+      "scenario" : "process",
+      "verdict" : "within"
+    }
+  ]
+}

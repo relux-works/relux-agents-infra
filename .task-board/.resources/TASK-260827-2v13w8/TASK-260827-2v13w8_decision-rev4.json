@@ -1,0 +1,116 @@
+{
+  "accepted" : false,
+  "blockers" : [
+    "long_prompt_8k\/peak_physical_footprint_bytes ratio 1.1512007084931994 is outside the admissible band <= 1.1 (baseline 33705153440.0, candidate 38801396520.0)"
+  ],
+  "declaredAsymmetries" : [
+    "prompt cache enabled as deployed: --prompt-cache-size 1 --prompt-cache-bytes 8GB, the incumbent's installed configuration, kept rather than tuned away",
+    "\/health is a static 200 in the deployed revision 9150698; the generation-thread liveness fix is in the fork checkout but not installed",
+    "\/v1\/models answers 200 about a second after launch with no weights resident; the model loads on first completion",
+    "no prompt cache across requests: every request builds a fresh KV cache, so a shared multi-turn prefix is re-prefilled every turn",
+    "one generation at a time: GenerationEngine is an actor, so requests serialize even though the profile allows concurrent leases",
+    "readiness is gated on a resident model: \/v1\/models answers 503 until the weights are loaded, and advertises only the configured model",
+    "served by MLXLLM.LLMModelFactory (text-only); the vision tower is not loaded and the HTTP contract refuses image and audio content"
+  ],
+  "deltas" : [
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 41,
+      "candidate" : 41,
+      "metric" : "prompt_tokens",
+      "ratio" : 1,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 0.9848637580871582,
+      "candidate" : 0.9306838512420654,
+      "metric" : "time_to_first_token_seconds",
+      "ratio" : 0.9449874092734175,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 41.63012362200416,
+      "candidate" : 44.053627819245506,
+      "metric" : "prefill_tokens_per_second",
+      "ratio" : 1.058215157352076,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 10.271074675413033,
+      "candidate" : 10.896686081347813,
+      "metric" : "decode_tokens_per_second",
+      "ratio" : 1.0609100240924518,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 29399274400,
+      "candidate" : 29116781352,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 0.99039115577628,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 7784,
+      "candidate" : 7784,
+      "metric" : "prompt_tokens",
+      "ratio" : 1,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 92.94988203048706,
+      "candidate" : 92.9784939289093,
+      "metric" : "time_to_first_token_seconds",
+      "ratio" : 1.0003078207072158,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 83.74405464492025,
+      "candidate" : 83.71828442340217,
+      "metric" : "prefill_tokens_per_second",
+      "ratio" : 0.999692274017214,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 9.723226817584736,
+      "candidate" : 10.533407463530223,
+      "metric" : "decode_tokens_per_second",
+      "ratio" : 1.0833242565606154,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 33705153440,
+      "candidate" : 38801396520,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 1.1512007084931994,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "outside"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 48534787000,
+      "candidate" : 52995462000,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 1.0919067595784442,
+      "scenario" : "process",
+      "verdict" : "within"
+    }
+  ]
+}

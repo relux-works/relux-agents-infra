@@ -1,0 +1,1 @@
+{"detail":"RuntimeError: [metal::malloc] Resource limit (499000) exceeded","event":"generation_worker_failed","marker":"generation_worker_unavailable"}

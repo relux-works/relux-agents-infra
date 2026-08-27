@@ -1,0 +1,124 @@
+{
+  "accepted" : false,
+  "blockers" : [
+    "short_prompt\/prompt_tokens skew 1.9268292682926829 is outside the admissible band <= 1.1 (baseline 79, candidate 41); the two runtimes rendered materially different prompts, so this scenario's latency and throughput are not a comparison",
+    "short_prompt\/time_to_first_token_seconds ratio 0.7479285374166297 is not comparable (baseline 1.2332327365875244, candidate 0.9223699569702148)",
+    "short_prompt\/prefill_tokens_per_second ratio 0.6938996385466873 is not comparable (baseline 64.05927904460331, candidate 44.45071057461163)",
+    "short_prompt\/decode_tokens_per_second ratio 1.0701115087476727 is not comparable (baseline 10.342266495670724, candidate 11.067378403552704)",
+    "short_prompt\/peak_physical_footprint_bytes ratio 0.9874858801121202 is not comparable (baseline 29465793464.0, candidate 29097054992.0)",
+    "long_prompt_8k\/time_to_first_token_seconds ratio 1.2082148945171773 is outside the admissible band <= 1.1 (baseline 72.71463584899902, candidate 87.85490608215332)",
+    "long_prompt_8k\/prefill_tokens_per_second ratio 0.8236464489524666 is outside the admissible band >= 0.9 (baseline 107.57119125568276, candidate 88.60062968732974)",
+    "long_prompt_8k\/peak_physical_footprint_bytes ratio 1.1594735175944813 is outside the admissible band <= 1.1 (baseline 33448121296.0, candidate 38782210856.0)"
+  ],
+  "declaredAsymmetries" : [
+    "deployed with --prompt-cache-size 1 --prompt-cache-bytes 8GB; multi-turn prefix reuse is served from that cache",
+    "loads the model in the generation thread at startup, so \/v1\/models answers 200 about a second after launch with no weights resident",
+    "\/v1\/models lists every MLX model in the local Hugging Face cache and appends the configured one last, so data[0].id is not the configured model",
+    "installed revision 9150698 still answers \/health with an unconditional 200 (BUG-260827-1jhv2g); the generation-thread liveness tie is not installed",
+    "no prompt cache across requests: every request builds a fresh KV cache, so a shared multi-turn prefix is re-prefilled every turn",
+    "one generation at a time: GenerationEngine is an actor, so requests serialize even though the Pi profile allows max_leases = 8",
+    "readiness is gated on a resident model: \/v1\/models answers 503 until the weights are loaded, and advertises only the configured model",
+    "served by MLXLLM.LLMModelFactory (text-only); the vision tower is not loaded and the HTTP contract refuses image and audio content"
+  ],
+  "deltas" : [
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 79,
+      "candidate" : 41,
+      "metric" : "prompt_tokens",
+      "ratio" : 1.9268292682926829,
+      "scenario" : "short_prompt",
+      "verdict" : "outside"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 1.2332327365875244,
+      "candidate" : 0.9223699569702148,
+      "metric" : "time_to_first_token_seconds",
+      "ratio" : 0.7479285374166297,
+      "scenario" : "short_prompt",
+      "verdict" : "non-comparable"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 64.05927904460331,
+      "candidate" : 44.45071057461163,
+      "metric" : "prefill_tokens_per_second",
+      "ratio" : 0.6938996385466873,
+      "scenario" : "short_prompt",
+      "verdict" : "non-comparable"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 10.342266495670724,
+      "candidate" : 11.067378403552704,
+      "metric" : "decode_tokens_per_second",
+      "ratio" : 1.0701115087476727,
+      "scenario" : "short_prompt",
+      "verdict" : "non-comparable"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 29465793464,
+      "candidate" : 29097054992,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 0.9874858801121202,
+      "scenario" : "short_prompt",
+      "verdict" : "non-comparable"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 7822,
+      "candidate" : 7784,
+      "metric" : "prompt_tokens",
+      "ratio" : 1.0048818088386433,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 72.71463584899902,
+      "candidate" : 87.85490608215332,
+      "metric" : "time_to_first_token_seconds",
+      "ratio" : 1.2082148945171773,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "outside"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 107.57119125568276,
+      "candidate" : 88.60062968732974,
+      "metric" : "prefill_tokens_per_second",
+      "ratio" : 0.8236464489524666,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "outside"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 10.051055240585475,
+      "candidate" : 10.699847224449956,
+      "metric" : "decode_tokens_per_second",
+      "ratio" : 1.0645496386533329,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 33448121296,
+      "candidate" : 38782210856,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 1.1594735175944813,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "outside"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 48532313112,
+      "candidate" : 53004129064,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 1.092141001845105,
+      "scenario" : "process",
+      "verdict" : "within"
+    }
+  ]
+}

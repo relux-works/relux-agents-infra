@@ -1,0 +1,28 @@
+{
+  "runtime": "python-mlx-lm",
+  "revisions": {},
+  "command": ["model-harness", "run", "python", "--config", "/tmp/config-A.toml"],
+  "pins": {
+    "hostIdentity": "same-host",
+    "modelPath": "/same/model",
+    "modelDigest": "same-digest",
+    "quantization": "8bit/group64/affine",
+    "promptSuiteDigest": "same-prompts",
+    "contextPolicy": "unbounded-kv",
+    "maxOutputTokens": 256,
+    "temperature": 0.0,
+    "topP": 1.0,
+    "seed": 1234
+  },
+  "startedAtUnixSeconds": 0,
+  "finishedAtUnixSeconds": 10,
+  "peakPhysicalFootprintBytes": 100,
+  "scenarios": [
+    {"name":"short_prompt","succeeded":true,"timeToFirstTokenSeconds":1,"prefillTokensPerSecond":100,"decodeTokensPerSecond":10,"peakPhysicalFootprintBytes":10},
+    {"name":"long_prompt_8k","succeeded":true,"timeToFirstTokenSeconds":1,"prefillTokensPerSecond":100,"decodeTokensPerSecond":10,"peakPhysicalFootprintBytes":10},
+    {"name":"context_75k","succeeded":true,"peakPhysicalFootprintBytes":100},
+    {"name":"tool_call","succeeded":true,"peakPhysicalFootprintBytes":100},
+    {"name":"stability_soak","succeeded":true,"peakPhysicalFootprintBytes":100}
+  ],
+  "declaredAsymmetries": []
+}

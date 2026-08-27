@@ -1,0 +1,125 @@
+[
+  {
+    "id": "N-P",
+    "kind": "narrowing",
+    "site": "BenchmarkRunCommand.drive, the scenario loop",
+    "claim": "the accepted control is accepted because the scenarios were driven, not because the run was observed",
+    "check": "smoke",
+    "caught": true,
+    "evidence": [
+      "FAIL  the replay did not reproduce the control's verdict",
+      "FAIL  the replay does not state its own limit",
+      "FAIL  strict thresholds exited 4, not 3",
+      "FAIL  strict thresholds did not produce blockers"
+    ],
+    "verdict": "caught"
+  },
+  {
+    "id": "P-1",
+    "kind": "production bypass",
+    "site": "BenchmarkRunCommand.execute, the admit failure branch",
+    "claim": "an inadmissible pair cannot be laundered into an acceptance by the subcommand",
+    "check": "smoke",
+    "caught": true,
+    "evidence": [
+      "FAIL  the placeholder pass exited 0, not 4",
+      "FAIL  the skipped-scenario pass exited 0, not 4"
+    ],
+    "verdict": "caught"
+  },
+  {
+    "id": "P-2",
+    "kind": "production bypass",
+    "site": "BenchmarkRunCommand.execute, the admit call site",
+    "claim": "the required-scenario set actually reaches admit from production",
+    "check": "smoke",
+    "caught": true,
+    "evidence": [
+      "FAIL  the skipped-scenario pass exited 3, not 4",
+      "FAIL  the skipped-scenario refusal does not name the missing scenario"
+    ],
+    "verdict": "caught"
+  },
+  {
+    "id": "P-3",
+    "kind": "production bypass",
+    "site": "BenchmarkCompareCommand.attestation, the decode failure branch",
+    "claim": "a failed read is never collapsed into an absence at the production entry",
+    "check": "smoke",
+    "caught": true,
+    "evidence": [
+      "FAIL  a failed read is reported as a read failure, not as absence: exit 4 but the refusal never mentions is malformed"
+    ],
+    "verdict": "caught"
+  },
+  {
+    "id": "N-1",
+    "kind": "narrowing",
+    "site": "RuntimeBenchmark.admitAttestation, the observing-binary clause",
+    "claim": "the judging binary is required to be the observing binary",
+    "check": "test",
+    "caught": true,
+    "evidence": [
+      "\udbc2\udc84  Suite \"runtime benchmark attestation gate\" failed after 0.021 seconds with 1 issue.",
+      "\udbc2\udc84  Test run with 285 tests in 24 suites failed after 0.022 seconds with 1 issue."
+    ],
+    "verdict": "caught"
+  },
+  {
+    "id": "N-2",
+    "kind": "narrowing",
+    "site": "RuntimeBenchmark.admitTranscriptObservation, the seal clause",
+    "claim": "an absent seal is a refusal, not a seal the gate mints for itself",
+    "check": "test",
+    "caught": true,
+    "evidence": [
+      "\udbc2\udc84  Suite \"runtime benchmark transcript binding\" failed after 0.031 seconds with 1 issue.",
+      "\udbc2\udc84  Test run with 285 tests in 24 suites failed after 0.032 seconds with 1 issue."
+    ],
+    "verdict": "caught"
+  },
+  {
+    "id": "L-1",
+    "kind": "limit probe (expected to survive)",
+    "site": "BenchmarkRunCommand.drive, the scenario loop",
+    "claim": "STATED LIMIT, not a claim: a modified build that fabricates the transcript as well as the numbers is not detectable by this gate. Run to show where the boundary actually is rather than to imply there is none.",
+    "check": "smoke",
+    "caught": true,
+    "evidence": [
+      "FAIL  the measured control exited 4, not 0",
+      "FAIL  the control did not report accepted=true",
+      "FAIL  the skipped-scenario refusal does not name the missing scenario",
+      "FAIL  the replay exited 4, not 3"
+    ],
+    "verdict": "caught"
+  },
+  {
+    "id": "L-2",
+    "kind": "limit probe (expected to survive)",
+    "site": "BenchmarkRunCommand.drive, the scenario loop",
+    "claim": "STATED LIMIT: L-1 scaled so the fabricated wall clock fits the interval the gate observed. If this survives, the boundary is arithmetic consistency, not an ability to tell a measured number from a typed one.",
+    "check": "smoke",
+    "caught": true,
+    "evidence": [
+      "FAIL  the measured control exited 4, not 0",
+      "FAIL  the control did not report accepted=true",
+      "FAIL  the skipped-scenario refusal does not name the missing scenario",
+      "FAIL  the replay exited 4, not 3"
+    ],
+    "verdict": "caught"
+  },
+  {
+    "id": "L-3",
+    "kind": "limit probe (expected to survive)",
+    "site": "BenchmarkRunCommand.drive, the scenario loop",
+    "claim": "STATED LIMIT: L-1 scaled so the fabricated wall clock fits the interval the gate observed. If this survives, the boundary is arithmetic consistency, not an ability to tell a measured number from a typed one.",
+    "check": "smoke",
+    "caught": false,
+    "evidence": [
+      "control: PASS  a measured pair inside its thresholds is accepted (exit 0)",
+      "control: PASS  the accepted decision is reported with its deltas",
+      "the suite's red lines came from an unrelated downstream fixture ('a measurement with no transcript is refused'), not from detecting the fabrication"
+    ],
+    "verdict": "survived"
+  }
+]

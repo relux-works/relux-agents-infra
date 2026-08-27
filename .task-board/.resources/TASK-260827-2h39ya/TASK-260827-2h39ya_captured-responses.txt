@@ -1,0 +1,18 @@
+===== fault-health-before.json =====
+{"status":"ok"}
+===== fault-health-after.json =====
+{"detail":"RuntimeError: [metal::malloc] Resource limit (499000) exceeded","status":"unavailable"}
+===== fault-health-again.json =====
+{"detail":"RuntimeError: [metal::malloc] Resource limit (499000) exceeded","status":"unavailable"}
+===== fault-models.json =====
+{"data":[],"error":{"code":"generation_worker_unavailable","message":"RuntimeError: [metal::malloc] Resource limit (499000) exceeded","type":"server_error"},"object":"list"}
+===== control-health.json =====
+{"status":"ok"}
+===== benign-health.json =====
+{"status":"ok"}
+===== supervised-health-recovered.json =====
+{"status":"ok"}
+===== stream-health-before.json =====
+{"status":"ok"}
+===== stream-health-after.json =====
+{"detail":"RuntimeError: [metal::malloc] Resource limit (499000) exceeded","status":"unavailable"}

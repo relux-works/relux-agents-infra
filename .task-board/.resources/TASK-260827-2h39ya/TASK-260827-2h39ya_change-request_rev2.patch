@@ -1,0 +1,1554 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 06e43f7..480c7a7 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,26 @@
+ 
+ ## 2026-08-27
+ 
++### 2242 — A Refusal Boundary Wide Enough To Catch Its Own Neighbour
++- REGRESSION: Review defeated the dead-generation health gate shipped at 2205. `GenerationWorkerHealth.invalidatingSignatures` listed `metal::malloc` and `Resource limit` as two *independent* substrings, so `RequestError: Resource limit for this request is 8 tokens` — a request-scoped refusal that shares two words with the incident and nothing else — condemned a healthy runtime through the production entry point: `/health` and `/v1/models` to 503, engine dropped, fatal marker emitted, supervised restart. The cure fired on the disease it was supposed to distinguish itself from.
++- ROOT CAUSE: The incident evidence is one message that asserts *two* facts at once — that MLX's Metal allocator produced it, and that the allocator is exhausted. Splitting it into independent OR-matched fragments kept the positive case working and silently widened the fatal class to every message carrying either half.
++- FIX: Signatures are conjunctive. `BackendFailureSignature` requires *all* of its fragments; `metal-allocator-resource-limit` needs `[metal::malloc]` **and** `Resource limit`. The bracketed tag is not a guess — `mlx/backend/metal/allocator.cpp:141-144` in the vendored MLX emits `[metal::malloc] Resource limit (N) exceeded.` verbatim. An empty fragment list matches nothing rather than everything, because `allSatisfy` is vacuously true and a signature that lost its fragments would otherwise become a condemn-all gate by accident.
++- FINDING: The same allocator's other throw (`allocator.cpp:111-117`, `[metal::malloc] Attempting to allocate N bytes which is greater than the maximum allowed buffer size`) is deliberately *not* fatal. It rejects one oversized allocation and leaves the pool intact, so it belongs to the request that asked for it. Carrying the allocator tag is not on its own proof that the backend is gone.
++- FINDING: The shipped negative coverage was the real defect. Revision 1's benign case shared no words with any fatal signature, so it proved only that the gate is not condemn-all — it could not tell a correctly narrowed gate from a deleted one or an over-broad one. A negative case has to sit next to the boundary, not somewhere in the safe interior.
++- EVIDENCE: `scripts/dead-generation-smoke.sh` gains phase 4b, injecting the reviewer's exact message. Rebuilding Release with the bare `Resource limit` signature restored reproduces the finding at the production entry point — 7 failures, all inside 4b, every other phase still green — with the runtime emitting `generation_worker_failed` for a request-scoped error and `model-harness` restarting it twice. Fixed build: 45 checks exit 0, contract suite 119 tests exit 0, three classifier mutants (widened, over-narrowed, empty-fragment guard deleted) each redden it.
++- STATUS: `TASK-260827-2h39ya` reworked and handed back to review.
++
++### 2205 — A Dead Generation Worker Must Not Answer /health 200, In Any Runtime
++- DECISION: `mlx_lm.server`'s dead-generation-thread regression (`BUG-260827-1jhv2g`, fixed upstream in `BUG-260827-2tul5n`) does not port literally to the MLX Swift runtime, because Swift has no equivalent failure: an error thrown inside a structured task propagates to its caller instead of silently killing a worker. Carried across as **invalidation** rather than death — the runtime condemns itself when a generation fails with a signature that names the backend, not the request.
++- FINDING: The Swift prototype had the same observable bug for a different reason. `Router.complete` caught a generation error, answered 500, and left readiness at `.ready`; `/health` kept answering `200 {"status":"ok"}` for a runtime whose backend was gone. Deleting the single line that now reports the failure reproduces the original incident exactly, and reddens 11 checks in `scripts/dead-generation-smoke.sh`.
++- FIX: New `Sources/MLXSwiftRuntimeContract/GenerationWorkerHealth.swift` classifies the failure and owns the readiness transition; `HealthReport` owns the endpoint. `RuntimeReadiness` gained `.generationWorkerFailed`, so `/v1/models` — which is what the managed launcher actually polls — stops advertising too, under its own code rather than as a load failure. Production call sites: `RuntimeState.recordGenerationFailure`, `Router.health`, `Router.complete` and `RuntimeHTTPHandler.sendStream`.
++- FINDING: The two completion paths are separate call sites into the same health state. Wiring only the buffered one would leave `/health` answering 200 for exactly the path Pi streams from; the smoke drives both.
++- FINDING: The signature list is the whole gate, and it is dangerous in both directions. Condemning on every generation error is a *worse* bug than the one being fixed — one malformed request would take a healthy runtime out of rotation and, under supervision, restart it. Three signatures only, each from a recorded incident. Also only a `ready` runtime transitions: a generation killed by `SIGTERM` must not be reported as a dead worker and must not ask the harness to restart a process that was asked to stop.
++- FINDING: Health-503 and supervised restart cannot be observed in one process. With `fatal_output_substrings` attached, `model-harness` kills the runtime within milliseconds of the marker reaching stdout — correct, and it destroys the 503 window. The smoke runs the same injected fault twice, unsupervised then supervised, so each phase measures one property instead of measuring which won the race.
++- FINDING: `model-harness` does not forward signals to the runtime it spawns. Signalling the harness alone orphans a live listener; an early revision of the smoke then "passed" three phases against the leftover control process. Teardown now signals the process group and every phase refuses to start on an occupied port.
++- EVIDENCE: `scripts/dead-generation-smoke.sh`, 35 checks, exit 0, on the real Release binary under the real `model-harness`. Uses the cached 261 MB `mlx-community/Qwen1.5-0.5B-Chat-4bit` — the failure path never reaches the weights, so paying 29 GB would only mean the check cannot run while the Python runtime is resident. Contract suite 116 tests exit 0; three mutants on the classifier (condemn-all, narrowed, health-returns-200) each redden it.
++- STATUS: Python `mlx-lm` remains the default local runtime. `examples/model-harness.prototype.toml` gains the supervision policy but is still an example, not an installed config.
++
+ ### 2110 — Existence Is Not Usability: Two Gates Minted Their Own Evidence
+ - REGRESSION: An independent review defeated two admission paths in the MLX Swift prototype. `MetalShaderLibraryCheck.inspect` used `FileManager.fileExists`, which answers true for a directory, so `mkdir default.metallib` passed the startup gate and the runtime bound its port on a build that could never reach the GPU. `ModelDirectoryCheck.observe` had the identical shape one level up: it matched required files by name in a directory listing, so `mkdir config.json` passed admission.
+ - ROOT CAUSE: Both gates asked "does something exist at this path" when the property they needed was "is there a loadable regular file here". The object the gate accepted as proof could be created by the thing being gated — forged evidence.
+diff --git a/README.md b/README.md
+index 3c3489f..77775f9 100644
+--- a/README.md
++++ b/README.md
+@@ -1395,7 +1395,7 @@ rg -n "Primary Parent Goal Actualization" \
+ | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+ | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
+-| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, and smoke transcripts under the caller's `OUT` directory |
++| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, and smoke transcripts under the caller's `OUT` directory |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+ | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+diff --git a/tools/mlx-swift-runtime-prototype/README.md b/tools/mlx-swift-runtime-prototype/README.md
+index 9f0bd07..8fefe4e 100644
+--- a/tools/mlx-swift-runtime-prototype/README.md
++++ b/tools/mlx-swift-runtime-prototype/README.md
+@@ -100,6 +100,7 @@ DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve \
+ | `--max-kv-size` | Rotating KV-cache bound. Unset means an unbounded cache. |
+ | `--default-max-tokens` | Applied when a request omits `max_tokens`. Default 2048. |
+ | `--reasoning-effort` | Chat-template kwarg: `low`, `medium` or `xhigh`. |
++| `--fault-inject-generation-error` | Acceptance-suite fault seam. Makes every generation fail with this exact text instead of reaching MLX. Off unless given. See [Dead generation worker](#dead-generation-worker). |
+ 
+ `{host}` and `{port}` are the literal tokens `model-harness` substitutes, so the
+ argv above drops straight into a local profile — see
+@@ -110,7 +111,7 @@ argv above drops straight into a local profile — see
+ | Route | Behaviour |
+ | --- | --- |
+ | `GET /v1/models` | `503` with an empty OpenAI list until the weights are resident; then `200` advertising exactly the configured model ID. |
+-| `GET /health` | `200 {"status":"ok"}` when ready, `503` otherwise. |
++| `GET /health` | `200 {"status":"ok"}` only when the runtime can actually generate. `503` while loading, while shutting down, after a failed load, and after the generation worker is condemned — the last as `{"status":"unavailable"}`. |
+ | `POST /v1/chat/completions` | Non-streaming JSON, or SSE when `stream: true`. |
+ 
+ Response shape tracks `mlx_lm.server` rather than a generic OpenAI client,
+@@ -139,6 +140,78 @@ the field ignored. A silent drop reports a constraint that was never applied.
+ 
+ `seed` **is** honoured and forwarded to the sampler.
+ 
++## Dead generation worker
++
++`200` on `/health` means *this runtime can produce a token*, not *this process
++is running*. The difference is a recorded incident, not a hypothetical.
++
++In `mlx_lm.server`, generation runs on a long-lived thread. An uncaught
++exception killed that thread while the HTTP listener stayed up, so `/health`
++kept answering `200 {"status": "ok"}` for a runtime that could no longer
++generate anything, and callers discovered it as a request timeout instead
++(`BUG-260827-1jhv2g`: the `qwen3_5` `ArraysCache` leak exhausting MLX's Metal
++allocator with `[metal::malloc] Resource limit (499000) exceeded`). Upstream
++fixed it in `BUG-260827-2tul5n` by reporting `503 {"status": "unavailable"}`
++whenever `_generation_thread.is_alive()` is false.
++
++Swift has no equivalent silent death — an error thrown inside a structured task
++propagates to its caller rather than tearing a worker down — so the same
++regression lands here as **invalidation**. When a generation fails with a
++signature that condemns the backend rather than the request, the runtime:
++
++1. drops the engine and moves to `generationWorkerFailed`, which is terminal;
++2. answers `/health` `503 {"status": "unavailable"}` with the failure as `detail`;
++3. stops advertising the model on `/v1/models`, which is what the managed
++   launcher actually polls, and answers `503`
++   `generation_worker_unavailable` there;
++4. refuses further completions with `503` at the readiness gate rather than
++   handing out an engine already known to be broken;
++5. writes one line carrying the literal marker `generation_worker_unavailable`,
++   which a `model-harness` `fatal_output_substrings` policy turns into a
++   supervised restart. See `examples/model-harness.prototype.toml`.
++
++The runtime never restarts itself. Recovery is the supervisor's job, and a
++runtime that quietly healed itself would hand the next caller a backend it
++already knows is broken.
++
++### What condemns the worker, and what does not
++
++Only failures that name a broken backend condemn it —
++`GenerationWorkerHealth.invalidatingSignatures`, currently two entries, each a
++**conjunction** of fragments that must all be present:
++
++| Signature | Requires | Why |
++| --- | --- | --- |
++| `metal-allocator-resource-limit` | `[metal::malloc]` **and** `Resource limit` | The `BUG-260827-1jhv2g` incident. MLX emits `[metal::malloc] Resource limit (N) exceeded.` verbatim from `mlx/backend/metal/allocator.cpp:141-144`; the pool is exhausted and the next request cannot be served either. |
++| `metal-shader-library-unreachable` | `Failed to load the default metallib` | MLX cannot reach the GPU at all. The startup gate refuses that build up front, so seeing it *during* generation means the shader library went away under a running process. |
++
++The list is short on purpose, and conjunctive on purpose. The gate is dangerous
++in both directions:
++
++- **Too broad.** Condemning on *every* generation error would be a worse bug
++  than the one being fixed: one malformed request would take a healthy runtime
++  out of rotation and, under supervision, restart it. Matching `Resource limit`
++  on its own does the same thing more quietly —
++  `RequestError: Resource limit for this request is 8 tokens` is a
++  request-scoped refusal that carries the phrase and nothing else. So does the
++  allocator's *other* throw (`allocator.cpp:111-117`,
++  `[metal::malloc] Attempting to allocate N bytes which is greater than the
++  maximum allowed buffer size`): it rejects one oversized allocation and leaves
++  the pool intact.
++- **Too narrow.** A signature that matches nothing turns the endpoint back into
++  a liveness check for the process.
++
++A signature with no fragments matches nothing rather than everything —
++`allSatisfy` is vacuously true on an empty sequence, so failing closed there is
++what keeps a bad edit from silently producing a condemn-all gate.
++
++A cancelled generation, a missing usage packet and a rejected parameter are all
++request-scoped and leave readiness untouched.
++
++Only a `ready` runtime transitions. A generation that fails because `SIGTERM`
++arrived mid-request must not be reported as a dead worker, and must not ask the
++harness to restart a process that was deliberately asked to stop.
++
+ ## Lifecycle
+ 
+ 1. The model directory is admitted before anything binds.
+@@ -172,6 +245,40 @@ port is released. It exits non-zero if any check fails.
+ > while the Python `mlx_lm.server` runtime for the same model is resident — a
+ > 64 GiB host cannot hold both. Check `agents-infra runtime status` first.
+ 
++## Dead-generation-worker smoke
++
++```bash
++BINARY=./DerivedData/Build/Products/Release/mlx-swift-runtime-prototype \
++HARNESS=/Users/alexis/.local/bin/model-harness \
++MODEL=/Users/alexis/.cache/huggingface/hub/models--mlx-community--Qwen1.5-0.5B-Chat-4bit/snapshots/659d8dafc39202a6688bb46242d60440702489b1 \
++PORT=18019 OUT=./dead-generation-out \
++scripts/dead-generation-smoke.sh
++```
++
++Drives the whole path on the real Release binary under the real
++`model-harness`, in four phases:
++
++| Phase | What it establishes |
++| --- | --- |
++| control | The same build, no injected fault: `/health` `200` before and after a real generation, and no marker in its output. |
++| fault | **Unsupervised.** `/health` `200` → completion `500` → `/health` `503 unavailable`, still `503` on a later poll, `/v1/models` `503` with the model ID absent, later completions refused `503`. |
++| supervision | The same fault **with** the policy attached: `model-harness` names the marker, restarts, and the replacement answers `200`. |
++| negative | A request-scoped failure returns `500` and leaves `/health` at `200`, the model advertised, no marker, and no restart. |
++
++The fault and supervision phases are separate runs on purpose. With a policy
++attached, the harness kills the runtime within milliseconds of the marker
++reaching its stdout — correct behaviour, and it destroys the very `503` window
++the fault phase has to observe. Measuring both in one process would only
++measure which won the race.
++
++The negative phase is what makes the rest mean anything: a runtime that
++condemned itself on any error would pass the first three phases.
++
++Uses a small model on purpose — the failure path never reaches the weights, so
++paying 29 GB to observe it would only mean the check cannot run while the
++default Python runtime is resident. Runs in about two minutes and needs no GPU
++memory beyond the 0.5B model.
++
+ ## Metal shader library gate probe
+ 
+ ```bash
+@@ -193,5 +300,10 @@ Runs in seconds and loads no weights.
+ ## Known limitations
+ 
+ See the task's gap list for the full record. In short: one generation at a time,
+-no prompt caching across requests, no `/v1/completions`, no embeddings, no
+-speculative decoding, and no supervision markers.
++no prompt caching across requests, no `/v1/completions`, no embeddings, and no
++speculative decoding.
++
++The one supervision marker that exists is `generation_worker_unavailable`
++(above). Nothing else in this runtime announces itself as fatal, so every other
++failure mode still reaches an operator as an exit status rather than as a
++supervised restart.
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/GenerationWorkerHealth.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/GenerationWorkerHealth.swift
+new file mode 100644
+index 0000000..eedf759
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/GenerationWorkerHealth.swift
+@@ -0,0 +1,188 @@
++import Foundation
++
++/// What an observed generation failure says about the runtime's ability to
++/// serve the *next* request.
++public enum GenerationWorkerVerdict: Sendable, Equatable {
++    /// The failure belongs to the request that provoked it. The worker is
++    /// still able to serve, so readiness must not change: flipping `/health`
++    /// on a bad request would take a healthy runtime out of rotation.
++    case requestScoped
++    /// The generation backend itself is broken. The worker cannot be trusted
++    /// with another request, so `/health` must stop answering `200` and the
++    /// supervisor must recover the process.
++    case workerInvalidated(signature: String)
++}
++
++/// Liveness of the thing that actually produces tokens, as distinct from
++/// whether weights are resident.
++///
++/// This carries `mlx_lm.server`'s dead-generation-thread regression across to
++/// the Swift runtime. In Python, `ResponseGenerator` runs generation on a
++/// long-lived thread; an uncaught exception killed that thread while the HTTP
++/// listener stayed up, so `/health` kept answering `200 {"status": "ok"}` for a
++/// runtime that could no longer produce a single token, and every client
++/// discovered it as a request timeout instead. Recorded as `BUG-260827-1jhv2g`
++/// and fixed upstream by making `/health` report
++/// `503 {"status": "unavailable"}` when `_generation_thread.is_alive()` is
++/// false.
++///
++/// Swift has no equivalent silent death — an error thrown inside a structured
++/// task propagates to its caller rather than tearing a worker down — so the
++/// same regression lands here as *invalidation*: the runtime observes a
++/// generation failure whose signature means the MLX backend, not the request,
++/// is broken, and takes itself out of rotation deliberately.
++///
++/// Production call sites: `RuntimeState.recordGenerationFailure(_:)` for the
++/// readiness transition and `Router.health()` via ``HealthReport/make(readiness:)``
++/// for the endpoint, both in the `mlx-swift-runtime-prototype` executable target.
++public enum GenerationWorkerHealth {
++    /// The literal substring `model-harness` matches against the managed
++    /// child's forwarded output to trigger the configured supervised restart.
++    ///
++    /// It is a stable token rather than prose because a supervision policy
++    /// pins it by value in `fatal_output_substrings`: reworded log text would
++    /// silently stop matching and the runtime would sit dead-but-listening,
++    /// which is the exact failure this whole path exists to end.
++    public static let supervisionMarker = "generation_worker_unavailable"
++
++    /// A failure signature that condemns the backend rather than the request.
++    ///
++    /// Every fragment must be present. The conjunction is the whole point: the
++    /// only recorded backend death reports *two* things at once — that the
++    /// message came from MLX's Metal allocator, and that the allocator is out
++    /// of resources — and either half on its own is a phrase an ordinary
++    /// request-scoped error can carry. `Resource limit` matched independently
++    /// condemns a healthy runtime on, for example,
++    /// `RequestError: Resource limit for this request is 8 tokens`.
++    public struct BackendFailureSignature: Sendable, Equatable {
++        /// Stable identifier for the condition, reported as the verdict's
++        /// signature. Not the matched text: the matched text is a fragment of
++        /// a message, and naming the condition is what a reader of the verdict
++        /// actually needs.
++        public let name: String
++        /// Fragments that must *all* appear in the failure description.
++        public let requiredFragments: [String]
++
++        public init(name: String, requiredFragments: [String]) {
++            self.name = name
++            self.requiredFragments = requiredFragments
++        }
++
++        /// - Returns: `false` for an empty fragment list. `allSatisfy` is
++        ///   vacuously true on an empty sequence, so a signature that lost its
++        ///   fragments — through a bad edit or a decoding default — would
++        ///   otherwise match *every* failure and condemn the runtime on the
++        ///   first one. Failing closed here means a malformed signature
++        ///   condemns nothing rather than everything.
++        public func matches(_ description: String) -> Bool {
++            guard !requiredFragments.isEmpty else { return false }
++            return requiredFragments.allSatisfy { description.contains($0) }
++        }
++    }
++
++    /// Failure signatures that condemn the backend rather than the request.
++    ///
++    /// Deliberately short, and deliberately conjunctive. Every entry names a
++    /// condition that was actually observed to leave MLX unable to generate; a
++    /// speculative entry, or an entry loose enough to match a neighbouring
++    /// message, would turn a recoverable request error into a restart loop,
++    /// and this list is the only thing standing between the two.
++    ///
++    /// - `metal-allocator-resource-limit` — the `BUG-260827-1jhv2g` incident.
++    ///   MLX's Metal allocator hit its buffer-object limit through the
++    ///   `qwen3_5` `ArraysCache` leak; the Python generation thread died on it
++    ///   and never recovered. Emitted verbatim as
++    ///   `[metal::malloc] Resource limit (N) exceeded.` by
++    ///   `mlx/backend/metal/allocator.cpp:141-144` in the vendored MLX, which
++    ///   is why the bracketed allocator tag is required alongside the limit
++    ///   phrase rather than trusted to appear on its own.
++    ///
++    ///   The allocator's *other* throw at `allocator.cpp:111-117`
++    ///   (`[metal::malloc] Attempting to allocate N bytes which is greater
++    ///   than the maximum allowed buffer size`) is deliberately **not** here:
++    ///   that one rejects a single oversized allocation and leaves the pool
++    ///   intact, so it belongs to the request that asked for it.
++    /// - `metal-shader-library-unreachable` — MLX cannot reach the GPU at all.
++    ///   Recorded in `LOGBOOK.md` for the `swift build` product; the startup
++    ///   gate refuses that build up front, so seeing it *during* generation
++    ///   means the shader library went away under a running process.
++    public static let invalidatingSignatures: [BackendFailureSignature] = [
++        BackendFailureSignature(
++            name: "metal-allocator-resource-limit",
++            requiredFragments: ["[metal::malloc]", "Resource limit"]),
++        BackendFailureSignature(
++            name: "metal-shader-library-unreachable",
++            requiredFragments: ["Failed to load the default metallib"]),
++    ]
++
++    /// Classify a generation failure by its reported description.
++    ///
++    /// Matching is on the message because MLX surfaces these as opaque backend
++    /// errors with no Swift type to switch on. Both directions are dangerous:
++    /// treating *every* generation error as fatal would restart the runtime
++    /// whenever a single request tripped over its own parameters, and matching
++    /// too loosely does the same thing for any request-scoped error that
++    /// happens to reuse a word from a backend message.
++    public static func classify(failure description: String) -> GenerationWorkerVerdict {
++        for signature in invalidatingSignatures where signature.matches(description) {
++            return .workerInvalidated(signature: signature.name)
++        }
++        return .requestScoped
++    }
++
++    /// The readiness a runtime should move to after observing a generation
++    /// failure, or `nil` when it must stay where it is.
++    ///
++    /// Both guards matter and both are load-bearing:
++    ///
++    /// - a request-scoped failure never changes readiness, or a malformed
++    ///   request would be able to take a healthy runtime down;
++    /// - only a `ready` runtime transitions. A failure seen while loading,
++    ///   already failed, or shutting down must not overwrite the reason that
++    ///   is already being reported — in particular, a generation cancelled by
++    ///   `SIGTERM` must not be reported as a dead worker and must not provoke
++    ///   a restart of a process that was asked to stop.
++    public static func readiness(
++        after current: RuntimeReadiness, observing description: String
++    ) -> RuntimeReadiness? {
++        guard case .workerInvalidated = classify(failure: description) else { return nil }
++        guard current == .ready else { return nil }
++        return .generationWorkerFailed(description)
++    }
++}
++
++/// The `GET /health` answer.
++///
++/// Split out of the router so the status/body pairing is testable without a
++/// model, a port or MLX. `model-harness` and the Pi launcher both read this
++/// endpoint, and the whole point of the carried regression is that `200` here
++/// must mean "this runtime can generate", not "this process is running".
++///
++/// Production call site: `Router.health()` in the `mlx-swift-runtime-prototype`
++/// executable target.
++public struct HealthReport: Sendable, Equatable {
++    public let status: Int
++    public let body: JSONValue
++
++    public static func make(readiness: RuntimeReadiness) -> HealthReport {
++        switch readiness {
++        case .ready:
++            return HealthReport(status: 200, body: .object(["status": .string("ok")]))
++        case .loading:
++            return HealthReport(status: 503, body: .object(["status": .string("loading")]))
++        case .shuttingDown:
++            return HealthReport(status: 503, body: .object(["status": .string("shutting_down")]))
++        case .failed(let reason):
++            return HealthReport(
++                status: 503,
++                body: .object(["status": .string("failed"), "detail": .string(reason)]))
++        case .generationWorkerFailed(let reason):
++            // `unavailable` verbatim from the upstream mlx-lm health patch, so
++            // a client that already distinguishes the Python runtime's dead
++            // worker sees the same word from this one.
++            return HealthReport(
++                status: 503,
++                body: .object(["status": .string("unavailable"), "detail": .string(reason)]))
++        }
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/ModelsListing.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/ModelsListing.swift
+index ac7e165..eed992c 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/ModelsListing.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/ModelsListing.swift
+@@ -1,10 +1,18 @@
+ import Foundation
+ 
+-/// Load state of the single model this process serves.
++/// Serving state of the single model this process serves.
++///
++/// This is readiness to *answer*, not merely to have loaded: a runtime whose
++/// generation worker has been invalidated is no more usable than one whose
++/// weights never arrived, and both must stop advertising the model.
+ public enum RuntimeReadiness: Sendable, Equatable {
+     case loading
+     case ready
+     case failed(String)
++    /// The weights loaded, but the generation backend was condemned by
++    /// ``GenerationWorkerHealth``. Terminal for this process; recovery is the
++    /// supervisor's job, not this runtime's.
++    case generationWorkerFailed(String)
+     case shuttingDown
+ }
+ 
+@@ -45,17 +53,26 @@ public struct ModelsListing: Sendable, Equatable {
+                 status: 503,
+                 body: .object(["object": .string("list"), "data": .array([])]))
+         case .failed(let reason):
++            return ModelsListing(status: 503, body: unavailable(reason, code: "model_load_failed"))
++        case .generationWorkerFailed(let reason):
++            // Reported under its own code: this runtime did load the model, and
++            // calling it a load failure would send whoever reads the receipt
++            // looking at the weights instead of at the generation backend.
+             return ModelsListing(
+                 status: 503,
+-                body: .object([
+-                    "object": .string("list"),
+-                    "data": .array([]),
+-                    "error": .object([
+-                        "message": .string(reason),
+-                        "type": .string("server_error"),
+-                        "code": .string("model_load_failed"),
+-                    ]),
+-                ]))
++                body: unavailable(reason, code: GenerationWorkerHealth.supervisionMarker))
+         }
+     }
++
++    private static func unavailable(_ reason: String, code: String) -> JSONValue {
++        .object([
++            "object": .string("list"),
++            "data": .array([]),
++            "error": .object([
++                "message": .string(reason),
++                "type": .string("server_error"),
++                "code": .string(code),
++            ]),
++        ])
++    }
+ }
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeOptions.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeOptions.swift
+index dbc74af..963c74c 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeOptions.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeOptions.swift
+@@ -31,6 +31,25 @@ public struct RuntimeOptions: Sendable, Equatable {
+     /// validated here rather than at first token.
+     public let reasoningEffort: String?
+ 
++    /// Acceptance-suite fault seam: when set, every generation attempt fails
++    /// immediately with this exact text instead of reaching MLX.
++    ///
++    /// It exists so the dead-generation-worker path — classification, the
++    /// readiness transition, `/health`, the supervision marker and the
++    /// supervised restart — can be driven end to end on a real build, on
++    /// demand, without waiting for a Metal allocator to actually leak. The
++    /// text is injected verbatim so the classifier sees exactly the message a
++    /// real backend failure would produce, which is what makes the check
++    /// meaningful rather than circular: nothing here forces a verdict, and
++    /// injecting a request-scoped message must leave `/health` at `200`.
++    ///
++    /// Upstream `mlx-lm` proved its own generation-thread recovery the same
++    /// way, by injecting a `RuntimeError` into the live generation loop.
++    ///
++    /// Off unless the flag is given, so a profile that does not ask for it
++    /// cannot be affected by it.
++    public let faultInjectedGenerationError: String?
++
+     public init(
+         modelPath: String,
+         modelID: String,
+@@ -38,7 +57,8 @@ public struct RuntimeOptions: Sendable, Equatable {
+         port: Int,
+         maxKVSize: Int?,
+         defaultMaxTokens: Int,
+-        reasoningEffort: String?
++        reasoningEffort: String?,
++        faultInjectedGenerationError: String? = nil
+     ) {
+         self.modelPath = modelPath
+         self.modelID = modelID
+@@ -47,6 +67,7 @@ public struct RuntimeOptions: Sendable, Equatable {
+         self.maxKVSize = maxKVSize
+         self.defaultMaxTokens = defaultMaxTokens
+         self.reasoningEffort = reasoningEffort
++        self.faultInjectedGenerationError = faultInjectedGenerationError
+     }
+ }
+ 
+@@ -63,6 +84,7 @@ public enum RuntimeOptionsError: Error, Equatable, CustomStringConvertible {
+     case invalidInteger(flag: String, value: String)
+     case nonPositiveInteger(flag: String, value: Int)
+     case unsupportedReasoningEffort(String)
++    case emptyFaultInjection
+ 
+     public var description: String {
+         switch self {
+@@ -94,6 +116,8 @@ public enum RuntimeOptionsError: Error, Equatable, CustomStringConvertible {
+         case .unsupportedReasoningEffort(let value):
+             return
+                 "--reasoning-effort must be one of low, medium, xhigh; got \(value.debugDescription)"
++        case .emptyFaultInjection:
++            return "--fault-inject-generation-error requires a non-empty failure message"
+         }
+     }
+ }
+@@ -126,7 +150,7 @@ extension RuntimeOptions {
+         var index = 1
+         let known: Set<String> = [
+             "--model", "--model-id", "--host", "--port", "--max-kv-size", "--default-max-tokens",
+-            "--reasoning-effort",
++            "--reasoning-effort", "--fault-inject-generation-error",
+         ]
+         while index < arguments.count {
+             let flag = arguments[index]
+@@ -181,6 +205,14 @@ extension RuntimeOptions {
+             throw RuntimeOptionsError.unsupportedReasoningEffort(effort)
+         }
+ 
++        // An empty injection would arm the seam with a message that matches no
++        // signature, producing a runtime that fails every request while
++        // reporting itself healthy — the precise shape this work exists to
++        // remove. Refused at parse time rather than discovered at first request.
++        if let injected = values["--fault-inject-generation-error"], injected.isEmpty {
++            throw RuntimeOptionsError.emptyFaultInjection
++        }
++
+         return (
+             subcommand,
+             RuntimeOptions(
+@@ -190,7 +222,8 @@ extension RuntimeOptions {
+                 port: port,
+                 maxKVSize: maxKVSize,
+                 defaultMaxTokens: defaultMaxTokens,
+-                reasoningEffort: values["--reasoning-effort"])
++                reasoningEffort: values["--reasoning-effort"],
++                faultInjectedGenerationError: values["--fault-inject-generation-error"])
+         )
+     }
+ 
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/GenerationEngine.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/GenerationEngine.swift
+index 85b9e07..ba8f5a0 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/GenerationEngine.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/GenerationEngine.swift
+@@ -14,6 +14,8 @@ enum GenerationError: Error, CustomStringConvertible {
+     /// block would be read downstream as a real measurement.
+     case missingCompletionInfo
+     case cancelled
++    /// Raised by the `--fault-inject-generation-error` acceptance seam.
++    case injected(String)
+ 
+     var description: String {
+         switch self {
+@@ -21,6 +23,11 @@ enum GenerationError: Error, CustomStringConvertible {
+             return "generation ended without completion info; token usage is unknown"
+         case .cancelled:
+             return "generation was cancelled before it finished"
++        case .injected(let message):
++            // Verbatim, with no wrapper text: the classifier must see exactly
++            // what a real backend failure would report, or the injected run
++            // would be testing a different string than production does.
++            return message
+         }
+     }
+ }
+@@ -47,6 +54,13 @@ actor GenerationEngine {
+         _ request: AdmittedChatCompletion,
+         emit: @Sendable (GenerationEvent) async throws -> Void
+     ) async throws {
++        // The acceptance seam fires before any MLX call, so an injected run
++        // exercises the failure path without touching the GPU and without
++        // depending on how far into generation the real fault would have got.
++        if let injected = options.faultInjectedGenerationError {
++            throw GenerationError.injected(injected)
++        }
++
+         var parameters = GenerateParameters(
+             maxTokens: request.maxTokens, maxKVSize: options.maxKVSize)
+         if let temperature = request.temperature {
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/HTTPServer.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/HTTPServer.swift
+index 5a94079..1da9386 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/HTTPServer.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/HTTPServer.swift
+@@ -91,7 +91,8 @@ final class RuntimeHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
+                     await Self.sendJSON(writer: writer, status: status, body: body)
+                 case .stream(let request, let engine, let builder):
+                     await Self.sendStream(
+-                        writer: writer, request: request, engine: engine, builder: builder)
++                        writer: writer, router: router, request: request, engine: engine,
++                        builder: builder)
+                 }
+             }
+         }
+@@ -113,6 +114,7 @@ final class RuntimeHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
+ 
+     private static func sendStream(
+         writer: ResponseWriter,
++        router: Router,
+         request: AdmittedChatCompletion,
+         engine: GenerationEngine,
+         builder: ChatCompletionResponseBuilder
+@@ -153,7 +155,10 @@ final class RuntimeHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
+         } catch {
+             // The head is already on the wire, so the failure is reported as a
+             // terminal SSE frame rather than as an HTTP status the client can no
+-            // longer receive.
++            // longer receive. Health is updated first: the client's next move
++            // after a broken stream is usually to poll `/health`, and it must
++            // not find a `200` there.
++            await router.recordGenerationFailure(error)
+             StandardOutput.shared.log("stream failed: \(error)")
+             let payload = ChatCompletionResponseBuilder.error(
+                 message: String(describing: error), type: "server_error",
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Main.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Main.swift
+index bec1a91..333030b 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Main.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Main.swift
+@@ -135,7 +135,8 @@ struct Main {
+     static let usage = """
+         usage: mlx-swift-runtime-prototype serve --model <absolute-dir> --port <port> \
+         [--model-id <id>] [--host 127.0.0.1] [--max-kv-size <n>] \
+-        [--default-max-tokens <n>] [--reasoning-effort low|medium|xhigh]
++        [--default-max-tokens <n>] [--reasoning-effort low|medium|xhigh] \
++        [--fault-inject-generation-error <message>]
+                mlx-swift-runtime-prototype preflight --model <absolute-dir> \
+         [--reasoning-effort low|medium|xhigh]
+         """
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Router.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Router.swift
+index 203feca..4be0a4e 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Router.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Router.swift
+@@ -56,18 +56,33 @@ struct Router: Sendable {
+     }
+ 
+     private func health() async -> RouterOutcome {
+-        switch await state.currentReadiness() {
+-        case .ready:
+-            return .json(status: 200, body: .object(["status": .string("ok")]))
+-        case .loading:
+-            return .json(status: 503, body: .object(["status": .string("loading")]))
+-        case .shuttingDown:
+-            return .json(status: 503, body: .object(["status": .string("shutting_down")]))
+-        case .failed(let reason):
+-            return .json(
+-                status: 503,
+-                body: .object(["status": .string("failed"), "detail": .string(reason)]))
+-        }
++        let report = HealthReport.make(readiness: await state.currentReadiness())
++        return .json(status: report.status, body: report.body)
++    }
++
++    /// Report a generation failure to the runtime's health state.
++    ///
++    /// Production call site for ``GenerationWorkerHealth``. Called from both
++    /// completion paths — the buffered one below and the SSE one in
++    /// `RuntimeHTTPHandler.sendStream` — because a worker condemned mid-stream
++    /// is exactly as dead as one condemned mid-request, and a health endpoint
++    /// that only noticed the buffered case would still answer `200` for the
++    /// runtime that Pi actually streams from.
++    func recordGenerationFailure(_ error: any Error) async {
++        let description = String(describing: error)
++        guard await state.recordGenerationFailure(description) else { return }
++        // Written to stdout as a normal runtime event *and* carrying the
++        // literal supervision marker, because `model-harness` matches fatal
++        // substrings against the forwarded stream rather than parsing it.
++        StandardOutput.shared.event(
++            RuntimeEvent(
++                name: "generation_worker_failed",
++                fields: [
++                    "marker": .string(GenerationWorkerHealth.supervisionMarker),
++                    "detail": .string(description),
++                ]))
++        StandardOutput.shared.log(
++            "\(GenerationWorkerHealth.supervisionMarker): \(description)")
+     }
+ 
+     private func chatCompletions(body: Data) async -> RouterOutcome {
+@@ -81,6 +96,8 @@ struct Router: Sendable {
+             case .loading: detail = "model is still loading"
+             case .shuttingDown: detail = "runtime is shutting down"
+             case .failed(let reason): detail = "model load failed: \(reason)"
++            case .generationWorkerFailed(let reason):
++                detail = "generation worker is unavailable: \(reason)"
+             case .ready: detail = "model is ready but no engine is installed"
+             }
+             return .json(
+@@ -141,6 +158,7 @@ struct Router: Sendable {
+                 await accumulator.apply(event)
+             }
+         } catch {
++            await recordGenerationFailure(error)
+             return .json(
+                 status: 500,
+                 body: ChatCompletionResponseBuilder.error(
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/RuntimeState.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/RuntimeState.swift
+index d7015c3..e08b9a4 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/RuntimeState.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/RuntimeState.swift
+@@ -26,4 +26,25 @@ actor RuntimeState {
+     func markShuttingDown() {
+         readiness = .shuttingDown
+     }
++
++    /// Production call site for
++    /// ``GenerationWorkerHealth/readiness(after:observing:)``.
++    ///
++    /// Drops the engine as well as flipping readiness, so a request that
++    /// arrives after the worker is condemned is refused with `503` at the same
++    /// gate that refuses one arriving before the weights land, rather than
++    /// being handed an engine already known to be broken.
++    ///
++    /// - Returns: `true` when this call is the one that condemned the worker,
++    ///   so the caller emits the supervision marker exactly once. A second
++    ///   failure from a request already in flight must not re-announce it.
++    func recordGenerationFailure(_ description: String) -> Bool {
++        guard
++            let next = GenerationWorkerHealth.readiness(
++                after: readiness, observing: description)
++        else { return false }
++        engine = nil
++        readiness = next
++        return true
++    }
+ }
+diff --git a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/GenerationWorkerHealthTests.swift b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/GenerationWorkerHealthTests.swift
+new file mode 100644
+index 0000000..37df295
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/GenerationWorkerHealthTests.swift
+@@ -0,0 +1,294 @@
++import Foundation
++import Testing
++
++@testable import MLXSwiftRuntimeContract
++
++/// The `mlx_lm.server` dead-generation-thread regression, carried over.
++///
++/// The bug being prevented is a single sentence: a runtime that cannot produce
++/// a token answered `GET /health` with `200 {"status": "ok"}`, so every caller
++/// found out through a request timeout instead. Every test here fails if that
++/// becomes possible again, and the negative half fails if the cure is worse
++/// than the disease and a bad request can take a healthy runtime down.
++@Suite("generation worker health")
++struct GenerationWorkerHealthTests {
++    /// Verbatim from the `BUG-260827-1jhv2g` incident record.
++    static let incidentFailure = "RuntimeError: [metal::malloc] Resource limit (499000) exceeded"
++
++    // MARK: - classification
++
++    @Test(
++        "a condemned backend is classified as worker invalidation",
++        arguments: [
++            GenerationWorkerHealthTests.incidentFailure,
++            "[metal::malloc] Resource limit (499000) exceeded",
++            "MLXError: Failed to load the default metallib after 4 lookups",
++        ])
++    func condemnsBackendFailures(description: String) {
++        guard case .workerInvalidated = GenerationWorkerHealth.classify(failure: description)
++        else {
++            Issue.record("\(description) was not classified as worker invalidation")
++            return
++        }
++    }
++
++    /// A request-scoped failure that reuses a fragment of a backend message.
++    ///
++    /// The over-broad class. Found by review on revision 1, where
++    /// `invalidatingSignatures` listed the bare phrase `Resource limit`
++    /// independently: this exact message condemned a healthy runtime through
++    /// the production entry point, flipped `/health` and `/v1/models` to 503,
++    /// and emitted the fatal supervision marker.
++    static let overBroadNeighbour = "RequestError: Resource limit for this request is 8 tokens"
++
++    /// MLX's *other* Metal allocator throw
++    /// (`mlx/backend/metal/allocator.cpp:111-117`). It rejects one oversized
++    /// allocation and leaves the pool intact, so it belongs to the request
++    /// that asked for it — carrying the allocator tag is not on its own proof
++    /// that the backend is gone.
++    static let oversizedAllocation =
++        "[metal::malloc] Attempting to allocate 91268055040 bytes which is greater than"
++        + " the maximum allowed buffer size of 68719476736 bytes."
++
++    /// The negative half of the gate.
++    ///
++    /// A classifier that condemned every generation error would pass all the
++    /// positive tests above and still be wrong: a single malformed request
++    /// would take a healthy runtime out of rotation and, with supervision
++    /// configured, restart it. These are the failures that must *not* move
++    /// readiness.
++    ///
++    /// The last two entries are the *narrowing* cases rather than the
++    /// unrelated ones. A gate that merely exists passes on messages sharing no
++    /// words with a backend failure; these two share half of one and must
++    /// still be request-scoped, so widening either signature back to a single
++    /// loose fragment reddens this test.
++    @Test(
++        "request-scoped failures never condemn the worker",
++        arguments: [
++            "generation ended without completion info; token usage is unknown",
++            "generation was cancelled before it finished",
++            "invalid_body: max_tokens must be between 1 and 1048576",
++            "unsupported_role: developer",
++            "The operation could not be completed",
++            "",
++            GenerationWorkerHealthTests.overBroadNeighbour,
++            GenerationWorkerHealthTests.oversizedAllocation,
++            // The allocator tag alone, with no exhaustion evidence at all.
++            "[metal::malloc] buffer cache trimmed",
++            // The limit phrase alone, from a subsystem that is not the GPU.
++            "HTTPError: Resource limit reached for this connection",
++        ])
++    func spareseRequestScopedFailures(description: String) {
++        #expect(GenerationWorkerHealth.classify(failure: description) == .requestScoped)
++        #expect(
++            GenerationWorkerHealth.readiness(after: .ready, observing: description) == nil,
++            "a request-scoped failure moved a ready runtime out of rotation")
++    }
++
++    /// Both halves of the incident, spelled out against the neighbour.
++    ///
++    /// Stated as a pair so the property under test is legible: the *same*
++    /// words condemn or do not condemn depending on whether the Metal
++    /// allocator context is present. A classifier narrowed until it matches
++    /// nothing would fail the first expectation; one widened to a bare
++    /// `Resource limit` would fail the second.
++    @Test("the allocator context, not the limit phrase, is what condemns")
++    func allocatorContextIsRequired() {
++        #expect(
++            GenerationWorkerHealth.classify(failure: Self.incidentFailure)
++                == .workerInvalidated(signature: "metal-allocator-resource-limit"))
++        #expect(GenerationWorkerHealth.classify(failure: Self.overBroadNeighbour) == .requestScoped)
++    }
++
++    /// Fails closed on a malformed signature.
++    ///
++    /// `allSatisfy` is vacuously true on an empty sequence, so a signature
++    /// that lost its fragments would match every failure and condemn the
++    /// runtime on the first one — a condemn-all gate arrived at by accident
++    /// rather than by decision.
++    @Test("a signature with no fragments matches nothing")
++    func emptySignatureMatchesNothing() {
++        let malformed = GenerationWorkerHealth.BackendFailureSignature(
++            name: "malformed", requiredFragments: [])
++        #expect(!malformed.matches(Self.incidentFailure))
++        #expect(!malformed.matches(""))
++    }
++
++    /// Every shipped signature has to be able to tell the incident class from
++    /// its neighbour, so a future entry cannot be added as one loose word.
++    @Test("no shipped signature is a single loose fragment of a common message")
++    func shippedSignaturesAreSpecific() {
++        for signature in GenerationWorkerHealth.invalidatingSignatures {
++            #expect(!signature.requiredFragments.isEmpty, "\(signature.name) has no fragments")
++            #expect(
++                !signature.matches(Self.overBroadNeighbour),
++                "\(signature.name) condemns a request-scoped failure")
++            #expect(
++                !signature.matches(Self.oversizedAllocation),
++                "\(signature.name) condemns a request-scoped allocation refusal")
++        }
++    }
++
++    // MARK: - readiness transition
++
++    @Test("a ready runtime that observes a condemned backend leaves rotation")
++    func readyRuntimeLeavesRotation() {
++        let next = GenerationWorkerHealth.readiness(
++            after: .ready, observing: Self.incidentFailure)
++        #expect(next == .generationWorkerFailed(Self.incidentFailure))
++    }
++
++    /// Only `ready` transitions.
++    ///
++    /// A generation in flight when `SIGTERM` arrives fails with whatever the
++    /// backend was doing at the time. Letting that overwrite `shuttingDown`
++    /// would report an orderly stop as a dead worker and — with the
++    /// supervision marker attached — ask the harness to restart a process that
++    /// was deliberately asked to stop. `loading` and the two terminal states
++    /// are excluded for the same reason: the reason already being reported is
++    /// the true one.
++    @Test(
++        "a runtime that is not ready keeps the state it already reports",
++        arguments: [
++            RuntimeReadiness.loading,
++            RuntimeReadiness.shuttingDown,
++            RuntimeReadiness.failed("no factory accepted model_type qwen3_5"),
++            RuntimeReadiness.generationWorkerFailed("already condemned"),
++        ])
++    func nonReadyRuntimesDoNotTransition(current: RuntimeReadiness) {
++        #expect(
++            GenerationWorkerHealth.readiness(after: current, observing: Self.incidentFailure) == nil
++        )
++    }
++
++    // MARK: - the endpoint
++
++    @Test("a ready runtime is the only thing that answers health 200")
++    func healthyRuntimeAnswers200() {
++        let report = HealthReport.make(readiness: .ready)
++        #expect(report.status == 200)
++        #expect(report.body == .object(["status": .string("ok")]))
++    }
++
++    /// The regression itself.
++    ///
++    /// This is the assertion the upstream `mlx-lm` fix added, in the runtime it
++    /// was carried into: with the generation worker gone, `/health` must be
++    /// `503` and must say `unavailable`, not `ok`.
++    @Test("a condemned worker answers health 503 unavailable")
++    func condemnedWorkerAnswers503() {
++        let report = HealthReport.make(readiness: .generationWorkerFailed(Self.incidentFailure))
++        #expect(report.status == 503)
++        #expect(report.body.objectValue?["status"] == .string("unavailable"))
++        #expect(report.body.objectValue?["detail"] == .string(Self.incidentFailure))
++    }
++
++    @Test(
++        "no unready state can answer health 200",
++        arguments: [
++            RuntimeReadiness.loading,
++            RuntimeReadiness.shuttingDown,
++            RuntimeReadiness.failed("no factory accepted model_type qwen3_5"),
++            RuntimeReadiness.generationWorkerFailed(GenerationWorkerHealthTests.incidentFailure),
++        ])
++    func unreadyStatesNeverAnswer200(readiness: RuntimeReadiness) {
++        let report = HealthReport.make(readiness: readiness)
++        #expect(report.status == 503)
++        #expect(report.body.objectValue?["status"] != .string("ok"))
++    }
++
++    // MARK: - the listing
++
++    /// `/health` and `/v1/models` must agree.
++    ///
++    /// The managed launcher polls the listing, not health, and accepts a `200`
++    /// whose `data[]` carries the exact model ID. A condemned runtime that kept
++    /// advertising would be handed traffic by the launcher no matter what
++    /// `/health` said.
++    @Test("a condemned worker stops advertising the model")
++    func condemnedWorkerStopsAdvertising() {
++        let modelID = "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit"
++        let listing = ModelsListing.make(
++            modelID: modelID,
++            readiness: .generationWorkerFailed(Self.incidentFailure),
++            created: 1)
++        #expect(listing.status == 503)
++        #expect(listing.body.objectValue?["data"] == .array([]))
++        let error = listing.body.objectValue?["error"]?.objectValue
++        // Not `model_load_failed`: the weights did load. Reporting the wrong
++        // code sends whoever reads the receipt to the wrong subsystem.
++        #expect(error?["code"] == .string(GenerationWorkerHealth.supervisionMarker))
++        #expect(error?["message"] == .string(Self.incidentFailure))
++        guard let encoded = try? JSONEncoding.string(listing.body) else {
++            Issue.record("listing did not encode")
++            return
++        }
++        #expect(!encoded.contains(modelID), "the model ID leaked into a condemned listing")
++    }
++
++    // MARK: - the supervision contract
++
++    /// The marker is a wire value shared with `model-harness`.
++    ///
++    /// A profile pins it by literal substring in `fatal_output_substrings`.
++    /// Renaming it here without updating every such profile would leave the
++    /// runtime dead-but-listening with no supervisor coming — the original
++    /// incident, with extra steps. Pinned so that rename has to be deliberate.
++    @Test("the supervision marker is a stable literal")
++    func supervisionMarkerIsPinned() {
++        #expect(GenerationWorkerHealth.supervisionMarker == "generation_worker_unavailable")
++    }
++
++    @Test("the emitted supervision event carries the marker verbatim")
++    func supervisionEventCarriesMarker() throws {
++        // The shape `Router.recordGenerationFailure(_:)` emits.
++        let event = RuntimeEvent(
++            name: "generation_worker_failed",
++            fields: [
++                "marker": .string(GenerationWorkerHealth.supervisionMarker),
++                "detail": .string(Self.incidentFailure),
++            ])
++        let line = try event.line()
++        #expect(line.contains(GenerationWorkerHealth.supervisionMarker))
++        #expect(!line.contains("\n"), "a multi-line event would break substring matching")
++    }
++}
++
++@Suite("generation fault injection seam")
++struct FaultInjectionOptionsTests {
++    static let base = [
++        "serve", "--model", "/models/qwen", "--port", "18017",
++    ]
++
++    @Test("the seam is off unless asked for")
++    func offByDefault() throws {
++        let (_, options) = try RuntimeOptions.parse(arguments: Self.base)
++        #expect(options.faultInjectedGenerationError == nil)
++    }
++
++    @Test("the injected message is carried verbatim")
++    func carriesMessageVerbatim() throws {
++        let message = GenerationWorkerHealthTests.incidentFailure
++        let (_, options) = try RuntimeOptions.parse(
++            arguments: Self.base + ["--fault-inject-generation-error", message])
++        #expect(options.faultInjectedGenerationError == message)
++        // The end-to-end point of "verbatim": what production classifies is
++        // exactly what the operator asked to inject.
++        guard
++            case .workerInvalidated = GenerationWorkerHealth.classify(
++                failure: options.faultInjectedGenerationError ?? "")
++        else {
++            Issue.record("the injected incident message did not condemn the worker")
++            return
++        }
++    }
++
++    @Test("an empty injection is refused at parse time")
++    func refusesEmptyInjection() {
++        #expect(throws: RuntimeOptionsError.emptyFaultInjection) {
++            try RuntimeOptions.parse(
++                arguments: Self.base + ["--fault-inject-generation-error", ""])
++        }
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/examples/model-harness.prototype.toml b/tools/mlx-swift-runtime-prototype/examples/model-harness.prototype.toml
+index 9f4ac75..1efb5a4 100644
+--- a/tools/mlx-swift-runtime-prototype/examples/model-harness.prototype.toml
++++ b/tools/mlx-swift-runtime-prototype/examples/model-harness.prototype.toml
+@@ -20,6 +20,28 @@ argv = [
+     "--default-max-tokens", "2048",
+ ]
+ 
+-# The prototype has no known fatal-output signature yet, so supervision is left
+-# unconfigured on purpose: an unproven restart marker would silently paper over
+-# the very failures this prototype exists to observe.
++# Supervised recovery for a dead generation worker.
++#
++# The runtime condemns itself when it observes a generation failure that means
++# the MLX backend, not the request, is broken -- the `BUG-260827-1jhv2g` Metal
++# allocator exhaustion is the recorded case. It then answers `/health` with
++# `503 {"status": "unavailable"}`, stops advertising on `/v1/models`, and writes
++# one line carrying the literal marker below. This policy is what turns that
++# announcement into a replacement process.
++#
++# `generation_worker_unavailable` is a wire value shared with the runtime
++# (`GenerationWorkerHealth.supervisionMarker`). Changing it in one place and not
++# the other leaves the runtime dead-but-listening with no supervisor coming,
++# which is the exact incident this exists to end;
++# `scripts/dead-generation-smoke.sh` fails if the two stop matching.
++#
++# `restart_on_failure = false` on purpose: only the marker restarts this
++# runtime. A plain non-zero exit -- a refused model directory, a missing shader
++# library, a rejected flag -- is a configuration error that a restart loop would
++# hide instead of report.
++[profiles.qwen-mlx-swift-prototype.supervision]
++fatal_output_substrings = ["generation_worker_unavailable"]
++restart_on_failure = false
++max_restarts = 3
++restart_window_seconds = 600
++restart_delay_milliseconds = 1000
+diff --git a/tools/mlx-swift-runtime-prototype/scripts/dead-generation-smoke.sh b/tools/mlx-swift-runtime-prototype/scripts/dead-generation-smoke.sh
+new file mode 100755
+index 0000000..093a626
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/scripts/dead-generation-smoke.sh
+@@ -0,0 +1,477 @@
++#!/usr/bin/env bash
++# Dead-generation-worker health regression, end to end (TASK-260827-2h39ya).
++#
++# Carries `mlx_lm.server`'s dead-generation-thread regression (BUG-260827-1jhv2g,
++# BUG-260827-2tul5n) into the MLX Swift runtime's acceptance suite: a runtime
++# that cannot produce a token must not answer `GET /health` with 200.
++#
++# Runs the real Release binary under the real `model-harness`, against a real
++# model, and checks four things:
++#
++#   1. control      -- a healthy run of the same build answers /health 200
++#   2. fault        -- an invalidating generation failure flips /health to 503,
++#                      unsupervised, so the window is observable rather than
++#                      raced against the supervisor's kill; run once through
++#                      the buffered path and once through the streaming one,
++#                      because they are two separate production call sites
++#   3. supervision  -- the same fault under a fatal-substring policy: the
++#                      harness restarts it and the replacement answers 200
++#   4a. benign      -- a request-scoped failure does NOT flip /health or restart
++#   4b. overbroad   -- a request-scoped failure that REUSES a fragment of the
++#                      backend message (`Resource limit`, no Metal allocator
++#                      context) also does NOT flip /health or restart
++#
++# (4a) is what makes (2) mean anything. Without it, a runtime that condemned
++# itself on every error would pass 1-3 and be strictly worse than the bug.
++#
++# (4b) is what makes (4a) mean anything. A classifier that condemns on any
++# single loose fragment of the incident message passes 1-4a and still takes a
++# healthy runtime out of rotation -- that was the shipped defect on revision 1.
++# Deleting the gate and narrowing it too little are different failures, and only
++# (4b) separates them.
++#
++# The fault is injected with `serve --fault-inject-generation-error <message>`,
++# which throws that exact text out of the real generation path. Upstream mlx-lm
++# proved its own generation-thread recovery the same way. Nothing about the
++# verdict is injected: production classifies the message, so the benign run
++# below is a real negative and not a rehearsed one.
++#
++# Uses a small model on purpose -- the failure path never reaches the weights,
++# so paying 29 GB and six seconds of load to observe it would only mean the
++# check cannot run while the default Python runtime is resident.
++#
++#   BINARY=./DerivedData/Build/Products/Release/mlx-swift-runtime-prototype \
++#   HARNESS=/Users/alexis/.local/bin/model-harness \
++#   MODEL=/Users/alexis/.cache/huggingface/hub/models--mlx-community--Qwen1.5-0.5B-Chat-4bit/snapshots/659d8dafc39202a6688bb46242d60440702489b1 \
++#   PORT=18019 OUT=./dead-generation-out \
++#   scripts/dead-generation-smoke.sh
++
++set -uo pipefail
++# Job control, so each managed run becomes its own process group and teardown
++# can signal the whole tree. `model-harness` does not forward signals to the
++# runtime it spawns, so signalling the harness alone orphans a live listener --
++# and an orphan holding this port is exactly how a later check could pass by
++# talking to the wrong process.
++set -m
++
++BINARY="${BINARY:?set BINARY to the xcodebuild Release product}"
++HARNESS="${HARNESS:?set HARNESS to the model-harness executable}"
++MODEL="${MODEL:?set MODEL to an absolute local model directory}"
++PORT="${PORT:-18019}"
++HOST=127.0.0.1
++OUT="${OUT:-./dead-generation-out}"
++BASE="http://${HOST}:${PORT}"
++
++# Verbatim from the BUG-260827-1jhv2g incident record.
++INCIDENT='RuntimeError: [metal::malloc] Resource limit (499000) exceeded'
++# A failure that belongs to the request, not to the backend.
++BENIGN='generation ended without completion info; token usage is unknown'
++# The over-broad neighbour. Shares half of the incident message -- the words
++# `Resource limit` -- and none of its Metal allocator context. Found by review
++# on revision 1, where a bare `Resource limit` substring was fatal on its own
++# and this message condemned a healthy runtime through the production entry
++# point. Kept verbatim from that reproduction.
++OVERBROAD='RequestError: Resource limit for this request is 8 tokens'
++MARKER='generation_worker_unavailable'
++
++case "$BINARY" in /*) ;; *) BINARY="$PWD/${BINARY#./}" ;; esac
++case "$OUT" in /*) ;; *) OUT="$PWD/${OUT#./}" ;; esac
++
++mkdir -p "$OUT"
++CONFIG="$OUT/model-harness-dead-generation.toml"
++
++FAILURES=0
++pass() { printf 'PASS  %s\n' "$*"; }
++fail() { printf 'FAIL  %s\n' "$*"; FAILURES=$((FAILURES + 1)); }
++info() { printf 'INFO  %s\n' "$*"; }
++
++status_of() { curl -sS --max-time 10 -o "$2" -w '%{http_code}' "$1" 2>/dev/null; }
++
++chat() {
++    curl -sS --max-time 60 -o "$2" -w '%{http_code}' \
++        -H 'Content-Type: application/json' -X POST "$BASE/v1/chat/completions" \
++        --data-binary "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}" \
++        2>/dev/null
++}
++
++# ------------------------------------------------------------------ config --
++# Supervision is deliberately narrow: `restart_on_failure = false` means the
++# ONLY thing that can restart this runtime is the fatal marker. A restart
++# observed below therefore proves the marker did it, not that the process
++# happened to exit.
++write_config() {
++    local profile=$1 injection=$2 supervised=$3
++    local injection_argv=""
++    if [ -n "$injection" ]; then
++        injection_argv=$(printf '    "--fault-inject-generation-error", "%s",\n' "$injection")
++    fi
++    cat > "$CONFIG" <<TOML
++# Task-scoped acceptance config for TASK-260827-2h39ya. NOT installed.
++[profiles.$profile]
++mode = "local"
++executable = "$BINARY"
++argv = [
++    "serve",
++    "--model", "$MODEL",
++    "--host", "{host}",
++    "--port", "{port}",
++    "--default-max-tokens", "64",
++$injection_argv]
++TOML
++    [ "$supervised" = "supervised" ] || return 0
++    cat >> "$CONFIG" <<TOML
++
++[profiles.$profile.supervision]
++fatal_output_substrings = ["$MARKER"]
++restart_on_failure = false
++max_restarts = 2
++restart_window_seconds = 120
++restart_delay_milliseconds = 250
++TOML
++}
++
++port_free() { ! lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; }
++
++wait_ready() {
++    local log=$1 limit=${2:-120} code
++    for _ in $(seq 1 "$limit"); do
++        code=$(status_of "$BASE/v1/models" /dev/null)
++        [ "$code" = "200" ] && return 0
++        sleep 0.5
++    done
++    info "runtime never became ready; last /v1/models code=${code:-none}"
++    tail -20 "$log" >&2
++    return 1
++}
++
++start_harness() {
++    local profile=$1 log=$2
++    # Refuse to start on an occupied port. Every check below reads the port, so
++    # a leftover listener from an earlier phase would answer for a runtime that
++    # was never launched and turn this suite into theatre.
++    if ! port_free; then
++        fail "port $PORT still has a listener; refusing to start $profile"
++        exit 1
++    fi
++    "$HARNESS" run "$profile" --config "$CONFIG" --host "$HOST" --port "$PORT" > "$log" 2>&1 &
++    HARNESS_PID=$!
++}
++
++stop_harness() {
++    [ -n "${HARNESS_PID:-}" ] || return 0
++    local children
++    children=$(pgrep -P "$HARNESS_PID" 2>/dev/null)
++    kill -TERM -- "-$HARNESS_PID" 2>/dev/null \
++        || kill -TERM "$HARNESS_PID" $children 2>/dev/null
++    for _ in $(seq 1 80); do
++        port_free && ! kill -0 "$HARNESS_PID" 2>/dev/null && break
++        sleep 0.25
++    done
++    kill -KILL -- "-$HARNESS_PID" 2>/dev/null \
++        || kill -KILL "$HARNESS_PID" $children 2>/dev/null
++    wait "$HARNESS_PID" 2>/dev/null
++    HARNESS_PID=""
++    for _ in $(seq 1 40); do port_free && break; sleep 0.25; done
++}
++
++trap 'stop_harness' EXIT
++
++if ! port_free; then
++    fail "port $PORT already has a listener"
++    exit 1
++fi
++
++# ================================================== 1. healthy control run ==
++info "control: same build, no injected fault"
++write_config prototype-control "" supervised
++start_harness prototype-control "$OUT/control.log"
++if wait_ready "$OUT/control.log"; then
++    pass "control run reached ready"
++
++    CODE=$(status_of "$BASE/health" "$OUT/control-health.json")
++    if [ "$CODE" = "200" ]; then
++        pass "control /health answers 200"
++    else
++        fail "control /health answered $CODE (want 200)"
++    fi
++    python3 -c '
++import json, sys
++body = json.load(open(sys.argv[1]))
++assert body == {"status": "ok"}, body
++' "$OUT/control-health.json" 2>/dev/null \
++        && pass "control /health body is {\"status\":\"ok\"}" \
++        || fail "control /health body is not {\"status\":\"ok\"}"
++
++    CODE=$(chat "$MODEL" "$OUT/control-chat.json")
++    [ "$CODE" = "200" ] && pass "control completion answers 200" \
++        || fail "control completion answered $CODE (want 200)"
++
++    CODE=$(status_of "$BASE/health" "$OUT/control-health-after.json")
++    [ "$CODE" = "200" ] && pass "control /health still 200 after a real generation" \
++        || fail "control /health answered $CODE after a real generation"
++else
++    fail "control run never became ready"
++fi
++grep -q "$MARKER" "$OUT/control.log" \
++    && fail "control run emitted the supervision marker" \
++    || pass "control run never emitted the supervision marker"
++stop_harness
++
++# ======================== 2. injected backend failure: the health semantics ==
++# Deliberately UNSUPERVISED. With a fatal-substring policy attached,
++# model-harness kills the runtime within milliseconds of the marker reaching
++# its stdout -- correct behaviour, and it destroys the very window this phase
++# has to observe. The 503 belongs to the runtime and the restart belongs to the
++# supervisor; measuring them in one process would only measure which won the
++# race. Phase 3 attaches supervision and measures the other half.
++info "fault: injecting the BUG-260827-1jhv2g backend failure (unsupervised)"
++write_config prototype-fault "$INCIDENT" unsupervised
++start_harness prototype-fault "$OUT/fault.log"
++if wait_ready "$OUT/fault.log"; then
++    pass "fault run reached ready"
++
++    # Same process, before the fault is provoked. This is what makes the 503
++    # below a transition rather than a runtime that was never healthy.
++    CODE=$(status_of "$BASE/health" "$OUT/fault-health-before.json")
++    [ "$CODE" = "200" ] && pass "fault run /health is 200 before the fault" \
++        || fail "fault run /health answered $CODE before the fault (want 200)"
++
++    CODE=$(chat "$MODEL" "$OUT/fault-chat.json")
++    [ "$CODE" = "500" ] && pass "the injected failure answers the request with 500" \
++        || fail "the injected failure answered $CODE (want 500)"
++    python3 -c '
++import json, sys
++body = json.load(open(sys.argv[1]))
++assert body["error"]["code"] == "generation_failed", body
++assert "metal::malloc" in body["error"]["message"], body
++' "$OUT/fault-chat.json" 2>/dev/null \
++        && pass "the 500 names the backend failure verbatim" \
++        || fail "the 500 did not name the backend failure"
++
++    # -------------------------------------------------- the regression itself
++    CODE=$(status_of "$BASE/health" "$OUT/fault-health-after.json")
++    if [ "$CODE" = "503" ]; then
++        pass "REGRESSION GATE: /health answers 503 with the worker condemned"
++    else
++        fail "REGRESSION GATE: /health answered $CODE with the worker condemned (want 503)"
++    fi
++    python3 -c '
++import json, sys
++body = json.load(open(sys.argv[1]))
++assert body["status"] == "unavailable", body
++assert "metal::malloc" in body["detail"], body
++' "$OUT/fault-health-after.json" 2>/dev/null \
++        && pass "condemned /health body is {\"status\":\"unavailable\"}" \
++        || fail "condemned /health body is not {\"status\":\"unavailable\"}"
++
++    # The condemnation is terminal, not a one-request blip: a second poll must
++    # still be 503. A runtime that healed itself would hand the next caller a
++    # backend already known to be broken.
++    CODE=$(status_of "$BASE/health" "$OUT/fault-health-again.json")
++    [ "$CODE" = "503" ] && pass "the condemned runtime stays 503 on a later poll" \
++        || fail "the condemned runtime answered $CODE on a later poll (want 503)"
++
++    CODE=$(status_of "$BASE/v1/models" "$OUT/fault-models.json")
++    [ "$CODE" = "503" ] && pass "a condemned runtime stops advertising on /v1/models" \
++        || fail "/v1/models answered $CODE with the worker condemned (want 503)"
++    if [ ! -s "$OUT/fault-models.json" ]; then
++        fail "no listing body was captured from the condemned runtime"
++    elif grep -q "$MODEL" "$OUT/fault-models.json"; then
++        fail "the model ID leaked into the condemned listing"
++    else
++        pass "the model ID is absent from the condemned listing"
++    fi
++
++    # A subsequent completion is refused at the readiness gate rather than
++    # handed the engine that was just condemned.
++    CODE=$(chat "$MODEL" "$OUT/fault-chat-after.json")
++    [ "$CODE" = "503" ] && pass "a later completion is refused with 503" \
++        || fail "a later completion answered $CODE (want 503)"
++
++    grep -q '"event":"generation_worker_failed"' "$OUT/fault.log" \
++        && pass "the runtime emitted a generation_worker_failed event" \
++        || fail "no generation_worker_failed event in the runtime output"
++    grep -q "$MARKER" "$OUT/fault.log" \
++        && pass "the emitted output carries the supervision marker" \
++        || fail "the emitted output does not carry the supervision marker"
++    grep '"event":"generation_worker_failed"' "$OUT/fault.log" | tail -1 \
++        > "$OUT/fault-marker.json"
++else
++    fail "fault run never became ready"
++fi
++stop_harness
++
++# ============== 2b. the streaming call site condemns the worker as well =====
++# `Router.complete` and `RuntimeHTTPHandler.sendStream` are two separate
++# production call sites into the same health state. A worker condemned
++# mid-stream is exactly as dead as one condemned mid-request, and a runtime
++# that only noticed the buffered case would keep answering 200 for the path Pi
++# actually streams from. Fresh process: the condemnation above is terminal.
++info "fault: same injection, driven through the streaming path"
++start_harness prototype-fault "$OUT/fault-stream.log"
++if wait_ready "$OUT/fault-stream.log"; then
++    pass "streaming fault run reached ready"
++
++    CODE=$(status_of "$BASE/health" "$OUT/stream-health-before.json")
++    [ "$CODE" = "200" ] && pass "streaming fault run /health is 200 before the fault" \
++        || fail "streaming fault run /health answered $CODE before the fault (want 200)"
++
++    # SSE opens with a 200 head before generation starts, so the failure can
++    # only be reported as a terminal frame; the status code says nothing here.
++    curl -sS --max-time 60 -o "$OUT/stream-body.txt" \
++        -H 'Content-Type: application/json' -X POST "$BASE/v1/chat/completions" \
++        --data-binary "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8,\"stream\":true}" \
++        >/dev/null 2>&1
++    grep -q 'metal::malloc' "$OUT/stream-body.txt" \
++        && pass "the stream reports the backend failure as a terminal frame" \
++        || fail "the stream did not report the backend failure"
++
++    CODE=$(status_of "$BASE/health" "$OUT/stream-health-after.json")
++    if [ "$CODE" = "503" ]; then
++        pass "REGRESSION GATE (streaming): /health answers 503 after a condemned stream"
++    else
++        fail "REGRESSION GATE (streaming): /health answered $CODE (want 503)"
++    fi
++    grep -q '"event":"generation_worker_failed"' "$OUT/fault-stream.log" \
++        && pass "the streaming path emitted a generation_worker_failed event" \
++        || fail "no generation_worker_failed event from the streaming path"
++else
++    fail "streaming fault run never became ready"
++fi
++stop_harness
++
++# ========================= 3. the same fault under the supervision policy ====
++info "supervised: same fault, with fatal_output_substrings configured"
++write_config prototype-supervised "$INCIDENT" supervised
++start_harness prototype-supervised "$OUT/supervised.log"
++if wait_ready "$OUT/supervised.log"; then
++    pass "supervised run reached ready"
++
++    # The response to this request is not asserted: the marker reaches the
++    # harness while the reply is still being written, so the kill may land
++    # first. That the client loses this request is the point of restarting.
++    chat "$MODEL" "$OUT/supervised-chat.json" > "$OUT/supervised-chat.code"
++    info "provoking request returned HTTP $(cat "$OUT/supervised-chat.code")"
++
++    RESTARTED=0
++    for _ in $(seq 1 240); do
++        if grep -q 'restarting profile "prototype-supervised"' "$OUT/supervised.log"; then
++            RESTARTED=1
++            break
++        fi
++        sleep 0.25
++    done
++    if [ "$RESTARTED" -eq 1 ]; then
++        pass "RECOVERY GATE: model-harness performed the configured supervised restart"
++        grep 'restarting profile "prototype-supervised"' "$OUT/supervised.log" | tail -1 \
++            > "$OUT/supervised-restart.txt"
++        info "restart line recorded in $OUT/supervised-restart.txt"
++    else
++        fail "RECOVERY GATE: model-harness never restarted the condemned runtime"
++    fi
++    grep -q 'fatal output "'"$MARKER"'"' "$OUT/supervised.log" \
++        && pass "the harness names the marker as the reason it restarted" \
++        || fail "the harness restart does not name the marker"
++
++    if wait_ready "$OUT/supervised.log"; then
++        pass "the restarted runtime became ready again"
++        CODE=$(status_of "$BASE/health" "$OUT/supervised-health-recovered.json")
++        [ "$CODE" = "200" ] && pass "the recovered runtime answers /health 200 again" \
++            || fail "the recovered runtime answered $CODE (want 200)"
++        # Counted only once the replacement is up, or this races the restart.
++        if [ "$(grep -c '"event":"listening"' "$OUT/supervised.log")" -ge 2 ]; then
++            pass "the restarted runtime bound its listener again"
++        else
++            fail "no second listening event after the restart"
++        fi
++    else
++        fail "the restarted runtime never became ready"
++    fi
++else
++    fail "supervised run never became ready"
++fi
++stop_harness
++
++# ========================================= 4. negative: request-scoped faults ==
++# Narrowing checks. Everything above is satisfied by a runtime that condemns
++# itself on ANY generation error, which would be a worse bug than the one being
++# fixed. Each run below injects a failure that belongs to the request and
++# requires the runtime to stay in rotation.
++#
++# Supervision is attached on purpose: these phases have to prove that no
++# restart happens, and a policy that is not configured cannot fire.
++negative_phase() {
++    local profile=$1 injection=$2 slug=$3 label=$4
++    info "negative ($slug): $label"
++    write_config "$profile" "$injection" supervised
++    start_harness "$profile" "$OUT/$slug.log"
++    if ! wait_ready "$OUT/$slug.log"; then
++        fail "negative run ($slug) never became ready"
++        stop_harness
++        return
++    fi
++    pass "negative run ($slug) reached ready"
++
++    CODE=$(chat "$MODEL" "$OUT/$slug-chat.json")
++    [ "$CODE" = "500" ] \
++        && pass "($slug) the request-scoped failure answers the request with 500" \
++        || fail "($slug) the request-scoped failure answered $CODE (want 500)"
++
++    CODE=$(status_of "$BASE/health" "$OUT/$slug-health.json")
++    if [ "$CODE" = "200" ]; then
++        pass "NARROWING GATE ($slug): a request-scoped failure leaves /health at 200"
++    else
++        fail "NARROWING GATE ($slug): a request-scoped failure moved /health to $CODE (want 200)"
++    fi
++    python3 -c '
++import json, sys
++body = json.load(open(sys.argv[1]))
++assert body == {"status": "ok"}, body
++' "$OUT/$slug-health.json" 2>/dev/null \
++        && pass "($slug) /health body is still {\"status\":\"ok\"}" \
++        || fail "($slug) /health body is not {\"status\":\"ok\"}"
++
++    CODE=$(status_of "$BASE/v1/models" "$OUT/$slug-models.json")
++    [ "$CODE" = "200" ] && pass "($slug) a request-scoped failure keeps the model advertised" \
++        || fail "($slug) /v1/models answered $CODE after a request-scoped failure (want 200)"
++
++    grep -q "$MARKER" "$OUT/$slug.log" \
++        && fail "($slug) a request-scoped failure emitted the supervision marker" \
++        || pass "($slug) a request-scoped failure emitted no supervision marker"
++
++    # Give supervision the same wall-clock it needed to act in the fault run.
++    sleep 2
++    grep -q 'restarting profile' "$OUT/$slug.log" \
++        && fail "($slug) model-harness restarted a runtime that was still healthy" \
++        || pass "($slug) model-harness left the healthy runtime alone"
++
++    # A completion after the refused one must still be served. A runtime that
++    # merely deferred the condemnation would pass every check above.
++    CODE=$(chat "$MODEL" "$OUT/$slug-chat-after.json")
++    [ "$CODE" = "500" ] && pass "($slug) the runtime is still serving requests afterwards" \
++        || fail "($slug) a later completion answered $CODE (want 500, the same request-scoped failure)"
++
++    stop_harness
++}
++
++# 4a. A failure sharing nothing with a backend message. Proves the gate is not
++# condemn-all.
++negative_phase prototype-benign "$BENIGN" benign \
++    "a failure that belongs to the request"
++
++# 4b. THE NARROWING CASE. Shares the words `Resource limit` with the incident
++# and carries no Metal allocator context. A classifier that matches the incident
++# by any single loose fragment passes 4a and fails here, which is exactly the
++# revision-1 defect: this message took a healthy runtime to 503 and emitted the
++# fatal marker. Deleting a signature cannot be told apart from narrowing one
++# without this phase.
++negative_phase prototype-overbroad "$OVERBROAD" overbroad \
++    "a request-scoped failure that reuses a fragment of the backend message"
++
++printf '\n%s\n' "----------------------------------------"
++if [ "$FAILURES" -eq 0 ]; then
++    printf 'DEAD-GENERATION SMOKE OK (0 failures)\n'
++    exit 0
++fi
++printf 'DEAD-GENERATION SMOKE FAILED (%d failures)\n' "$FAILURES"
++exit 1

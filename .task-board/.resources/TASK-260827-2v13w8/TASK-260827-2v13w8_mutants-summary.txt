@@ -1,0 +1,55 @@
+=== contract mutant campaign (M1-M7) ===
+--- M1 ---
+􀢄  Test "a difference in any pinned condition refuses the comparison" with 10 test cases failed after 0.001 seconds with 1 issue.
+􁁛  Test "a scored scenario that failed on either runtime blocks instead of being scored" passed after 0.001 seconds.
+􀢄  Suite "runtime benchmark comparison gate" failed after 0.001 seconds with 1 issue.
+􀢄  Test run with 24 tests in 2 suites failed after 0.001 seconds with 1 issue.
+--- M2 ---
+􀢄  Test "an overlap of one second is still an overlap" failed after 0.001 seconds with 1 issue.
+􀢄  Test "overlapping runs are refused because they measured each other" failed after 0.001 seconds with 1 issue.
+􀢄  Suite "runtime benchmark comparison gate" failed after 0.001 seconds with 2 issues.
+􀢄  Test run with 24 tests in 2 suites failed after 0.001 seconds with 2 issues.
+--- M3 ---
+􀢄  Test "an unmeasured process footprint is a blocker, not a pass" failed after 0.001 seconds with 2 issues.
+􀢄  Test "a scenario that claims success with no measurements is a blocker, not a pass" failed after 0.001 seconds with 4 issues.
+􀢄  Suite "runtime benchmark comparison gate" failed after 0.001 seconds with 6 issues.
+􀢄  Test run with 24 tests in 2 suites failed after 0.002 seconds with 6 issues.
+--- M4 ---
+􁁛  Test "a scored scenario that failed on either runtime blocks instead of being scored" passed after 0.001 seconds.
+􀢄  Test "bytes that could not be read are a read failure, never an empty record" failed after 0.001 seconds with 1 issue.
+􀢄  Suite "runtime benchmark comparison gate" failed after 0.001 seconds with 1 issue.
+􀢄  Test run with 24 tests in 2 suites failed after 0.002 seconds with 1 issue.
+--- M5 ---
+􀢄  Test "an unmeasured process footprint is a blocker, not a pass" failed after 0.001 seconds with 1 issue.
+􀢄  Test "a candidate outside any single threshold is rejected" with 4 test cases failed after 0.001 seconds with 4 issues.
+􀢄  Suite "runtime benchmark comparison gate" failed after 0.002 seconds with 6 issues.
+􀢄  Test run with 24 tests in 2 suites failed after 0.002 seconds with 6 issues.
+--- M6 ---
+􁁛  Test "a scored scenario that failed on either runtime blocks instead of being scored" passed after 0.001 seconds.
+􀢄  Test "a runtime compared against itself is refused" failed after 0.001 seconds with 1 issue.
+􀢄  Suite "runtime benchmark comparison gate" failed after 0.001 seconds with 1 issue.
+􀢄  Test run with 24 tests in 2 suites failed after 0.001 seconds with 1 issue.
+--- M7 ---
+􀢄  Test "a scored scenario that failed on either runtime blocks instead of being scored" recorded an issue at RuntimeBenchmarkTests.swift:445:9: Expectation failed: !(decision.deltas.contains { $0.scenario == "short_prompt" } → <not evaluated>)
+􀢄  Test "a scored scenario that failed on either runtime blocks instead of being scored" failed after 0.001 seconds with 2 issues.
+􀢄  Suite "runtime benchmark comparison gate" failed after 0.001 seconds with 2 issues.
+􀢄  Test run with 24 tests in 2 suites failed after 0.001 seconds with 2 issues.
+
+=== production mutant P1 ===
+pristine binary vs mismatched pair: exit 4, refusal on modelDigest, no report
+P1 binary vs the same pair: exit 3, full decision produced
+restored binary vs the same pair: exit 4
+
+=== P1 output (first lines) ===
+{
+  "accepted" : false,
+  "blockers" : [
+    "parity scenario \"context_75k\": baseline succeeded and candidate failed (the stream ended without a usage frame, so nothing was measured)",
+    "short_prompt\/prefill_tokens_per_second ratio 0.6915200486060813 is outside the admissible band >= 0.9 (baseline 63.999789854329265, candidate 44.25713779084476)",
+    "long_prompt_8k\/time_to_first_token_seconds ratio 1.441701016259825 is outside the admissible band <= 1.1 (baseline 71.46707582473755, candidate 103.03415584564209)",
+    "long_prompt_8k\/prefill_tokens_per_second ratio 0.6902553970740953 is outside the admissible band >= 0.9 (baseline 109.44900025268, candidate 75.5477631287764)"
+  ],
+  "declaredAsymmetries" : [
+    "deployed with --prompt-cache-size 1 --prompt-cache-bytes 8GB; multi-turn prefix reuse is served from that cache",
+    "loads the model lazily on the first completion, so \/v1\/models answers 200 about a second after launch with no weights resident",
+    "\/v1\/models lists every MLX model in the local Hugging Face cache and appends the configured one last, so data[0].id is not the configured model",

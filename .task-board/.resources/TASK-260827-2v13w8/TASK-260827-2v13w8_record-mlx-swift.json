@@ -1,0 +1,129 @@
+{
+  "command": [
+    "/Users/alexis/.local/bin/model-harness",
+    "run",
+    "qwen-benchmark-swift",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18031",
+    "--config",
+    "/Users/alexis/src/relux-works/relux-agents-infra/.temp/TASK-260827-2v13w8/model-harness.benchmark.toml"
+  ],
+  "declaredAsymmetries": [
+    "no prompt cache across requests: every request builds a fresh KV cache, so a shared multi-turn prefix is re-prefilled every turn",
+    "one generation at a time: GenerationEngine is an actor, so requests serialize even though the Pi profile allows max_leases = 8",
+    "readiness is gated on a resident model: /v1/models answers 503 until the weights are loaded, and advertises only the configured model"
+  ],
+  "finishedAtUnixSeconds": 1787884529.102318,
+  "footprintSamples": 2458,
+  "harnessExitStatus": 1,
+  "lifecycle": {
+    "first_completion_seconds": 6.669034004211426,
+    "footprint_after_warmup_bytes": 29898806680,
+    "models_listing_seconds": 3.5603699684143066
+  },
+  "peakPhysicalFootprintBytes": 53000017448,
+  "pins": {
+    "contextPolicy": "unbounded-kv",
+    "hostIdentity": "MacBookPro18,2/68719476736/25F80/arm64",
+    "maxOutputTokens": 256,
+    "modelDigest": "1b10f3fe1c1097c909fa35e112b943255c44be4a5f332f45e0af57a96188460b",
+    "modelPath": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+    "promptSuiteDigest": "bba8867f4300f343b15960fb2cf8f821c653b96f538cf87287d0dacd36275d41",
+    "quantization": "8bit/group64/affine",
+    "seed": 1234,
+    "temperature": 0.0,
+    "topP": 1.0
+  },
+  "revisions": {
+    "mlx_swift": "0.31.6 (0bb916c67f4b9e5c682cbe02a42c701c93ab5021)",
+    "mlx_swift_lm": "3.31.4 (bd4b7434e6bdb588c7ef55706ff8904cb7fd4c57)",
+    "model_harness": "model-harness v1.6.1-44-gd91d6fc (d91d6fc, 2026-08-27T06:58:43Z)"
+  },
+  "runtime": "mlx-swift",
+  "scenarios": [
+    {
+      "completionTokens": 53,
+      "decodeTokensPerSecond": 11.069352775940672,
+      "failureMode": null,
+      "name": "short_prompt",
+      "peakPhysicalFootprintBytes": 30014739864,
+      "prefillTokensPerSecond": 44.25713779084476,
+      "promptTokens": 41,
+      "succeeded": true,
+      "timeToFirstTokenSeconds": 0.9264042377471924,
+      "wallClockSeconds": 5.624144077301025
+    },
+    {
+      "completionTokens": 105,
+      "decodeTokensPerSecond": 10.529391672965605,
+      "failureMode": null,
+      "name": "long_prompt_8k",
+      "peakPhysicalFootprintBytes": 47257540040,
+      "prefillTokensPerSecond": 75.5477631287764,
+      "promptTokens": 7784,
+      "succeeded": true,
+      "timeToFirstTokenSeconds": 103.03415584564209,
+      "wallClockSeconds": 112.91146802902222
+    },
+    {
+      "completionTokens": 63,
+      "decodeTokensPerSecond": null,
+      "failureMode": null,
+      "name": "tool_call",
+      "peakPhysicalFootprintBytes": 48061650472,
+      "prefillTokensPerSecond": null,
+      "promptTokens": 296,
+      "succeeded": true,
+      "timeToFirstTokenSeconds": null,
+      "wallClockSeconds": 9.701805114746094
+    },
+    {
+      "completionTokens": 175,
+      "decodeTokensPerSecond": null,
+      "failureMode": null,
+      "name": "multiturn_prefix_reuse",
+      "peakPhysicalFootprintBytes": 53000017448,
+      "prefillTokensPerSecond": 77.09917930044627,
+      "promptTokens": 7784,
+      "succeeded": true,
+      "timeToFirstTokenSeconds": 104.7740490436554,
+      "wallClockSeconds": 323.41111421585083
+    },
+    {
+      "completionTokens": 1256,
+      "decodeTokensPerSecond": 9.775381127206575,
+      "failureMode": null,
+      "name": "stability_soak",
+      "peakPhysicalFootprintBytes": 53000017448,
+      "prefillTokensPerSecond": null,
+      "promptTokens": 910,
+      "soak": {
+        "first_footprint_bytes": 52952061456,
+        "first_latency_seconds": 6.509638786315918,
+        "footprint_drift_bytes": -47300608,
+        "iterations": 20,
+        "last_footprint_bytes": 52904760848,
+        "last_latency_seconds": 6.508002996444702,
+        "median_latency_seconds": 6.517634868621826
+      },
+      "succeeded": true,
+      "timeToFirstTokenSeconds": null,
+      "wallClockSeconds": 128.48603892326355
+    },
+    {
+      "completionTokens": null,
+      "decodeTokensPerSecond": null,
+      "failureMode": "the stream ended without a usage frame, so nothing was measured",
+      "name": "context_75k",
+      "peakPhysicalFootprintBytes": 53000017448,
+      "prefillTokensPerSecond": null,
+      "promptTokens": null,
+      "succeeded": false,
+      "timeToFirstTokenSeconds": null,
+      "wallClockSeconds": 48.04114103317261
+    }
+  ],
+  "startedAtUnixSeconds": 1787883894.222464
+}
