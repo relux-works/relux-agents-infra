@@ -10,18 +10,16 @@
       "codex": {
         "model": "gpt-5.6-sol",
         "model_criterion": "less_or_equal",
-        "reasoning_effort": "xhigh"
+        "reasoning_effort": "high"
       },
       "claude": {
-        "model": "claude-fable-5",
-        "model_criterion": "less_or_equal"
+        "model": "claude-opus-5",
+        "model_criterion": "less_or_equal",
+        "reasoning_effort": "high"
       }
     },
     "preferred_agentic_system": {
-      "mixed": [
-        "claude",
-        "codex"
-      ]
+      "exclusive": "codex"
     },
     "worktree_isolation": {
       "validation": {
