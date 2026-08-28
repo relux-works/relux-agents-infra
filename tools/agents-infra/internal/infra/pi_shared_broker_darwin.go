@@ -350,6 +350,12 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
 }
 
 func startUnauthorizedRuntime(resolved sharedResolvedProfile, environ []string) (*exec.Cmd, *piProcessWait, *os.File, error) {
+	return startUnauthorizedRuntimeWithDependencies(resolved, environ, sharedSystemLogClock{}, func(command *exec.Cmd) error {
+		return command.Start()
+	})
+}
+
+func startUnauthorizedRuntimeWithDependencies(resolved sharedResolvedProfile, environ []string, clock sharedLogClock, startCommand func(*exec.Cmd) error) (*exec.Cmd, *piProcessWait, *os.File, error) {
 	readEnd, writeEnd, err := os.Pipe()
 	if err != nil {
 		return nil, nil, nil, sharedRuntimeError("runtime_start_failed", err)
@@ -360,7 +366,7 @@ func startUnauthorizedRuntime(resolved sharedResolvedProfile, environ []string) 
 		writeEnd.Close()
 		return nil, nil, nil, sharedRuntimeError("runtime_start_failed", err)
 	}
-	logFile, err := openSharedLog(resolved.Paths.RuntimeLog)
+	logFile, err := openSharedRotatingLog(resolved.Paths.RuntimeLog, resolved.Sharing.MaxSegmentBytes, resolved.Sharing.MaxSegments, clock)
 	if err != nil {
 		readEnd.Close()
 		writeEnd.Close()
@@ -378,15 +384,26 @@ func startUnauthorizedRuntime(resolved sharedResolvedProfile, environ []string) 
 	command.Stderr = logFile
 	command.ExtraFiles = []*os.File{readEnd}
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := command.Start(); err != nil {
+	if err := startCommand(command); err != nil {
 		readEnd.Close()
 		writeEnd.Close()
 		logFile.Close()
 		return nil, nil, nil, sharedRuntimeError("runtime_start_failed", err)
 	}
 	readEnd.Close()
-	logFile.Close()
-	return command, waitForPiProcess(command), writeEnd, nil
+	return command, waitForPiProcessAndClose(command, logFile), writeEnd, nil
+}
+
+func waitForPiProcessAndClose(command *exec.Cmd, closer io.Closer) *piProcessWait {
+	wait := &piProcessWait{done: make(chan struct{})}
+	go func() {
+		wait.err = command.Wait()
+		if closeErr := closer.Close(); wait.err == nil {
+			wait.err = closeErr
+		}
+		close(wait.done)
+	}()
+	return wait
 }
 
 func waitForSharedProcessIdentity(pid int, timeout time.Duration) (sharedProcessObservation, error) {

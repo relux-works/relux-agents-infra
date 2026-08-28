@@ -13,7 +13,7 @@ import (
 )
 
 func testSharedRuntimeSupervisionPolicy() PiRuntimeSharing {
-	return PiRuntimeSharing{RestartLimit: 4, RestartInitialBackoffSeconds: 2, RestartMaxBackoffSeconds: 5, StableRunSeconds: 9, QuarantineSeconds: 30}
+	return PiRuntimeSharing{MaxSegmentBytes: 1024, MaxSegments: 2, RestartLimit: 4, RestartInitialBackoffSeconds: 2, RestartMaxBackoffSeconds: 5, StableRunSeconds: 9, QuarantineSeconds: 30}
 }
 
 func shortSharedRuntimeCache(t *testing.T) string {
@@ -87,6 +87,8 @@ func TestSharedRuntimeRestartPolicyIsBoundedStableAndHalfOpen(t *testing.T) {
 
 func TestSharedRuntimeRestartBackoffClampsBeforeDurationOverflow(t *testing.T) {
 	policy := PiRuntimeSharing{
+		MaxSegmentBytes:              1024,
+		MaxSegments:                  2,
 		RestartLimit:                 3,
 		RestartInitialBackoffSeconds: int(maxTimeDurationSeconds - 1),
 		RestartMaxBackoffSeconds:     int(maxTimeDurationSeconds),

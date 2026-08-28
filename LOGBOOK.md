@@ -5,17 +5,41 @@
 
 ## 2026-08-29
 
+### 2100 — Log Rotation Replayed On Current Trunk
+- DECISION: Revision 5 replays the reviewed rotation candidate on `91356833949cb6a30958265514fe5852d97eec1b`, preserving trunk-owned `restart_not_before`, `half_open`, and root output-capture fixes.
+- FIX: The 16 code/document paths from immutable revision 4 apply cleanly on current trunk; `LOGBOOK.md` is merged as a newest-first union instead of replaying the stale historical hunk.
+- SCOPE: `TASK-260829-3fozxa` publishes a fresh tree-bound Change Request; revision 4 remains immutable historical evidence.
+- STATUS: Replay implemented; validation and fresh review handoff pending.
+
 ### 2035 — Root Output Capture No Longer Blocks Before Drain
 - ROOT CAUSE: `tools/agents-infra/main_test.go` called stdout/stderr producers before starting `io.Copy`; a `3 MiB + 17 byte` write blocked at pipe capacity and made the reader unreachable.
 - FIX: Both capture wrappers now start a shared concurrent drain before the producer and restore the global descriptor before writer close, EOF wait, and reader close; the same idempotent cleanup runs during panic unwinding.
 - EVIDENCE: Separate pre-fix stdout and stderr regressions timed out with exit 1 in `os.File.Write`; after the fix, byte-identity/restoration tests, the exact root status test, the complete root package, `go vet .`, and `go build .` exit 0.
 - STATUS: `BUG-260829-ajb7n7` ready for review.
 
+### 1921 — Log Rotation CR Validation Recovered After Host Contention
+- ANOMALY: Automatic revision 2 and 3 CR validation failed in unrelated model-check/readiness timing fixtures while concurrent Go suites drove host load; scoped rotation tests remained green.
+- FIX: `tools/agents-infra/internal/infra/pi_test.go` now drives `RunPi` for zero and overflowing values of both rotation caps and proves refusal before provider lookup or runtime-state mutation.
+- EVIDENCE: After the foreign infra suite exited, exact CR gate `go test ./... -count=1` passed (root 169.670s; infra 327.101s); `go vet ./...`, `go build ./...`, formatting, and diff checks exited 0.
+- STATUS: `TASK-260829-3fozxa` restart/config-change rework prepared for a fresh review handoff.
+
+### 1807 — Restart Log Archives Bypassed A Lowered Segment Cap
+- REGRESSION: Revision 1 validated only active `runtime.log` size; a managed archive created under a larger prior `max_segment_bytes` survived restart and could raise retained output above `max_segment_bytes * max_segments`.
+- FIX: `sharedFilesystemLogSink.Prune` now validates every managed archive against the current byte cap before count pruning and fails closed on oversized, non-regular, linked, or incorrectly permissioned archives.
+- EVIDENCE: `TestStartUnauthorizedRuntimeRefusesOversizedRetainedArchiveBeforeCommandStart` drives the production start path with the filesystem sink and fake clock and proves the command-start side effect remains unreachable.
+- STATUS: `TASK-260829-3fozxa` revision 2 rework in development.
+
 ### 1756 — Backoff Status Publishes Only Persisted Facts
 - DECISION: `SharedRuntimeStatus` publishes ledger-derived `restart_not_before` and `half_open`; `restart_count` never implies active backoff, and `half_open` never gates a runtime that may already be serving.
 - DECISION: `last_failure` and `last_failure_at` remain absent until a reviewed ledger event persists reason/time; placeholders or counter-derived provenance are refused by contract.
 - EVIDENCE: `SharedRuntimeStatusReport` pre/post fixtures copy the exact deadline, malformed lifecycle timestamps refuse, and a narrowed production mapping that drops the persisted deadline makes `TestSharedRuntimeStatusReportPublishesPersistedDeadlineWithoutInference` exit 1.
 - SCOPE: `tools/agents-infra/internal/infra/pi_shared_operator_darwin.go`, platform stubs, CLI output, `README.md`, and `SKILL.md`.
+
+### 1732 — Rotating Runtime Output Changes os/exec Ownership
+- FINDING: Replacing shared runtime `*os.File` stdout/stderr with an `io.Writer` makes `os/exec` copy through a parent-owned pipe; closing immediately after `Start()` would discard subsequent runtime output.
+- FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` keeps the rotating writer alive through `command.Wait()` and closes it before publishing the wait result.
+- DECISION: Byte-cap behavior stays in `sharedRotatingLogWriter` behind fake sink/clock tests; the production filesystem sink only owns secure segment archive naming and pruning.
+- STATUS: `TASK-260829-3fozxa` implementation ready for review gates.
 
 ### 1646 — Supervision Seconds Duration Overflow Refused
 - REGRESSION: `tools/agents-infra/internal/infra/pi_config.go:424` admitted seconds above 9223372036; later `time.Duration(seconds) * time.Second` overflowed and could make backoff, stable-run, and quarantine timing negative or immediate.

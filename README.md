@@ -474,6 +474,8 @@ shutdown_timeout_seconds = 10
 mode = "shared"
 linger_seconds = 15
 max_leases = 8
+max_segment_bytes = 104857600
+max_segments = 7
 heartbeat_interval_seconds = 5
 lease_stale_seconds = 30
 restart_limit = 3
@@ -638,6 +640,17 @@ coordination overhead. `mode = "exclusive"` uses the established direct-child
 path. `mode = "shared"` gives each tracked RUN its own Pi state, session, lock,
 and process group while byte-identical profiles can lease one broker-owned MLX
 runtime across independent launcher sessions and project roots.
+
+Shared runtime output is bounded by the operator-supplied `max_segment_bytes`
+and `max_segments`; neither has a code default. The broker splits writes at the
+exact byte boundary, keeps `runtime.log` as the active segment, archives full
+segments with a monotonic sequence and UTC timestamp, and prunes the oldest
+archive first. On restart, any managed archive larger than the current cap is
+refused before runtime launch rather than admitted from an older configuration.
+The active file and retained archives therefore occupy at most
+`max_segment_bytes * max_segments` bytes of runtime output. A pre-existing
+active segment or managed archive larger than the configured cap is refused
+rather than silently discarded or reported as bounded.
 
 `compaction` is also an explicit, strict opt-in. Configure exactly one threshold:
 prefer the operator-facing `compact_at_tokens`, or retain the Pi-native

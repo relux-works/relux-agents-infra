@@ -27,6 +27,8 @@ func TestRunRuntimeStatusJSONIsAbsentAndSideEffectFree(t *testing.T) {
 mode = "shared"
 linger_seconds = 0
 max_leases = 4
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 3
@@ -83,6 +85,8 @@ func TestRunRuntimeManualQuarantineRoundTripUsesResolvedLedger(t *testing.T) {
 mode = "shared"
 linger_seconds = 0
 max_leases = 4
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 3
