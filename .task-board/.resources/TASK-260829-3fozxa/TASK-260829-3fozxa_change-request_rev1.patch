@@ -1,0 +1,921 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 3c1295d..4367081 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,12 @@
+ 
+ ## 2026-08-29
+ 
++### 1732 — Rotating Runtime Output Changes os/exec Ownership
++- FINDING: Replacing shared runtime `*os.File` stdout/stderr with an `io.Writer` makes `os/exec` copy through a parent-owned pipe; closing immediately after `Start()` would discard subsequent runtime output.
++- FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` keeps the rotating writer alive through `command.Wait()` and closes it before publishing the wait result.
++- DECISION: Byte-cap behavior stays in `sharedRotatingLogWriter` behind fake sink/clock tests; the production filesystem sink only owns secure segment archive naming and pruning.
++- STATUS: `TASK-260829-3fozxa` implementation ready for review gates.
++
+ ### 1646 — Supervision Seconds Duration Overflow Refused
+ - REGRESSION: `tools/agents-infra/internal/infra/pi_config.go:424` admitted seconds above 9223372036; later `time.Duration(seconds) * time.Second` overflowed and could make backoff, stable-run, and quarantine timing negative or immediate.
+ - FIX: Runtime and shared-supervision seconds now have explicit overflow-safe bounds; doubled lease-stale and handoff sums have effective-duration bounds, broker ordering uses `int64`, and exponential backoff clamps before doubling.
+diff --git a/README.md b/README.md
+index dfb47a1..0cd7b19 100644
+--- a/README.md
++++ b/README.md
+@@ -474,6 +474,8 @@ shutdown_timeout_seconds = 10
+ mode = "shared"
+ linger_seconds = 15
+ max_leases = 8
++max_segment_bytes = 104857600
++max_segments = 7
+ heartbeat_interval_seconds = 5
+ lease_stale_seconds = 30
+ restart_limit = 3
+@@ -639,6 +641,15 @@ path. `mode = "shared"` gives each tracked RUN its own Pi state, session, lock,
+ and process group while byte-identical profiles can lease one broker-owned MLX
+ runtime across independent launcher sessions and project roots.
+ 
++Shared runtime output is bounded by the operator-supplied `max_segment_bytes`
++and `max_segments`; neither has a code default. The broker splits writes at the
++exact byte boundary, keeps `runtime.log` as the active segment, archives full
++segments with a monotonic sequence and UTC timestamp, and prunes the oldest
++archive first. The active file and retained archives therefore occupy at most
++`max_segment_bytes * max_segments` bytes of runtime output. A pre-existing
++active segment larger than the configured cap is refused rather than silently
++discarded or reported as bounded.
++
+ `compaction` is also an explicit, strict opt-in. Configure exactly one threshold:
+ prefer the operator-facing `compact_at_tokens`, or retain the Pi-native
+ `reserve_tokens` compatibility form. agents-infra derives the other value as
+diff --git a/tools/agents-infra/internal/infra/pi_config.go b/tools/agents-infra/internal/infra/pi_config.go
+index 010c416..d8a262e 100644
+--- a/tools/agents-infra/internal/infra/pi_config.go
++++ b/tools/agents-infra/internal/infra/pi_config.go
+@@ -110,6 +110,8 @@ type PiRuntimeSharing struct {
+ 	Mode                         string `json:"mode"`
+ 	LingerSeconds                int    `json:"linger_seconds"`
+ 	MaxLeases                    int    `json:"max_leases"`
++	MaxSegmentBytes              int    `json:"max_segment_bytes"`
++	MaxSegments                  int    `json:"max_segments"`
+ 	HeartbeatIntervalSeconds     int    `json:"heartbeat_interval_seconds"`
+ 	LeaseStaleSeconds            int    `json:"lease_stale_seconds"`
+ 	BrokerStartTimeoutSeconds    int    `json:"broker_start_timeout_seconds"`
+@@ -453,7 +455,7 @@ func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
+ }
+ 
+ func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime) (PiRuntimeSharing, error) {
+-	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds", "restart_limit", "restart_initial_backoff_seconds", "restart_max_backoff_seconds", "stable_run_seconds", "quarantine_seconds"); err != nil {
++	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "max_segment_bytes", "max_segments", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds", "restart_limit", "restart_initial_backoff_seconds", "restart_max_backoff_seconds", "stable_run_seconds", "quarantine_seconds"); err != nil {
+ 		return PiRuntimeSharing{}, err
+ 	}
+ 	var sharing PiRuntimeSharing
+@@ -477,6 +479,12 @@ func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime
+ 	if sharing.MaxLeases, err = requiredPositiveInt(table, "max_leases"); err != nil {
+ 		return sharing, fieldError(field+".max_leases", err)
+ 	}
++	if sharing.MaxSegmentBytes, err = requiredPositiveInt(table, "max_segment_bytes"); err != nil {
++		return sharing, fieldError(field+".max_segment_bytes", err)
++	}
++	if sharing.MaxSegments, err = requiredPositiveInt(table, "max_segments"); err != nil {
++		return sharing, fieldError(field+".max_segments", err)
++	}
+ 	if sharing.HeartbeatIntervalSeconds, err = requiredPositiveDurationSeconds(table, "heartbeat_interval_seconds", maxTimeDurationSeconds); err != nil {
+ 		return sharing, fieldError(field+".heartbeat_interval_seconds", err)
+ 	}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_attestation_test.go b/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
+index 3aae2f1..107a334 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
+@@ -55,6 +55,8 @@ func newSharedAttestationFixture(t *testing.T, extraRuntimeArgv ...string) share
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+diff --git a/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go b/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go
+index 71dc09d..52621c9 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go
+@@ -360,7 +360,7 @@ func startUnauthorizedRuntime(resolved sharedResolvedProfile, environ []string)
+ 		writeEnd.Close()
+ 		return nil, nil, nil, sharedRuntimeError("runtime_start_failed", err)
+ 	}
+-	logFile, err := openSharedLog(resolved.Paths.RuntimeLog)
++	logFile, err := openSharedRotatingLog(resolved.Paths.RuntimeLog, resolved.Sharing.MaxSegmentBytes, resolved.Sharing.MaxSegments)
+ 	if err != nil {
+ 		readEnd.Close()
+ 		writeEnd.Close()
+@@ -385,8 +385,19 @@ func startUnauthorizedRuntime(resolved sharedResolvedProfile, environ []string)
+ 		return nil, nil, nil, sharedRuntimeError("runtime_start_failed", err)
+ 	}
+ 	readEnd.Close()
+-	logFile.Close()
+-	return command, waitForPiProcess(command), writeEnd, nil
++	return command, waitForPiProcessAndClose(command, logFile), writeEnd, nil
++}
++
++func waitForPiProcessAndClose(command *exec.Cmd, closer io.Closer) *piProcessWait {
++	wait := &piProcessWait{done: make(chan struct{})}
++	go func() {
++		wait.err = command.Wait()
++		if closeErr := closer.Close(); wait.err == nil {
++			wait.err = closeErr
++		}
++		close(wait.done)
++	}()
++	return wait
+ }
+ 
+ func waitForSharedProcessIdentity(pid int, timeout time.Duration) (sharedProcessObservation, error) {
+diff --git a/tools/agents-infra/internal/infra/pi_shared_integration_test.go b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+index 4b3c340..509e1fc 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_integration_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+@@ -318,6 +318,8 @@ func TestSharedRuntimeProductionSingleFlightIndependentClientsCrashAndFinalRelea
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+@@ -441,6 +443,8 @@ func TestSharedRuntimeAcquisitionRetriesListenerHandoff(t *testing.T) {
+ mode = "shared"
+ linger_seconds = 1
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+@@ -548,6 +552,8 @@ func TestSharedRuntimeAcquisitionRetriesExecutableUpgradeHandoff(t *testing.T) {
+ mode = "shared"
+ linger_seconds = 1
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+@@ -666,6 +672,8 @@ func TestSharedRuntimeOperatorStopRefusesActiveLeasesThenForceDrains(t *testing.
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+@@ -745,6 +753,8 @@ func TestSharedRuntimeStarterPolicyGovernsLeaseLimitStatusAndCleanup(t *testing.
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 1
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+@@ -827,6 +837,8 @@ func TestSharedRuntimeProductionStartupWindowElectsOneOfEight(t *testing.T) {
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 8
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+@@ -928,6 +940,8 @@ func TestSharedRuntimeFirstLeaseGraceDrainsAbandonedBroker(t *testing.T) {
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+@@ -1219,6 +1233,8 @@ func TestAcquireSharedRuntimeLeaseAutomaticallyRestartsAcrossBrokers(t *testing.
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 4
+diff --git a/tools/agents-infra/internal/infra/pi_shared_launcher_test.go b/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+index af7352c..1c5f8c7 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+@@ -61,6 +61,8 @@ func newSharedLauncherFixture(t *testing.T) sharedLauncherFixture {
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+diff --git a/tools/agents-infra/internal/infra/pi_shared_log_rotation.go b/tools/agents-infra/internal/infra/pi_shared_log_rotation.go
+new file mode 100644
+index 0000000..0eb161c
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_shared_log_rotation.go
+@@ -0,0 +1,131 @@
++package infra
++
++import (
++	"errors"
++	"io"
++	"sync"
++	"time"
++)
++
++type sharedLogClock interface {
++	Now() time.Time
++}
++
++type sharedLogSegmentSink interface {
++	Open(time.Time) (io.WriteCloser, int64, error)
++	Rotate(time.Time) (io.WriteCloser, error)
++	Prune(int) error
++}
++
++type sharedRotatingLogWriter struct {
++	mu              sync.Mutex
++	sink            sharedLogSegmentSink
++	clock           sharedLogClock
++	current         io.WriteCloser
++	currentBytes    int64
++	maxSegmentBytes int64
++	maxSegments     int
++	closed          bool
++}
++
++func newSharedRotatingLogWriter(sink sharedLogSegmentSink, clock sharedLogClock, maxSegmentBytes int64, maxSegments int) (*sharedRotatingLogWriter, error) {
++	if sink == nil {
++		return nil, errors.New("shared runtime log sink is required")
++	}
++	if clock == nil {
++		return nil, errors.New("shared runtime log clock is required")
++	}
++	if maxSegmentBytes <= 0 {
++		return nil, errors.New("shared runtime log max_segment_bytes must be positive")
++	}
++	if maxSegments <= 0 {
++		return nil, errors.New("shared runtime log max_segments must be positive")
++	}
++	current, currentBytes, err := sink.Open(clock.Now().UTC())
++	if err != nil {
++		return nil, err
++	}
++	if currentBytes < 0 || currentBytes > maxSegmentBytes {
++		_ = current.Close()
++		return nil, errors.New("existing shared runtime log segment exceeds max_segment_bytes")
++	}
++	if err := sink.Prune(maxSegments); err != nil {
++		_ = current.Close()
++		return nil, err
++	}
++	return &sharedRotatingLogWriter{
++		sink:            sink,
++		clock:           clock,
++		current:         current,
++		currentBytes:    currentBytes,
++		maxSegmentBytes: maxSegmentBytes,
++		maxSegments:     maxSegments,
++	}, nil
++}
++
++func (writer *sharedRotatingLogWriter) Write(data []byte) (int, error) {
++	writer.mu.Lock()
++	defer writer.mu.Unlock()
++	if writer.closed {
++		return 0, io.ErrClosedPipe
++	}
++
++	written := 0
++	for len(data) > 0 {
++		if writer.currentBytes == writer.maxSegmentBytes {
++			if err := writer.rotate(); err != nil {
++				return written, err
++			}
++		}
++		remaining := writer.maxSegmentBytes - writer.currentBytes
++		chunkBytes := int64(len(data))
++		if chunkBytes > remaining {
++			chunkBytes = remaining
++		}
++		chunk := data[:int(chunkBytes)]
++		n, err := writer.current.Write(chunk)
++		written += n
++		writer.currentBytes += int64(n)
++		data = data[n:]
++		if err != nil {
++			return written, err
++		}
++		if n != len(chunk) {
++			return written, io.ErrShortWrite
++		}
++	}
++	return written, nil
++}
++
++func (writer *sharedRotatingLogWriter) rotate() error {
++	if err := writer.current.Close(); err != nil {
++		return err
++	}
++	current, err := writer.sink.Rotate(writer.clock.Now().UTC())
++	if err != nil {
++		return err
++	}
++	writer.current = current
++	writer.currentBytes = 0
++	if err := writer.sink.Prune(writer.maxSegments); err != nil {
++		_ = writer.current.Close()
++		return err
++	}
++	return nil
++}
++
++func (writer *sharedRotatingLogWriter) Close() error {
++	writer.mu.Lock()
++	defer writer.mu.Unlock()
++	if writer.closed {
++		return nil
++	}
++	writer.closed = true
++	return writer.current.Close()
++}
++
++type sharedSystemLogClock struct{}
++
++func (sharedSystemLogClock) Now() time.Time {
++	return time.Now()
++}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_log_rotation_darwin.go b/tools/agents-infra/internal/infra/pi_shared_log_rotation_darwin.go
+new file mode 100644
+index 0000000..708cbfc
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_shared_log_rotation_darwin.go
+@@ -0,0 +1,129 @@
++//go:build darwin
++
++package infra
++
++import (
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"sort"
++	"strconv"
++	"strings"
++	"time"
++
++	"golang.org/x/sys/unix"
++)
++
++const sharedLogArchiveTimestampLayout = "20060102T150405.000000000Z"
++
++type sharedFilesystemLogSink struct {
++	path string
++}
++
++func (sink *sharedFilesystemLogSink) Open(_ time.Time) (io.WriteCloser, int64, error) {
++	file, err := openSharedLog(sink.path)
++	if err != nil {
++		return nil, 0, err
++	}
++	info, err := file.Stat()
++	if err != nil {
++		_ = file.Close()
++		return nil, 0, sharedRuntimeError("shared_runtime_state_path_invalid", err)
++	}
++	return file, info.Size(), nil
++}
++
++func (sink *sharedFilesystemLogSink) Rotate(at time.Time) (io.WriteCloser, error) {
++	archive, err := sink.nextArchivePath(at)
++	if err != nil {
++		return nil, err
++	}
++	if err := os.Rename(sink.path, archive); err != nil {
++		return nil, sharedRuntimeError("shared_runtime_state_path_invalid", err)
++	}
++	file, err := openSharedLog(sink.path)
++	if err != nil {
++		return nil, err
++	}
++	return file, nil
++}
++
++func (sink *sharedFilesystemLogSink) Prune(maxSegments int) error {
++	archives, _, err := sink.archives()
++	if err != nil {
++		return err
++	}
++	maxArchives := maxSegments - 1
++	if excess := len(archives) - maxArchives; excess > 0 {
++		for _, archive := range archives[:excess] {
++			var stat unix.Stat_t
++			statErr := unix.Lstat(archive, &stat)
++			if statErr != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0o777 != 0o600 || stat.Nlink != 1 {
++				if statErr == nil {
++					statErr = fmt.Errorf("managed log archive must be a mode-0600 single-link regular file")
++				}
++				return sharedRuntimeError("shared_runtime_state_path_invalid", statErr)
++			}
++			if removeErr := os.Remove(archive); removeErr != nil {
++				return sharedRuntimeError("shared_runtime_state_path_invalid", removeErr)
++			}
++		}
++	}
++	return nil
++}
++
++func (sink *sharedFilesystemLogSink) nextArchivePath(at time.Time) (string, error) {
++	_, highest, err := sink.archives()
++	if err != nil {
++		return "", err
++	}
++	if highest == ^uint64(0) {
++		return "", sharedRuntimeError("shared_runtime_state_path_invalid", fmt.Errorf("runtime log archive sequence exhausted"))
++	}
++	sequence := highest + 1
++	name := fmt.Sprintf("%s.%020d.%s", filepath.Base(sink.path), sequence, at.UTC().Format(sharedLogArchiveTimestampLayout))
++	return filepath.Join(filepath.Dir(sink.path), name), nil
++}
++
++func (sink *sharedFilesystemLogSink) archives() ([]string, uint64, error) {
++	entries, err := os.ReadDir(filepath.Dir(sink.path))
++	if err != nil {
++		return nil, 0, sharedRuntimeError("shared_runtime_state_path_invalid", err)
++	}
++	prefix := filepath.Base(sink.path) + "."
++	archives := make([]string, 0)
++	var highest uint64
++	for _, entry := range entries {
++		name := entry.Name()
++		if !strings.HasPrefix(name, prefix) {
++			continue
++		}
++		remainder := strings.TrimPrefix(name, prefix)
++		separator := strings.IndexByte(remainder, '.')
++		if separator != 20 {
++			continue
++		}
++		sequence, parseErr := strconv.ParseUint(remainder[:separator], 10, 64)
++		if parseErr != nil {
++			continue
++		}
++		if _, parseErr := time.Parse(sharedLogArchiveTimestampLayout, remainder[separator+1:]); parseErr != nil {
++			continue
++		}
++		archives = append(archives, filepath.Join(filepath.Dir(sink.path), name))
++		if sequence > highest {
++			highest = sequence
++		}
++	}
++	sort.Strings(archives)
++	return archives, highest, nil
++}
++
++func openSharedRotatingLog(path string, maxSegmentBytes, maxSegments int) (*sharedRotatingLogWriter, error) {
++	writer, err := newSharedRotatingLogWriter(&sharedFilesystemLogSink{path: path}, sharedSystemLogClock{}, int64(maxSegmentBytes), maxSegments)
++	if err != nil {
++		return nil, sharedRuntimeError("shared_runtime_state_path_invalid", err)
++	}
++	return writer, nil
++}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_log_rotation_test.go b/tools/agents-infra/internal/infra/pi_shared_log_rotation_test.go
+new file mode 100644
+index 0000000..0a384a5
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_shared_log_rotation_test.go
+@@ -0,0 +1,257 @@
++//go:build !windows
++
++package infra
++
++import (
++	"bytes"
++	"errors"
++	"io"
++	"testing"
++	"time"
++)
++
++type fakeSharedLogClock struct {
++	now time.Time
++}
++
++func (clock *fakeSharedLogClock) Now() time.Time {
++	return clock.now
++}
++
++func (clock *fakeSharedLogClock) advance(duration time.Duration) {
++	clock.now = clock.now.Add(duration)
++}
++
++type fakeSharedLogSegment struct {
++	openedAt time.Time
++	data     bytes.Buffer
++	closed   bool
++}
++
++func (segment *fakeSharedLogSegment) Write(data []byte) (int, error) {
++	if segment.closed {
++		return 0, io.ErrClosedPipe
++	}
++	return segment.data.Write(data)
++}
++
++func (segment *fakeSharedLogSegment) Close() error {
++	segment.closed = true
++	return nil
++}
++
++type fakeSharedLogSink struct {
++	segments  []*fakeSharedLogSegment
++	initial   []byte
++	openErr   error
++	rotateErr error
++	pruneErr  error
++}
++
++func (sink *fakeSharedLogSink) Open(at time.Time) (io.WriteCloser, int64, error) {
++	if sink.openErr != nil {
++		return nil, 0, sink.openErr
++	}
++	segment := &fakeSharedLogSegment{openedAt: at}
++	_, _ = segment.data.Write(sink.initial)
++	sink.segments = append(sink.segments, segment)
++	return segment, int64(len(sink.initial)), nil
++}
++
++func (sink *fakeSharedLogSink) Rotate(at time.Time) (io.WriteCloser, error) {
++	if sink.rotateErr != nil {
++		return nil, sink.rotateErr
++	}
++	segment := &fakeSharedLogSegment{openedAt: at}
++	sink.segments = append(sink.segments, segment)
++	return segment, nil
++}
++
++func (sink *fakeSharedLogSink) Prune(maxSegments int) error {
++	if sink.pruneErr != nil {
++		return sink.pruneErr
++	}
++	if excess := len(sink.segments) - maxSegments; excess > 0 {
++		sink.segments = append([]*fakeSharedLogSegment(nil), sink.segments[excess:]...)
++	}
++	return nil
++}
++
++func (sink *fakeSharedLogSink) footprint() int64 {
++	var total int64
++	for _, segment := range sink.segments {
++		total += int64(segment.data.Len())
++	}
++	return total
++}
++
++// Production call site: startUnauthorizedRuntime -> openSharedRotatingLog ->
++// newSharedRotatingLogWriter. The fake sink/clock exercise the same writer that
++// receives both stdout and stderr from the managed runtime.
++func TestSharedRuntimeLogRotatesBeforeFirstBytePastExactCap(t *testing.T) {
++	clock := &fakeSharedLogClock{now: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
++	sink := &fakeSharedLogSink{}
++	writer, err := newSharedRotatingLogWriter(sink, clock, 4, 3)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer writer.Close()
++
++	if n, err := writer.Write([]byte("abcd")); err != nil || n != 4 {
++		t.Fatalf("exact-cap write n=%d err=%v", n, err)
++	}
++	if len(sink.segments) != 1 || sink.segments[0].data.String() != "abcd" {
++		t.Fatalf("rotation occurred before cap: %#v", sink.segments)
++	}
++
++	clock.advance(time.Hour)
++	if n, err := writer.Write([]byte("efghi")); err != nil || n != 5 {
++		t.Fatalf("cross-cap write n=%d err=%v", n, err)
++	}
++	if len(sink.segments) != 3 {
++		t.Fatalf("segments=%d want=3", len(sink.segments))
++	}
++	if got := []string{sink.segments[0].data.String(), sink.segments[1].data.String(), sink.segments[2].data.String()}; !equalStrings(got, []string{"abcd", "efgh", "i"}) {
++		t.Fatalf("segments=%q want=[abcd efgh i]", got)
++	}
++	if got := sink.segments[1].openedAt; !got.Equal(clock.now) {
++		t.Fatalf("rotation time=%s want=%s", got, clock.now)
++	}
++}
++
++func TestSharedRuntimeLogPrunesOldestSegmentsDeterministically(t *testing.T) {
++	clock := &fakeSharedLogClock{now: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
++	sink := &fakeSharedLogSink{}
++	writer, err := newSharedRotatingLogWriter(sink, clock, 3, 2)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer writer.Close()
++
++	if n, err := writer.Write([]byte("abcdefghij")); err != nil || n != 10 {
++		t.Fatalf("write n=%d err=%v", n, err)
++	}
++	if len(sink.segments) != 2 {
++		t.Fatalf("segments=%d want=2", len(sink.segments))
++	}
++	if got := []string{sink.segments[0].data.String(), sink.segments[1].data.String()}; !equalStrings(got, []string{"ghi", "j"}) {
++		t.Fatalf("retained segments=%q want=[ghi j]", got)
++	}
++}
++
++func TestSharedRuntimeLogMultiDayFootprintNeverExceedsConfiguredProduct(t *testing.T) {
++	const maxSegmentBytes int64 = 127
++	const maxSegments = 5
++	clock := &fakeSharedLogClock{now: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)}
++	sink := &fakeSharedLogSink{}
++	writer, err := newSharedRotatingLogWriter(sink, clock, maxSegmentBytes, maxSegments)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer writer.Close()
++
++	dailyOutput := bytes.Repeat([]byte("runtime-output\n"), 97)
++	for day := 0; day < 45; day++ {
++		clock.advance(24 * time.Hour)
++		if n, err := writer.Write(dailyOutput); err != nil || n != len(dailyOutput) {
++			t.Fatalf("day=%d write n=%d err=%v", day, n, err)
++		}
++		if got, bound := sink.footprint(), maxSegmentBytes*maxSegments; got > bound {
++			t.Fatalf("day=%d footprint=%d exceeds bound=%d", day, got, bound)
++		}
++		if len(sink.segments) > maxSegments {
++			t.Fatalf("day=%d segments=%d exceeds max=%d", day, len(sink.segments), maxSegments)
++		}
++		for index, segment := range sink.segments {
++			if got := int64(segment.data.Len()); got > maxSegmentBytes {
++				t.Fatalf("day=%d segment=%d bytes=%d exceeds cap=%d", day, index, got, maxSegmentBytes)
++			}
++		}
++	}
++}
++
++func TestSharedRuntimeLogWriterRefusesAbsentNumericPolicy(t *testing.T) {
++	clock := &fakeSharedLogClock{now: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
++	for _, test := range []struct {
++		name            string
++		maxSegmentBytes int64
++		maxSegments     int
++	}{
++		{name: "absent max segment bytes", maxSegments: 2},
++		{name: "absent max segments", maxSegmentBytes: 128},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			if _, err := newSharedRotatingLogWriter(&fakeSharedLogSink{}, clock, test.maxSegmentBytes, test.maxSegments); err == nil {
++				t.Fatal("rotating writer admitted absent numeric policy")
++			}
++		})
++	}
++}
++
++func TestSharedRuntimeLogWriterRefusesMissingDependenciesAndSinkOpenFailure(t *testing.T) {
++	clock := &fakeSharedLogClock{now: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
++	if _, err := newSharedRotatingLogWriter(nil, clock, 4, 2); err == nil {
++		t.Fatal("rotating writer admitted a nil sink")
++	}
++	if _, err := newSharedRotatingLogWriter(&fakeSharedLogSink{}, nil, 4, 2); err == nil {
++		t.Fatal("rotating writer admitted a nil clock")
++	}
++	want := errors.New("open failed")
++	if _, err := newSharedRotatingLogWriter(&fakeSharedLogSink{openErr: want}, clock, 4, 2); !errors.Is(err, want) {
++		t.Fatalf("open error=%v want=%v", err, want)
++	}
++}
++
++func TestSharedRuntimeLogWriterRefusesPreexistingOversizedSegment(t *testing.T) {
++	clock := &fakeSharedLogClock{now: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
++	sink := &fakeSharedLogSink{initial: []byte("12345")}
++	if _, err := newSharedRotatingLogWriter(sink, clock, 4, 2); err == nil {
++		t.Fatal("rotating writer silently admitted an already-oversized segment")
++	}
++	if !sink.segments[0].closed {
++		t.Fatal("refused oversized segment was left open")
++	}
++}
++
++func TestSharedRuntimeLogWriterPropagatesRotationAndPruningFailures(t *testing.T) {
++	clock := &fakeSharedLogClock{now: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
++	for _, test := range []struct {
++		name  string
++		apply func(*fakeSharedLogSink)
++	}{
++		{name: "rotation", apply: func(sink *fakeSharedLogSink) { sink.rotateErr = errors.New("rotate failed") }},
++		{name: "pruning", apply: func(sink *fakeSharedLogSink) { sink.pruneErr = errors.New("prune failed") }},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			sink := &fakeSharedLogSink{}
++			writer, err := newSharedRotatingLogWriter(sink, clock, 2, 2)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if _, err := writer.Write([]byte("ab")); err != nil {
++				t.Fatal(err)
++			}
++			test.apply(sink)
++			if _, err := writer.Write([]byte("c")); err == nil {
++				t.Fatalf("%s failure was swallowed", test.name)
++			}
++		})
++	}
++}
++
++func TestSharedRuntimeLogWriterCloseIsIdempotentAndRefusesLaterWrites(t *testing.T) {
++	clock := &fakeSharedLogClock{now: time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)}
++	writer, err := newSharedRotatingLogWriter(&fakeSharedLogSink{}, clock, 4, 2)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := writer.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if err := writer.Close(); err != nil {
++		t.Fatalf("second close: %v", err)
++	}
++	if _, err := writer.Write([]byte("x")); !errors.Is(err, io.ErrClosedPipe) {
++		t.Fatalf("write after close error=%v want=%v", err, io.ErrClosedPipe)
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_protocol_test.go b/tools/agents-infra/internal/infra/pi_shared_protocol_test.go
+index 22172d4..dd3fa58 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_protocol_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_protocol_test.go
+@@ -29,11 +29,11 @@ func TestSharedRuntimeQuarantineHasNominalBrokerExitCode(t *testing.T) {
+ 
+ func TestSharedRuntimeDigestsExcludeSharingAndCoverTheExecutionPlan(t *testing.T) {
+ 	profile := mustParsedPiProfile(t, false)
+-	profile.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 1, HeartbeatIntervalSeconds: 1, LeaseStaleSeconds: 2, BrokerStartTimeoutSeconds: 40}
++	profile.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 1, MaxSegmentBytes: 1024, MaxSegments: 2, HeartbeatIntervalSeconds: 1, LeaseStaleSeconds: 2, BrokerStartTimeoutSeconds: 40}
+ 	key, digest := SharedRuntimeKey(profile)
+ 
+ 	peer := profile
+-	peer.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 300, MaxLeases: 16, HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 240}
++	peer.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 300, MaxLeases: 16, MaxSegmentBytes: 2048, MaxSegments: 4, HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 240}
+ 	peer.Source = "/another/project/config.toml"
+ 	peerKey, peerDigest := SharedRuntimeKey(peer)
+ 	if key != peerKey || digest != peerDigest {
+diff --git a/tools/agents-infra/internal/infra/pi_shared_supervision_test.go b/tools/agents-infra/internal/infra/pi_shared_supervision_test.go
+index 5bd3a9b..631850a 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_supervision_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_supervision_test.go
+@@ -13,7 +13,7 @@ import (
+ )
+ 
+ func testSharedRuntimeSupervisionPolicy() PiRuntimeSharing {
+-	return PiRuntimeSharing{RestartLimit: 4, RestartInitialBackoffSeconds: 2, RestartMaxBackoffSeconds: 5, StableRunSeconds: 9, QuarantineSeconds: 30}
++	return PiRuntimeSharing{MaxSegmentBytes: 1024, MaxSegments: 2, RestartLimit: 4, RestartInitialBackoffSeconds: 2, RestartMaxBackoffSeconds: 5, StableRunSeconds: 9, QuarantineSeconds: 30}
+ }
+ 
+ func shortSharedRuntimeCache(t *testing.T) string {
+@@ -87,6 +87,8 @@ func TestSharedRuntimeRestartPolicyIsBoundedStableAndHalfOpen(t *testing.T) {
+ 
+ func TestSharedRuntimeRestartBackoffClampsBeforeDurationOverflow(t *testing.T) {
+ 	policy := PiRuntimeSharing{
++		MaxSegmentBytes:              1024,
++		MaxSegments:                  2,
+ 		RestartLimit:                 3,
+ 		RestartInitialBackoffSeconds: int(maxTimeDurationSeconds - 1),
+ 		RestartMaxBackoffSeconds:     int(maxTimeDurationSeconds),
+diff --git a/tools/agents-infra/internal/infra/pi_standalone_shared_test.go b/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
+index 1d10ff3..d3f45e5 100644
+--- a/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
++++ b/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
+@@ -93,6 +93,8 @@ func TestRunPiStandaloneConcurrentWorkersShareOnlyRuntimeAndCrashCleanupPreserve
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+diff --git a/tools/agents-infra/internal/infra/pi_standalone_test.go b/tools/agents-infra/internal/infra/pi_standalone_test.go
+index 665d541..247efbf 100644
+--- a/tools/agents-infra/internal/infra/pi_standalone_test.go
++++ b/tools/agents-infra/internal/infra/pi_standalone_test.go
+@@ -27,6 +27,8 @@ func validStandaloneQwenConfig(runtime string, port int, shared bool) string {
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 8
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+diff --git a/tools/agents-infra/internal/infra/pi_test.go b/tools/agents-infra/internal/infra/pi_test.go
+index 8087ff6..9cbf25b 100644
+--- a/tools/agents-infra/internal/infra/pi_test.go
++++ b/tools/agents-infra/internal/infra/pi_test.go
+@@ -163,6 +163,8 @@ func sharedPiProfileTOML(name, runtime string, port int) string {
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 8
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 15
+ lease_stale_seconds = 60
+ restart_limit = 3
+@@ -190,6 +192,7 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
+ 	}
+ 	want := &PiRuntimeSharing{
+ 		Mode: "shared", LingerSeconds: 0, MaxLeases: 8,
++		MaxSegmentBytes: 1048576, MaxSegments: 7,
+ 		HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 40,
+ 		RestartLimit: 3, RestartInitialBackoffSeconds: 1, RestartMaxBackoffSeconds: 4,
+ 		StableRunSeconds: 10, QuarantineSeconds: 30,
+@@ -203,6 +206,8 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
+ 		"missing mode":                   strings.Replace(sharedBody, "mode = \"shared\"\n", "", 1),
+ 		"missing linger":                 strings.Replace(sharedBody, "linger_seconds = 0\n", "", 1),
+ 		"missing max leases":             strings.Replace(sharedBody, "max_leases = 8\n", "", 1),
++		"missing max segment bytes":      strings.Replace(sharedBody, "max_segment_bytes = 1048576\n", "", 1),
++		"missing max segments":           strings.Replace(sharedBody, "max_segments = 7\n", "", 1),
+ 		"missing heartbeat":              strings.Replace(sharedBody, "heartbeat_interval_seconds = 15\n", "", 1),
+ 		"missing stale":                  strings.Replace(sharedBody, "lease_stale_seconds = 60\n", "", 1),
+ 		"missing broker timeout":         strings.Replace(sharedBody, "broker_start_timeout_seconds = 40\n", "", 1),
+@@ -214,6 +219,8 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
+ 		"unknown mode":                   strings.Replace(sharedBody, `mode = "shared"`, `mode = "automatic"`, 1),
+ 		"negative linger":                strings.Replace(sharedBody, "linger_seconds = 0", "linger_seconds = -1", 1),
+ 		"zero max leases":                strings.Replace(sharedBody, "max_leases = 8", "max_leases = 0", 1),
++		"zero max segment bytes":         strings.Replace(sharedBody, "max_segment_bytes = 1048576", "max_segment_bytes = 0", 1),
++		"zero max segments":              strings.Replace(sharedBody, "max_segments = 7", "max_segments = 0", 1),
+ 		"heartbeat equals stale":         strings.Replace(sharedBody, "heartbeat_interval_seconds = 15", "heartbeat_interval_seconds = 60", 1),
+ 		"broker timeout below bound":     strings.Replace(sharedBody, "broker_start_timeout_seconds = 40", "broker_start_timeout_seconds = 36", 1),
+ 		"zero restart limit":             strings.Replace(sharedBody, "restart_limit = 3", "restart_limit = 0", 1),
+@@ -232,6 +239,40 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
+ 	}
+ }
+ 
++// Production call site: RunPi -> loadCompositeProjectConfig -> parsePiRuntimeSharing.
++// Missing rotation caps must refuse before provider lookup or runtime-state mutation;
++// there is deliberately no numeric fallback in code.
++func TestRunPiRejectsMissingSharedRuntimeLogRotationPolicy(t *testing.T) {
++	for _, field := range []string{"max_segment_bytes = 1048576\n", "max_segments = 7\n"} {
++		t.Run(strings.Fields(field)[0], func(t *testing.T) {
++			project, home := t.TempDir(), t.TempDir()
++			cache := filepath.Join(t.TempDir(), "cache")
++			body := strings.Replace(sharedPiProfileTOML("profile", "/bin/echo", 18011), field, "", 1)
++			writePiProjectConfig(t, project, body)
++			providerLookup := false
++			err := RunPi(RunPiOptions{
++				ProjectDir: project,
++				HomeDir:    home,
++				CacheRoot:  cache,
++				Environ:    []string{},
++				LookPath: func(string) (string, error) {
++					providerLookup = true
++					return "/bin/false", nil
++				},
++			})
++			if piErrorCode(err) != "invalid_project_configuration" || !strings.Contains(err.Error(), strings.Fields(field)[0]) {
++				t.Fatalf("RunPi admitted missing %s: %v", strings.Fields(field)[0], err)
++			}
++			if providerLookup {
++				t.Fatal("missing rotation policy reached provider lookup")
++			}
++			if _, statErr := os.Stat(cache); !errors.Is(statErr, os.ErrNotExist) {
++				t.Fatalf("missing rotation policy mutated runtime state: %v", statErr)
++			}
++		})
++	}
++}
++
+ // Production call site: RunPi -> loadCompositeProjectConfig -> parsePiRuntime.
+ // Every invalid policy must be refused before provider lookup, runtime launch,
+ // or creation of the shared-runtime tree and restart ledger.
+diff --git a/tools/agents-infra/runtime_main_darwin_test.go b/tools/agents-infra/runtime_main_darwin_test.go
+index 3eb24e1..fb9f4be 100644
+--- a/tools/agents-infra/runtime_main_darwin_test.go
++++ b/tools/agents-infra/runtime_main_darwin_test.go
+@@ -27,6 +27,8 @@ func TestRunRuntimeStatusJSONIsAbsentAndSideEffectFree(t *testing.T) {
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
+@@ -80,6 +82,8 @@ func TestRunRuntimeManualQuarantineRoundTripUsesResolvedLedger(t *testing.T) {
+ mode = "shared"
+ linger_seconds = 0
+ max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
+ restart_limit = 3
