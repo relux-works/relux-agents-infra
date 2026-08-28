@@ -386,6 +386,18 @@ standalone Pi tree check both initially and immediately before Pi spawn. It
 never attaches or silently falls back to another runtime, port, profile, model,
 listener, or Muse target-only decoding.
 
+Shared-runtime status publishes persisted restart facts without inference.
+`restart_not_before` is always present as the ledger's RFC3339 deadline or JSON
+`null`; `half_open` is the ledger Boolean. Never infer active backoff from a
+non-zero `restart_count`, and never treat `half_open` as an availability gate —
+a ready runtime may retain both historical facts until its stable-run reset.
+Consumers must distinguish a pre-extension missing key from post-extension
+`null`, refuse malformed timestamps, and create
+`vendorplugin.LimitedUntil` only for a non-null future deadline observed at
+`agents-infra runtime status --json.restart_not_before`. `last_failure` and
+`last_failure_at` remain explicitly absent until a separately reviewed ledger
+event persists their reason and time; do not synthesize them from counters.
+
 Before raising a local profile's context window, configure every member of its
 `[profiles.<name>.stress]` table in the separate model-harness config and run:
 

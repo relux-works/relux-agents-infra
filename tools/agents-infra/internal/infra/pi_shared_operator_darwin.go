@@ -72,9 +72,11 @@ type SharedRuntimeStatus struct {
 	ProfileDigest      string                      `json:"profile_digest"`
 	Endpoint           string                      `json:"endpoint"`
 	RestartCount       int                         `json:"restart_count"`
+	RestartNotBefore   *time.Time                  `json:"restart_not_before"`
 	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
 	ManualQuarantine   bool                        `json:"manual_quarantine"`
+	HalfOpen           bool                        `json:"half_open"`
 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
 	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
@@ -137,9 +139,11 @@ func SharedRuntimeStatusReport(options SharedRuntimeOperatorOptions) (SharedRunt
 
 func applySharedRuntimeLedgerStatus(report *SharedRuntimeStatus, ledger SharedRuntimeRestartLedger) {
 	report.RestartCount = ledger.RestartCount
+	report.RestartNotBefore = ledger.RestartNotBefore
 	report.QuarantinedUntil = ledger.QuarantinedUntil
 	report.LastReadinessMatch = ledger.LastReadinessMatch
 	report.ManualQuarantine = ledger.ManualQuarantine
+	report.HalfOpen = ledger.HalfOpen
 }
 
 func SetSharedRuntimeManualQuarantine(options SharedRuntimeOperatorOptions, enabled bool) (SharedRuntimeRestartLedger, error) {

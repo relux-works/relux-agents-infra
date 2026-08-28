@@ -667,7 +667,46 @@ runtime for `quarantine_seconds`; the next broker attempt after that deadline
 is the automatic half-open probe. `runtime quarantine` and
 `runtime unquarantine` mutate the same ledger only while no broker owns it, so
 stop an active broker before changing manual quarantine. Status JSON always
-includes `restart_count`, `quarantined_until`, and `last_readiness_match`.
+includes `restart_count`, `restart_not_before`, `quarantined_until`,
+`last_readiness_match`, `manual_quarantine`, and `half_open`.
+`restart_not_before` is the ledger's exact RFC3339 deadline or JSON `null`; it
+is never synthesized from `restart_count`, readiness history, or broker state.
+A non-zero restart count is historical and may coexist with a serving runtime.
+`half_open` is also copied directly from the ledger. It is lifecycle evidence,
+not an availability gate: it can remain true after readiness while the stable
+run timer is still pending.
+
+The consumer handoff is exact and presence-aware. A post-extension parser must
+require the `restart_not_before` key, accept only JSON `null` or a valid RFC3339
+timestamp, and refuse malformed timestamps as a failed status read. A
+pre-extension fixture with the key absent is compatibility input with no
+backoff-deadline evidence; it must not fall back to `restart_count`. Given a
+successful read observed at `checked_at`, only a non-null deadline strictly
+after `checked_at` maps to:
+
+```go
+vendorplugin.LimitedUntil(
+    restartNotBefore,
+    vendorplugin.Observation{
+        Source: "agents-infra runtime status --json.restart_not_before",
+        Detail: "shared runtime restart backoff deadline",
+        At: checkedAt,
+    },
+)
+```
+
+That shape is validator-safe: `Until` is evidence-derived and non-zero, while
+`Checked` and `Observed` are populated by `LimitedUntil`. A missing legacy key
+maps to `vendorplugin.UnknownAfterCheck` for that source. A `null` or elapsed
+deadline contributes no backoff verdict; consumers continue with attested
+broker/runtime facts, so a serving runtime is never relabeled from a historical
+restart count. `half_open` alone likewise contributes no availability verdict.
+
+`last_failure` and `last_failure_at` are explicitly deferred and absent from
+this status schema. Restart-ledger v1 persists neither a failure reason nor a
+failure timestamp, so publishing placeholders or deriving them from another
+field would fabricate provenance. Adding them requires a separately reviewed
+ledger/event write contract and new pre/post fixtures.
 Every configured seconds field is bounded before conversion to `time.Duration`;
 coupled handoff and doubled lease-stale windows are bounded as effective
 durations too, so overflow is refused during config resolution before launch.

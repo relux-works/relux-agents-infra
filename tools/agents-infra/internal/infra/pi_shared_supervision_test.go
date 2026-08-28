@@ -138,30 +138,168 @@ func sharedRuntimeErrorCode(err error) string {
 
 func TestSharedRuntimeStatusJSONCarriesLifecycleFacts(t *testing.T) {
 	now := time.Unix(2000, 0).UTC()
-	report := SharedRuntimeStatus{RestartCount: 2, QuarantinedUntil: &now, LastReadinessMatch: &now}
+	report := SharedRuntimeStatus{
+		RestartCount: 2, RestartNotBefore: &now, QuarantinedUntil: &now,
+		LastReadinessMatch: &now, HalfOpen: true,
+	}
 	data, err := json.Marshal(report)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"restart_count":2`, `"quarantined_until":`, `"last_readiness_match":`} {
+	for _, field := range []string{
+		`"restart_count":2`, `"restart_not_before":`, `"quarantined_until":`,
+		`"last_readiness_match":`, `"half_open":true`,
+	} {
 		if !bytes.Contains(data, []byte(field)) {
 			t.Fatalf("status JSON %s lacks %s", data, field)
 		}
+	}
+	if bytes.Contains(data, []byte(`"last_failure`)) {
+		t.Fatalf("status JSON invented deferred last-failure evidence: %s", data)
+	}
+}
+
+func TestSharedRuntimeStatusServingAfterRestartHasNoInferredBackoff(t *testing.T) {
+	readyAt := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	report := SharedRuntimeStatus{
+		RestartCount: 2, LastReadinessMatch: &readyAt, HalfOpen: true,
+		Broker:  SharedRuntimeBrokerStatus{State: "ready", Source: "attested"},
+		Runtime: &SharedRuntimeProcessStatus{Source: "attested", Endpoint: "http://127.0.0.1:18011/v1"},
+	}
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"restart_not_before":null`)) {
+		t.Fatalf("serving status inferred backoff from restart_count: %s", data)
+	}
+}
+
+func TestSharedRuntimeStatusWireFixturesAreAdditiveAndTimestampStrict(t *testing.T) {
+	const preExtension = `{"restart_count":2,"quarantined_until":null,"last_readiness_match":"2026-08-29T12:00:00Z","manual_quarantine":false}`
+	var legacy SharedRuntimeStatus
+	if err := json.Unmarshal([]byte(preExtension), &legacy); err != nil {
+		t.Fatalf("decode pre-extension fixture: %v", err)
+	}
+	if legacy.RestartNotBefore != nil || legacy.HalfOpen {
+		t.Fatalf("pre-extension fixture fabricated new facts: %#v", legacy)
+	}
+	var legacyFields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(preExtension), &legacyFields); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := legacyFields["restart_not_before"]; present {
+		t.Fatalf("pre-extension fixture unexpectedly contains restart_not_before: %s", preExtension)
+	}
+
+	const postExtension = `{"restart_count":2,"restart_not_before":"2026-08-29T12:00:04Z","quarantined_until":null,"last_readiness_match":"2026-08-29T12:00:00Z","manual_quarantine":false,"half_open":true}`
+	var widened SharedRuntimeStatus
+	if err := json.Unmarshal([]byte(postExtension), &widened); err != nil {
+		t.Fatalf("decode post-extension fixture: %v", err)
+	}
+	wantDeadline := time.Date(2026, 8, 29, 12, 0, 4, 0, time.UTC)
+	if widened.RestartNotBefore == nil || !widened.RestartNotBefore.Equal(wantDeadline) || !widened.HalfOpen {
+		t.Fatalf("post-extension facts=%#v want deadline=%s half_open=true", widened, wantDeadline)
+	}
+	var widenedFields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(postExtension), &widenedFields); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := widenedFields["restart_not_before"]; !present {
+		t.Fatalf("post-extension fixture omitted restart_not_before: %s", postExtension)
+	}
+
+	for _, fixture := range []string{
+		`{"restart_not_before":"not-a-timestamp"}`,
+		`{"quarantined_until":"not-a-timestamp"}`,
+		`{"last_readiness_match":"not-a-timestamp"}`,
+	} {
+		var status SharedRuntimeStatus
+		if err := json.Unmarshal([]byte(fixture), &status); err == nil {
+			t.Fatalf("malformed timestamp fixture decoded: %s", fixture)
+		}
+	}
+}
+
+// Production call site: SharedRuntimeStatusReport. It copies the persisted
+// deadline and half-open fact; a historical restart count never mints backoff.
+func TestSharedRuntimeStatusReportPublishesPersistedDeadlineWithoutInference(t *testing.T) {
+	project, home, cache, resolved := newSharedIntegrationProfile(t)
+	readyAt := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	ledger := newSharedRuntimeRestartLedger(resolved.RuntimeKey, resolved.ProfileDigest)
+	ledger.RestartCount = 2
+	ledger.LastReadinessMatch = &readyAt
+	ledger.HalfOpen = true
+	if err := writeSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, ledger); err != nil {
+		t.Fatal(err)
+	}
+	options := SharedRuntimeOperatorOptions{
+		ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile",
+	}
+	report, err := SharedRuntimeStatusReport(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.RestartCount != 2 || report.RestartNotBefore != nil || !report.HalfOpen {
+		t.Fatalf("historical restart count was inferred as backoff: %#v", report)
+	}
+
+	deadline := time.Date(2026, 8, 29, 12, 0, 4, 0, time.UTC)
+	ledger.RestartNotBefore = &deadline
+	ledger.HalfOpen = false
+	if err := writeSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, ledger); err != nil {
+		t.Fatal(err)
+	}
+	report, err = SharedRuntimeStatusReport(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.RestartNotBefore == nil || !report.RestartNotBefore.Equal(deadline) || report.HalfOpen {
+		t.Fatalf("persisted restart facts changed in status: %#v", report)
 	}
 }
 
 // Production call site: SharedRuntimeStatusReport. A malformed ledger is a
 // failed read, not an absent ledger with zero-valued lifecycle facts.
-func TestSharedRuntimeStatusRefusesMalformedRestartLedger(t *testing.T) {
+func TestSharedRuntimeStatusRefusesMalformedRestartLedgerTimestamps(t *testing.T) {
 	project, home, cache, resolved := newSharedIntegrationProfile(t)
-	if err := os.WriteFile(resolved.Paths.RestartLedger, []byte(`{"schema":`), 0o600); err != nil {
-		t.Fatal(err)
+	valid := map[string]any{
+		"schema": sharedRuntimeRestartLedgerSchema, "runtime_key": resolved.RuntimeKey,
+		"profile_digest": resolved.ProfileDigest, "restart_count": 2,
+		"restart_not_before": nil, "quarantined_until": nil,
+		"last_readiness_match": nil, "manual_quarantine": false, "half_open": false,
 	}
-	_, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{
-		ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile",
-	})
-	if sharedRuntimeErrorCode(err) != "shared_runtime_state_unreadable" {
-		t.Fatalf("malformed ledger was treated as absence: %v", err)
+	fixtures := []struct {
+		name string
+		data []byte
+	}{{name: "truncated", data: []byte(`{"schema":`)}}
+	for _, field := range []string{"restart_not_before", "quarantined_until", "last_readiness_match"} {
+		record := make(map[string]any, len(valid))
+		for key, value := range valid {
+			record[key] = value
+		}
+		record[field] = "not-a-timestamp"
+		data, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixtures = append(fixtures, struct {
+			name string
+			data []byte
+		}{name: field, data: data})
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			if err := os.WriteFile(resolved.Paths.RestartLedger, fixture.data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{
+				ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile",
+			})
+			if sharedRuntimeErrorCode(err) != "shared_runtime_state_unreadable" {
+				t.Fatalf("malformed ledger was treated as absence: %v", err)
+			}
+		})
 	}
 }
 
