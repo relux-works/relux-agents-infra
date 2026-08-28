@@ -1,0 +1,2771 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 274e2e9..fff878e 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,24 +5,77 @@
+ 
+ ## 2026-08-29
+ 
++### 2318 — Status Publication Revalidates Its Resource Decision
++- ROOT CAUSE: `handleConnection` observed resources and snapshotted broker state in separate critical sections, so a newer acquire could latch pressure between them while the wire response still published `healthy/admitted`.
++- FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` revalidates status/admission generations and snapshots latch, broker state, and leases under one lock; superseded status publishes explicit `unknown/refused`.
++- EVIDENCE: Real status/acquire handlers reproduce the observe-to-publish race before the fix; disabling final revalidation makes `TestSharedBrokerProductionPressureCannotSupersedeStatusBeforePublication` exit 1.
++- STATUS: Current latch and draining precedence apply only to a current status decision; stale provider facts are never laundered into availability.
++
++### 2317 — Diagnostic Polls No Longer Own Admission Freshness
++- ROOT CAUSE: Healthy status polls incremented the same generation used at lease reservation, allowing repeated observability to supersede every healthy acquire.
++- DECISION: Admission and diagnostic observations use separate generations; only admission starts and direct pressure evidence advance admission invalidation.
++- EVIDENCE: Four real healthy status requests cannot starve a paused healthy acquire, while a real pressured status invalidates it before reservation; re-coupling status to admission generation makes the starvation test exit 1.
++- STATUS: Existing leases and the single broker-owned runtime remain unchanged across both schedules.
++
++### 2235 — Record-Derived Pressure Policy Keeps One Provenance
++- ROOT CAUSE: `sharedRuntimeRecordStatus` paired persisted effective sharing with caller-derived resource policy, publishing contradictory disabled/provider enforcement on the unverified fallback path.
++- FIX: `tools/agents-infra/internal/infra/pi_shared_operator_darwin.go` now derives both views from `record.Sharing`; pre-extension records use explicit unknown policy and refused admission.
++- EVIDENCE: Real `SharedRuntimeStatusReport` tests cover both configured/effective mismatch directions and missing sharing; a pressure-threshold-only admission mutant is killed by independent recovery/path/timeout/grace/action witnesses through `handleConnection -> acquireLease`.
++- STATUS: Revision 6 rework preserves `record-derived-unverified`, unknown provider observations, existing leases, and single broker/runtime ownership.
++
++### 2152 — Live Broker Cannot Narrow Caller Pressure Policy
++- ROOT CAUSE: `sharedBrokerServer.acquireLease` observed only the live broker resource policy, so an existing disabled broker or wider pressure threshold silently weakened a stricter caller configuration.
++- FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` now requires exact resource-pressure mode/table compatibility before provider I/O or lease reservation and returns typed configured/effective provenance on mismatch.
++- EVIDENCE: Real `handleConnection -> acquireLease` tests refuse provider-to-disabled, stricter-threshold, and absent-policy witnesses with no observation, lease, runtime replacement, or duplicate ownership; narrowing table equality grants the forbidden lease and exits 1.
++- SCOPE: Revision 5 composes the resource-pressure candidate with log rotation from exact trunk `6d051f54440d36e3ca3d132f8d9d1e78d46289de`.
++
+ ### 2100 — Log Rotation Replayed On Current Trunk
+ - DECISION: Revision 5 replays the reviewed rotation candidate on `91356833949cb6a30958265514fe5852d97eec1b`, preserving trunk-owned `restart_not_before`, `half_open`, and root output-capture fixes.
+ - FIX: The 16 code/document paths from immutable revision 4 apply cleanly on current trunk; `LOGBOOK.md` is merged as a newest-first union instead of replaying the stale historical hunk.
+ - SCOPE: `TASK-260829-3fozxa` publishes a fresh tree-bound Change Request; revision 4 remains immutable historical evidence.
+ - STATUS: Replay implemented; validation and fresh review handoff pending.
+ 
++### 2055 — Headless Validation Split Around Foreign Go Contention
++- ANOMALY: A foreign `go test -p 1 ./...` overlapped revision-3 validation; the combined remaining-package run and an unfiltered root rerun produced no package result before 8:36 and 9:23 respectively and were interrupted with exit 1 before the shell limit.
++- EVIDENCE: The changed `internal/infra` package exited 0 uncached in 153.133s; the runtime/Pi/status root subset exited 0 in 447.587s; attachments and modelharness, vet, formatting, diff, and Darwin/Linux/Windows build gates exited 0.
++- DECISION: Preserve both interrupted exit-1 logs as incomplete evidence; never relabel them green or wait past the headless command bound.
++
+ ### 2035 — Root Output Capture No Longer Blocks Before Drain
+ - ROOT CAUSE: `tools/agents-infra/main_test.go` called stdout/stderr producers before starting `io.Copy`; a `3 MiB + 17 byte` write blocked at pipe capacity and made the reader unreachable.
+ - FIX: Both capture wrappers now start a shared concurrent drain before the producer and restore the global descriptor before writer close, EOF wait, and reader close; the same idempotent cleanup runs during panic unwinding.
+ - EVIDENCE: Separate pre-fix stdout and stderr regressions timed out with exit 1 in `os.File.Write`; after the fix, byte-identity/restoration tests, the exact root status test, the complete root package, `go vet .`, and `go build .` exit 0.
+ - STATUS: `BUG-260829-ajb7n7` ready for review.
+ 
++### 2021 — Resource Observation Completion Cannot Reorder Admission
++- ROOT CAUSE: Concurrent `handleConnection -> acquireLease` calls applied provider snapshots in HTTP completion order; an older recovery response could clear a newer pressure latch and receive a lease.
++- FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` assigns monotonic generations before I/O, refuses superseded observations as `unknown`, reserves leases atomically with the generation check, and generation-binds pressure/recovery events.
++- EVIDENCE: Deterministic real wire acquire and status races reproduce the old lease grant at exit 1, then refuse both stale surfaces at exit 0; the focused pair also exits 0 under `go test -race`.
++- STATUS: `TASK-260829-1qh0ud` revision 3 rework closes the persisted stale-completion finding without touching a live runtime.
++
++### 1924 — Serial Full Suite Removes Package-Level Self-Contention
++- FINDING: `go test -p 1 ./... -count=1` executed every package and both previously red timing tests without skips; exit 0.
++- EVIDENCE: Root `184.571s`, attachments `3.063s`, infra `265.111s`, and modelharness `2.081s` all exited 0 in `.temp/TASK-260829-1qh0ud/go-test-all-serial-01.log`.
++- DECISION: Preserve the parallel full-run exit 1 as timing-history evidence; use the later no-skip serial exit 0 as the final all-tests gate.
++- STATUS: `TASK-260829-1qh0ud` test checklist is satisfied and ready for developer handoff.
++
+ ### 1921 — Log Rotation CR Validation Recovered After Host Contention
+ - ANOMALY: Automatic revision 2 and 3 CR validation failed in unrelated model-check/readiness timing fixtures while concurrent Go suites drove host load; scoped rotation tests remained green.
+ - FIX: `tools/agents-infra/internal/infra/pi_test.go` now drives `RunPi` for zero and overflowing values of both rotation caps and proves refusal before provider lookup or runtime-state mutation.
+ - EVIDENCE: After the foreign infra suite exited, exact CR gate `go test ./... -count=1` passed (root 169.670s; infra 327.101s); `go vet ./...`, `go build ./...`, formatting, and diff checks exited 0.
+ - STATUS: `TASK-260829-3fozxa` restart/config-change rework prepared for a fresh review handoff.
+ 
++### 1913 — Resource Status No Longer Publishes Hypothetical Recovery
++- ROOT CAUSE: `sharedBrokerServer.handleConnection` status classified a recovery sample but did not commit the pressure latch or cancel its armed eviction, publishing `healthy/admitted` beside an enforced pressured state.
++- FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` keeps status read-only and publishes the still-enforced `pressured/refused` latch until `acquireLease` applies recovery; `draining` retains precedence.
++- EVIDENCE: Real wire status/acquire tests preserve latch, timer sequencing, leases, and runtime PID; a narrowed `serving`-only preservation mutant makes `TestSharedBrokerProductionStatusCannotBypassLatchedPressureRecovery` exit 1, restored code exits 0.
++- STATUS: `TASK-260829-1qh0ud` revision 2 ready for review handoff.
++
++### 1913 — Two Unrelated Host-Timing Gates Remain Red Under Contention
++- ANOMALY: Final `go test ./... -count=1` exited 1 only in the pinned-Pi 500ms RPC side-effect fixture and the 1s readiness-exit fixture; isolated `-count=3` reruns also exited 1.
++- EVIDENCE: Read-only `mac-load-profile snapshot` recorded 929 processes, concurrent foreign Go integration binaries, and repository searches above 177% CPU; no foreign process was stopped.
++- EVIDENCE: An earlier full run exited 0; the complete infra package excluding exactly those two tests exited 0, and resource focused/race, vet, and Darwin/Linux/Windows builds exited 0.
++- STATUS: Red gates are reported as failing, not waived or relabeled green.
++
+ ### 1807 — Restart Log Archives Bypassed A Lowered Segment Cap
+ - REGRESSION: Revision 1 validated only active `runtime.log` size; a managed archive created under a larger prior `max_segment_bytes` survived restart and could raise retained output above `max_segment_bytes * max_segments`.
+ - FIX: `sharedFilesystemLogSink.Prune` now validates every managed archive against the current byte cap before count pruning and fails closed on oversized, non-regular, linked, or incorrectly permissioned archives.
+diff --git a/README.md b/README.md
+index d357068..1524252 100644
+--- a/README.md
++++ b/README.md
+@@ -484,6 +484,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 160
++resource_pressure_mode = "disabled"
+ 
+ [agents.pi.profiles."muse-glimmer-30b-dflash"]
+ provider = "local-muse"
+@@ -724,6 +725,90 @@ Every configured seconds field is bounded before conversion to `time.Duration`;
+ coupled handoff and doubled lease-stale windows are bounded as effective
+ durations too, so overflow is refused during config resolution before launch.
+ 
++Shared profiles must also make an explicit resource-pressure choice. The
++`disabled` value in the example preserves legacy admission but publishes
++resource facts as `unknown` with `admission = "not-enforced"`; it is an
++explicit operator opt-out, not a default. To enforce provider-backed
++observation, replace it with `resource_pressure_mode = "provider"` and add the
++complete strict table:
++
++```toml
++[agents.pi.profiles."qwen-3.8-27b".runtime.sharing.resource_pressure]
++observation_path = "/agents-infra/resources"
++observation_timeout_milliseconds = 250
++pressure_threshold_bytes = 50000000000
++recovery_threshold_bytes = 45000000000
++eviction_grace_seconds = 15
++pressure_action = "refuse-new-drain-idle"
++unknown_action = "refuse-new"
++busy_action = "observe"
++```
++
++There are no threshold or action defaults. Recovery must be below pressure to
++provide explicit hysteresis. The only admitted actions preserve existing
++connection-bound leases: pressure refuses new leases, waits for the final lease
++to release, then drains and evicts after `eviction_grace_seconds`; an unknown
++observation refuses a new lease but never guesses that eviction is safe; busy
++is an independently observed fact and is not inferred from lease count.
++
++The configured absolute observation path must return at most 16 KiB of strict
++JSON before `observation_timeout_milliseconds` expires:
++
++```json
++{
++  "schema": "agents-infra.pi.shared-runtime.resource-observation.v1",
++  "model": "Qwen-3.8-27B",
++  "loaded_model_memory": {"state": "observed", "bytes": 47244640256},
++  "inference": {"state": "busy"}
++}
++```
++
++Each provider fact may instead use `state = "unknown"` with a non-empty
++`reason` and no value. A failed, partial, oversized, wrong-schema, wrong-model,
++or malformed response is also `unknown`; it is never treated as absence or
++healthy. Protocol v7 carries the versioned
++`agents-infra.pi.shared-runtime.resource-status.v1` consumer handoff. Runtime
++status always publishes independent loaded-model-memory and inference facts,
++the effective thresholds/actions, admission, source, and one aggregate state:
++`healthy`, `busy`, `pressured`, `draining`, or `unknown`.
++
++An attested live broker is the authoritative source for that effective policy.
++When the broker cannot be reached but its persisted record is readable, status
++keeps `source = "record-derived-unverified"` and derives both
++`sharing.effective` and `resources.policy` from the same recorded sharing
++value. Provider observations remain explicitly unknown/refused. A
++pre-extension record without sharing evidence reports
++`resources.policy.mode = "unknown"`, reason
++`resource_pressure_policy_unknown`, and refused admission; caller
++configuration is never substituted as a guess for effective enforcement.
++
++Admission and diagnostic provider reads use separate monotonic broker-local
++generations. Healthy or busy status polling advances only diagnostic freshness,
++so observability cannot repeatedly supersede a healthy lease at its reservation
++boundary. Direct pressure observed by status still advances admission
++invalidation and prevents an older healthy observation from granting a lease;
++status does not take ownership of the pressure latch or eviction timer.
++
++Immediately before building a status wire response, the broker revalidates the
++diagnostic and admission generations while atomically snapshotting the pressure
++latch, broker state, and leases. A superseded response is explicit
++`unknown/refused` with `resource_observation_stale`, never stale
++`healthy/admitted`. The admission generation check and lease reservation share
++the same broker lock, and pressure/recovery events carry the admission
++generation that changed the latch, so completion, publication, or event
++scheduling cannot reverse a newer admission decision.
++
++Because sharing policy is not part of the runtime identity, a caller may find
++an already-running broker with different settings. Status keeps both
++`sharing.configured` and `sharing.effective` visible, but lease acquisition
++requires the resource-pressure mode and complete policy table to match exactly.
++The compared table includes observation path and timeout, pressure and recovery
++thresholds, eviction grace, and all three actions. Any single-field difference,
++including either disabled/provider direction or a recovery-threshold-only
++change, refuses before provider observation or lease reservation with
++`shared_runtime_resource_policy_mismatch`; the existing broker/runtime and its
++leases are preserved.
++
+ When a profile change produces a new runtime identity while the previous
+ shared runtime is still releasing the same fixed listener, acquisition retries
+ the broker's structured `runtime_listener_occupied` exit. The same bounded
+diff --git a/SKILL.md b/SKILL.md
+index 926eaf4..5bcd1a8 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -398,6 +398,40 @@ Consumers must distinguish a pre-extension missing key from post-extension
+ `last_failure_at` remain explicitly absent until a separately reviewed ledger
+ event persists their reason and time; do not synthesize them from counters.
+ 
++Shared profiles must explicitly select `resource_pressure_mode = "disabled"`
++or `"provider"`; there is no implicit mode. Provider mode requires the complete
++strict `runtime.sharing.resource_pressure` table documented in the README,
++including bounded observation timeout, pressure and lower recovery thresholds,
++eviction grace, and the exact actions `refuse-new-drain-idle`, `refuse-new`, and
++`observe`. Its absolute observation path returns the versioned provider facts;
++the broker accepts at most 16 KiB, requires exact schema/model identity, and
++reports failed, malformed, partial, or provider-declared unavailable facts as
++`unknown`, never healthy or absent. Pressure refuses only new leases, preserves
++connection-bound owners, and drains after final release plus configured grace;
++unknown refuses without eviction, while inference busy remains independently
++observed rather than inferred from leases. Protocol v7 status publishes the
++versioned aggregate `healthy|busy|pressured|draining|unknown` handoff plus the
++independent facts and effective policy. Admission and diagnostic provider reads
++use separate monotonic generations: healthy or busy status polling cannot stale
++a pending healthy lease, while direct pressure observed by status invalidates
++unsafe admission before reservation without taking ownership of the latch or
++eviction timer. Immediately before status publication, revalidate both
++generations and snapshot the latch, broker state, and leases under one lock;
++supersession is explicit `unknown/refused` with
++`resource_observation_stale`, never stale availability. Lease reservation is
++atomic with the admission generation check, and pressure/recovery events are
++bound to the generation that changed the latch. A caller connecting to an
++existing broker may observe different sharing configuration in status. An
++unreachable broker's readable record keeps `record-derived-unverified` and
++binds `sharing.effective` plus `resources.policy` to the same recorded sharing
++value; provider facts stay unknown/refused. A pre-extension record without
++sharing reports policy mode `unknown` and never substitutes caller config as
++effective enforcement. Lease acquisition requires exact resource-pressure
++mode/table equality across observation path/timeout, both thresholds, grace,
++and all actions, and returns `shared_runtime_resource_policy_mismatch` before
++provider I/O or lease reservation on any single-field difference; never narrow
++the caller policy to the broker.
++
+ Before raising a local profile's context window, configure every member of its
+ `[profiles.<name>.stress]` table in the separate model-harness config and run:
+ 
+diff --git a/tools/agents-infra/internal/infra/pi_config.go b/tools/agents-infra/internal/infra/pi_config.go
+index d8a262e..188d5d6 100644
+--- a/tools/agents-infra/internal/infra/pi_config.go
++++ b/tools/agents-infra/internal/infra/pi_config.go
+@@ -107,19 +107,32 @@ type PiRuntime struct {
+ }
+ 
+ type PiRuntimeSharing struct {
+-	Mode                         string `json:"mode"`
+-	LingerSeconds                int    `json:"linger_seconds"`
+-	MaxLeases                    int    `json:"max_leases"`
+-	MaxSegmentBytes              int    `json:"max_segment_bytes"`
+-	MaxSegments                  int    `json:"max_segments"`
+-	HeartbeatIntervalSeconds     int    `json:"heartbeat_interval_seconds"`
+-	LeaseStaleSeconds            int    `json:"lease_stale_seconds"`
+-	BrokerStartTimeoutSeconds    int    `json:"broker_start_timeout_seconds"`
+-	RestartLimit                 int    `json:"restart_limit"`
+-	RestartInitialBackoffSeconds int    `json:"restart_initial_backoff_seconds"`
+-	RestartMaxBackoffSeconds     int    `json:"restart_max_backoff_seconds"`
+-	StableRunSeconds             int    `json:"stable_run_seconds"`
+-	QuarantineSeconds            int    `json:"quarantine_seconds"`
++	Mode                         string                     `json:"mode"`
++	LingerSeconds                int                        `json:"linger_seconds"`
++	MaxLeases                    int                        `json:"max_leases"`
++	MaxSegmentBytes              int                        `json:"max_segment_bytes"`
++	MaxSegments                  int                        `json:"max_segments"`
++	HeartbeatIntervalSeconds     int                        `json:"heartbeat_interval_seconds"`
++	LeaseStaleSeconds            int                        `json:"lease_stale_seconds"`
++	BrokerStartTimeoutSeconds    int                        `json:"broker_start_timeout_seconds"`
++	RestartLimit                 int                        `json:"restart_limit"`
++	RestartInitialBackoffSeconds int                        `json:"restart_initial_backoff_seconds"`
++	RestartMaxBackoffSeconds     int                        `json:"restart_max_backoff_seconds"`
++	StableRunSeconds             int                        `json:"stable_run_seconds"`
++	QuarantineSeconds            int                        `json:"quarantine_seconds"`
++	ResourcePressureMode         string                     `json:"resource_pressure_mode"`
++	ResourcePressure             *PiRuntimeResourcePressure `json:"resource_pressure,omitempty"`
++}
++
++type PiRuntimeResourcePressure struct {
++	ObservationPath                string `json:"observation_path"`
++	ObservationTimeoutMilliseconds int    `json:"observation_timeout_milliseconds"`
++	PressureThresholdBytes         int    `json:"pressure_threshold_bytes"`
++	RecoveryThresholdBytes         int    `json:"recovery_threshold_bytes"`
++	EvictionGraceSeconds           int    `json:"eviction_grace_seconds"`
++	PressureAction                 string `json:"pressure_action"`
++	UnknownAction                  string `json:"unknown_action"`
++	BusyAction                     string `json:"busy_action"`
+ }
+ 
+ type PiDFlash struct {
+@@ -455,7 +468,7 @@ func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
+ }
+ 
+ func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime) (PiRuntimeSharing, error) {
+-	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "max_segment_bytes", "max_segments", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds", "restart_limit", "restart_initial_backoff_seconds", "restart_max_backoff_seconds", "stable_run_seconds", "quarantine_seconds"); err != nil {
++	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "max_segment_bytes", "max_segments", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds", "restart_limit", "restart_initial_backoff_seconds", "restart_max_backoff_seconds", "stable_run_seconds", "quarantine_seconds", "resource_pressure_mode", "resource_pressure"); err != nil {
+ 		return PiRuntimeSharing{}, err
+ 	}
+ 	var sharing PiRuntimeSharing
+@@ -522,9 +535,84 @@ func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime
+ 	if sharing.QuarantineSeconds, err = requiredPositiveDurationSeconds(table, "quarantine_seconds", maxTimeDurationSeconds); err != nil {
+ 		return sharing, fieldError(field+".quarantine_seconds", err)
+ 	}
++	if sharing.ResourcePressureMode, err = requiredString(table, "resource_pressure_mode"); err != nil {
++		return sharing, fieldError(field+".resource_pressure_mode", err)
++	}
++	resourceTable, resourcePresent, err := projectConfigTable(table, "resource_pressure", field+".resource_pressure")
++	if err != nil {
++		return sharing, err
++	}
++	switch sharing.ResourcePressureMode {
++	case "disabled":
++		if resourcePresent {
++			return sharing, fieldError(field+".resource_pressure", errors.New("must be absent when resource_pressure_mode is disabled"))
++		}
++	case "provider":
++		if !resourcePresent {
++			return sharing, fieldError(field+".resource_pressure", errors.New("required when resource_pressure_mode is provider"))
++		}
++		resource, parseErr := parsePiRuntimeResourcePressure(resourceTable, field+".resource_pressure")
++		if parseErr != nil {
++			return sharing, parseErr
++		}
++		sharing.ResourcePressure = &resource
++	default:
++		return sharing, fieldError(field+".resource_pressure_mode", errors.New("must equal disabled or provider"))
++	}
+ 	return sharing, nil
+ }
+ 
++func parsePiRuntimeResourcePressure(table map[string]any, field string) (PiRuntimeResourcePressure, error) {
++	if err := rejectUnknownFields(table, field, "observation_path", "observation_timeout_milliseconds", "pressure_threshold_bytes", "recovery_threshold_bytes", "eviction_grace_seconds", "pressure_action", "unknown_action", "busy_action"); err != nil {
++		return PiRuntimeResourcePressure{}, err
++	}
++	var policy PiRuntimeResourcePressure
++	var err error
++	if policy.ObservationPath, err = requiredString(table, "observation_path"); err != nil {
++		return policy, fieldError(field+".observation_path", err)
++	}
++	if !strings.HasPrefix(policy.ObservationPath, "/") || strings.ContainsAny(policy.ObservationPath, "?#") || filepath.Clean(policy.ObservationPath) != policy.ObservationPath {
++		return policy, fieldError(field+".observation_path", errors.New("must be a clean absolute HTTP path without query or fragment"))
++	}
++	if policy.ObservationTimeoutMilliseconds, err = requiredPositiveInt(table, "observation_timeout_milliseconds"); err != nil {
++		return policy, fieldError(field+".observation_timeout_milliseconds", err)
++	}
++	if policy.ObservationTimeoutMilliseconds > sharedRuntimeResourceObservationMaxTimeoutMilliseconds {
++		return policy, fieldError(field+".observation_timeout_milliseconds", fmt.Errorf("must be at most %d", sharedRuntimeResourceObservationMaxTimeoutMilliseconds))
++	}
++	if policy.PressureThresholdBytes, err = requiredPositiveInt(table, "pressure_threshold_bytes"); err != nil {
++		return policy, fieldError(field+".pressure_threshold_bytes", err)
++	}
++	if policy.RecoveryThresholdBytes, err = requiredPositiveInt(table, "recovery_threshold_bytes"); err != nil {
++		return policy, fieldError(field+".recovery_threshold_bytes", err)
++	}
++	if policy.RecoveryThresholdBytes >= policy.PressureThresholdBytes {
++		return policy, fieldError(field+".recovery_threshold_bytes", errors.New("must be less than pressure_threshold_bytes"))
++	}
++	if policy.EvictionGraceSeconds, err = requiredNonNegativeDurationSeconds(table, "eviction_grace_seconds", maxTimeDurationSeconds); err != nil {
++		return policy, fieldError(field+".eviction_grace_seconds", err)
++	}
++	if policy.PressureAction, err = requiredString(table, "pressure_action"); err != nil {
++		return policy, fieldError(field+".pressure_action", err)
++	}
++	if policy.PressureAction != "refuse-new-drain-idle" {
++		return policy, fieldError(field+".pressure_action", errors.New("must equal refuse-new-drain-idle"))
++	}
++	if policy.UnknownAction, err = requiredString(table, "unknown_action"); err != nil {
++		return policy, fieldError(field+".unknown_action", err)
++	}
++	if policy.UnknownAction != "refuse-new" {
++		return policy, fieldError(field+".unknown_action", errors.New("must equal refuse-new"))
++	}
++	if policy.BusyAction, err = requiredString(table, "busy_action"); err != nil {
++		return policy, fieldError(field+".busy_action", err)
++	}
++	if policy.BusyAction != "observe" {
++		return policy, fieldError(field+".busy_action", errors.New("must equal observe"))
++	}
++	return policy, nil
++}
++
+ func parsePiDFlash(table map[string]any, field string, runtimeArgv []string) (PiDFlash, error) {
+ 	if err := rejectUnknownFields(table, field, "target_model", "draft_model", "target_argv", "draft_argv"); err != nil {
+ 		return PiDFlash{}, err
+diff --git a/tools/agents-infra/internal/infra/pi_shared_attestation_test.go b/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
+index 107a334..8b0f4c3 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
+@@ -65,6 +65,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 35
++resource_pressure_mode = "disabled"
+ `
+ 	writePiProjectConfig(t, project, body)
+ 	resolved, err := resolveSharedProfile(project, home, cache, "profile")
+diff --git a/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go b/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go
+index f9fc415..094f8b9 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go
+@@ -37,35 +37,37 @@ type SharedRuntimeBrokerOptions struct {
+ }
+ 
+ type sharedWireMessage struct {
+-	Type                string                      `json:"type"`
+-	Code                string                      `json:"code,omitempty"`
+-	Reason              string                      `json:"reason,omitempty"`
+-	ProtocolVersion     int                         `json:"protocol_version,omitempty"`
+-	ClientPID           int                         `json:"client_pid,omitempty"`
+-	ClientExec          FileIdentity                `json:"client_exec,omitempty"`
+-	RuntimeKey          string                      `json:"runtime_key,omitempty"`
+-	ProfileDigest       string                      `json:"profile_digest,omitempty"`
+-	ProjectKey          string                      `json:"project_key,omitempty"`
+-	ProfileKey          string                      `json:"profile_key,omitempty"`
+-	RunID               string                      `json:"run_id,omitempty"`
+-	ConfiguredSharing   *PiRuntimeSharing           `json:"sharing_configured,omitempty"`
+-	EffectiveSharing    *PiRuntimeSharing           `json:"sharing_effective,omitempty"`
+-	Broker              *SharedBrokerIdentity       `json:"broker,omitempty"`
+-	Runtime             *SharedRuntimeProcessRecord `json:"runtime,omitempty"`
+-	Lease               *SharedLeaseRecord          `json:"lease,omitempty"`
+-	Leases              []SharedLeaseStatus         `json:"leases,omitempty"`
+-	LeaseID             string                      `json:"lease_id,omitempty"`
+-	LeaseCount          int                         `json:"lease_count,omitempty"`
+-	ClientKey           string                      `json:"client_key,omitempty"`
+-	RequestedAt         time.Time                   `json:"requested_at,omitempty"`
+-	Force               bool                        `json:"force,omitempty"`
+-	TimeoutSeconds      int                         `json:"timeout_seconds,omitempty"`
+-	State               string                      `json:"state,omitempty"`
+-	Stage               string                      `json:"stage,omitempty"`
+-	EffectiveMaxLeases  int                         `json:"effective_max_leases,omitempty"`
+-	ConfiguredMaxLeases int                         `json:"configured_max_leases,omitempty"`
+-	BrokerPID           int                         `json:"broker_pid,omitempty"`
+-	BrokerStartTime     *ProcessStartTime           `json:"broker_start_time,omitempty"`
++	Type                string                       `json:"type"`
++	Code                string                       `json:"code,omitempty"`
++	Reason              string                       `json:"reason,omitempty"`
++	MismatchField       string                       `json:"mismatch_field,omitempty"`
++	ProtocolVersion     int                          `json:"protocol_version,omitempty"`
++	ClientPID           int                          `json:"client_pid,omitempty"`
++	ClientExec          FileIdentity                 `json:"client_exec,omitempty"`
++	RuntimeKey          string                       `json:"runtime_key,omitempty"`
++	ProfileDigest       string                       `json:"profile_digest,omitempty"`
++	ProjectKey          string                       `json:"project_key,omitempty"`
++	ProfileKey          string                       `json:"profile_key,omitempty"`
++	RunID               string                       `json:"run_id,omitempty"`
++	ConfiguredSharing   *PiRuntimeSharing            `json:"sharing_configured,omitempty"`
++	EffectiveSharing    *PiRuntimeSharing            `json:"sharing_effective,omitempty"`
++	Broker              *SharedBrokerIdentity        `json:"broker,omitempty"`
++	Runtime             *SharedRuntimeProcessRecord  `json:"runtime,omitempty"`
++	Lease               *SharedLeaseRecord           `json:"lease,omitempty"`
++	Leases              []SharedLeaseStatus          `json:"leases,omitempty"`
++	LeaseID             string                       `json:"lease_id,omitempty"`
++	LeaseCount          int                          `json:"lease_count,omitempty"`
++	ClientKey           string                       `json:"client_key,omitempty"`
++	RequestedAt         time.Time                    `json:"requested_at,omitempty"`
++	Force               bool                         `json:"force,omitempty"`
++	TimeoutSeconds      int                          `json:"timeout_seconds,omitempty"`
++	State               string                       `json:"state,omitempty"`
++	Stage               string                       `json:"stage,omitempty"`
++	EffectiveMaxLeases  int                          `json:"effective_max_leases,omitempty"`
++	ConfiguredMaxLeases int                          `json:"configured_max_leases,omitempty"`
++	BrokerPID           int                          `json:"broker_pid,omitempty"`
++	BrokerStartTime     *ProcessStartTime            `json:"broker_start_time,omitempty"`
++	Resources           *SharedRuntimeResourceStatus `json:"resources,omitempty"`
+ }
+ 
+ type SharedLeaseStatus struct {
+@@ -328,6 +330,7 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
+ 	}
+ 
+ 	server := newSharedBrokerServer(resolved, &record, &ledger, listener)
++	server.httpClient = options.HTTPClient
+ 	serveErr := server.serve(runtimeWait, options.Signals)
+ 	listener.Close()
+ 	if server.forcedStop() {
+@@ -550,8 +553,14 @@ func cleanupSharedRuntimeState(paths SharedRuntimePaths) error {
+ }
+ 
+ type sharedBrokerEvent struct {
+-	kind  string
+-	force bool
++	kind               string
++	force              bool
++	resourceGeneration uint64
++}
++
++type sharedBrokerResourceDecision struct {
++	admissionGeneration uint64
++	statusGeneration    uint64
+ }
+ 
+ type sharedBrokerConnection struct {
+@@ -573,6 +582,18 @@ type sharedBrokerAdmissionDependencies struct {
+ 	processExecIdentity func(sharedProcessObservation) (FileIdentity, error)
+ }
+ 
++type sharedBrokerResourceDependencies struct {
++	observe                 func(context.Context, *http.Client, string, string, PiRuntimeResourcePressure) (sharedRuntimeProviderResourceObservation, error)
++	now                     func() time.Time
++	beforeLeaseReservation  func(uint64)
++	beforeStatusPublication func(sharedBrokerResourceDecision)
++}
++
++var sharedBrokerResourceSystem = sharedBrokerResourceDependencies{
++	observe: observeSharedRuntimeProviderResources,
++	now:     time.Now,
++}
++
+ var sharedBrokerAdmissionSystem = sharedBrokerAdmissionDependencies{
+ 	peerIdentity:        sharedUnixPeerIdentity,
+ 	inspectProcess:      inspectSharedProcess,
+@@ -580,19 +601,25 @@ var sharedBrokerAdmissionSystem = sharedBrokerAdmissionDependencies{
+ }
+ 
+ type sharedBrokerServer struct {
+-	resolved    sharedResolvedProfile
+-	record      *SharedBrokerRecord
+-	ledger      *SharedRuntimeRestartLedger
+-	listener    *net.UnixListener
+-	mu          sync.Mutex
+-	state       string
+-	connections map[*sharedBrokerConnection]bool
+-	leases      map[string]*SharedLeaseRecord
+-	events      chan sharedBrokerEvent
+-	hadLease    bool
+-	forced      bool
+-	readyAt     time.Time
+-	admission   sharedBrokerAdmissionDependencies
++	resolved                    sharedResolvedProfile
++	record                      *SharedBrokerRecord
++	ledger                      *SharedRuntimeRestartLedger
++	listener                    *net.UnixListener
++	mu                          sync.Mutex
++	state                       string
++	connections                 map[*sharedBrokerConnection]bool
++	leases                      map[string]*SharedLeaseRecord
++	events                      chan sharedBrokerEvent
++	hadLease                    bool
++	forced                      bool
++	readyAt                     time.Time
++	admission                   sharedBrokerAdmissionDependencies
++	resources                   sharedBrokerResourceDependencies
++	httpClient                  *http.Client
++	pressureLatched             bool
++	resourceAdmissionGeneration uint64
++	resourceStatusGeneration    uint64
++	resourcePressureGeneration  uint64
+ }
+ 
+ var sharedFirstLeaseGraceDuration = func(sharing PiRuntimeSharing) time.Duration {
+@@ -605,6 +632,7 @@ func newSharedBrokerServer(resolved sharedResolvedProfile, record *SharedBrokerR
+ 		connections: map[*sharedBrokerConnection]bool{}, leases: map[string]*SharedLeaseRecord{},
+ 		events: make(chan sharedBrokerEvent, 32), readyAt: dereferenceReadyAt(record.ReadyAt),
+ 		admission: sharedBrokerAdmissionSystem,
++		resources: sharedBrokerResourceSystem,
+ 	}
+ }
+ 
+@@ -650,6 +678,28 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
+ 	stableRunChannel := stableRun.C
+ 	var linger *time.Timer
+ 	var lingerChannel <-chan time.Time
++	var pressureEviction *time.Timer
++	var pressureEvictionChannel <-chan time.Time
++	stopPressureEviction := func() {
++		if pressureEviction != nil && !pressureEviction.Stop() {
++			select {
++			case <-pressureEviction.C:
++			default:
++			}
++		}
++		pressureEvictionChannel = nil
++	}
++	startPressureEviction := func() {
++		stopPressureEviction()
++		policy := server.resolved.Sharing.ResourcePressure
++		if policy == nil {
++			return
++		}
++		server.setState("pressured")
++		pressureEviction = time.NewTimer(time.Duration(policy.EvictionGraceSeconds) * time.Second)
++		pressureEvictionChannel = pressureEviction.C
++	}
++	defer stopPressureEviction()
+ 	for {
+ 		select {
+ 		case connection := <-accepts:
+@@ -696,6 +746,7 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
+ 			case "lease-change":
+ 				leaseCount, hadLease := server.leaseFacts()
+ 				if leaseCount > 0 {
++					stopPressureEviction()
+ 					if linger != nil {
+ 						if !linger.Stop() {
+ 							select {
+@@ -706,6 +757,8 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
+ 					}
+ 					lingerChannel = nil
+ 					server.setState("serving")
++				} else if server.resourcePressureLatched() {
++					startPressureEviction()
+ 				} else if hadLease {
+ 					server.setState("lingering")
+ 					if server.resolved.Sharing.LingerSeconds == 0 {
+@@ -715,6 +768,25 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
+ 					linger = time.NewTimer(time.Duration(server.resolved.Sharing.LingerSeconds) * time.Second)
+ 					lingerChannel = linger.C
+ 				}
++			case "resource-pressure":
++				if !server.resourceTransitionCurrent(event) {
++					break
++				}
++				leaseCount, _ := server.leaseFacts()
++				if leaseCount == 0 {
++					startPressureEviction()
++				}
++			case "resource-recovered":
++				if !server.resourceTransitionCurrent(event) {
++					break
++				}
++				stopPressureEviction()
++				leaseCount, hadLease := server.leaseFacts()
++				if leaseCount > 0 || !hadLease {
++					server.setState("serving")
++				} else {
++					server.setState("lingering")
++				}
+ 			}
+ 		case <-firstLeaseGrace.C:
+ 			_, hadLease := server.leaseFacts()
+@@ -725,6 +797,13 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
+ 		case <-lingerChannel:
+ 			server.setDraining()
+ 			return nil
++		case <-pressureEvictionChannel:
++			pressureEvictionChannel = nil
++			leaseCount, _ := server.leaseFacts()
++			if server.resourcePressureLatched() && leaseCount == 0 {
++				server.setDraining()
++				return nil
++			}
+ 		}
+ 	}
+ }
+@@ -755,6 +834,25 @@ func (server *sharedBrokerServer) leaseFacts() (int, bool) {
+ 	return len(server.leases), server.hadLease
+ }
+ 
++func (server *sharedBrokerServer) resourcePressureLatched() bool {
++	server.mu.Lock()
++	defer server.mu.Unlock()
++	return server.pressureLatched
++}
++
++func (server *sharedBrokerServer) resourceTransitionCurrent(event sharedBrokerEvent) bool {
++	if event.resourceGeneration == 0 {
++		return true
++	}
++	server.mu.Lock()
++	defer server.mu.Unlock()
++	if event.resourceGeneration != server.resourcePressureGeneration {
++		return false
++	}
++	return event.kind == "resource-pressure" && server.pressureLatched ||
++		event.kind == "resource-recovered" && !server.pressureLatched
++}
++
+ func (server *sharedBrokerServer) forcedStop() bool {
+ 	server.mu.Lock()
+ 	defer server.mu.Unlock()
+@@ -823,11 +921,7 @@ func (server *sharedBrokerServer) handleConnection(connection *sharedBrokerConne
+ 				return
+ 			}
+ 			connection.leaseID = lease.LeaseID
+-			server.mu.Lock()
+-			server.leases[lease.LeaseID] = lease
+-			server.hadLease = true
+-			leaseCount := len(server.leases)
+-			server.mu.Unlock()
++			leaseCount, _ := server.leaseFacts()
+ 			if err := writeSharedJSONAtomic(filepath.Join(server.resolved.Paths.LeasesDir, lease.LeaseID+".json"), lease); err != nil {
+ 				server.releaseConnectionLease(connection)
+ 				_ = sendSharedRefusal(connection, err)
+@@ -864,8 +958,12 @@ func (server *sharedBrokerServer) handleConnection(connection *sharedBrokerConne
+ 			_ = connection.send(sharedWireMessage{Type: "released", LeaseID: message.LeaseID})
+ 			return
+ 		case "status":
+-			state, leases := server.statusSnapshot()
+-			if err := connection.send(sharedWireMessage{Type: "status", State: state, Stage: server.record.Stage, Leases: leases, LeaseCount: len(leases), Runtime: server.record.Runtime, Broker: &server.record.Broker, EffectiveSharing: server.record.Sharing}); err != nil {
++			resources, _, decision := server.observeResourceStatus(false)
++			if server.resources.beforeStatusPublication != nil {
++				server.resources.beforeStatusPublication(decision)
++			}
++			state, leases, resources := server.resourceStatusSnapshot(resources, decision)
++			if err := connection.send(sharedWireMessage{Type: "status", State: state, Stage: server.record.Stage, Leases: leases, LeaseCount: len(leases), Runtime: server.record.Runtime, Broker: &server.record.Broker, EffectiveSharing: server.record.Sharing, Resources: &resources}); err != nil {
+ 				return
+ 			}
+ 		case "stop":
+@@ -924,9 +1022,42 @@ func (server *sharedBrokerServer) attestClient(connection *net.UnixConn, hello s
+ }
+ 
+ func (server *sharedBrokerServer) acquireLease(message, hello sharedWireMessage, client sharedProcessObservation) (*SharedLeaseRecord, error) {
++	if !sharedRuntimeResourcePolicyMatches(hello.ConfiguredSharing, server.resolved.Sharing) {
++		details := map[string]any{"effective_sharing": server.resolved.Sharing}
++		if hello.ConfiguredSharing != nil {
++			details["configured_sharing"] = *hello.ConfiguredSharing
++		}
++		return nil, &SharedRuntimeError{
++			Code:          "shared_runtime_resource_policy_mismatch",
++			Reason:        "configured_resource_pressure_policy_differs",
++			MismatchField: "sharing.resource_pressure",
++			Details:       details,
++			Err:           errors.New("configured resource-pressure policy differs from the live broker policy"),
++		}
++	}
++	resources, transition, decision := server.observeResourceStatus(true)
++	resourceGeneration := decision.admissionGeneration
++	if resources.Admission == "refused" && resources.State != "draining" {
++		server.notifyResourceTransition(transition, resourceGeneration)
++		code := "shared_runtime_resource_unknown"
++		if resources.State == "pressured" {
++			code = "shared_runtime_resource_pressure"
++		}
++		return nil, &SharedRuntimeError{Code: code, Details: map[string]any{"resources": resources}, Err: errors.New("resource policy refused a new lease")}
++	}
++	if server.resources.beforeLeaseReservation != nil {
++		server.resources.beforeLeaseReservation(resourceGeneration)
++	}
+ 	server.mu.Lock()
+-	defer server.mu.Unlock()
++	if resourceGeneration != 0 && resourceGeneration != server.resourceAdmissionGeneration {
++		brokerState := server.state
++		policy := *server.resolved.Sharing.ResourcePressure
++		server.mu.Unlock()
++		status := failedSharedRuntimeResourceStatus(policy, brokerState, "resource_observation_stale")
++		return nil, &SharedRuntimeError{Code: "shared_runtime_resource_unknown", Details: map[string]any{"resources": status}, Err: errors.New("resource observation was superseded before lease grant")}
++	}
+ 	if server.state == "draining" {
++		server.mu.Unlock()
+ 		return nil, sharedRuntimeError("shared_runtime_shutting_down", errors.New("broker is draining"))
+ 	}
+ 	if len(server.leases) >= server.resolved.Sharing.MaxLeases {
+@@ -934,6 +1065,7 @@ func (server *sharedBrokerServer) acquireLease(message, hello sharedWireMessage,
+ 		if hello.ConfiguredSharing != nil {
+ 			configured = hello.ConfiguredSharing.MaxLeases
+ 		}
++		server.mu.Unlock()
+ 		return nil, &SharedRuntimeError{Code: "shared_runtime_lease_limit", Details: map[string]any{
+ 			"effective_max_leases":  server.resolved.Sharing.MaxLeases,
+ 			"configured_max_leases": configured,
+@@ -943,16 +1075,89 @@ func (server *sharedBrokerServer) acquireLease(message, hello sharedWireMessage,
+ 	}
+ 	var nonce [16]byte
+ 	if _, err := rand.Read(nonce[:]); err != nil {
++		server.mu.Unlock()
+ 		return nil, sharedRuntimeError("shared_runtime_state_path_invalid", err)
+ 	}
+ 	now := time.Now().UTC()
+-	return &SharedLeaseRecord{
++	lease := &SharedLeaseRecord{
+ 		LeaseID: hex.EncodeToString(nonce[:]), RunID: hello.RunID, ClientKey: message.ClientKey,
+ 		ClientPID: client.PID, ClientStartTime: client.StartTime,
+ 		RuntimeKey: server.resolved.RuntimeKey, ProfileDigest: server.resolved.ProfileDigest,
+ 		Endpoint: server.resolved.Profile.BaseURL, RuntimePID: server.record.Runtime.PID,
+ 		GrantedAt: now, LastHeartbeatAt: now,
+-	}, nil
++	}
++	server.leases[lease.LeaseID] = lease
++	server.hadLease = true
++	server.mu.Unlock()
++	server.notifyResourceTransition(transition, resourceGeneration)
++	return lease, nil
++}
++
++func (server *sharedBrokerServer) observeResourceStatus(commitAdmissionState bool) (SharedRuntimeResourceStatus, string, sharedBrokerResourceDecision) {
++	sharing := server.resolved.Sharing
++	server.mu.Lock()
++	brokerState := server.state
++	if sharing.ResourcePressureMode != "provider" || sharing.ResourcePressure == nil {
++		server.mu.Unlock()
++		return disabledSharedRuntimeResourceStatus(sharing, brokerState, "broker-config"), "", sharedBrokerResourceDecision{}
++	}
++	decision := sharedBrokerResourceDecision{}
++	if commitAdmissionState {
++		server.resourceAdmissionGeneration++
++		decision.admissionGeneration = server.resourceAdmissionGeneration
++	} else {
++		server.resourceStatusGeneration++
++		decision.statusGeneration = server.resourceStatusGeneration
++		decision.admissionGeneration = server.resourceAdmissionGeneration
++	}
++	server.mu.Unlock()
++	policy := *sharing.ResourcePressure
++	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(policy.ObservationTimeoutMilliseconds)*time.Millisecond)
++	defer cancel()
++	observation, err := server.resources.observe(ctx, server.httpClient, server.resolved.Profile.BaseURL, server.resolved.Profile.Model, policy)
++	server.mu.Lock()
++	brokerState = server.state
++	if err != nil {
++		server.mu.Unlock()
++		return failedSharedRuntimeResourceStatus(policy, brokerState, "provider_observation_failed"), "", decision
++	}
++	admissionStale := commitAdmissionState && decision.admissionGeneration != server.resourceAdmissionGeneration
++	statusStale := !commitAdmissionState && (decision.statusGeneration != server.resourceStatusGeneration || decision.admissionGeneration != server.resourceAdmissionGeneration)
++	if admissionStale || statusStale {
++		server.mu.Unlock()
++		return failedSharedRuntimeResourceStatus(policy, brokerState, "resource_observation_stale"), "", decision
++	}
++	previousPressure := server.pressureLatched
++	status, pressure := classifySharedRuntimeResources(observation, policy, brokerState, previousPressure, server.resources.now())
++	if commitAdmissionState {
++		server.pressureLatched = pressure
++		if previousPressure != pressure {
++			server.resourcePressureGeneration = decision.admissionGeneration
++		}
++	} else if pressure {
++		// A diagnostic poll does not own the pressure latch or eviction timer,
++		// but direct pressure evidence must invalidate any healthy admission
++		// observation that has not reserved its lease yet.
++		server.resourceAdmissionGeneration++
++		decision.admissionGeneration = server.resourceAdmissionGeneration
++	}
++	if !commitAdmissionState && previousPressure && !pressure {
++		// Status is a read-only diagnostic path. It must report the pressure
++		// admission state the broker still enforces until acquireLease owns and
++		// applies recovery, including cancellation of the eviction sequence.
++		status = enforceSharedRuntimeResourceState(status, brokerState, true)
++	}
++	server.mu.Unlock()
++	if !commitAdmissionState {
++		return status, "", decision
++	}
++	transition := ""
++	if !previousPressure && pressure {
++		transition = "pressured"
++	} else if previousPressure && !pressure {
++		transition = "recovered"
++	}
++	return status, transition, decision
+ }
+ 
+ func (server *sharedBrokerServer) releaseConnectionLease(connection *sharedBrokerConnection) {
+@@ -972,17 +1177,63 @@ func (server *sharedBrokerServer) releaseConnectionLease(connection *sharedBroke
+ }
+ 
+ func (server *sharedBrokerServer) notify(kind string, force bool) {
++	server.notifyEvent(sharedBrokerEvent{kind: kind, force: force})
++}
++
++func (server *sharedBrokerServer) notifyResourceTransition(kind string, generation uint64) {
++	if kind == "" {
++		return
++	}
++	server.notifyEvent(sharedBrokerEvent{kind: "resource-" + kind, resourceGeneration: generation})
++}
++
++func (server *sharedBrokerServer) notifyEvent(event sharedBrokerEvent) {
+ 	select {
+-	case server.events <- sharedBrokerEvent{kind: kind, force: force}:
++	case server.events <- event:
+ 	default:
+-		go func() { server.events <- sharedBrokerEvent{kind: kind, force: force} }()
++		go func() { server.events <- event }()
+ 	}
+ }
+ 
+ func (server *sharedBrokerServer) statusSnapshot() (string, []SharedLeaseStatus) {
+ 	server.mu.Lock()
+ 	defer server.mu.Unlock()
+-	now := time.Now()
++	return server.statusSnapshotLocked(time.Now())
++}
++
++func (server *sharedBrokerServer) resourceStatusSnapshot(resources SharedRuntimeResourceStatus, decision sharedBrokerResourceDecision) (string, []SharedLeaseStatus, SharedRuntimeResourceStatus) {
++	server.mu.Lock()
++	defer server.mu.Unlock()
++	brokerState := server.state
++	stale := decision.statusGeneration != 0 && (decision.statusGeneration != server.resourceStatusGeneration || decision.admissionGeneration != server.resourceAdmissionGeneration)
++	if stale {
++		resources = failedSharedRuntimeResourceStatus(*server.resolved.Sharing.ResourcePressure, brokerState, "resource_observation_stale")
++		resources = enforceSharedRuntimeResourceState(resources, brokerState, false)
++	} else {
++		resources = enforceSharedRuntimeResourceState(resources, brokerState, server.pressureLatched)
++	}
++	state, leases := server.statusSnapshotLocked(time.Now())
++	return state, leases, resources
++}
++
++func enforceSharedRuntimeResourceState(status SharedRuntimeResourceStatus, brokerState string, pressureLatched bool) SharedRuntimeResourceStatus {
++	if brokerState == "draining" {
++		status.State = SharedRuntimeResourceDraining
++		status.Admission = SharedRuntimeAdmissionRefused
++		status.Reason = "broker_draining"
++		return status
++	}
++	if pressureLatched {
++		status.LoadedModelMemory.State = SharedRuntimeMemoryPressured
++		status.LoadedModelMemory.Reason = "loaded_model_memory_pressure"
++		status.State = SharedRuntimeResourcePressured
++		status.Admission = SharedRuntimeAdmissionRefused
++		status.Reason = "loaded_model_memory_pressure"
++	}
++	return status
++}
++
++func (server *sharedBrokerServer) statusSnapshotLocked(now time.Time) (string, []SharedLeaseStatus) {
+ 	leases := make([]SharedLeaseStatus, 0, len(server.leases))
+ 	for _, lease := range server.leases {
+ 		state := "held"
+@@ -1001,7 +1252,14 @@ func sendSharedRefusal(connection *sharedBrokerConnection, err error) error {
+ 	if errors.As(err, &shared) {
+ 		message.Code = shared.Code
+ 		message.Reason = shared.Reason
++		message.MismatchField = shared.MismatchField
+ 		if shared.Details != nil {
++			if value, ok := shared.Details["configured_sharing"].(PiRuntimeSharing); ok {
++				message.ConfiguredSharing = &value
++			}
++			if value, ok := shared.Details["effective_sharing"].(PiRuntimeSharing); ok {
++				message.EffectiveSharing = &value
++			}
+ 			if value, ok := shared.Details["effective_max_leases"].(int); ok {
+ 				message.EffectiveMaxLeases = value
+ 			}
+@@ -1014,6 +1272,9 @@ func sendSharedRefusal(connection *sharedBrokerConnection, err error) error {
+ 			if value, ok := shared.Details["broker_start_time"].(ProcessStartTime); ok {
+ 				message.BrokerStartTime = &value
+ 			}
++			if value, ok := shared.Details["resources"].(SharedRuntimeResourceStatus); ok {
++				message.Resources = &value
++			}
+ 		}
+ 	}
+ 	return connection.send(message)
+diff --git a/tools/agents-infra/internal/infra/pi_shared_client_darwin.go b/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
+index 53a8926..94a3e33 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
+@@ -307,7 +307,7 @@ func connectAndAcquireSharedRuntime(resolved sharedResolvedProfile, state PiStat
+ 		return nil, sharedRuntimeError("shared_runtime_unavailable", err)
+ 	}
+ 	if leaseResponse.Type == "refused" {
+-		return nil, &SharedRuntimeError{Code: leaseResponse.Code, Reason: leaseResponse.Reason, Details: map[string]any{"effective_max_leases": leaseResponse.EffectiveMaxLeases, "configured_max_leases": leaseResponse.ConfiguredMaxLeases, "broker_pid": leaseResponse.BrokerPID, "broker_start_time": leaseResponse.BrokerStartTime}, Err: errors.New("broker refused lease")}
++		return nil, &SharedRuntimeError{Code: leaseResponse.Code, Reason: leaseResponse.Reason, MismatchField: leaseResponse.MismatchField, Details: map[string]any{"effective_max_leases": leaseResponse.EffectiveMaxLeases, "configured_max_leases": leaseResponse.ConfiguredMaxLeases, "broker_pid": leaseResponse.BrokerPID, "broker_start_time": leaseResponse.BrokerStartTime, "resources": leaseResponse.Resources, "configured_sharing": leaseResponse.ConfiguredSharing, "effective_sharing": leaseResponse.EffectiveSharing}, Err: errors.New("broker refused lease")}
+ 	}
+ 	if leaseResponse.Type != "lease" || leaseResponse.Lease == nil || leaseResponse.Runtime == nil {
+ 		return nil, sharedRuntimeError("protocol_violation", errors.New("lease response is incomplete"))
+diff --git a/tools/agents-infra/internal/infra/pi_shared_integration_test.go b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+index 509e1fc..2b96169 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_integration_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+@@ -328,6 +328,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+ 	peerProject := filepath.Join(testRoot, "peer-project")
+@@ -388,7 +389,7 @@ broker_start_timeout_seconds = 40
+ 		t.Fatalf("two-lease attested status=%#v", status)
+ 	}
+ 	requireExactSharedRuntimeAttestation(t, status.Attestation)
+-	if status.Sharing.Configured.MaxLeases != 8 || status.Sharing.Effective == nil || status.Sharing.Effective.MaxLeases != 4 || status.Sharing.FixedByPID != status.Broker.PID {
++	if status.Sharing.Configured.MaxLeases != 8 || status.Sharing.Configured.ResourcePressureMode != "disabled" || status.Sharing.Effective == nil || status.Sharing.Effective.MaxLeases != 4 || status.Sharing.Effective.ResourcePressureMode != "disabled" || status.Sharing.FixedByPID != status.Broker.PID {
+ 		t.Fatalf("starter policy was not reported as effective beside peer configuration: %#v", status.Sharing)
+ 	}
+ 
+@@ -453,6 +454,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `, sharedTestProfileName)
+ 	}
+ 	writePiProjectConfig(t, project, bodyForPIDFile(filepath.Join(testRoot, "runtime-a.pid")))
+@@ -562,6 +564,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+ 	resolved, err := resolveSharedProfile(project, home, cache, sharedTestProfileName)
+@@ -682,6 +685,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+ 	first := startSharedLeaseHelper(t, project, home, "RUN-stop-a")
+@@ -763,6 +767,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+ 	writePiProjectConfig(t, peerProject, strings.Replace(body, "max_leases = 1", "max_leases = 16", 1))
+@@ -847,6 +852,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 47
++resource_pressure_mode = "disabled"
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+ 	resolved, err := resolveSharedProfile(project, home, cache, sharedTestProfileName)
+@@ -950,6 +956,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+ 	resolved, err := resolveSharedProfile(project, home, cache, sharedTestProfileName)
+@@ -1243,6 +1250,7 @@ restart_max_backoff_seconds = 2
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `
+ 	writePiProjectConfig(t, project, body)
+ 	resolved, err := resolveSharedProfile(project, home, cache, "profile")
+diff --git a/tools/agents-infra/internal/infra/pi_shared_launcher_test.go b/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+index 1c5f8c7..aec1be3 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+@@ -71,6 +71,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 35
++resource_pressure_mode = "disabled"
+ `
+ 	writePiProjectConfig(t, project, body)
+ 	resolved, err := resolveSharedProfile(project, home, cache, "profile")
+diff --git a/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go b/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go
+index d73f38a..a5cbcaa 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go
+@@ -77,6 +77,7 @@ type SharedRuntimeStatus struct {
+ 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
+ 	ManualQuarantine   bool                        `json:"manual_quarantine"`
+ 	HalfOpen           bool                        `json:"half_open"`
++	Resources          SharedRuntimeResourceStatus `json:"resources"`
+ 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
+ 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
+ 	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+@@ -120,6 +121,10 @@ func SharedRuntimeStatusReport(options SharedRuntimeOperatorOptions) (SharedRunt
+ 		report.Broker = sharedBrokerStatus(message.State, message.Stage, "attested", *message.Broker)
+ 		report.Runtime = sharedRuntimeProcessStatus(message.Runtime, "attested")
+ 		report.Leases = append([]SharedLeaseStatus(nil), message.Leases...)
++		if message.Resources == nil {
++			return SharedRuntimeStatus{}, sharedRuntimeError("protocol_violation", errors.New("broker status response lacks resource facts"))
++		}
++		report.Resources = *message.Resources
+ 		report.Attestation = append([]SharedRuntimeGateOutcome(nil), attested.gates...)
+ 		report.Sharing.Effective = message.EffectiveSharing
+ 		report.Sharing.FixedByPID = message.Broker.PID
+@@ -236,9 +241,10 @@ func newSharedRuntimeStatus(resolved sharedResolvedProfile) SharedRuntimeStatus
+ 	return SharedRuntimeStatus{
+ 		RuntimeKey: resolved.RuntimeKey, ProfileDigest: resolved.ProfileDigest,
+ 		Endpoint: resolved.Profile.BaseURL, Paths: resolved.Paths,
+-		Sharing: SharedRuntimeSharingStatus{Mode: resolved.Sharing.Mode, Configured: resolved.Sharing},
+-		Broker:  SharedRuntimeBrokerStatus{State: "absent", Source: "determined"},
+-		Leases:  []SharedLeaseStatus{}, Attestation: []SharedRuntimeGateOutcome{},
++		Sharing:   SharedRuntimeSharingStatus{Mode: resolved.Sharing.Mode, Configured: resolved.Sharing},
++		Broker:    SharedRuntimeBrokerStatus{State: "absent", Source: "determined"},
++		Resources: unavailableSharedRuntimeResourceStatus(resolved.Sharing, "absent", "broker-absent"),
++		Leases:    []SharedLeaseStatus{}, Attestation: []SharedRuntimeGateOutcome{},
+ 	}
+ }
+ 
+@@ -280,6 +286,9 @@ func sharedRuntimeRecordStatus(resolved sharedResolvedProfile, report SharedRunt
+ 		report.Sharing.Effective = &effective
+ 		report.Sharing.FixedByPID = record.Broker.PID
+ 		report.Sharing.FixedAt = &record.Broker.StartTime
++		report.Resources = unavailableSharedRuntimeResourceStatus(effective, state, "record-derived-unverified")
++	} else {
++		report.Resources = unknownSharedRuntimeResourcePolicyStatus(state, "record-derived-unverified")
+ 	}
+ 	leasing, err := readSharedLeaseMirrors(resolved.Paths.LeasesDir)
+ 	if err != nil {
+diff --git a/tools/agents-infra/internal/infra/pi_shared_protocol.go b/tools/agents-infra/internal/infra/pi_shared_protocol.go
+index de46641..2df8037 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_protocol.go
++++ b/tools/agents-infra/internal/infra/pi_shared_protocol.go
+@@ -24,7 +24,7 @@ import (
+ )
+ 
+ const (
+-	SharedRuntimeProtocolVersion  = 6
++	SharedRuntimeProtocolVersion  = 7
+ 	sharedRuntimeAuthSchema       = "agents-infra.pi.shared-runtime.auth.v1"
+ 	sharedRuntimeProfileSchema    = "agents-infra.pi.shared-runtime.profile.v1"
+ 	sharedRuntimeKeySchema        = "agents-infra.pi.shared-runtime.v1"
+diff --git a/tools/agents-infra/internal/infra/pi_shared_resources.go b/tools/agents-infra/internal/infra/pi_shared_resources.go
+new file mode 100644
+index 0000000..e4ee14a
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_shared_resources.go
+@@ -0,0 +1,336 @@
++package infra
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"time"
++)
++
++const (
++	SharedRuntimeResourceStatusSchema                      = "agents-infra.pi.shared-runtime.resource-status.v1"
++	sharedRuntimeResourceObservationSchema                 = "agents-infra.pi.shared-runtime.resource-observation.v1"
++	sharedRuntimeResourceObservationMaxBytes               = 16 * 1024
++	sharedRuntimeResourceObservationMaxTimeoutMilliseconds = 30_000
++)
++
++type SharedRuntimeResourceState string
++type SharedRuntimeMemoryState string
++type SharedRuntimeInferenceState string
++type SharedRuntimeAdmissionState string
++
++const (
++	SharedRuntimeResourceHealthy   SharedRuntimeResourceState = "healthy"
++	SharedRuntimeResourceBusy      SharedRuntimeResourceState = "busy"
++	SharedRuntimeResourcePressured SharedRuntimeResourceState = "pressured"
++	SharedRuntimeResourceDraining  SharedRuntimeResourceState = "draining"
++	SharedRuntimeResourceUnknown   SharedRuntimeResourceState = "unknown"
++
++	SharedRuntimeMemoryHealthy   SharedRuntimeMemoryState = "healthy"
++	SharedRuntimeMemoryPressured SharedRuntimeMemoryState = "pressured"
++	SharedRuntimeMemoryUnknown   SharedRuntimeMemoryState = "unknown"
++
++	SharedRuntimeInferenceIdle    SharedRuntimeInferenceState = "idle"
++	SharedRuntimeInferenceBusy    SharedRuntimeInferenceState = "busy"
++	SharedRuntimeInferenceUnknown SharedRuntimeInferenceState = "unknown"
++
++	SharedRuntimeAdmissionAdmitted    SharedRuntimeAdmissionState = "admitted"
++	SharedRuntimeAdmissionRefused     SharedRuntimeAdmissionState = "refused"
++	SharedRuntimeAdmissionNotEnforced SharedRuntimeAdmissionState = "not-enforced"
++)
++
++type SharedRuntimeLoadedModelMemoryStatus struct {
++	State           SharedRuntimeMemoryState `json:"state"`
++	Bytes           *uint64                  `json:"bytes,omitempty"`
++	PressureAtBytes int                      `json:"pressure_at_bytes,omitempty"`
++	RecoveryAtBytes int                      `json:"recovery_at_bytes,omitempty"`
++	Reason          string                   `json:"reason,omitempty"`
++}
++
++type SharedRuntimeInferenceStatus struct {
++	State  SharedRuntimeInferenceState `json:"state"`
++	Reason string                      `json:"reason,omitempty"`
++}
++
++type SharedRuntimeResourcePolicyStatus struct {
++	Mode                 string `json:"mode"`
++	EvictionGraceSeconds int    `json:"eviction_grace_seconds"`
++	PressureAction       string `json:"pressure_action,omitempty"`
++	UnknownAction        string `json:"unknown_action,omitempty"`
++	BusyAction           string `json:"busy_action,omitempty"`
++}
++
++// SharedRuntimeResourceStatus is the versioned consumer handoff for resource
++// admission. State is one of healthy, busy, pressured, draining, or unknown.
++// The independent facts remain explicit so a consumer never has to infer busy
++// or pressure from leases, restart counts, or broker lifecycle state.
++type SharedRuntimeResourceStatus struct {
++	Schema            string                               `json:"schema"`
++	State             SharedRuntimeResourceState           `json:"state"`
++	Source            string                               `json:"source"`
++	ObservedAt        *time.Time                           `json:"observed_at,omitempty"`
++	LoadedModelMemory SharedRuntimeLoadedModelMemoryStatus `json:"loaded_model_memory"`
++	Inference         SharedRuntimeInferenceStatus         `json:"inference"`
++	Admission         SharedRuntimeAdmissionState          `json:"admission"`
++	Reason            string                               `json:"reason,omitempty"`
++	Policy            SharedRuntimeResourcePolicyStatus    `json:"policy"`
++}
++
++type sharedRuntimeProviderMemoryFact struct {
++	State  string  `json:"state"`
++	Bytes  *uint64 `json:"bytes,omitempty"`
++	Reason string  `json:"reason,omitempty"`
++}
++
++type sharedRuntimeProviderInferenceFact struct {
++	State  string `json:"state"`
++	Reason string `json:"reason,omitempty"`
++}
++
++type sharedRuntimeProviderResourceObservation struct {
++	Schema            string                             `json:"schema"`
++	Model             string                             `json:"model"`
++	LoadedModelMemory sharedRuntimeProviderMemoryFact    `json:"loaded_model_memory"`
++	Inference         sharedRuntimeProviderInferenceFact `json:"inference"`
++}
++
++func disabledSharedRuntimeResourceStatus(sharing PiRuntimeSharing, brokerState, source string) SharedRuntimeResourceStatus {
++	state := SharedRuntimeResourceUnknown
++	admission := SharedRuntimeAdmissionNotEnforced
++	if brokerState == "draining" {
++		state = SharedRuntimeResourceDraining
++		admission = SharedRuntimeAdmissionRefused
++	}
++	return SharedRuntimeResourceStatus{
++		Schema:            SharedRuntimeResourceStatusSchema,
++		State:             state,
++		Source:            source,
++		LoadedModelMemory: SharedRuntimeLoadedModelMemoryStatus{State: SharedRuntimeMemoryUnknown, Reason: "resource_pressure_disabled"},
++		Inference:         SharedRuntimeInferenceStatus{State: SharedRuntimeInferenceUnknown, Reason: "resource_pressure_disabled"},
++		Admission:         admission,
++		Reason:            "resource_pressure_disabled",
++		Policy:            SharedRuntimeResourcePolicyStatus{Mode: sharing.ResourcePressureMode},
++	}
++}
++
++func unavailableSharedRuntimeResourceStatus(sharing PiRuntimeSharing, brokerState, source string) SharedRuntimeResourceStatus {
++	if sharing.ResourcePressureMode == "disabled" && sharing.ResourcePressure == nil {
++		return disabledSharedRuntimeResourceStatus(sharing, brokerState, source)
++	}
++	if sharing.ResourcePressureMode == "provider" && sharing.ResourcePressure != nil {
++		status := failedSharedRuntimeResourceStatus(*sharing.ResourcePressure, brokerState, "broker_resource_observation_unavailable")
++		status.Source = source
++		return status
++	}
++	return unknownSharedRuntimeResourcePolicyStatus(brokerState, source)
++}
++
++func unknownSharedRuntimeResourcePolicyStatus(brokerState, source string) SharedRuntimeResourceStatus {
++	state := SharedRuntimeResourceUnknown
++	if brokerState == "draining" {
++		state = SharedRuntimeResourceDraining
++	}
++	const reason = "resource_pressure_policy_unknown"
++	return SharedRuntimeResourceStatus{
++		Schema:            SharedRuntimeResourceStatusSchema,
++		State:             state,
++		Source:            source,
++		LoadedModelMemory: SharedRuntimeLoadedModelMemoryStatus{State: SharedRuntimeMemoryUnknown, Reason: reason},
++		Inference:         SharedRuntimeInferenceStatus{State: SharedRuntimeInferenceUnknown, Reason: reason},
++		Admission:         SharedRuntimeAdmissionRefused,
++		Reason:            reason,
++		Policy:            SharedRuntimeResourcePolicyStatus{Mode: "unknown"},
++	}
++}
++
++func failedSharedRuntimeResourceStatus(policy PiRuntimeResourcePressure, brokerState, reason string) SharedRuntimeResourceStatus {
++	state := SharedRuntimeResourceUnknown
++	if brokerState == "draining" {
++		state = SharedRuntimeResourceDraining
++	}
++	return SharedRuntimeResourceStatus{
++		Schema: SharedRuntimeResourceStatusSchema,
++		State:  state,
++		Source: "provider-observation-failed",
++		LoadedModelMemory: SharedRuntimeLoadedModelMemoryStatus{
++			State: SharedRuntimeMemoryUnknown, PressureAtBytes: policy.PressureThresholdBytes,
++			RecoveryAtBytes: policy.RecoveryThresholdBytes, Reason: reason,
++		},
++		Inference: SharedRuntimeInferenceStatus{State: SharedRuntimeInferenceUnknown, Reason: reason},
++		Admission: SharedRuntimeAdmissionRefused,
++		Reason:    reason,
++		Policy:    sharedRuntimeResourcePolicyStatus(policy),
++	}
++}
++
++func sharedRuntimeResourcePolicyStatus(policy PiRuntimeResourcePressure) SharedRuntimeResourcePolicyStatus {
++	return SharedRuntimeResourcePolicyStatus{
++		Mode: "provider", EvictionGraceSeconds: policy.EvictionGraceSeconds,
++		PressureAction: policy.PressureAction, UnknownAction: policy.UnknownAction,
++		BusyAction: policy.BusyAction,
++	}
++}
++
++// sharedRuntimeResourcePolicyMatches is the single lease-admission
++// compatibility boundary between a caller's configured policy and the policy
++// fixed by the live broker. Resource-pressure policy is intentionally strict:
++// any mode or table difference refuses acquisition instead of silently
++// weakening, strengthening, or otherwise changing the caller's reviewed gate.
++func sharedRuntimeResourcePolicyMatches(configured *PiRuntimeSharing, effective PiRuntimeSharing) bool {
++	if configured == nil || configured.ResourcePressureMode != effective.ResourcePressureMode {
++		return false
++	}
++	switch effective.ResourcePressureMode {
++	case "disabled":
++		return configured.ResourcePressure == nil && effective.ResourcePressure == nil
++	case "provider":
++		return configured.ResourcePressure != nil && effective.ResourcePressure != nil &&
++			*configured.ResourcePressure == *effective.ResourcePressure
++	default:
++		return false
++	}
++}
++
++func classifySharedRuntimeResources(observation sharedRuntimeProviderResourceObservation, policy PiRuntimeResourcePressure, brokerState string, pressureLatched bool, now time.Time) (SharedRuntimeResourceStatus, bool) {
++	status := SharedRuntimeResourceStatus{
++		Schema: SharedRuntimeResourceStatusSchema, Source: "provider-observed",
++		ObservedAt: timePointer(now.UTC()), Admission: SharedRuntimeAdmissionAdmitted,
++		Policy: sharedRuntimeResourcePolicyStatus(policy),
++	}
++	if observation.LoadedModelMemory.State == "unknown" {
++		status.LoadedModelMemory = SharedRuntimeLoadedModelMemoryStatus{
++			State: SharedRuntimeMemoryUnknown, PressureAtBytes: policy.PressureThresholdBytes,
++			RecoveryAtBytes: policy.RecoveryThresholdBytes, Reason: observation.LoadedModelMemory.Reason,
++		}
++	} else {
++		bytesValue := *observation.LoadedModelMemory.Bytes
++		if pressureLatched {
++			if bytesValue <= uint64(policy.RecoveryThresholdBytes) {
++				pressureLatched = false
++			}
++		} else if bytesValue >= uint64(policy.PressureThresholdBytes) {
++			pressureLatched = true
++		}
++		memoryState := SharedRuntimeMemoryHealthy
++		if pressureLatched {
++			memoryState = SharedRuntimeMemoryPressured
++		}
++		status.LoadedModelMemory = SharedRuntimeLoadedModelMemoryStatus{
++			State: memoryState, Bytes: &bytesValue,
++			PressureAtBytes: policy.PressureThresholdBytes,
++			RecoveryAtBytes: policy.RecoveryThresholdBytes,
++		}
++	}
++	status.Inference = SharedRuntimeInferenceStatus{State: SharedRuntimeInferenceState(observation.Inference.State), Reason: observation.Inference.Reason}
++	switch {
++	case brokerState == "draining":
++		status.State, status.Admission, status.Reason = SharedRuntimeResourceDraining, SharedRuntimeAdmissionRefused, "broker_draining"
++	case status.LoadedModelMemory.State == SharedRuntimeMemoryPressured:
++		status.State, status.Admission, status.Reason = SharedRuntimeResourcePressured, SharedRuntimeAdmissionRefused, "loaded_model_memory_pressure"
++	case status.LoadedModelMemory.State == SharedRuntimeMemoryUnknown || status.Inference.State == SharedRuntimeInferenceUnknown:
++		status.State, status.Admission, status.Reason = SharedRuntimeResourceUnknown, SharedRuntimeAdmissionRefused, "resource_observation_unknown"
++	case status.Inference.State == SharedRuntimeInferenceBusy:
++		status.State = SharedRuntimeResourceBusy
++	default:
++		status.State = SharedRuntimeResourceHealthy
++	}
++	return status, pressureLatched
++}
++
++func observeSharedRuntimeProviderResources(ctx context.Context, client *http.Client, baseURL, model string, policy PiRuntimeResourcePressure) (sharedRuntimeProviderResourceObservation, error) {
++	endpoint, err := url.Parse(baseURL)
++	if err != nil {
++		return sharedRuntimeProviderResourceObservation{}, err
++	}
++	endpoint.Path = policy.ObservationPath
++	endpoint.RawPath = ""
++	endpoint.RawQuery = ""
++	endpoint.Fragment = ""
++	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
++	if err != nil {
++		return sharedRuntimeProviderResourceObservation{}, err
++	}
++	if client == nil {
++		client = http.DefaultClient
++	}
++	response, err := client.Do(request)
++	if err != nil {
++		return sharedRuntimeProviderResourceObservation{}, err
++	}
++	defer response.Body.Close()
++	if response.StatusCode != http.StatusOK {
++		return sharedRuntimeProviderResourceObservation{}, fmt.Errorf("resource observation status %d", response.StatusCode)
++	}
++	data, err := io.ReadAll(io.LimitReader(response.Body, sharedRuntimeResourceObservationMaxBytes+1))
++	if err != nil {
++		return sharedRuntimeProviderResourceObservation{}, err
++	}
++	if len(data) > sharedRuntimeResourceObservationMaxBytes {
++		return sharedRuntimeProviderResourceObservation{}, errors.New("resource observation exceeds 16384 bytes")
++	}
++	decoder := json.NewDecoder(bytes.NewReader(data))
++	decoder.DisallowUnknownFields()
++	var observation sharedRuntimeProviderResourceObservation
++	if err := decoder.Decode(&observation); err != nil {
++		return sharedRuntimeProviderResourceObservation{}, err
++	}
++	if err := requireSharedRuntimeResourceJSONEOF(decoder); err != nil {
++		return sharedRuntimeProviderResourceObservation{}, err
++	}
++	if err := validateSharedRuntimeProviderObservation(observation, model); err != nil {
++		return sharedRuntimeProviderResourceObservation{}, err
++	}
++	return observation, nil
++}
++
++func validateSharedRuntimeProviderObservation(observation sharedRuntimeProviderResourceObservation, model string) error {
++	if observation.Schema != sharedRuntimeResourceObservationSchema {
++		return errors.New("resource observation schema differs")
++	}
++	if observation.Model != model {
++		return errors.New("resource observation model differs")
++	}
++	switch observation.LoadedModelMemory.State {
++	case "observed":
++		if observation.LoadedModelMemory.Bytes == nil || *observation.LoadedModelMemory.Bytes == 0 || observation.LoadedModelMemory.Reason != "" {
++			return errors.New("observed loaded-model memory fact is incomplete")
++		}
++	case "unknown":
++		if observation.LoadedModelMemory.Bytes != nil || observation.LoadedModelMemory.Reason == "" {
++			return errors.New("unknown loaded-model memory fact is incomplete")
++		}
++	default:
++		return errors.New("loaded-model memory state must equal observed or unknown")
++	}
++	switch observation.Inference.State {
++	case "idle", "busy":
++		if observation.Inference.Reason != "" {
++			return errors.New("observed inference fact must not carry a reason")
++		}
++	case "unknown":
++		if observation.Inference.Reason == "" {
++			return errors.New("unknown inference fact requires a reason")
++		}
++	default:
++		return errors.New("inference state must equal idle, busy, or unknown")
++	}
++	return nil
++}
++
++func timePointer(value time.Time) *time.Time { return &value }
++
++func requireSharedRuntimeResourceJSONEOF(decoder *json.Decoder) error {
++	var extra any
++	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
++		if err == nil {
++			return errors.New("content follows resource observation")
++		}
++		return err
++	}
++	return nil
++}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_resources_test.go b/tools/agents-infra/internal/infra/pi_shared_resources_test.go
+new file mode 100644
+index 0000000..c6b0fb9
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_shared_resources_test.go
+@@ -0,0 +1,1134 @@
++//go:build darwin
++
++package infra
++
++import (
++	"bufio"
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"reflect"
++	"strings"
++	"sync/atomic"
++	"syscall"
++	"testing"
++	"time"
++)
++
++func testSharedRuntimeResourcePolicy() PiRuntimeResourcePressure {
++	return PiRuntimeResourcePressure{
++		ObservationPath: "/agents-infra/resources", ObservationTimeoutMilliseconds: 100,
++		PressureThresholdBytes: 1000, RecoveryThresholdBytes: 800, EvictionGraceSeconds: 0,
++		PressureAction: "refuse-new-drain-idle", UnknownAction: "refuse-new", BusyAction: "observe",
++	}
++}
++
++func sharedRuntimeProviderTestProfileTOML(name, runtime string, port int) string {
++	return strings.Replace(sharedPiProfileTOML(name, runtime, port),
++		`resource_pressure_mode = "disabled"`,
++		`resource_pressure_mode = "provider"
++
++[agents.pi.profiles."profile".runtime.sharing.resource_pressure]
++observation_path = "/agents-infra/resources"
++observation_timeout_milliseconds = 100
++pressure_threshold_bytes = 1000
++recovery_threshold_bytes = 800
++eviction_grace_seconds = 0
++pressure_action = "refuse-new-drain-idle"
++unknown_action = "refuse-new"
++busy_action = "observe"`, 1)
++}
++
++func observedSharedRuntimeResources(bytesValue uint64, inference string) sharedRuntimeProviderResourceObservation {
++	return sharedRuntimeProviderResourceObservation{
++		Schema: sharedRuntimeResourceObservationSchema, Model: "Qwen-test",
++		LoadedModelMemory: sharedRuntimeProviderMemoryFact{State: "observed", Bytes: &bytesValue},
++		Inference:         sharedRuntimeProviderInferenceFact{State: inference},
++	}
++}
++
++func TestSharedRuntimeProviderObservationIsBoundedStrictAndVersioned(t *testing.T) {
++	policy := testSharedRuntimeResourcePolicy()
++	fixtureData, err := os.ReadFile("testdata/shared-runtime-resource-observation-v1.json")
++	if err != nil {
++		t.Fatal(err)
++	}
++	var valid sharedRuntimeProviderResourceObservation
++	decoder := json.NewDecoder(bytes.NewReader(fixtureData))
++	decoder.DisallowUnknownFields()
++	if err := decoder.Decode(&valid); err != nil || requireSharedRuntimeResourceJSONEOF(decoder) != nil {
++		t.Fatalf("versioned provider fixture is invalid: %v", err)
++	}
++	tests := []struct {
++		name    string
++		body    any
++		status  int
++		wantErr bool
++	}{
++		{name: "versioned observed facts", body: valid},
++		{name: "wrong schema", body: func() any { value := valid; value.Schema = "v0"; return value }(), wantErr: true},
++		{name: "wrong model", body: func() any { value := valid; value.Model = "other"; return value }(), wantErr: true},
++		{name: "unknown field", body: map[string]any{"schema": sharedRuntimeResourceObservationSchema, "model": "Qwen-test", "loaded_model_memory": map[string]any{"state": "observed", "bytes": 900}, "inference": map[string]any{"state": "idle"}, "lease_count": 0}, wantErr: true},
++		{name: "read failure is not unknown", status: http.StatusServiceUnavailable, body: map[string]any{"error": "unavailable"}, wantErr: true},
++	}
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
++				if request.URL.Path != policy.ObservationPath {
++					t.Fatalf("observation path=%q", request.URL.Path)
++				}
++				status := tc.status
++				if status == 0 {
++					status = http.StatusOK
++				}
++				writer.WriteHeader(status)
++				_ = json.NewEncoder(writer).Encode(tc.body)
++			}))
++			defer server.Close()
++			observation, err := observeSharedRuntimeProviderResources(context.Background(), server.Client(), server.URL+"/v1", "Qwen-test", policy)
++			if tc.wantErr {
++				if err == nil {
++					t.Fatalf("invalid provider observation admitted: %#v", observation)
++				}
++				return
++			}
++			if err != nil || observation.Schema != sharedRuntimeResourceObservationSchema || observation.Inference.State != "busy" {
++				t.Fatalf("observation=%#v err=%v", observation, err)
++			}
++		})
++	}
++
++	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
++		writer.WriteHeader(http.StatusOK)
++		_, _ = writer.Write([]byte(strings.Repeat("x", sharedRuntimeResourceObservationMaxBytes+1)))
++	}))
++	defer server.Close()
++	if _, err := observeSharedRuntimeProviderResources(context.Background(), server.Client(), server.URL+"/v1", "Qwen-test", policy); err == nil {
++		t.Fatal("oversized provider observation was admitted")
++	}
++}
++
++func TestSharedRuntimeResourceStatusConsumerFixtureV1(t *testing.T) {
++	status, pressure := classifySharedRuntimeResources(observedSharedRuntimeResources(900, "busy"), testSharedRuntimeResourcePolicy(), "serving", false, time.Unix(100, 0).UTC())
++	if pressure {
++		t.Fatal("healthy fixture unexpectedly latched pressure")
++	}
++	got, err := json.MarshalIndent(status, "", "  ")
++	if err != nil {
++		t.Fatal(err)
++	}
++	got = append(got, '\n')
++	want, err := os.ReadFile("testdata/shared-runtime-resource-status-v1.json")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !bytes.Equal(got, want) {
++		t.Fatalf("consumer fixture drifted\ngot:\n%s\nwant:\n%s", got, want)
++	}
++}
++
++// Production call site: SharedRuntimeStatusReport -> sharedRuntimeRecordStatus.
++// A stale persisted record is unverified, but its effective sharing provenance
++// must still agree with the resource-policy view. Caller configuration must not
++// be laundered into an effective disabled or provider enforcement claim.
++func TestSharedRuntimeStatusReportRecordDerivedResourcePolicyUsesCoherentProvenance(t *testing.T) {
++	tests := []struct {
++		name               string
++		configuredProvider bool
++		recordSharing      func(PiRuntimeSharing) *PiRuntimeSharing
++		wantEffectiveMode  string
++		wantPolicyMode     string
++		wantReason         string
++		wantAdmission      SharedRuntimeAdmissionState
++	}{
++		{
++			name: "configured disabled and record effective provider",
++			recordSharing: func(configured PiRuntimeSharing) *PiRuntimeSharing {
++				policy := testSharedRuntimeResourcePolicy()
++				configured.ResourcePressureMode = "provider"
++				configured.ResourcePressure = &policy
++				return &configured
++			},
++			wantEffectiveMode: "provider", wantPolicyMode: "provider",
++			wantReason: "broker_resource_observation_unavailable", wantAdmission: SharedRuntimeAdmissionRefused,
++		},
++		{
++			name:               "configured provider and record effective disabled",
++			configuredProvider: true,
++			recordSharing: func(configured PiRuntimeSharing) *PiRuntimeSharing {
++				configured.ResourcePressureMode = "disabled"
++				configured.ResourcePressure = nil
++				return &configured
++			},
++			wantEffectiveMode: "disabled", wantPolicyMode: "disabled",
++			wantReason: "resource_pressure_disabled", wantAdmission: SharedRuntimeAdmissionNotEnforced,
++		},
++		{
++			name:           "pre extension record has unknown effective policy",
++			recordSharing:  func(PiRuntimeSharing) *PiRuntimeSharing { return nil },
++			wantPolicyMode: "unknown", wantReason: "resource_pressure_policy_unknown",
++			wantAdmission: SharedRuntimeAdmissionRefused,
++		},
++		{
++			name: "partial record provider policy is unknown",
++			recordSharing: func(configured PiRuntimeSharing) *PiRuntimeSharing {
++				configured.ResourcePressureMode = "provider"
++				configured.ResourcePressure = nil
++				return &configured
++			},
++			wantEffectiveMode: "provider", wantPolicyMode: "unknown",
++			wantReason: "resource_pressure_policy_unknown", wantAdmission: SharedRuntimeAdmissionRefused,
++		},
++		{
++			name: "partial record disabled policy is unknown",
++			recordSharing: func(configured PiRuntimeSharing) *PiRuntimeSharing {
++				policy := testSharedRuntimeResourcePolicy()
++				configured.ResourcePressureMode = "disabled"
++				configured.ResourcePressure = &policy
++				return &configured
++			},
++			wantEffectiveMode: "disabled", wantPolicyMode: "unknown",
++			wantReason: "resource_pressure_policy_unknown", wantAdmission: SharedRuntimeAdmissionRefused,
++		},
++	}
++
++	for _, testCase := range tests {
++		t.Run(testCase.name, func(t *testing.T) {
++			project, home, cache, resolved := newSharedIntegrationProfile(t)
++			if testCase.configuredProvider {
++				writePiProjectConfig(t, project, sharedRuntimeProviderTestProfileTOML("profile", "/bin/echo", 18011))
++				var err error
++				resolved, err = resolveSharedProfile(project, home, cache, "profile")
++				if err != nil {
++					t.Fatal(err)
++				}
++			}
++			record := SharedBrokerRecord{
++				Stage: "serving", State: "serving", ProtocolVersion: SharedRuntimeProtocolVersion,
++				Broker:            SharedBrokerIdentity{PID: 99_999_999},
++				RuntimeKeyClaimed: resolved.RuntimeKey, RuntimeKey: resolved.RuntimeKey,
++				ProfileDigest: resolved.ProfileDigest,
++				Sharing:       testCase.recordSharing(resolved.Sharing),
++			}
++			if err := writeSharedJSONAtomic(resolved.Paths.BrokerState, record); err != nil {
++				t.Fatal(err)
++			}
++
++			status, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{
++				ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile",
++			})
++			if err != nil {
++				t.Fatal(err)
++			}
++			if status.Broker.State != "unverified-stale" || status.Broker.Source != "record-derived-unverified" {
++				t.Fatalf("record broker provenance=%#v", status.Broker)
++			}
++			if status.Resources.Source != "record-derived-unverified" || status.Resources.ObservedAt != nil ||
++				status.Resources.LoadedModelMemory.State != SharedRuntimeMemoryUnknown ||
++				status.Resources.Inference.State != SharedRuntimeInferenceUnknown {
++				t.Fatalf("record resource observation was guessed: %#v", status.Resources)
++			}
++			if status.Resources.Policy.Mode != testCase.wantPolicyMode || status.Resources.Reason != testCase.wantReason || status.Resources.Admission != testCase.wantAdmission {
++				t.Fatalf("record resource policy=%#v want mode=%q reason=%q admission=%q", status.Resources, testCase.wantPolicyMode, testCase.wantReason, testCase.wantAdmission)
++			}
++			if testCase.wantEffectiveMode == "" {
++				if status.Sharing.Effective != nil {
++					t.Fatalf("pre-extension record invented effective sharing: %#v", status.Sharing.Effective)
++				}
++			} else if status.Sharing.Effective == nil || status.Sharing.Effective.ResourcePressureMode != testCase.wantEffectiveMode {
++				t.Fatalf("record effective sharing=%#v want mode=%q", status.Sharing.Effective, testCase.wantEffectiveMode)
++			}
++		})
++	}
++}
++
++func TestSharedRuntimeResourceClassificationPreservesUnknownAndHysteresis(t *testing.T) {
++	policy := testSharedRuntimeResourcePolicy()
++	now := time.Unix(100, 0).UTC()
++	status, pressure := classifySharedRuntimeResources(observedSharedRuntimeResources(700, "idle"), policy, "serving", false, now)
++	if status.State != SharedRuntimeResourceHealthy || status.Admission != SharedRuntimeAdmissionAdmitted || pressure {
++		t.Fatalf("healthy classification=%#v latched=%t", status, pressure)
++	}
++	status, pressure = classifySharedRuntimeResources(observedSharedRuntimeResources(1000, "idle"), policy, "serving", pressure, now)
++	if status.State != "pressured" || status.Admission != "refused" || !pressure {
++		t.Fatalf("pressure classification=%#v latched=%t", status, pressure)
++	}
++	status, pressure = classifySharedRuntimeResources(observedSharedRuntimeResources(900, "busy"), policy, "serving", pressure, now)
++	if status.State != "pressured" || !pressure {
++		t.Fatalf("hysteresis gap cleared pressure: %#v latched=%t", status, pressure)
++	}
++	status, pressure = classifySharedRuntimeResources(observedSharedRuntimeResources(800, "busy"), policy, "serving", pressure, now)
++	if status.State != "busy" || status.Inference.State != "busy" || status.Admission != "admitted" || pressure {
++		t.Fatalf("recovery classification=%#v latched=%t", status, pressure)
++	}
++	unknown := observedSharedRuntimeResources(700, "idle")
++	unknown.LoadedModelMemory = sharedRuntimeProviderMemoryFact{State: "unknown", Reason: "provider_does_not_report_memory"}
++	status, pressure = classifySharedRuntimeResources(unknown, policy, "serving", pressure, now)
++	if status.State != "unknown" || status.Admission != "refused" || pressure {
++		t.Fatalf("unknown fact was guessed: %#v latched=%t", status, pressure)
++	}
++	status, _ = classifySharedRuntimeResources(observedSharedRuntimeResources(700, "idle"), policy, "draining", false, now)
++	if status.State != "draining" || status.Admission != "refused" {
++		t.Fatalf("draining classification=%#v", status)
++	}
++}
++
++func configureSharedBrokerResourceFixture(fixture *sharedBrokerAdmissionFixture, observations ...sharedRuntimeProviderResourceObservation) {
++	policy := testSharedRuntimeResourcePolicy()
++	fixture.server.resolved.Sharing.ResourcePressureMode = "provider"
++	fixture.server.resolved.Sharing.ResourcePressure = &policy
++	fixture.hello.ConfiguredSharing = &fixture.server.resolved.Sharing
++	index := 0
++	fixture.server.resources = sharedBrokerResourceDependencies{
++		observe: func(context.Context, *http.Client, string, string, PiRuntimeResourcePressure) (sharedRuntimeProviderResourceObservation, error) {
++			if index >= len(observations) {
++				return sharedRuntimeProviderResourceObservation{}, errors.New("fake provider fixture exhausted")
++			}
++			observation := observations[index]
++			index++
++			return observation, nil
++		},
++		now: func() time.Time { return time.Unix(200, 0).UTC() },
++	}
++}
++
++func startSharedBrokerFixtureConnection(t *testing.T, fixture *sharedBrokerAdmissionFixture) (*net.UnixConn, *bufio.Reader, <-chan struct{}) {
++	t.Helper()
++	serverConnection, clientConnection := sharedBrokerUnixConnectionPair(t)
++	wrapped := &sharedBrokerConnection{connection: serverConnection, reader: bufio.NewReaderSize(serverConnection, sharedRuntimeMaxFrameBytes+1)}
++	fixture.server.mu.Lock()
++	fixture.server.connections[wrapped] = true
++	fixture.server.mu.Unlock()
++	done := make(chan struct{})
++	go func() {
++		fixture.server.handleConnection(wrapped)
++		close(done)
++	}()
++	reader := bufio.NewReaderSize(clientConnection, sharedRuntimeMaxFrameBytes+1)
++	if err := writeSharedWireMessage(clientConnection, fixture.hello); err != nil {
++		t.Fatal(err)
++	}
++	if message, err := readSharedWireMessage(reader); err != nil || message.Type != "hello_ok" {
++		t.Fatalf("hello response=%#v err=%v", message, err)
++	}
++	return clientConnection, reader, done
++}
++
++// Production call site: sharedBrokerServer.handleConnection -> acquireLease.
++// The live broker must refuse before provider observation or lease reservation
++// whenever its fixed resource-pressure policy differs from the caller's
++// configured policy. This covers a provider-to-disabled downgrade, a narrowed
++// threshold, and absent caller evidence.
++func TestSharedBrokerProductionResourcePolicyMismatchRefusesBeforeObservationOrLease(t *testing.T) {
++	tests := []struct {
++		name      string
++		configure func(*sharedBrokerAdmissionFixture) *PiRuntimeSharing
++	}{
++		{
++			name: "provider caller cannot use disabled broker",
++			configure: func(fixture *sharedBrokerAdmissionFixture) *PiRuntimeSharing {
++				fixture.server.resolved.Sharing.ResourcePressureMode = "disabled"
++				fixture.server.resolved.Sharing.ResourcePressure = nil
++				configured := fixture.server.resolved.Sharing
++				policy := testSharedRuntimeResourcePolicy()
++				configured.ResourcePressureMode = "provider"
++				configured.ResourcePressure = &policy
++				return &configured
++			},
++		},
++		{
++			name: "stricter caller threshold cannot be narrowed",
++			configure: configuredSharedRuntimeResourcePolicyDifference(func(policy *PiRuntimeResourcePressure) {
++				policy.PressureThresholdBytes = 900
++			}),
++		},
++		{
++			name: "recovery threshold only differs",
++			configure: configuredSharedRuntimeResourcePolicyDifference(func(policy *PiRuntimeResourcePressure) {
++				policy.RecoveryThresholdBytes = 799
++			}),
++		},
++		{
++			name: "observation path only differs",
++			configure: configuredSharedRuntimeResourcePolicyDifference(func(policy *PiRuntimeResourcePressure) {
++				policy.ObservationPath = "/agents-infra/resources-v2"
++			}),
++		},
++		{
++			name: "observation timeout only differs",
++			configure: configuredSharedRuntimeResourcePolicyDifference(func(policy *PiRuntimeResourcePressure) {
++				policy.ObservationTimeoutMilliseconds++
++			}),
++		},
++		{
++			name: "eviction grace only differs",
++			configure: configuredSharedRuntimeResourcePolicyDifference(func(policy *PiRuntimeResourcePressure) {
++				policy.EvictionGraceSeconds++
++			}),
++		},
++		{
++			name: "pressure action only differs",
++			configure: configuredSharedRuntimeResourcePolicyDifference(func(policy *PiRuntimeResourcePressure) {
++				policy.PressureAction += "-v2"
++			}),
++		},
++		{
++			name: "unknown action only differs",
++			configure: configuredSharedRuntimeResourcePolicyDifference(func(policy *PiRuntimeResourcePressure) {
++				policy.UnknownAction += "-v2"
++			}),
++		},
++		{
++			name: "busy action only differs",
++			configure: configuredSharedRuntimeResourcePolicyDifference(func(policy *PiRuntimeResourcePressure) {
++				policy.BusyAction += "-v2"
++			}),
++		},
++		{
++			name: "disabled caller cannot use provider broker",
++			configure: func(fixture *sharedBrokerAdmissionFixture) *PiRuntimeSharing {
++				effectivePolicy := testSharedRuntimeResourcePolicy()
++				fixture.server.resolved.Sharing.ResourcePressureMode = "provider"
++				fixture.server.resolved.Sharing.ResourcePressure = &effectivePolicy
++				configured := fixture.server.resolved.Sharing
++				configured.ResourcePressureMode = "disabled"
++				configured.ResourcePressure = nil
++				return &configured
++			},
++		},
++		{
++			name: "absent caller policy is not treated as compatible",
++			configure: func(fixture *sharedBrokerAdmissionFixture) *PiRuntimeSharing {
++				fixture.server.resolved.Sharing.ResourcePressureMode = "disabled"
++				fixture.server.resolved.Sharing.ResourcePressure = nil
++				return nil
++			},
++		},
++	}
++
++	for _, testCase := range tests {
++		t.Run(testCase.name, func(t *testing.T) {
++			fixture := newSharedBrokerAdmissionFixture(t)
++			fixture.server.resolved.Profile.Model = "Qwen-test"
++			configured := testCase.configure(&fixture)
++			fixture.hello.ConfiguredSharing = configured
++			effective := fixture.server.resolved.Sharing
++			fixture.server.record.Sharing = &effective
++			runtimePID := fixture.server.record.Runtime.PID
++
++			var observations atomic.Int32
++			fixture.server.resources = sharedBrokerResourceDependencies{
++				observe: func(context.Context, *http.Client, string, string, PiRuntimeResourcePressure) (sharedRuntimeProviderResourceObservation, error) {
++					observations.Add(1)
++					return observedSharedRuntimeResources(950, "busy"), nil
++				},
++				now: func() time.Time { return time.Unix(500, 0).UTC() },
++			}
++
++			connection, reader, done := startSharedBrokerFixtureConnection(t, &fixture)
++			if err := writeSharedWireMessage(connection, sharedWireMessage{Type: "acquire", ClientKey: "policy-mismatch"}); err != nil {
++				t.Fatal(err)
++			}
++			refusal, err := readSharedWireMessage(reader)
++			if err != nil {
++				t.Fatal(err)
++			}
++			_ = connection.Close()
++			<-done
++
++			if refusal.Type != "refused" || refusal.Code != "shared_runtime_resource_policy_mismatch" || refusal.Reason != "configured_resource_pressure_policy_differs" || refusal.MismatchField != "sharing.resource_pressure" {
++				t.Fatalf("policy mismatch response=%#v", refusal)
++			}
++			if !reflect.DeepEqual(refusal.ConfiguredSharing, configured) || refusal.EffectiveSharing == nil || !reflect.DeepEqual(*refusal.EffectiveSharing, effective) {
++				t.Fatalf("policy mismatch provenance configured=%#v effective=%#v", refusal.ConfiguredSharing, refusal.EffectiveSharing)
++			}
++			if observations.Load() != 0 {
++				t.Fatalf("policy mismatch reached provider observation %d times", observations.Load())
++			}
++			if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 0 || fixture.server.record.Runtime.PID != runtimePID {
++				t.Fatalf("policy mismatch changed ownership: leases=%d runtime=%#v", leaseCount, fixture.server.record.Runtime)
++			}
++		})
++	}
++}
++
++func configuredSharedRuntimeResourcePolicyDifference(mutate func(*PiRuntimeResourcePressure)) func(*sharedBrokerAdmissionFixture) *PiRuntimeSharing {
++	return func(fixture *sharedBrokerAdmissionFixture) *PiRuntimeSharing {
++		effectivePolicy := testSharedRuntimeResourcePolicy()
++		fixture.server.resolved.Sharing.ResourcePressureMode = "provider"
++		fixture.server.resolved.Sharing.ResourcePressure = &effectivePolicy
++		configured := fixture.server.resolved.Sharing
++		configuredPolicy := effectivePolicy
++		mutate(&configuredPolicy)
++		configured.ResourcePressure = &configuredPolicy
++		return &configured
++	}
++}
++
++// Production call site: sharedBrokerServer.handleConnection -> acquireLease.
++// Pressure refuses only the new lease; the existing connection-bound lease and
++// single broker-owned runtime survive, then the same runtime admits after the
++// provider reports memory at the configured recovery threshold.
++func TestSharedBrokerProductionPressureRefusalPreservesLeaseAndRecoversWithoutDuplicateRuntime(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	configureSharedBrokerResourceFixture(&fixture,
++		observedSharedRuntimeResources(700, "idle"),
++		observedSharedRuntimeResources(1000, "busy"),
++		observedSharedRuntimeResources(800, "idle"),
++	)
++	runtimePID := fixture.server.record.Runtime.PID
++
++	first, firstReader, firstDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(first, sharedWireMessage{Type: "acquire", ClientKey: "owner-a"}); err != nil {
++		t.Fatal(err)
++	}
++	firstLease, err := readSharedWireMessage(firstReader)
++	if err != nil || firstLease.Type != "lease" || firstLease.Runtime.PID != runtimePID {
++		t.Fatalf("first lease=%#v err=%v", firstLease, err)
++	}
++
++	pressured, pressuredReader, pressuredDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(pressured, sharedWireMessage{Type: "acquire", ClientKey: "owner-b"}); err != nil {
++		t.Fatal(err)
++	}
++	refusal, err := readSharedWireMessage(pressuredReader)
++	if err != nil || refusal.Type != "refused" || refusal.Code != "shared_runtime_resource_pressure" || refusal.Resources == nil || refusal.Resources.State != "pressured" {
++		t.Fatalf("pressure refusal=%#v err=%v", refusal, err)
++	}
++	_ = pressured.Close()
++	<-pressuredDone
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 1 || fixture.server.record.Runtime.PID != runtimePID {
++		t.Fatalf("pressure changed ownership: leases=%d runtime=%#v", leaseCount, fixture.server.record.Runtime)
++	}
++
++	recovered, recoveredReader, recoveredDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(recovered, sharedWireMessage{Type: "acquire", ClientKey: "owner-c"}); err != nil {
++		t.Fatal(err)
++	}
++	recoveredLease, err := readSharedWireMessage(recoveredReader)
++	if err != nil || recoveredLease.Type != "lease" || recoveredLease.Runtime.PID != runtimePID {
++		t.Fatalf("recovered lease=%#v err=%v", recoveredLease, err)
++	}
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 2 {
++		t.Fatalf("recovery lease count=%d want=2", leaseCount)
++	}
++	_ = first.Close()
++	_ = recovered.Close()
++	<-firstDone
++	<-recoveredDone
++}
++
++// Production call site: sharedBrokerServer.handleConnection -> acquireLease.
++// A provider read failure is unknown, never absence or healthy pressure.
++func TestSharedBrokerProductionUnknownResourceObservationRefusesLease(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	policy := testSharedRuntimeResourcePolicy()
++	fixture.server.resolved.Sharing.ResourcePressureMode = "provider"
++	fixture.server.resolved.Sharing.ResourcePressure = &policy
++	fixture.hello.ConfiguredSharing = &fixture.server.resolved.Sharing
++	fixture.server.resources = sharedBrokerResourceDependencies{
++		observe: func(context.Context, *http.Client, string, string, PiRuntimeResourcePressure) (sharedRuntimeProviderResourceObservation, error) {
++			return sharedRuntimeProviderResourceObservation{}, errors.New("fake read failure")
++		},
++		now: time.Now,
++	}
++	connection, reader, done := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(connection, sharedWireMessage{Type: "acquire", ClientKey: "unknown"}); err != nil {
++		t.Fatal(err)
++	}
++	refusal, err := readSharedWireMessage(reader)
++	if err != nil || refusal.Type != "refused" || refusal.Code != "shared_runtime_resource_unknown" || refusal.Resources == nil || refusal.Resources.State != "unknown" {
++		t.Fatalf("unknown refusal=%#v err=%v", refusal, err)
++	}
++	_ = connection.Close()
++	<-done
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 0 {
++		t.Fatalf("unknown observation granted %d leases", leaseCount)
++	}
++}
++
++// Production call site: sharedBrokerServer.handleConnection status case. This
++// is the protocol-v7 consumer handoff, not a helper-only serialization test.
++func TestSharedBrokerProductionStatusPublishesVersionedBusyFact(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	configureSharedBrokerResourceFixture(&fixture, observedSharedRuntimeResources(700, "busy"))
++	connection, reader, done := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(connection, sharedWireMessage{Type: "status"}); err != nil {
++		t.Fatal(err)
++	}
++	status, err := readSharedWireMessage(reader)
++	if err != nil || status.Type != "status" || status.Resources == nil || status.Resources.Schema != SharedRuntimeResourceStatusSchema || status.Resources.State != "busy" || status.Resources.Inference.State != "busy" {
++		t.Fatalf("status handoff=%#v err=%v", status, err)
++	}
++	_ = connection.Close()
++	<-done
++}
++
++// Production call sites: sharedBrokerServer.handleConnection status and
++// acquire cases. A read-only status request may observe recovery facts, but it
++// must publish the pressure admission state still enforced by the broker until
++// acquireLease applies recovery and the serve-loop cancels pressure eviction.
++func TestSharedBrokerProductionStatusCannotBypassLatchedPressureRecovery(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	configureSharedBrokerResourceFixture(&fixture,
++		observedSharedRuntimeResources(800, "idle"),
++		observedSharedRuntimeResources(800, "idle"),
++	)
++	fixture.server.resolved.Sharing.ResourcePressure.EvictionGraceSeconds = 1
++	fixture.hello.ConfiguredSharing = &fixture.server.resolved.Sharing
++	fixture.server.pressureLatched = true
++	fixture.server.hadLease = true
++	runtimePID := fixture.server.record.Runtime.PID
++
++	root := shortSharedRuntimeCache(t)
++	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: root + "/status-pressure.sock", Net: "unix"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	fixture.server.listener = listener
++	runtimeWait := &piProcessWait{done: make(chan struct{})}
++	signals := make(chan os.Signal, 1)
++	serveDone := make(chan error, 1)
++	go func() { serveDone <- fixture.server.serve(runtimeWait, signals) }()
++	fixture.server.notify("resource-pressure", false)
++	waitForSharedBrokerResourceCondition(t, "pressure eviction armed", func() bool {
++		return fixture.server.currentState() == "pressured"
++	})
++
++	statusConnection, statusReader, statusDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(statusConnection, sharedWireMessage{Type: "status"}); err != nil {
++		t.Fatal(err)
++	}
++	status, err := readSharedWireMessage(statusReader)
++	if err != nil || status.Type != "status" || status.State != "pressured" || status.Resources == nil || status.Resources.State != "pressured" || status.Resources.Admission != "refused" {
++		t.Fatalf("latched status bypassed enforced pressure: response=%#v err=%v", status, err)
++	}
++	if !fixture.server.resourcePressureLatched() || fixture.server.currentState() != "pressured" {
++		t.Fatalf("status mutated pressure owner: latched=%t state=%s", fixture.server.resourcePressureLatched(), fixture.server.currentState())
++	}
++	_ = statusConnection.Close()
++	<-statusDone
++
++	recoveredConnection, recoveredReader, recoveredDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(recoveredConnection, sharedWireMessage{Type: "acquire", ClientKey: "recovered-owner"}); err != nil {
++		t.Fatal(err)
++	}
++	lease, err := readSharedWireMessage(recoveredReader)
++	if err != nil || lease.Type != "lease" || lease.Runtime == nil || lease.Runtime.PID != runtimePID {
++		t.Fatalf("recovery did not reuse broker-owned runtime: response=%#v err=%v", lease, err)
++	}
++	waitForSharedBrokerResourceCondition(t, "recovery applied and eviction cancelled", func() bool {
++		return !fixture.server.resourcePressureLatched() && fixture.server.currentState() == "serving"
++	})
++	select {
++	case err := <-serveDone:
++		t.Fatalf("cancelled pressure eviction still drained broker: %v", err)
++	case <-time.After(1200 * time.Millisecond):
++	}
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 1 || fixture.server.record.Runtime.PID != runtimePID {
++		t.Fatalf("recovery changed ownership: leases=%d runtime=%#v", leaseCount, fixture.server.record.Runtime)
++	}
++
++	signals <- syscall.SIGTERM
++	if err := <-serveDone; err != nil {
++		t.Fatal(err)
++	}
++	_ = recoveredConnection.Close()
++	<-recoveredDone
++}
++
++// Production call site: sharedBrokerServer.handleConnection -> acquireLease.
++// Observation order, rather than HTTP completion order, owns admission. An
++// older recovery snapshot must not clear a newer pressure latch or receive a
++// lease after the newer request has been refused.
++func TestSharedBrokerProductionStaleRecoveryObservationCannotClearNewerPressure(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	policy := testSharedRuntimeResourcePolicy()
++	policy.ObservationTimeoutMilliseconds = 2_000
++	fixture.server.resolved.Sharing.ResourcePressureMode = "provider"
++	fixture.server.resolved.Sharing.ResourcePressure = &policy
++	fixture.hello.ConfiguredSharing = &fixture.server.resolved.Sharing
++
++	firstStarted := make(chan struct{})
++	releaseFirst := make(chan struct{})
++	var calls atomic.Int32
++	fixture.server.resources = sharedBrokerResourceDependencies{
++		observe: func(ctx context.Context, _ *http.Client, _, _ string, _ PiRuntimeResourcePressure) (sharedRuntimeProviderResourceObservation, error) {
++			switch calls.Add(1) {
++			case 1:
++				close(firstStarted)
++				select {
++				case <-releaseFirst:
++					return observedSharedRuntimeResources(800, "idle"), nil
++				case <-ctx.Done():
++					return sharedRuntimeProviderResourceObservation{}, ctx.Err()
++				}
++			case 2:
++				return observedSharedRuntimeResources(1000, "busy"), nil
++			default:
++				return sharedRuntimeProviderResourceObservation{}, errors.New("unexpected fake provider observation")
++			}
++		},
++		now: func() time.Time { return time.Unix(300, 0).UTC() },
++	}
++
++	stale, staleReader, staleDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(stale, sharedWireMessage{Type: "acquire", ClientKey: "stale-recovery"}); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-firstStarted:
++	case <-time.After(time.Second):
++		t.Fatal("older recovery observation did not start")
++	}
++
++	newer, newerReader, newerDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(newer, sharedWireMessage{Type: "acquire", ClientKey: "newer-pressure"}); err != nil {
++		t.Fatal(err)
++	}
++	pressureRefusal, err := readSharedWireMessage(newerReader)
++	if err != nil || pressureRefusal.Type != "refused" || pressureRefusal.Code != "shared_runtime_resource_pressure" {
++		t.Fatalf("newer pressure response=%#v err=%v", pressureRefusal, err)
++	}
++	if !fixture.server.resourcePressureLatched() {
++		t.Fatal("newer pressure observation did not latch pressure")
++	}
++	close(releaseFirst)
++
++	staleRefusal, err := readSharedWireMessage(staleReader)
++	if err != nil || staleRefusal.Type != "refused" || staleRefusal.Code != "shared_runtime_resource_unknown" || staleRefusal.Resources == nil || staleRefusal.Resources.Reason != "resource_observation_stale" {
++		t.Fatalf("stale recovery observation was not refused as unknown: response=%#v err=%v", staleRefusal, err)
++	}
++	if !fixture.server.resourcePressureLatched() {
++		t.Fatal("stale recovery observation cleared newer pressure")
++	}
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 0 {
++		t.Fatalf("stale recovery observation granted %d leases", leaseCount)
++	}
++
++	_ = stale.Close()
++	_ = newer.Close()
++	<-staleDone
++	<-newerDone
++}
++
++// Production call site: sharedBrokerServer.handleConnection -> acquireLease.
++// A provider snapshot can still be superseded after its read completes. The
++// generation is rechecked under the same lock that reserves the lease, closing
++// the observe-to-grant bypass rather than relying only on completion ordering.
++func TestSharedBrokerProductionSupersededAdmissionCannotGrantBeforeLeaseReservation(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	configureSharedBrokerResourceFixture(&fixture,
++		observedSharedRuntimeResources(800, "idle"),
++		observedSharedRuntimeResources(1000, "busy"),
++	)
++
++	beforeReservation := make(chan struct{})
++	releaseReservation := make(chan struct{})
++	fixture.server.resources.beforeLeaseReservation = func(generation uint64) {
++		if generation != 1 {
++			return
++		}
++		close(beforeReservation)
++		<-releaseReservation
++	}
++
++	stale, staleReader, staleDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(stale, sharedWireMessage{Type: "acquire", ClientKey: "superseded-before-reservation"}); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-beforeReservation:
++	case <-time.After(time.Second):
++		t.Fatal("first admission did not reach the lease reservation boundary")
++	}
++
++	newer, newerReader, newerDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(newer, sharedWireMessage{Type: "acquire", ClientKey: "newer-pressure"}); err != nil {
++		t.Fatal(err)
++	}
++	pressureRefusal, err := readSharedWireMessage(newerReader)
++	if err != nil || pressureRefusal.Type != "refused" || pressureRefusal.Code != "shared_runtime_resource_pressure" {
++		t.Fatalf("newer pressure response=%#v err=%v", pressureRefusal, err)
++	}
++	close(releaseReservation)
++
++	staleRefusal, err := readSharedWireMessage(staleReader)
++	if err != nil || staleRefusal.Type != "refused" || staleRefusal.Code != "shared_runtime_resource_unknown" || staleRefusal.Resources == nil || staleRefusal.Resources.Reason != "resource_observation_stale" {
++		t.Fatalf("superseded admission crossed lease reservation: response=%#v err=%v", staleRefusal, err)
++	}
++	if !fixture.server.resourcePressureLatched() {
++		t.Fatal("superseded admission cleared newer pressure")
++	}
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 0 {
++		t.Fatalf("superseded admission reserved %d leases", leaseCount)
++	}
++
++	_ = stale.Close()
++	_ = newer.Close()
++	<-staleDone
++	<-newerDone
++}
++
++// Production call sites: sharedBrokerServer.handleConnection status and
++// acquire cases. A status response whose provider snapshot was superseded by
++// a newer pressure decision must remain unknown/refused instead of publishing
++// the stale recovery as healthy/admitted.
++func TestSharedBrokerProductionStaleStatusObservationCannotLaunderNewerPressure(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	policy := testSharedRuntimeResourcePolicy()
++	policy.ObservationTimeoutMilliseconds = 2_000
++	fixture.server.resolved.Sharing.ResourcePressureMode = "provider"
++	fixture.server.resolved.Sharing.ResourcePressure = &policy
++	fixture.hello.ConfiguredSharing = &fixture.server.resolved.Sharing
++
++	statusStarted := make(chan struct{})
++	releaseStatus := make(chan struct{})
++	var calls atomic.Int32
++	fixture.server.resources = sharedBrokerResourceDependencies{
++		observe: func(ctx context.Context, _ *http.Client, _, _ string, _ PiRuntimeResourcePressure) (sharedRuntimeProviderResourceObservation, error) {
++			switch calls.Add(1) {
++			case 1:
++				close(statusStarted)
++				select {
++				case <-releaseStatus:
++					return observedSharedRuntimeResources(800, "idle"), nil
++				case <-ctx.Done():
++					return sharedRuntimeProviderResourceObservation{}, ctx.Err()
++				}
++			case 2:
++				return observedSharedRuntimeResources(1000, "busy"), nil
++			default:
++				return sharedRuntimeProviderResourceObservation{}, errors.New("unexpected fake provider observation")
++			}
++		},
++		now: func() time.Time { return time.Unix(400, 0).UTC() },
++	}
++
++	statusConnection, statusReader, statusDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(statusConnection, sharedWireMessage{Type: "status"}); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-statusStarted:
++	case <-time.After(time.Second):
++		t.Fatal("older status observation did not start")
++	}
++
++	pressure, pressureReader, pressureDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(pressure, sharedWireMessage{Type: "acquire", ClientKey: "newer-pressure"}); err != nil {
++		t.Fatal(err)
++	}
++	pressureRefusal, err := readSharedWireMessage(pressureReader)
++	if err != nil || pressureRefusal.Type != "refused" || pressureRefusal.Code != "shared_runtime_resource_pressure" {
++		t.Fatalf("newer pressure response=%#v err=%v", pressureRefusal, err)
++	}
++	close(releaseStatus)
++
++	status, err := readSharedWireMessage(statusReader)
++	if err != nil || status.Type != "status" || status.Resources == nil || status.Resources.State != SharedRuntimeResourceUnknown || status.Resources.Admission != SharedRuntimeAdmissionRefused || status.Resources.Reason != "resource_observation_stale" {
++		t.Fatalf("stale status laundered newer pressure: response=%#v err=%v", status, err)
++	}
++	if !fixture.server.resourcePressureLatched() {
++		t.Fatal("stale status observation cleared newer pressure")
++	}
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 0 {
++		t.Fatalf("status/pressure race granted %d leases", leaseCount)
++	}
++
++	_ = statusConnection.Close()
++	_ = pressure.Close()
++	<-statusDone
++	<-pressureDone
++}
++
++// Production call sites: sharedBrokerServer.handleConnection status and
++// acquire cases. A status observation that completed healthy must be
++// revalidated together with the broker snapshot immediately before the wire
++// response is built; a newer pressure latch cannot be published as healthy.
++func TestSharedBrokerProductionPressureCannotSupersedeStatusBeforePublication(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	runtimePID := fixture.server.record.Runtime.PID
++	configureSharedBrokerResourceFixture(&fixture,
++		observedSharedRuntimeResources(800, "idle"),
++		observedSharedRuntimeResources(1000, "busy"),
++	)
++
++	beforePublication := make(chan struct{})
++	releasePublication := make(chan struct{})
++	fixture.server.resources.beforeStatusPublication = func(decision sharedBrokerResourceDecision) {
++		if decision.statusGeneration != 1 {
++			return
++		}
++		close(beforePublication)
++		<-releasePublication
++	}
++
++	statusConnection, statusReader, statusDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(statusConnection, sharedWireMessage{Type: "status"}); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-beforePublication:
++	case <-time.After(time.Second):
++		t.Fatal("status observation did not reach the publication boundary")
++	}
++
++	pressureConnection, pressureReader, pressureDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(pressureConnection, sharedWireMessage{Type: "acquire", ClientKey: "newer-pressure"}); err != nil {
++		t.Fatal(err)
++	}
++	pressureRefusal, err := readSharedWireMessage(pressureReader)
++	if err != nil || pressureRefusal.Type != "refused" || pressureRefusal.Code != "shared_runtime_resource_pressure" {
++		t.Fatalf("newer pressure response=%#v err=%v", pressureRefusal, err)
++	}
++	close(releasePublication)
++
++	status, err := readSharedWireMessage(statusReader)
++	if err != nil || status.Type != "status" || status.Resources == nil || status.Resources.State != SharedRuntimeResourceUnknown || status.Resources.Admission != SharedRuntimeAdmissionRefused || status.Resources.Reason != "resource_observation_stale" {
++		t.Fatalf("superseded status was not published as explicit unknown/refused: response=%#v err=%v", status, err)
++	}
++	if !fixture.server.resourcePressureLatched() {
++		t.Fatal("newer pressure observation did not remain latched")
++	}
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 0 || fixture.server.record.Runtime.PID != runtimePID {
++		t.Fatalf("status/pressure publication race changed ownership: leases=%d runtime=%#v", leaseCount, fixture.server.record.Runtime)
++	}
++
++	_ = statusConnection.Close()
++	_ = pressureConnection.Close()
++	<-statusDone
++	<-pressureDone
++}
++
++// Production call sites: sharedBrokerServer.handleConnection status and
++// acquire cases. Healthy diagnostic polls cannot advance lease-admission
++// invalidation; an acquire paused at the reservation boundary must still grant
++// after repeated healthy status responses.
++func TestSharedBrokerProductionHealthyStatusPollingCannotStarveAdmission(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	runtimePID := fixture.server.record.Runtime.PID
++	policy := testSharedRuntimeResourcePolicy()
++	fixture.server.resolved.Sharing.ResourcePressureMode = "provider"
++	fixture.server.resolved.Sharing.ResourcePressure = &policy
++	fixture.hello.ConfiguredSharing = &fixture.server.resolved.Sharing
++	var observations atomic.Int32
++	fixture.server.resources = sharedBrokerResourceDependencies{
++		observe: func(context.Context, *http.Client, string, string, PiRuntimeResourcePressure) (sharedRuntimeProviderResourceObservation, error) {
++			observations.Add(1)
++			return observedSharedRuntimeResources(800, "idle"), nil
++		},
++		now: func() time.Time { return time.Unix(600, 0).UTC() },
++	}
++
++	beforeReservation := make(chan struct{})
++	releaseReservation := make(chan struct{})
++	fixture.server.resources.beforeLeaseReservation = func(generation uint64) {
++		if generation != 1 {
++			return
++		}
++		close(beforeReservation)
++		<-releaseReservation
++	}
++
++	acquireConnection, acquireReader, acquireDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(acquireConnection, sharedWireMessage{Type: "acquire", ClientKey: "healthy-owner"}); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-beforeReservation:
++	case <-time.After(time.Second):
++		t.Fatal("healthy acquire did not reach the lease reservation boundary")
++	}
++
++	for poll := 0; poll < 4; poll++ {
++		statusConnection, statusReader, statusDone := startSharedBrokerFixtureConnection(t, &fixture)
++		if err := writeSharedWireMessage(statusConnection, sharedWireMessage{Type: "status"}); err != nil {
++			t.Fatal(err)
++		}
++		status, err := readSharedWireMessage(statusReader)
++		if err != nil || status.Type != "status" || status.Resources == nil || status.Resources.State != SharedRuntimeResourceHealthy || status.Resources.Admission != SharedRuntimeAdmissionAdmitted {
++			t.Fatalf("healthy status poll %d response=%#v err=%v", poll+1, status, err)
++		}
++		_ = statusConnection.Close()
++		<-statusDone
++	}
++	close(releaseReservation)
++
++	lease, err := readSharedWireMessage(acquireReader)
++	if err != nil || lease.Type != "lease" || lease.Runtime == nil || lease.Runtime.PID != runtimePID {
++		t.Fatalf("healthy status polling starved admission: response=%#v err=%v", lease, err)
++	}
++	if observations.Load() != 5 {
++		t.Fatalf("provider observations=%d want=5", observations.Load())
++	}
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 1 {
++		t.Fatalf("healthy admission lease count=%d want=1", leaseCount)
++	}
++
++	_ = acquireConnection.Close()
++	<-acquireDone
++}
++
++// Production call sites: sharedBrokerServer.handleConnection status and
++// acquire cases. Separating healthy diagnostics from admission freshness must
++// not weaken the safety edge: direct pressure observed by status invalidates a
++// healthy acquire before it can reserve a lease.
++func TestSharedBrokerProductionPressuredStatusInvalidatesPendingAdmission(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	policy := testSharedRuntimeResourcePolicy()
++	fixture.server.resolved.Sharing.ResourcePressureMode = "provider"
++	fixture.server.resolved.Sharing.ResourcePressure = &policy
++	fixture.hello.ConfiguredSharing = &fixture.server.resolved.Sharing
++	runtimePID := fixture.server.record.Runtime.PID
++	var observations atomic.Int32
++	fixture.server.resources = sharedBrokerResourceDependencies{
++		observe: func(context.Context, *http.Client, string, string, PiRuntimeResourcePressure) (sharedRuntimeProviderResourceObservation, error) {
++			switch observations.Add(1) {
++			case 1:
++				return observedSharedRuntimeResources(800, "idle"), nil
++			case 2:
++				return observedSharedRuntimeResources(1000, "busy"), nil
++			default:
++				return sharedRuntimeProviderResourceObservation{}, errors.New("unexpected fake provider observation")
++			}
++		},
++		now: func() time.Time { return time.Unix(700, 0).UTC() },
++	}
++
++	beforeReservation := make(chan struct{})
++	releaseReservation := make(chan struct{})
++	fixture.server.resources.beforeLeaseReservation = func(generation uint64) {
++		if generation != 1 {
++			return
++		}
++		close(beforeReservation)
++		<-releaseReservation
++	}
++
++	acquireConnection, acquireReader, acquireDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(acquireConnection, sharedWireMessage{Type: "acquire", ClientKey: "pending-healthy-owner"}); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-beforeReservation:
++	case <-time.After(time.Second):
++		t.Fatal("healthy acquire did not reach the lease reservation boundary")
++	}
++
++	statusConnection, statusReader, statusDone := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(statusConnection, sharedWireMessage{Type: "status"}); err != nil {
++		t.Fatal(err)
++	}
++	status, err := readSharedWireMessage(statusReader)
++	if err != nil || status.Type != "status" || status.Resources == nil || status.Resources.State != SharedRuntimeResourcePressured || status.Resources.Admission != SharedRuntimeAdmissionRefused {
++		t.Fatalf("pressure status response=%#v err=%v", status, err)
++	}
++	close(releaseReservation)
++
++	refusal, err := readSharedWireMessage(acquireReader)
++	if err != nil || refusal.Type != "refused" || refusal.Code != "shared_runtime_resource_unknown" || refusal.Resources == nil || refusal.Resources.Reason != "resource_observation_stale" {
++		t.Fatalf("pressured status did not invalidate pending admission: response=%#v err=%v", refusal, err)
++	}
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 0 || fixture.server.record.Runtime.PID != runtimePID {
++		t.Fatalf("pressured status changed ownership: leases=%d runtime=%#v", leaseCount, fixture.server.record.Runtime)
++	}
++
++	_ = acquireConnection.Close()
++	_ = statusConnection.Close()
++	<-acquireDone
++	<-statusDone
++}
++
++func TestSharedBrokerProductionStatusPreservesDrainingOverLatchedPressure(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	fixture.server.resolved.Profile.Model = "Qwen-test"
++	configureSharedBrokerResourceFixture(&fixture, observedSharedRuntimeResources(800, "idle"))
++	fixture.server.state = "draining"
++	fixture.server.pressureLatched = true
++
++	connection, reader, done := startSharedBrokerFixtureConnection(t, &fixture)
++	if err := writeSharedWireMessage(connection, sharedWireMessage{Type: "status"}); err != nil {
++		t.Fatal(err)
++	}
++	status, err := readSharedWireMessage(reader)
++	if err != nil || status.Type != "status" || status.State != "draining" || status.Resources == nil || status.Resources.State != "draining" || status.Resources.Admission != "refused" {
++		t.Fatalf("draining precedence was bypassed: response=%#v err=%v", status, err)
++	}
++	if !fixture.server.resourcePressureLatched() || fixture.server.currentState() != "draining" {
++		t.Fatalf("status mutated draining pressure owner: latched=%t state=%s", fixture.server.resourcePressureLatched(), fixture.server.currentState())
++	}
++	_ = connection.Close()
++	<-done
++}
++
++func waitForSharedBrokerResourceCondition(t *testing.T, name string, condition func() bool) {
++	t.Helper()
++	deadline := time.Now().Add(2 * time.Second)
++	for !condition() {
++		if time.Now().After(deadline) {
++			t.Fatalf("timed out waiting for %s", name)
++		}
++		time.Sleep(5 * time.Millisecond)
++	}
++}
++
++func TestSharedBrokerPressureDrainPreservesLeaseThenEvictsAfterFinalRelease(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	policy := testSharedRuntimeResourcePolicy()
++	fixture.server.resolved.Sharing.ResourcePressureMode = "provider"
++	fixture.server.resolved.Sharing.ResourcePressure = &policy
++	fixture.server.pressureLatched = true
++	lease := &SharedLeaseRecord{LeaseID: "lease-a"}
++	connection := &sharedBrokerConnection{leaseID: lease.LeaseID}
++	fixture.server.leases[lease.LeaseID] = lease
++	fixture.server.hadLease = true
++
++	root := shortSharedRuntimeCache(t)
++	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: root + "/pressure.sock", Net: "unix"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	fixture.server.listener = listener
++	runtimeWait := &piProcessWait{done: make(chan struct{})}
++	signals := make(chan os.Signal)
++	done := make(chan error, 1)
++	go func() { done <- fixture.server.serve(runtimeWait, signals) }()
++	fixture.server.notify("resource-pressure", false)
++	select {
++	case err := <-done:
++		t.Fatalf("pressure drained while lease was held: %v", err)
++	case <-time.After(50 * time.Millisecond):
++	}
++	if fixture.server.currentState() != "serving" {
++		t.Fatalf("pressure changed state while leased: %s", fixture.server.currentState())
++	}
++	fixture.server.releaseConnectionLease(connection)
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(3 * time.Second):
++		t.Fatal("final lease release did not trigger configured pressure drain")
++	}
++	if fixture.server.currentState() != "draining" {
++		t.Fatalf("post-release state=%s want=draining", fixture.server.currentState())
++	}
++	_ = listener.Close()
++}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_shape_oracle_test.go b/tools/agents-infra/internal/infra/pi_shared_shape_oracle_test.go
+index 0b07b8a..2b46e90 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_shape_oracle_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_shape_oracle_test.go
+@@ -743,7 +743,7 @@ func TestSharedRuntimeAuthorizationMutantCalibrationAndHarnessNegatives(t *testi
+ 		}
+ 	})
+ 
+-	if SharedRuntimeProtocolVersion != 6 {
++	if SharedRuntimeProtocolVersion != 7 {
+ 		t.Fatalf("revision 9 protocol version=%d want=6", SharedRuntimeProtocolVersion)
+ 	}
+ 	checked := 0
+diff --git a/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go b/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go
+index 515b32d..988b71d 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go
++++ b/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go
+@@ -51,6 +51,7 @@ type SharedRuntimeStatus struct {
+ 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
+ 	ManualQuarantine   bool                        `json:"manual_quarantine"`
+ 	HalfOpen           bool                        `json:"half_open"`
++	Resources          SharedRuntimeResourceStatus `json:"resources"`
+ 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
+ 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
+ 	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+diff --git a/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go b/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go
+index 33e3c7c..589be6f 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go
++++ b/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go
+@@ -98,6 +98,7 @@ type SharedRuntimeStatus struct {
+ 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
+ 	ManualQuarantine   bool                        `json:"manual_quarantine"`
+ 	HalfOpen           bool                        `json:"half_open"`
++	Resources          SharedRuntimeResourceStatus `json:"resources"`
+ 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
+ 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
+ 	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+diff --git a/tools/agents-infra/internal/infra/pi_standalone_shared_test.go b/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
+index d3f45e5..38570d0 100644
+--- a/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
++++ b/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
+@@ -103,6 +103,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `
+ 	writePiProjectConfig(t, project, body)
+ 	piRoot := officialPiAsset(t)
+diff --git a/tools/agents-infra/internal/infra/pi_standalone_test.go b/tools/agents-infra/internal/infra/pi_standalone_test.go
+index 247efbf..599d544 100644
+--- a/tools/agents-infra/internal/infra/pi_standalone_test.go
++++ b/tools/agents-infra/internal/infra/pi_standalone_test.go
+@@ -37,6 +37,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `
+ 	}
+ 	return body
+diff --git a/tools/agents-infra/internal/infra/pi_test.go b/tools/agents-infra/internal/infra/pi_test.go
+index 88694ee..3424d9c 100644
+--- a/tools/agents-infra/internal/infra/pi_test.go
++++ b/tools/agents-infra/internal/infra/pi_test.go
+@@ -173,6 +173,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `, name)
+ }
+ 
+@@ -196,6 +197,7 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
+ 		HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 40,
+ 		RestartLimit: 3, RestartInitialBackoffSeconds: 1, RestartMaxBackoffSeconds: 4,
+ 		StableRunSeconds: 10, QuarantineSeconds: 30,
++		ResourcePressureMode: "disabled",
+ 	}
+ 	if got := shared.PiProfiles["profile"].Runtime.Sharing; !reflect.DeepEqual(got, want) {
+ 		t.Fatalf("sharing=%#v want=%#v", got, want)
+@@ -216,6 +218,8 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
+ 		"missing maximum backoff":        strings.Replace(sharedBody, "restart_max_backoff_seconds = 4\n", "", 1),
+ 		"missing stable run":             strings.Replace(sharedBody, "stable_run_seconds = 10\n", "", 1),
+ 		"missing quarantine":             strings.Replace(sharedBody, "quarantine_seconds = 30\n", "", 1),
++		"missing resource pressure mode": strings.Replace(sharedBody, "resource_pressure_mode = \"disabled\"\n", "", 1),
++		"unknown resource pressure mode": strings.Replace(sharedBody, `resource_pressure_mode = "disabled"`, `resource_pressure_mode = "automatic"`, 1),
+ 		"unknown mode":                   strings.Replace(sharedBody, `mode = "shared"`, `mode = "automatic"`, 1),
+ 		"negative linger":                strings.Replace(sharedBody, "linger_seconds = 0", "linger_seconds = -1", 1),
+ 		"zero max leases":                strings.Replace(sharedBody, "max_leases = 8", "max_leases = 0", 1),
+@@ -323,6 +327,46 @@ func TestRunPiRejectsZeroAndOverflowingSharedRuntimeLogRotationPolicy(t *testing
+ 	}
+ }
+ 
++func TestParsePiRuntimeResourcePressureRequiresExplicitSafePolicy(t *testing.T) {
++	body := strings.Replace(sharedPiProfileTOML("profile", "/bin/echo", 18011),
++		`resource_pressure_mode = "disabled"`,
++		`resource_pressure_mode = "provider"
++
++[agents.pi.profiles."profile".runtime.sharing.resource_pressure]
++observation_path = "/agents-infra/resources"
++observation_timeout_milliseconds = 250
++pressure_threshold_bytes = 50000000000
++recovery_threshold_bytes = 45000000000
++eviction_grace_seconds = 15
++pressure_action = "refuse-new-drain-idle"
++unknown_action = "refuse-new"
++busy_action = "observe"`, 1)
++	config, err := parseProjectConfig([]byte(body), "/project/config.toml")
++	if err != nil {
++		t.Fatal(err)
++	}
++	policy := config.PiProfiles["profile"].Runtime.Sharing.ResourcePressure
++	if policy == nil || policy.PressureThresholdBytes != 50000000000 || policy.RecoveryThresholdBytes != 45000000000 || policy.UnknownAction != "refuse-new" {
++		t.Fatalf("resource pressure policy=%#v", policy)
++	}
++	tests := map[string]string{
++		"missing table":                   strings.Replace(body, `[agents.pi.profiles."profile".runtime.sharing.resource_pressure]`, `[agents.pi.profiles."other".runtime.sharing.resource_pressure]`, 1),
++		"thresholds have no hysteresis":   strings.Replace(body, "recovery_threshold_bytes = 45000000000", "recovery_threshold_bytes = 50000000000", 1),
++		"unsafe unknown action":           strings.Replace(body, `unknown_action = "refuse-new"`, `unknown_action = "allow"`, 1),
++		"unsafe pressure action":          strings.Replace(body, `pressure_action = "refuse-new-drain-idle"`, `pressure_action = "evict-now"`, 1),
++		"busy guessed from admission":     strings.Replace(body, `busy_action = "observe"`, `busy_action = "infer-from-leases"`, 1),
++		"unbounded observation timeout":   strings.Replace(body, "observation_timeout_milliseconds = 250", "observation_timeout_milliseconds = 0", 1),
++		"observation timeout above bound": strings.Replace(body, "observation_timeout_milliseconds = 250", "observation_timeout_milliseconds = 30001", 1),
++	}
++	for name, invalid := range tests {
++		t.Run(name, func(t *testing.T) {
++			if _, err := parseProjectConfig([]byte(invalid), "/project/config.toml"); err == nil {
++				t.Fatal("invalid resource-pressure policy was admitted")
++			}
++		})
++	}
++}
++
+ // Production call site: RunPi -> loadCompositeProjectConfig -> parsePiRuntime.
+ // Every invalid policy must be refused before provider lookup, runtime launch,
+ // or creation of the shared-runtime tree and restart ledger.
+diff --git a/tools/agents-infra/internal/infra/testdata/shared-runtime-resource-observation-v1.json b/tools/agents-infra/internal/infra/testdata/shared-runtime-resource-observation-v1.json
+new file mode 100644
+index 0000000..f454c8f
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/testdata/shared-runtime-resource-observation-v1.json
+@@ -0,0 +1,11 @@
++{
++  "schema": "agents-infra.pi.shared-runtime.resource-observation.v1",
++  "model": "Qwen-test",
++  "loaded_model_memory": {
++    "state": "observed",
++    "bytes": 900
++  },
++  "inference": {
++    "state": "busy"
++  }
++}
+diff --git a/tools/agents-infra/internal/infra/testdata/shared-runtime-resource-status-v1.json b/tools/agents-infra/internal/infra/testdata/shared-runtime-resource-status-v1.json
+new file mode 100644
+index 0000000..6b6ec2c
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/testdata/shared-runtime-resource-status-v1.json
+@@ -0,0 +1,23 @@
++{
++  "schema": "agents-infra.pi.shared-runtime.resource-status.v1",
++  "state": "busy",
++  "source": "provider-observed",
++  "observed_at": "1970-01-01T00:01:40Z",
++  "loaded_model_memory": {
++    "state": "healthy",
++    "bytes": 900,
++    "pressure_at_bytes": 1000,
++    "recovery_at_bytes": 800
++  },
++  "inference": {
++    "state": "busy"
++  },
++  "admission": "admitted",
++  "policy": {
++    "mode": "provider",
++    "eviction_grace_seconds": 0,
++    "pressure_action": "refuse-new-drain-idle",
++    "unknown_action": "refuse-new",
++    "busy_action": "observe"
++  }
++}
+diff --git a/tools/agents-infra/runtime_main_darwin_test.go b/tools/agents-infra/runtime_main_darwin_test.go
+index 973da01..ef49cdd 100644
+--- a/tools/agents-infra/runtime_main_darwin_test.go
++++ b/tools/agents-infra/runtime_main_darwin_test.go
+@@ -37,6 +37,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `
+ 	mustWrite(t, configPath, body)
+ 	t.Setenv("HOME", home)
+@@ -95,6 +96,7 @@ restart_max_backoff_seconds = 4
+ stable_run_seconds = 10
+ quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
+ `
+ 	mustWrite(t, configPath, body)
+ 	t.Setenv("HOME", home)
