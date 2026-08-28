@@ -51,6 +51,7 @@ type SharedRuntimeStatus struct {
 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
 	ManualQuarantine   bool                        `json:"manual_quarantine"`
 	HalfOpen           bool                        `json:"half_open"`
+	Resources          SharedRuntimeResourceStatus `json:"resources"`
 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
 	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`

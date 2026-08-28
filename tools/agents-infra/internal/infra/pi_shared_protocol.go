@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	SharedRuntimeProtocolVersion  = 6
+	SharedRuntimeProtocolVersion  = 7
 	sharedRuntimeAuthSchema       = "agents-infra.pi.shared-runtime.auth.v1"
 	sharedRuntimeProfileSchema    = "agents-infra.pi.shared-runtime.profile.v1"
 	sharedRuntimeKeySchema        = "agents-infra.pi.shared-runtime.v1"

@@ -484,6 +484,7 @@ restart_max_backoff_seconds = 4
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 160
+resource_pressure_mode = "disabled"
 
 [agents.pi.profiles."muse-glimmer-30b-dflash"]
 provider = "local-muse"
@@ -723,6 +724,90 @@ ledger/event write contract and new pre/post fixtures.
 Every configured seconds field is bounded before conversion to `time.Duration`;
 coupled handoff and doubled lease-stale windows are bounded as effective
 durations too, so overflow is refused during config resolution before launch.
+
+Shared profiles must also make an explicit resource-pressure choice. The
+`disabled` value in the example preserves legacy admission but publishes
+resource facts as `unknown` with `admission = "not-enforced"`; it is an
+explicit operator opt-out, not a default. To enforce provider-backed
+observation, replace it with `resource_pressure_mode = "provider"` and add the
+complete strict table:
+
+```toml
+[agents.pi.profiles."qwen-3.8-27b".runtime.sharing.resource_pressure]
+observation_path = "/agents-infra/resources"
+observation_timeout_milliseconds = 250
+pressure_threshold_bytes = 50000000000
+recovery_threshold_bytes = 45000000000
+eviction_grace_seconds = 15
+pressure_action = "refuse-new-drain-idle"
+unknown_action = "refuse-new"
+busy_action = "observe"
+```
+
+There are no threshold or action defaults. Recovery must be below pressure to
+provide explicit hysteresis. The only admitted actions preserve existing
+connection-bound leases: pressure refuses new leases, waits for the final lease
+to release, then drains and evicts after `eviction_grace_seconds`; an unknown
+observation refuses a new lease but never guesses that eviction is safe; busy
+is an independently observed fact and is not inferred from lease count.
+
+The configured absolute observation path must return at most 16 KiB of strict
+JSON before `observation_timeout_milliseconds` expires:
+
+```json
+{
+  "schema": "agents-infra.pi.shared-runtime.resource-observation.v1",
+  "model": "Qwen-3.8-27B",
+  "loaded_model_memory": {"state": "observed", "bytes": 47244640256},
+  "inference": {"state": "busy"}
+}
+```
+
+Each provider fact may instead use `state = "unknown"` with a non-empty
+`reason` and no value. A failed, partial, oversized, wrong-schema, wrong-model,
+or malformed response is also `unknown`; it is never treated as absence or
+healthy. Protocol v7 carries the versioned
+`agents-infra.pi.shared-runtime.resource-status.v1` consumer handoff. Runtime
+status always publishes independent loaded-model-memory and inference facts,
+the effective thresholds/actions, admission, source, and one aggregate state:
+`healthy`, `busy`, `pressured`, `draining`, or `unknown`.
+
+An attested live broker is the authoritative source for that effective policy.
+When the broker cannot be reached but its persisted record is readable, status
+keeps `source = "record-derived-unverified"` and derives both
+`sharing.effective` and `resources.policy` from the same recorded sharing
+value. Provider observations remain explicitly unknown/refused. A
+pre-extension record without sharing evidence reports
+`resources.policy.mode = "unknown"`, reason
+`resource_pressure_policy_unknown`, and refused admission; caller
+configuration is never substituted as a guess for effective enforcement.
+
+Admission and diagnostic provider reads use separate monotonic broker-local
+generations. Healthy or busy status polling advances only diagnostic freshness,
+so observability cannot repeatedly supersede a healthy lease at its reservation
+boundary. Direct pressure observed by status still advances admission
+invalidation and prevents an older healthy observation from granting a lease;
+status does not take ownership of the pressure latch or eviction timer.
+
+Immediately before building a status wire response, the broker revalidates the
+diagnostic and admission generations while atomically snapshotting the pressure
+latch, broker state, and leases. A superseded response is explicit
+`unknown/refused` with `resource_observation_stale`, never stale
+`healthy/admitted`. The admission generation check and lease reservation share
+the same broker lock, and pressure/recovery events carry the admission
+generation that changed the latch, so completion, publication, or event
+scheduling cannot reverse a newer admission decision.
+
+Because sharing policy is not part of the runtime identity, a caller may find
+an already-running broker with different settings. Status keeps both
+`sharing.configured` and `sharing.effective` visible, but lease acquisition
+requires the resource-pressure mode and complete policy table to match exactly.
+The compared table includes observation path and timeout, pressure and recovery
+thresholds, eviction grace, and all three actions. Any single-field difference,
+including either disabled/provider direction or a recovery-threshold-only
+change, refuses before provider observation or lease reservation with
+`shared_runtime_resource_policy_mismatch`; the existing broker/runtime and its
+leases are preserved.
 
 When a profile change produces a new runtime identity while the previous
 shared runtime is still releasing the same fixed listener, acquisition retries

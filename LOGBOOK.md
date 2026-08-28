@@ -5,11 +5,40 @@
 
 ## 2026-08-29
 
+### 2318 — Status Publication Revalidates Its Resource Decision
+- ROOT CAUSE: `handleConnection` observed resources and snapshotted broker state in separate critical sections, so a newer acquire could latch pressure between them while the wire response still published `healthy/admitted`.
+- FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` revalidates status/admission generations and snapshots latch, broker state, and leases under one lock; superseded status publishes explicit `unknown/refused`.
+- EVIDENCE: Real status/acquire handlers reproduce the observe-to-publish race before the fix; disabling final revalidation makes `TestSharedBrokerProductionPressureCannotSupersedeStatusBeforePublication` exit 1.
+- STATUS: Current latch and draining precedence apply only to a current status decision; stale provider facts are never laundered into availability.
+
+### 2317 — Diagnostic Polls No Longer Own Admission Freshness
+- ROOT CAUSE: Healthy status polls incremented the same generation used at lease reservation, allowing repeated observability to supersede every healthy acquire.
+- DECISION: Admission and diagnostic observations use separate generations; only admission starts and direct pressure evidence advance admission invalidation.
+- EVIDENCE: Four real healthy status requests cannot starve a paused healthy acquire, while a real pressured status invalidates it before reservation; re-coupling status to admission generation makes the starvation test exit 1.
+- STATUS: Existing leases and the single broker-owned runtime remain unchanged across both schedules.
+
+### 2235 — Record-Derived Pressure Policy Keeps One Provenance
+- ROOT CAUSE: `sharedRuntimeRecordStatus` paired persisted effective sharing with caller-derived resource policy, publishing contradictory disabled/provider enforcement on the unverified fallback path.
+- FIX: `tools/agents-infra/internal/infra/pi_shared_operator_darwin.go` now derives both views from `record.Sharing`; pre-extension records use explicit unknown policy and refused admission.
+- EVIDENCE: Real `SharedRuntimeStatusReport` tests cover both configured/effective mismatch directions and missing sharing; a pressure-threshold-only admission mutant is killed by independent recovery/path/timeout/grace/action witnesses through `handleConnection -> acquireLease`.
+- STATUS: Revision 6 rework preserves `record-derived-unverified`, unknown provider observations, existing leases, and single broker/runtime ownership.
+
+### 2152 — Live Broker Cannot Narrow Caller Pressure Policy
+- ROOT CAUSE: `sharedBrokerServer.acquireLease` observed only the live broker resource policy, so an existing disabled broker or wider pressure threshold silently weakened a stricter caller configuration.
+- FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` now requires exact resource-pressure mode/table compatibility before provider I/O or lease reservation and returns typed configured/effective provenance on mismatch.
+- EVIDENCE: Real `handleConnection -> acquireLease` tests refuse provider-to-disabled, stricter-threshold, and absent-policy witnesses with no observation, lease, runtime replacement, or duplicate ownership; narrowing table equality grants the forbidden lease and exits 1.
+- SCOPE: Revision 5 composes the resource-pressure candidate with log rotation from exact trunk `6d051f54440d36e3ca3d132f8d9d1e78d46289de`.
+
 ### 2100 — Log Rotation Replayed On Current Trunk
 - DECISION: Revision 5 replays the reviewed rotation candidate on `91356833949cb6a30958265514fe5852d97eec1b`, preserving trunk-owned `restart_not_before`, `half_open`, and root output-capture fixes.
 - FIX: The 16 code/document paths from immutable revision 4 apply cleanly on current trunk; `LOGBOOK.md` is merged as a newest-first union instead of replaying the stale historical hunk.
 - SCOPE: `TASK-260829-3fozxa` publishes a fresh tree-bound Change Request; revision 4 remains immutable historical evidence.
 - STATUS: Replay implemented; validation and fresh review handoff pending.
+
+### 2055 — Headless Validation Split Around Foreign Go Contention
+- ANOMALY: A foreign `go test -p 1 ./...` overlapped revision-3 validation; the combined remaining-package run and an unfiltered root rerun produced no package result before 8:36 and 9:23 respectively and were interrupted with exit 1 before the shell limit.
+- EVIDENCE: The changed `internal/infra` package exited 0 uncached in 153.133s; the runtime/Pi/status root subset exited 0 in 447.587s; attachments and modelharness, vet, formatting, diff, and Darwin/Linux/Windows build gates exited 0.
+- DECISION: Preserve both interrupted exit-1 logs as incomplete evidence; never relabel them green or wait past the headless command bound.
 
 ### 2035 — Root Output Capture No Longer Blocks Before Drain
 - ROOT CAUSE: `tools/agents-infra/main_test.go` called stdout/stderr producers before starting `io.Copy`; a `3 MiB + 17 byte` write blocked at pipe capacity and made the reader unreachable.
@@ -17,11 +46,35 @@
 - EVIDENCE: Separate pre-fix stdout and stderr regressions timed out with exit 1 in `os.File.Write`; after the fix, byte-identity/restoration tests, the exact root status test, the complete root package, `go vet .`, and `go build .` exit 0.
 - STATUS: `BUG-260829-ajb7n7` ready for review.
 
+### 2021 — Resource Observation Completion Cannot Reorder Admission
+- ROOT CAUSE: Concurrent `handleConnection -> acquireLease` calls applied provider snapshots in HTTP completion order; an older recovery response could clear a newer pressure latch and receive a lease.
+- FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` assigns monotonic generations before I/O, refuses superseded observations as `unknown`, reserves leases atomically with the generation check, and generation-binds pressure/recovery events.
+- EVIDENCE: Deterministic real wire acquire and status races reproduce the old lease grant at exit 1, then refuse both stale surfaces at exit 0; the focused pair also exits 0 under `go test -race`.
+- STATUS: `TASK-260829-1qh0ud` revision 3 rework closes the persisted stale-completion finding without touching a live runtime.
+
+### 1924 — Serial Full Suite Removes Package-Level Self-Contention
+- FINDING: `go test -p 1 ./... -count=1` executed every package and both previously red timing tests without skips; exit 0.
+- EVIDENCE: Root `184.571s`, attachments `3.063s`, infra `265.111s`, and modelharness `2.081s` all exited 0 in `.temp/TASK-260829-1qh0ud/go-test-all-serial-01.log`.
+- DECISION: Preserve the parallel full-run exit 1 as timing-history evidence; use the later no-skip serial exit 0 as the final all-tests gate.
+- STATUS: `TASK-260829-1qh0ud` test checklist is satisfied and ready for developer handoff.
+
 ### 1921 — Log Rotation CR Validation Recovered After Host Contention
 - ANOMALY: Automatic revision 2 and 3 CR validation failed in unrelated model-check/readiness timing fixtures while concurrent Go suites drove host load; scoped rotation tests remained green.
 - FIX: `tools/agents-infra/internal/infra/pi_test.go` now drives `RunPi` for zero and overflowing values of both rotation caps and proves refusal before provider lookup or runtime-state mutation.
 - EVIDENCE: After the foreign infra suite exited, exact CR gate `go test ./... -count=1` passed (root 169.670s; infra 327.101s); `go vet ./...`, `go build ./...`, formatting, and diff checks exited 0.
 - STATUS: `TASK-260829-3fozxa` restart/config-change rework prepared for a fresh review handoff.
+
+### 1913 — Resource Status No Longer Publishes Hypothetical Recovery
+- ROOT CAUSE: `sharedBrokerServer.handleConnection` status classified a recovery sample but did not commit the pressure latch or cancel its armed eviction, publishing `healthy/admitted` beside an enforced pressured state.
+- FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` keeps status read-only and publishes the still-enforced `pressured/refused` latch until `acquireLease` applies recovery; `draining` retains precedence.
+- EVIDENCE: Real wire status/acquire tests preserve latch, timer sequencing, leases, and runtime PID; a narrowed `serving`-only preservation mutant makes `TestSharedBrokerProductionStatusCannotBypassLatchedPressureRecovery` exit 1, restored code exits 0.
+- STATUS: `TASK-260829-1qh0ud` revision 2 ready for review handoff.
+
+### 1913 — Two Unrelated Host-Timing Gates Remain Red Under Contention
+- ANOMALY: Final `go test ./... -count=1` exited 1 only in the pinned-Pi 500ms RPC side-effect fixture and the 1s readiness-exit fixture; isolated `-count=3` reruns also exited 1.
+- EVIDENCE: Read-only `mac-load-profile snapshot` recorded 929 processes, concurrent foreign Go integration binaries, and repository searches above 177% CPU; no foreign process was stopped.
+- EVIDENCE: An earlier full run exited 0; the complete infra package excluding exactly those two tests exited 0, and resource focused/race, vet, and Darwin/Linux/Windows builds exited 0.
+- STATUS: Red gates are reported as failing, not waived or relabeled green.
 
 ### 1807 — Restart Log Archives Bypassed A Lowered Segment Cap
 - REGRESSION: Revision 1 validated only active `runtime.log` size; a managed archive created under a larger prior `max_segment_bytes` survived restart and could raise retained output above `max_segment_bytes * max_segments`.

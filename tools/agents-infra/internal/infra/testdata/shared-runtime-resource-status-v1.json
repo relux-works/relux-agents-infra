@@ -1,0 +1,23 @@
+{
+  "schema": "agents-infra.pi.shared-runtime.resource-status.v1",
+  "state": "busy",
+  "source": "provider-observed",
+  "observed_at": "1970-01-01T00:01:40Z",
+  "loaded_model_memory": {
+    "state": "healthy",
+    "bytes": 900,
+    "pressure_at_bytes": 1000,
+    "recovery_at_bytes": 800
+  },
+  "inference": {
+    "state": "busy"
+  },
+  "admission": "admitted",
+  "policy": {
+    "mode": "provider",
+    "eviction_grace_seconds": 0,
+    "pressure_action": "refuse-new-drain-idle",
+    "unknown_action": "refuse-new",
+    "busy_action": "observe"
+  }
+}

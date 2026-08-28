@@ -173,6 +173,7 @@ restart_max_backoff_seconds = 4
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 40
+resource_pressure_mode = "disabled"
 `, name)
 }
 
@@ -196,6 +197,7 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
 		HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 40,
 		RestartLimit: 3, RestartInitialBackoffSeconds: 1, RestartMaxBackoffSeconds: 4,
 		StableRunSeconds: 10, QuarantineSeconds: 30,
+		ResourcePressureMode: "disabled",
 	}
 	if got := shared.PiProfiles["profile"].Runtime.Sharing; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sharing=%#v want=%#v", got, want)
@@ -216,6 +218,8 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
 		"missing maximum backoff":        strings.Replace(sharedBody, "restart_max_backoff_seconds = 4\n", "", 1),
 		"missing stable run":             strings.Replace(sharedBody, "stable_run_seconds = 10\n", "", 1),
 		"missing quarantine":             strings.Replace(sharedBody, "quarantine_seconds = 30\n", "", 1),
+		"missing resource pressure mode": strings.Replace(sharedBody, "resource_pressure_mode = \"disabled\"\n", "", 1),
+		"unknown resource pressure mode": strings.Replace(sharedBody, `resource_pressure_mode = "disabled"`, `resource_pressure_mode = "automatic"`, 1),
 		"unknown mode":                   strings.Replace(sharedBody, `mode = "shared"`, `mode = "automatic"`, 1),
 		"negative linger":                strings.Replace(sharedBody, "linger_seconds = 0", "linger_seconds = -1", 1),
 		"zero max leases":                strings.Replace(sharedBody, "max_leases = 8", "max_leases = 0", 1),
@@ -318,6 +322,46 @@ func TestRunPiRejectsZeroAndOverflowingSharedRuntimeLogRotationPolicy(t *testing
 			}
 			if _, statErr := os.Stat(cache); !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("%s mutated runtime state: %v", test.name, statErr)
+			}
+		})
+	}
+}
+
+func TestParsePiRuntimeResourcePressureRequiresExplicitSafePolicy(t *testing.T) {
+	body := strings.Replace(sharedPiProfileTOML("profile", "/bin/echo", 18011),
+		`resource_pressure_mode = "disabled"`,
+		`resource_pressure_mode = "provider"
+
+[agents.pi.profiles."profile".runtime.sharing.resource_pressure]
+observation_path = "/agents-infra/resources"
+observation_timeout_milliseconds = 250
+pressure_threshold_bytes = 50000000000
+recovery_threshold_bytes = 45000000000
+eviction_grace_seconds = 15
+pressure_action = "refuse-new-drain-idle"
+unknown_action = "refuse-new"
+busy_action = "observe"`, 1)
+	config, err := parseProjectConfig([]byte(body), "/project/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := config.PiProfiles["profile"].Runtime.Sharing.ResourcePressure
+	if policy == nil || policy.PressureThresholdBytes != 50000000000 || policy.RecoveryThresholdBytes != 45000000000 || policy.UnknownAction != "refuse-new" {
+		t.Fatalf("resource pressure policy=%#v", policy)
+	}
+	tests := map[string]string{
+		"missing table":                   strings.Replace(body, `[agents.pi.profiles."profile".runtime.sharing.resource_pressure]`, `[agents.pi.profiles."other".runtime.sharing.resource_pressure]`, 1),
+		"thresholds have no hysteresis":   strings.Replace(body, "recovery_threshold_bytes = 45000000000", "recovery_threshold_bytes = 50000000000", 1),
+		"unsafe unknown action":           strings.Replace(body, `unknown_action = "refuse-new"`, `unknown_action = "allow"`, 1),
+		"unsafe pressure action":          strings.Replace(body, `pressure_action = "refuse-new-drain-idle"`, `pressure_action = "evict-now"`, 1),
+		"busy guessed from admission":     strings.Replace(body, `busy_action = "observe"`, `busy_action = "infer-from-leases"`, 1),
+		"unbounded observation timeout":   strings.Replace(body, "observation_timeout_milliseconds = 250", "observation_timeout_milliseconds = 0", 1),
+		"observation timeout above bound": strings.Replace(body, "observation_timeout_milliseconds = 250", "observation_timeout_milliseconds = 30001", 1),
+	}
+	for name, invalid := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseProjectConfig([]byte(invalid), "/project/config.toml"); err == nil {
+				t.Fatal("invalid resource-pressure policy was admitted")
 			}
 		})
 	}

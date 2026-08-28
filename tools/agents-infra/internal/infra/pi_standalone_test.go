@@ -37,6 +37,7 @@ restart_max_backoff_seconds = 4
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 40
+resource_pressure_mode = "disabled"
 `
 	}
 	return body

@@ -328,6 +328,7 @@ restart_max_backoff_seconds = 4
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 40
+resource_pressure_mode = "disabled"
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
 	peerProject := filepath.Join(testRoot, "peer-project")
@@ -388,7 +389,7 @@ broker_start_timeout_seconds = 40
 		t.Fatalf("two-lease attested status=%#v", status)
 	}
 	requireExactSharedRuntimeAttestation(t, status.Attestation)
-	if status.Sharing.Configured.MaxLeases != 8 || status.Sharing.Effective == nil || status.Sharing.Effective.MaxLeases != 4 || status.Sharing.FixedByPID != status.Broker.PID {
+	if status.Sharing.Configured.MaxLeases != 8 || status.Sharing.Configured.ResourcePressureMode != "disabled" || status.Sharing.Effective == nil || status.Sharing.Effective.MaxLeases != 4 || status.Sharing.Effective.ResourcePressureMode != "disabled" || status.Sharing.FixedByPID != status.Broker.PID {
 		t.Fatalf("starter policy was not reported as effective beside peer configuration: %#v", status.Sharing)
 	}
 
@@ -453,6 +454,7 @@ restart_max_backoff_seconds = 4
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 40
+resource_pressure_mode = "disabled"
 `, sharedTestProfileName)
 	}
 	writePiProjectConfig(t, project, bodyForPIDFile(filepath.Join(testRoot, "runtime-a.pid")))
@@ -562,6 +564,7 @@ restart_max_backoff_seconds = 4
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 40
+resource_pressure_mode = "disabled"
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
 	resolved, err := resolveSharedProfile(project, home, cache, sharedTestProfileName)
@@ -682,6 +685,7 @@ restart_max_backoff_seconds = 4
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 40
+resource_pressure_mode = "disabled"
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
 	first := startSharedLeaseHelper(t, project, home, "RUN-stop-a")
@@ -763,6 +767,7 @@ restart_max_backoff_seconds = 4
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 40
+resource_pressure_mode = "disabled"
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
 	writePiProjectConfig(t, peerProject, strings.Replace(body, "max_leases = 1", "max_leases = 16", 1))
@@ -847,6 +852,7 @@ restart_max_backoff_seconds = 4
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 47
+resource_pressure_mode = "disabled"
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
 	resolved, err := resolveSharedProfile(project, home, cache, sharedTestProfileName)
@@ -950,6 +956,7 @@ restart_max_backoff_seconds = 4
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 40
+resource_pressure_mode = "disabled"
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
 	resolved, err := resolveSharedProfile(project, home, cache, sharedTestProfileName)
@@ -1243,6 +1250,7 @@ restart_max_backoff_seconds = 2
 stable_run_seconds = 10
 quarantine_seconds = 30
 broker_start_timeout_seconds = 40
+resource_pressure_mode = "disabled"
 `
 	writePiProjectConfig(t, project, body)
 	resolved, err := resolveSharedProfile(project, home, cache, "profile")
