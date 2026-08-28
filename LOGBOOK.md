@@ -5,6 +5,12 @@
 
 ## 2026-08-29
 
+### 2035 — Root Output Capture No Longer Blocks Before Drain
+- ROOT CAUSE: `tools/agents-infra/main_test.go` called stdout/stderr producers before starting `io.Copy`; a `3 MiB + 17 byte` write blocked at pipe capacity and made the reader unreachable.
+- FIX: Both capture wrappers now start a shared concurrent drain before the producer and restore the global descriptor before writer close, EOF wait, and reader close; the same idempotent cleanup runs during panic unwinding.
+- EVIDENCE: Separate pre-fix stdout and stderr regressions timed out with exit 1 in `os.File.Write`; after the fix, byte-identity/restoration tests, the exact root status test, the complete root package, `go vet .`, and `go build .` exit 0.
+- STATUS: `BUG-260829-ajb7n7` ready for review.
+
 ### 1756 — Backoff Status Publishes Only Persisted Facts
 - DECISION: `SharedRuntimeStatus` publishes ledger-derived `restart_not_before` and `half_open`; `restart_count` never implies active backoff, and `half_open` never gates a runtime that may already be serving.
 - DECISION: `last_failure` and `last_failure_at` remain absent until a reviewed ledger event persists reason/time; placeholders or counter-derived provenance are refused by contract.
