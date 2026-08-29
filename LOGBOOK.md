@@ -3,6 +3,25 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-08-30
+
+### 0646 — Correction: Readiness Test Predates Later Main State
+- CORRECTION: `TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry` was introduced in `97ebda4`, not after `TASK-260817-3a0zr3`; it passes in the exact `0413aee` task-head suite and fails only in the current-main runs observed here.
+- FINDING: `TestModelCheckProductionEntrypoint/deadline_override_terminates_both_owned_process_groups` was introduced after the task head.
+- STATUS: The 0643 scope conclusion stands, but its statement that both red tests postdate the task is withdrawn.
+
+### 0643 — Exact Pi Alias Task Head Is Green; Current Main Has Later Timing Failures
+- FINDING: `0413aee` (`97ebda4` implementation plus `0413aee` operator docs) passes uncached `go test ./...`, `go vet ./...`, and `go build ./...` in a clean worktree.
+- ANOMALY: current `main` repeatedly fails `TestModelCheckProductionEntrypoint/deadline_override_terminates_both_owned_process_groups` and `TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry` because fixture evidence is absent or the expected early exit races the timeout.
+- SCOPE: both failures postdate `TASK-260817-3a0zr3`; its production global/local alias drift tests pass uncached on current `main` and the exact task head.
+- STATUS: alias/documentation review accepted; current-main timing failures remain separate follow-up evidence and are not reported as green.
+
+### 0625 — 50K Qwen Candidate Absent And Naive Compaction Invalid
+- ANOMALY: `TASK-260826-vrvauf` notes claim `context_window 131072 -> 50000`, but `/Users/alexis/src/.agents/.configs/project-config.toml` and its 0259 backup both contain `75000`.
+- FINDING: Production `qwen-infra` resolution derives `compactAtTokens=50000` and `reserveTokens=25000`; changing only the window to `50000` is refused because the threshold reaches the window.
+- EVIDENCE: A narrowed real-entrypoint fixture with window/threshold `50000/50000` exits 1; `50000/33000` exits 0 while model, reasoning, endpoint, and yolo remain unchanged.
+- STATUS: Changes requested; restore the requested window with a valid compaction threshold and attach reproducible production evidence.
+
 ## 2026-08-29
 
 ### 2318 — Status Publication Revalidates Its Resource Decision
@@ -16,6 +35,12 @@
 - DECISION: Admission and diagnostic observations use separate generations; only admission starts and direct pressure evidence advance admission invalidation.
 - EVIDENCE: Four real healthy status requests cannot starve a paused healthy acquire, while a real pressured status invalidates it before reservation; re-coupling status to admission generation makes the starvation test exit 1.
 - STATUS: Existing leases and the single broker-owned runtime remain unchanged across both schedules.
+
+### 2312 — Retention Architecture Needs Bounded Liveness And Upgrade Recovery
+- DECISION: `TASK-260829-1q31e0` remains in analysis; the dedicated aggregate envelope design is not development-ready while profile-lock waits and scanner work are unbounded.
+- FINDING: preserving every legacy lifecycle log while forcing `within_policy=false` and `soak_ready=false` gives upgraded profiles no path back to health.
+- REQUIRED: pin per-operation lock/scan budgets with fail-closed status, and add an explicit audited, resumable operator retirement or archive flow that never adopts ambiguous legacy evidence.
+- EVIDENCE: `retention-architecture-revision-required.md` is attached to the Task; corrected architecture run `RUN-260829-c75634` is active on exact base `6d051f54`.
 
 ### 2235 — Record-Derived Pressure Policy Keeps One Provenance
 - ROOT CAUSE: `sharedRuntimeRecordStatus` paired persisted effective sharing with caller-derived resource policy, publishing contradictory disabled/provider enforcement on the unverified fallback path.
@@ -51,6 +76,12 @@
 - FIX: `tools/agents-infra/internal/infra/pi_shared_broker_darwin.go` assigns monotonic generations before I/O, refuses superseded observations as `unknown`, reserves leases atomically with the generation check, and generation-binds pressure/recovery events.
 - EVIDENCE: Deterministic real wire acquire and status races reproduce the old lease grant at exit 1, then refuse both stale surfaces at exit 0; the focused pair also exits 0 under `go test -race`.
 - STATUS: `TASK-260829-1qh0ud` revision 3 rework closes the persisted stale-completion finding without touching a live runtime.
+
+### 1942 — Stale recovery observation can clear newer resource pressure
+
+- REVIEW FINDING: immutable `CR-TASK-260829-1qh0ud-2` keeps read-only status and broker views unhealthy while pressure is latched, but concurrent admission observations are applied in completion order rather than observation generation order.
+- REPRODUCTION: an older idle/recovery observation paused; a newer busy observation refused admission and latched pressure; the older observation then resumed, cleared the newer latch, and production `handleConnection -> acquireLease` granted a lease. The deterministic Darwin production-path test failed with `Type=lease` and `resourcePressureLatched=false`.
+- STATUS: rev2 is not acceptable. Revision 3 must reject stale application independently of completion order and retain fail-closed unreadable/unsupported behavior. Evidence is attached to `TASK-260829-1qh0ud` as `rev2-review-finding-stale-observation.md`.
 
 ### 1924 — Serial Full Suite Removes Package-Level Self-Contention
 - FINDING: `go test -p 1 ./... -count=1` executed every package and both previously red timing tests without skips; exit 0.
