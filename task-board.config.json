@@ -22,6 +22,14 @@
         "claude",
         "codex"
       ]
+    },
+    "worktree_isolation": {
+      "validation": {
+        "commands": [
+          "cd tools/agents-infra && go test ./... -count=1",
+          "cd tools/agents-infra && go vet ./..."
+        ]
+      }
     }
   },
   "version_control": {
