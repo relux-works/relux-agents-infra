@@ -1,4 +1,6 @@
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
+model_context_window = 1000000
+model_auto_compact_token_limit = 900000
 model_reasoning_effort = "xhigh"
 service_tier = "default"
 project_doc_max_bytes = 131072
@@ -28,6 +30,12 @@ trust_level = "trusted"
 trust_level = "untrusted"
 
 [projects."/"]
+trust_level = "trusted"
+
+[projects."/Users/iv/Developer/relux-tunnel"]
+trust_level = "trusted"
+
+[projects."/Users/iv"]
 trust_level = "trusted"
 
 [notice]

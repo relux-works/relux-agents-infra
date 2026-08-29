@@ -1,0 +1,21 @@
+{
+  "contract": "primary-goal-v1",
+  "id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 25,
+  "previous_revision": 24,
+  "state": "active",
+  "scope": {
+    "kind": "board"
+  },
+  "objective": "Complete the existing agents-infra local-setup, instruction-materialization, and Pi primary-launcher work while preserving global setup/provider rendering and exact Codex config semantics; keep automatic author-signed PR delivery, fresh-main task starts, and explicit agent co-authorship, remove residual uncommitted-handoff directives from the global instruction surface, install the revised policy locally, publish it through a signed PR and exact-head landing, track the pre-existing task-board missing-resource integrity debt in a dedicated GitHub issue, and update the global Codex CLI default config to use gpt-5.6-sol with a 1,000,000 token context window and 900,000 token auto-compaction limit.",
+  "mutation": {
+    "kind": "objective_realigned",
+    "reason": "User requested updating Codex CLI config for GPT-5.6 Sol long context.",
+    "actor": {
+      "kind": "primary_parent",
+      "actor_id": "iv"
+    }
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-29T23:39:11.258606Z"
+}

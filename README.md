@@ -1737,7 +1737,9 @@ Reference config with:
 
 ### Codex CLI (`codex-config.toml`)
 
-- Model: `gpt-5.5`
+- Model: `gpt-5.6-sol`
+- Context window override: `1000000`
+- Auto-compaction token limit: `900000`
 - Reasoning effort: `xhigh`
 - Service tier: `default` (Standard).
 - Project docs byte limit: `131072`
