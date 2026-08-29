@@ -1,0 +1,463 @@
+diff --git a/.configs/codex-config.toml b/.configs/codex-config.toml
+index 7dc00bc..7b94818 100644
+--- a/.configs/codex-config.toml
++++ b/.configs/codex-config.toml
+@@ -3,10 +3,6 @@ model_reasoning_effort = "xhigh"
+ service_tier = "default"
+ project_doc_max_bytes = 131072
+ 
+-[profiles.fast]
+-model = "gpt-5.5"
+-model_reasoning_effort = "xhigh"
+-
+ [projects."/Users/aagrigore1"]
+ trust_level = "trusted"
+ 
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 76fda0d..2f41129 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,18 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-24
++
++### 1815 — Managed Codex Sync Preserves User State
++- ROOT CAUSE: `tools/agents-infra/internal/infra/infra.go:274` copied global Codex config wholesale and skipped the local copy wholesale; repeat setup therefore either erased user trust/TUI state or retained withdrawn managed defaults.
++- FIX: `Setup -> syncRepo -> syncManagedCodexConfig` now refreshes source-owned defaults, merges installed `projects`/`notice` and non-fast custom profiles, removes `profiles.fast`, and refuses malformed installed TOML without replacement.
++- EVIDENCE: Production-path global/local resync tests preserve trust, notice, and primary-session state while installing `service_tier = "default"`; malformed-existing-config coverage attacks the fallback boundary.
++
++### 1753 — Fast-Profile Removal Meets Runtime Preservation Boundary
++- FINDING: Source `.configs/codex-config.toml` and both installed managed copies retain `[profiles.fast]`; the source-repository local copy also retains the withdrawn `service_tier = "fast"` state.
++- FINDING: Global installed config contains user-added trust entries and model selection absent from source; `setup global` would replace them from source, while `setup local` intentionally preserves existing `.agents/.configs/codex-config.toml` bytes.
++- DECISION: Remove the source profile and its README advertisement with production `Setup` regression coverage; validate supported installs on isolated destinations and defer live runtime synchronization until accepted source integration can preserve user-owned state explicitly.
++
+ ## 2026-08-18
+ 
+ ### 0504 — 503 Retry Accepted; Configured-Timeout Magnitude Still Unbound
+diff --git a/README.md b/README.md
+index 2b6812d..fbcf3d8 100644
+--- a/README.md
++++ b/README.md
+@@ -212,6 +212,13 @@ model, reasoning effort, service tier, trusted projects, and TUI notices are
+ owned by the global `~/.codex/config.toml` link by default. This prevents stale
+ project-local configs from silently overriding the current global model.
+ 
++Both global and local source sync refresh the managed
++`.agents/.configs/codex-config.toml` defaults while merging existing Codex
++user state: project trust decisions, TUI notice acknowledgements, and custom
++profiles other than the withdrawn `fast` profile. Source remains authoritative
++for model, reasoning, and `service_tier = "default"`. A malformed installed
++Codex config refuses synchronization without replacing that config.
++
+ During local setup in the default `preserve` mode, agents-infra removes managed
+ project-local Codex config artifacts it created: either the legacy symlink or a
+ rendered managed regular file. A custom project-local config is left in place
+@@ -811,7 +818,6 @@ Inspect either provider invocation without launching an agent:
+ ```bash
+ cd /abs/path/to/project
+ agents-infra codex --print-config
+-agents-infra codex --print-config --profile fast
+ agents-infra codex --print-config --model gpt-5.6-terra -c 'model_reasoning_effort="xhigh"'
+ 
+ agents-infra claude --print-config
+@@ -1105,7 +1111,7 @@ Reference config with:
+ 
+ - Model: `gpt-5.5`
+ - Reasoning effort: `xhigh`
+-- Service tier: `default` (Standard). The named `fast` profile remains available for explicit model/reasoning selection; use `/fast on` for interactive Fast opt-in, and persistent Fast requires `service_tier = "fast"` with `[features].fast_mode = true`.
++- Service tier: `default` (Standard).
+ - Project docs byte limit: `131072`
+ - The approaching-rate-limit model switch reminder is suppressed with `[notice].hide_rate_limit_model_nudge = true` so Codex does not ask to move to a lower-credit model.
+ - As of the audited Codex CLI `0.144.1`, the separate safety-buffering chooser (`Retry with a faster model` / `Keep waiting`) has no supported `config.toml` setting for suppression, a default choice, or automatic waiting. It is runtime UI shown before agent instructions can act; terminal key automation or a patched Codex binary is intentionally out of scope.
+diff --git a/SKILL.md b/SKILL.md
+index b1fb57e..e7886d0 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -107,6 +107,13 @@ Project-local instructions are an overlay, not a copy of global policy:
+ 
+ Keep local agent runtime setup separate from Codex model/reasoning config.
+ 
++Every global or local source sync refreshes the managed
++`.agents/.configs/codex-config.toml` defaults while merging existing project
++trust decisions, TUI notice acknowledgements, and custom profiles other than
++the withdrawn `fast` profile. Source remains authoritative for model,
++reasoning, and service tier. Malformed installed TOML refuses synchronization
++without replacing that config.
++
+ Default project-local setup should not create `.codex/config.toml`:
+ 
+ ```bash
+diff --git a/tools/agents-infra/internal/infra/codex_config.go b/tools/agents-infra/internal/infra/codex_config.go
+index 6eca6f8..19f5e69 100644
+--- a/tools/agents-infra/internal/infra/codex_config.go
++++ b/tools/agents-infra/internal/infra/codex_config.go
+@@ -8,6 +8,105 @@ import (
+ 	"github.com/pelletier/go-toml/v2"
+ )
+ 
++const managedCodexConfigRelativePath = ".configs/codex-config.toml"
++
++func syncManagedCodexConfig(sourcePath, destinationPath string, mode os.FileMode) error {
++	sourceData, err := os.ReadFile(sourcePath)
++	if err != nil {
++		return fmt.Errorf("read source-managed Codex config %s: %w", sourcePath, err)
++	}
++	installedData, err := os.ReadFile(destinationPath)
++	if os.IsNotExist(err) {
++		if err := writeProjectConfigAtomically(destinationPath, sourceData, mode); err != nil {
++			return fmt.Errorf("install source-managed Codex config %s: %w", destinationPath, err)
++		}
++		return nil
++	}
++	if err != nil {
++		return fmt.Errorf("read existing managed Codex config %s: %w", destinationPath, err)
++	}
++
++	var sourceDocument map[string]any
++	if err := toml.Unmarshal(sourceData, &sourceDocument); err != nil {
++		return fmt.Errorf("parse source-managed Codex config %s: %w", sourcePath, err)
++	}
++	var installedDocument map[string]any
++	if err := toml.Unmarshal(installedData, &installedDocument); err != nil {
++		return fmt.Errorf("parse existing managed Codex config %s: %w", destinationPath, err)
++	}
++
++	// Codex mutates these user-level tables while it runs. Preserve installed
++	// trust decisions and TUI acknowledgement state while source remains the
++	// authority for model, reasoning, service tier, and other managed defaults.
++	for _, key := range []string{"projects", "notice"} {
++		merged, err := mergeCodexConfigTable(sourceDocument, installedDocument, key, "")
++		if err != nil {
++			return fmt.Errorf("merge existing managed Codex config %s: %w", destinationPath, err)
++		}
++		if len(merged) == 0 {
++			delete(sourceDocument, key)
++		} else {
++			sourceDocument[key] = merged
++		}
++	}
++
++	// Profiles are user-level configuration. Carry forward custom profiles, but
++	// never retain the withdrawn fast profile from an older managed install.
++	profiles, err := mergeCodexConfigTable(sourceDocument, installedDocument, "profiles", "fast")
++	if err != nil {
++		return fmt.Errorf("merge existing managed Codex config %s: %w", destinationPath, err)
++	}
++	if len(profiles) == 0 {
++		delete(sourceDocument, "profiles")
++	} else {
++		sourceDocument["profiles"] = profiles
++	}
++
++	mergedData, err := toml.Marshal(sourceDocument)
++	if err != nil {
++		return fmt.Errorf("encode merged managed Codex config %s: %w", destinationPath, err)
++	}
++	if err := writeProjectConfigAtomically(destinationPath, mergedData, mode); err != nil {
++		return fmt.Errorf("write merged managed Codex config %s: %w", destinationPath, err)
++	}
++	return nil
++}
++
++func mergeCodexConfigTable(sourceDocument, installedDocument map[string]any, key, excludedKey string) (map[string]any, error) {
++	sourceTable, err := codexConfigTable(sourceDocument, key)
++	if err != nil {
++		return nil, fmt.Errorf("source field %s: %w", key, err)
++	}
++	installedTable, err := codexConfigTable(installedDocument, key)
++	if err != nil {
++		return nil, fmt.Errorf("installed field %s: %w", key, err)
++	}
++	merged := make(map[string]any, len(sourceTable)+len(installedTable))
++	for name, value := range sourceTable {
++		if name != excludedKey {
++			merged[name] = value
++		}
++	}
++	for name, value := range installedTable {
++		if name != excludedKey {
++			merged[name] = value
++		}
++	}
++	return merged, nil
++}
++
++func codexConfigTable(document map[string]any, key string) (map[string]any, error) {
++	raw, found := document[key]
++	if !found {
++		return nil, nil
++	}
++	table, ok := raw.(map[string]any)
++	if !ok {
++		return nil, fmt.Errorf("expected table, got %T", raw)
++	}
++	return table, nil
++}
++
+ func renderProjectCodexConfig(sourcePath, destinationPath string, out io.Writer) error {
+ 	data, err := os.ReadFile(sourcePath)
+ 	if err != nil {
+diff --git a/tools/agents-infra/internal/infra/infra.go b/tools/agents-infra/internal/infra/infra.go
+index e587c57..f2f9a11 100644
+--- a/tools/agents-infra/internal/infra/infra.go
++++ b/tools/agents-infra/internal/infra/infra.go
+@@ -309,6 +309,9 @@ func syncRepo(layout Layout) error {
+ 		if err != nil {
+ 			return err
+ 		}
++		if filepath.ToSlash(rel) == managedCodexConfigRelativePath {
++			return syncManagedCodexConfig(path, dst, info.Mode())
++		}
+ 
+ 		if d.Type()&os.ModeSymlink != 0 {
+ 			target, err := os.Readlink(path)
+@@ -366,7 +369,7 @@ func shouldPreserveExistingLocalConfig(mode Mode, rel, dst string) bool {
+ 		return false
+ 	}
+ 	switch filepath.ToSlash(rel) {
+-	case ".configs/codex-config.toml", ".configs/claude-settings.json":
++	case ".configs/claude-settings.json":
+ 		return true
+ 	default:
+ 		return false
+diff --git a/tools/agents-infra/internal/infra/infra_test.go b/tools/agents-infra/internal/infra/infra_test.go
+index 1a6c88d..546c1be 100644
+--- a/tools/agents-infra/internal/infra/infra_test.go
++++ b/tools/agents-infra/internal/infra/infra_test.go
+@@ -791,10 +791,35 @@ func TestSetupLocalPreservesExistingNativeAgentConfigsOnResync(t *testing.T) {
+ 
+ 	codexConfig := filepath.Join(project, ".agents", ".configs", "codex-config.toml")
+ 	claudeSettings := filepath.Join(project, ".agents", ".configs", "claude-settings.json")
+-	mustWrite(t, codexConfig, "model = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"xhigh\"\n")
++	mustWrite(t, codexConfig, `model = "user-overrides-managed-model"
++service_tier = "fast"
++
++[profiles.fast]
++model = "gpt-5.5"
++
++[profiles.custom]
++model = "custom-model"
++
++[projects."/user/trusted"]
++trust_level = "trusted"
++
++[notice]
++hide_full_access_warning = true
++`)
+ 	mustWrite(t, claudeSettings, "{\n  \"model\": \"claude-sonnet-5\",\n  \"permissions\": {\"defaultMode\": \"bypassPermissions\"}\n}\n")
++	projectConfig := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
++	projectConfigState := "[agents.codex.primary_session]\nmodel = \"primary-model\"\nyolo_mode = false\n"
++	mustWrite(t, projectConfig, projectConfigState)
++
++	mustWrite(t, filepath.Join(source, ".configs", "codex-config.toml"), `model = "source-default-overwrite"
++service_tier = "default"
++
++[projects."/source/trusted"]
++trust_level = "trusted"
+ 
+-	mustWrite(t, filepath.Join(source, ".configs", "codex-config.toml"), "model = \"source-default-overwrite\"\n")
++[notice]
++hide_rate_limit_model_nudge = true
++`)
+ 	mustWrite(t, filepath.Join(source, ".configs", "claude-settings.json"), "{\"model\":\"source-default-overwrite\"}\n")
+ 	mustWrite(t, filepath.Join(source, ".configs", "codex-mcp-servers.toml"), `[servers.updated]
+ url = "https://example.test/mcp"
+@@ -804,15 +829,34 @@ url = "https://example.test/mcp"
+ 		t.Fatalf("second Setup: %v", err)
+ 	}
+ 
+-	assertFileContains(t, codexConfig, "gpt-5.6-terra")
+-	assertFileNotContains(t, codexConfig, "source-default-overwrite")
++	assertFileContains(t, codexConfig, "source-default-overwrite")
++	assertFileContains(t, codexConfig, "service_tier = 'default'")
++	assertFileNotContains(t, codexConfig, "user-overrides-managed-model")
++	assertFileNotContains(t, codexConfig, "[profiles.fast]")
++	assertFileContains(t, codexConfig, "[profiles.custom]")
++	assertFileContains(t, codexConfig, "[projects.'/user/trusted']")
++	assertFileContains(t, codexConfig, "[projects.'/source/trusted']")
++	assertFileContains(t, codexConfig, "hide_full_access_warning = true")
++	assertFileContains(t, codexConfig, "hide_rate_limit_model_nudge = true")
+ 	assertFileContains(t, claudeSettings, "claude-sonnet-5")
+ 	assertFileContains(t, claudeSettings, "bypassPermissions")
+ 	assertFileNotContains(t, claudeSettings, "source-default-overwrite")
+ 	assertFileContains(t, filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.updated]")
+-	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "gpt-5.6-terra")
+-	assertFileNotContains(t, filepath.Join(project, ".codex", "config.toml"), "source-default-overwrite")
++	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "source-default-overwrite")
++	assertFileNotContains(t, filepath.Join(project, ".codex", "config.toml"), "[profiles.custom]")
+ 	assertSymlink(t, filepath.Join(project, ".claude", "settings.json"), claudeSettings)
++	report := mustDoctor(t, layout)
++	if !report.CodexConfigPresent || !report.CodexConfigGenerated || !report.CodexPrimarySession.Model.Present || report.CodexPrimarySession.Model.Value != "primary-model" || !report.CodexPrimarySession.YoloMode.Present || report.CodexPrimarySession.YoloMode.Value {
++		t.Fatalf("unexpected local doctor report after managed config migration: %+v", report)
++	}
++	if err := VerifyInstalledRuntime(layout); err != nil {
++		t.Fatalf("VerifyInstalledRuntime: %v", err)
++	}
++	if got, err := os.ReadFile(projectConfig); err != nil {
++		t.Fatalf("ReadFile(%s): %v", projectConfig, err)
++	} else if string(got) != projectConfigState {
++		t.Fatalf("primary-session policy changed during resync:\ngot:  %q\nwant: %q", string(got), projectConfigState)
++	}
+ }
+ 
+ func TestSetupLocalProjectMCPOptInInstallsCodexLocalLauncher(t *testing.T) {
+@@ -1111,7 +1155,8 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
+ 
+ 	assertSymlink(t, filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".agents", ".configs", "codex-config.toml"))
+ 	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "hide_rate_limit_model_nudge = true")
+-	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "[profiles.fast]")
++	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "service_tier = \"default\"")
++	assertFileNotContains(t, filepath.Join(home, ".codex", "config.toml"), "[profiles.fast]")
+ 	report := mustDoctor(t, layout)
+ 	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
+ 		t.Fatalf("unexpected global Codex config doctor report: %+v", report)
+@@ -1119,6 +1164,85 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
+ 	assertFileNotContains(t, filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.figma]")
+ }
+ 
++func TestSetupGlobalMigratesManagedCodexConfigPreservingUserState(t *testing.T) {
++	source := seedSourceRepo(t)
++	home := t.TempDir()
++	layout, err := GlobalLayout(source, home)
++	if err != nil {
++		t.Fatalf("GlobalLayout: %v", err)
++	}
++	seedGlobalAgentsInfraTarget(t, layout)
++	existingConfigPath := filepath.Join(home, ".agents", managedCodexConfigRelativePath)
++	mustMkdir(t, filepath.Dir(existingConfigPath))
++	mustWrite(t, existingConfigPath, `model = "old-managed-model"
++service_tier = "fast"
++
++[profiles.fast]
++model = "gpt-5.5"
++
++[profiles.custom]
++model = "custom-model"
++
++[projects."/user/trusted"]
++trust_level = "trusted"
++
++[notice]
++hide_rate_limit_model_nudge = false
++hide_full_access_warning = true
++`)
++
++	if err := Setup(Options{Layout: layout}); err != nil {
++		t.Fatalf("Setup: %v", err)
++	}
++
++	configPath := filepath.Join(home, ".codex", "config.toml")
++	assertSymlink(t, configPath, existingConfigPath)
++	assertFileContains(t, configPath, "model = 'gpt-5.5'")
++	assertFileContains(t, configPath, "service_tier = 'default'")
++	assertFileNotContains(t, configPath, "old-managed-model")
++	assertFileNotContains(t, configPath, "[profiles.fast]")
++	assertFileContains(t, configPath, "[profiles.custom]")
++	assertFileContains(t, configPath, "[projects.'/user/trusted']")
++	assertFileContains(t, configPath, "hide_rate_limit_model_nudge = false")
++	assertFileContains(t, configPath, "hide_full_access_warning = true")
++	report := mustDoctor(t, layout)
++	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigEffective != "global" {
++		t.Fatalf("unexpected global doctor report after managed config migration: %+v", report)
++	}
++	if err := VerifyInstalledRuntime(layout); err != nil {
++		t.Fatalf("VerifyInstalledRuntime: %v", err)
++	}
++}
++
++func TestSetupGlobalRejectsMalformedExistingCodexConfigWithoutReplacingIt(t *testing.T) {
++	source := seedSourceRepo(t)
++	home := t.TempDir()
++	layout, err := GlobalLayout(source, home)
++	if err != nil {
++		t.Fatalf("GlobalLayout: %v", err)
++	}
++	seedGlobalAgentsInfraTarget(t, layout)
++	existingConfigPath := filepath.Join(home, ".agents", managedCodexConfigRelativePath)
++	mustMkdir(t, filepath.Dir(existingConfigPath))
++	existingConfig := []byte("model = \"user-model\"\n[projects.\"/user\"\ntrust_level = \"trusted\"\n")
++	mustWrite(t, existingConfigPath, string(existingConfig))
++
++	err = Setup(Options{Layout: layout})
++	if err == nil {
++		t.Fatal("Setup succeeded with malformed existing managed Codex config")
++	}
++	if !strings.Contains(err.Error(), "parse existing managed Codex config") || !strings.Contains(err.Error(), existingConfigPath) {
++		t.Fatalf("unexpected malformed existing config error: %v", err)
++	}
++	after, readErr := os.ReadFile(existingConfigPath)
++	if readErr != nil {
++		t.Fatalf("ReadFile(%s): %v", existingConfigPath, readErr)
++	}
++	if !bytes.Equal(after, existingConfig) {
++		t.Fatalf("failed migration replaced malformed existing config:\nbefore: %q\nafter:  %q", existingConfig, after)
++	}
++}
++
+ func TestSetupPreservesExistingPublicSkillsRegistryEntries(t *testing.T) {
+ 	source := seedSourceRepo(t)
+ 	project := t.TempDir()
+@@ -1216,7 +1340,7 @@ func seedSourceRepo(t *testing.T) string {
+ 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
+ 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n")
+ 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
+-	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\n\n[profiles.fast]\nmodel = \"gpt-5.5\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
++	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
+ 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
+ url = "https://mcp.figma.com/mcp"
+ 
+diff --git a/tools/agents-infra/setup_test.go b/tools/agents-infra/setup_test.go
+index a68bf15..4cb0ed8 100644
+--- a/tools/agents-infra/setup_test.go
++++ b/tools/agents-infra/setup_test.go
+@@ -5,8 +5,48 @@ import (
+ 	"path/filepath"
+ 	"strings"
+ 	"testing"
++
++	"github.com/pelletier/go-toml/v2"
+ )
+ 
++func TestSourceManagedCodexConfigUsesStandardTierWithoutFastProfile(t *testing.T) {
++	root := sourceRepoRoot(t)
++	path := filepath.Join(root, ".configs", "codex-config.toml")
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", path, err)
++	}
++
++	var config map[string]any
++	if err := toml.Unmarshal(data, &config); err != nil {
++		t.Fatalf("Unmarshal(%s): %v", path, err)
++	}
++	if got := config["service_tier"]; got != "default" {
++		t.Fatalf("service_tier = %#v, want default", got)
++	}
++	if profiles, ok := config["profiles"].(map[string]any); ok {
++		if _, found := profiles["fast"]; found {
++			t.Fatalf("source-managed Codex config still advertises profiles.fast: %#v", profiles["fast"])
++		}
++	}
++}
++
++func TestREADMEDoesNotAdvertiseRemovedCodexFastProfile(t *testing.T) {
++	path := filepath.Join(sourceRepoRoot(t), "README.md")
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", path, err)
++	}
++	for _, removed := range []string{
++		"agents-infra codex --print-config --profile fast",
++		"named `fast` profile remains available",
++	} {
++		if strings.Contains(string(data), removed) {
++			t.Fatalf("README.md still advertises removed fast profile with %q", removed)
++		}
++	}
++}
++
+ func TestRunSetupLocalAcceptsPrimaryFlagsAfterProjectDirectory(t *testing.T) {
+ 	source := sourceRepoRoot(t)
+ 	project := t.TempDir()

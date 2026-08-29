@@ -1,0 +1,133 @@
+{
+  "command": [
+    "/Users/alexis/.local/bin/model-harness",
+    "run",
+    "qwen-benchmark-python",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18031",
+    "--config",
+    "/Users/alexis/src/relux-works/relux-agents-infra/.temp/TASK-260827-2v13w8/model-harness.benchmark.toml"
+  ],
+  "declaredAsymmetries": [
+    "deployed with --prompt-cache-size 1 --prompt-cache-bytes 8GB; multi-turn prefix reuse is served from that cache",
+    "loads the model lazily on the first completion, so /v1/models answers 200 about a second after launch with no weights resident",
+    "/v1/models lists every MLX model in the local Hugging Face cache and appends the configured one last, so data[0].id is not the configured model"
+  ],
+  "finishedAtUnixSeconds": 1787883871.024946,
+  "footprintSamples": 5046,
+  "harnessExitStatus": -15,
+  "lifecycle": {
+    "first_completion_seconds": 5.78995418548584,
+    "footprint_after_warmup_bytes": 29116896184,
+    "models_listing_seconds": 1.0746171474456787
+  },
+  "peakPhysicalFootprintBytes": 48438825960,
+  "pins": {
+    "contextPolicy": "unbounded-kv",
+    "hostIdentity": "MacBookPro18,2/68719476736/25F80/arm64",
+    "maxOutputTokens": 256,
+    "modelDigest": "1b10f3fe1c1097c909fa35e112b943255c44be4a5f332f45e0af57a96188460b",
+    "modelPath": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+    "promptSuiteDigest": "bba8867f4300f343b15960fb2cf8f821c653b96f538cf87287d0dacd36275d41",
+    "quantization": "8bit/group64/affine",
+    "seed": 1234,
+    "temperature": 0.0,
+    "topP": 1.0
+  },
+  "revisions": {
+    "mlx": "0.32.2",
+    "mlx_lm": "0.32.0",
+    "mlx_lm_direct_url": "{\"url\": \"file:///Users/alexis/src/relux-works/mlx-lm/.git\", \"vcs_info\": {\"commit_id\": \"91506981056172f937e7bdca4ab0d3b7459c7fab\", \"requested_revision\": \"91506981056172f937e7bdca4ab0d3b7459c7fab\", \"vcs\": \"git\"}}",
+    "mlx_metal": "0.32.2",
+    "model_harness": "model-harness v1.6.1-44-gd91d6fc (d91d6fc, 2026-08-27T06:58:43Z)",
+    "python": "3.14.7",
+    "transformers": "5.16.1"
+  },
+  "runtime": "python-mlx-lm",
+  "scenarios": [
+    {
+      "completionTokens": 77,
+      "decodeTokensPerSecond": 10.738987805240823,
+      "failureMode": null,
+      "name": "short_prompt",
+      "peakPhysicalFootprintBytes": 29468365752,
+      "prefillTokensPerSecond": 63.999789854329265,
+      "promptTokens": 79,
+      "succeeded": true,
+      "timeToFirstTokenSeconds": 1.2343790531158447,
+      "wallClockSeconds": 8.31152629852295
+    },
+    {
+      "completionTokens": 172,
+      "decodeTokensPerSecond": 10.353220313714306,
+      "failureMode": null,
+      "name": "long_prompt_8k",
+      "peakPhysicalFootprintBytes": 33788449720,
+      "prefillTokensPerSecond": 109.44900025268,
+      "promptTokens": 7822,
+      "succeeded": true,
+      "timeToFirstTokenSeconds": 71.46707582473755,
+      "wallClockSeconds": 87.98388671875
+    },
+    {
+      "completionTokens": 64,
+      "decodeTokensPerSecond": null,
+      "failureMode": null,
+      "name": "tool_call",
+      "peakPhysicalFootprintBytes": 33788449720,
+      "prefillTokensPerSecond": null,
+      "promptTokens": 351,
+      "succeeded": true,
+      "timeToFirstTokenSeconds": null,
+      "wallClockSeconds": 9.421900033950806
+    },
+    {
+      "completionTokens": 141,
+      "decodeTokensPerSecond": null,
+      "failureMode": null,
+      "name": "multiturn_prefix_reuse",
+      "peakPhysicalFootprintBytes": 34365526992,
+      "prefillTokensPerSecond": 111.53287273317711,
+      "promptTokens": 7822,
+      "succeeded": true,
+      "timeToFirstTokenSeconds": 70.77267503738403,
+      "wallClockSeconds": 224.4093997478485
+    },
+    {
+      "completionTokens": 1279,
+      "decodeTokensPerSecond": 8.991227648206268,
+      "failureMode": null,
+      "name": "stability_soak",
+      "peakPhysicalFootprintBytes": 34365526992,
+      "prefillTokensPerSecond": null,
+      "promptTokens": 1670,
+      "soak": {
+        "first_footprint_bytes": 29817852880,
+        "first_latency_seconds": 7.160643100738525,
+        "footprint_drift_bytes": -501809152,
+        "iterations": 20,
+        "last_footprint_bytes": 29316043728,
+        "last_latency_seconds": 7.121428966522217,
+        "median_latency_seconds": 7.117451190948486
+      },
+      "succeeded": true,
+      "timeToFirstTokenSeconds": null,
+      "wallClockSeconds": 142.2497627735138
+    },
+    {
+      "completionTokens": 16,
+      "decodeTokensPerSecond": 7.944718565705296,
+      "failureMode": null,
+      "name": "context_75k",
+      "peakPhysicalFootprintBytes": 48438825960,
+      "prefillTokensPerSecond": 88.86691448572947,
+      "promptTokens": 73054,
+      "succeeded": true,
+      "timeToFirstTokenSeconds": 822.0607233047485,
+      "wallClockSeconds": 823.9501488208771
+    }
+  ],
+  "startedAtUnixSeconds": 1787882568.651839
+}

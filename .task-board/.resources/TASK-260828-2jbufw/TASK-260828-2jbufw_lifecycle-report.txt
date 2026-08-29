@@ -1,0 +1,33 @@
+== head-prefix ==
+binary        : /Users/alexis/src/relux-works/relux-agents-infra/.temp/TASK-260828-2jbufw/model-harness-head
+port          : 60184
+harness pid   : 76957
+runtime pid   : 76965
+readiness     : /v1/models -> 200
+health        : {"status":"ok"}
+pgid before   : 76948  (harness pgid 76948)
+-- after a directed SIGTERM at the harness --
+harness exit  : 143
+runtime       : ALIVE (ppid 1)
+port 60184 : STILL HELD
+harness stderr bytes after the model-loading output:
+  lifecycle records: 0
+
+  (cleaning up the orphan this control produced: pid 76965)
+== with-group-shutdown ==
+binary        : /Users/alexis/src/relux-works/relux-agents-infra/.temp/TASK-260828-2jbufw/model-harness
+port          : 60204
+harness pid   : 77007
+runtime pid   : 77012
+readiness     : /v1/models -> 200
+health        : {"status":"ok"}
+pgid before   : 77012  (harness pgid 76948)
+-- after a directed SIGTERM at the harness --
+harness exit  : 0
+runtime       : gone
+port 60204 : free
+harness stderr bytes after the model-loading output:
+  lifecycle records: 2
+  model-harness: received terminated; stopping profile "llamacpp-fixture" process group 77012
+  model-harness: profile "llamacpp-fixture" process group 77012 stopped after terminated (child: <nil>)
+

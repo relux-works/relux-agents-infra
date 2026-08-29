@@ -1,0 +1,1 @@
+{"batch":{"active":0,"batches_released":1,"completed":0,"failed":1,"shared_cache_rebuild_pending":true,"shared_cache_rebuilds":0,"shared_cache_rebuilds_abandoned":1,"started":1},"mlx":{"active_bytes":255724192,"cache_bytes":4724586588,"peak_bytes":1572033420},"readiness":"generation_worker_failed"}

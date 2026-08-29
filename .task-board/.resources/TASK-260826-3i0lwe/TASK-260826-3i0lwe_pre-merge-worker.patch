@@ -1,0 +1,248 @@
+diff --git a/tools/agents-infra/internal/infra/pi_config.go b/tools/agents-infra/internal/infra/pi_config.go
+index 2d7b499..2240141 100644
+--- a/tools/agents-infra/internal/infra/pi_config.go
++++ b/tools/agents-infra/internal/infra/pi_config.go
+@@ -24,6 +24,19 @@ type PiPrimarySessionPolicy struct {
+ 	YoloMode        PiPolicyBoolValue
+ }
+ 
++// PiStandaloneSessionSource is deliberately separate from primary-session
++// policy. A project may authorize one unattended worker without changing the
++// interactive Pi trust or tool surface.
++type PiStandaloneSessionSource struct {
++	YoloMode      *bool
++	ToolAllowlist *[]string
++}
++
++type PiStandaloneSessionPolicy struct {
++	YoloMode      PiPolicyBoolValue
++	ToolAllowlist PiPolicyStringListValue
++}
++
+ type PiPolicyStringValue struct {
+ 	Value   string
+ 	Source  string
+@@ -36,6 +49,12 @@ type PiPolicyBoolValue struct {
+ 	Present bool
+ }
+ 
++type PiPolicyStringListValue struct {
++	Value   []string
++	Source  string
++	Present bool
++}
++
+ type PiProfile struct {
+ 	Provider              string
+ 	Model                 string
+@@ -77,67 +96,89 @@ type PiDFlash struct {
+ 	DraftArgv   []string
+ }
+ 
+-func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, map[string]PiProfile, error) {
++func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, PiStandaloneSessionSource, map[string]PiProfile, error) {
+ 	pi, present, err := projectConfigTable(agents, "pi", "agents.pi")
+ 	if err != nil {
+-		return PiPrimarySessionSource{}, nil, projectConfigFieldError(path, "agents.pi", err)
++		return PiPrimarySessionSource{}, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, "agents.pi", err)
+ 	}
+ 	if !present {
+-		return PiPrimarySessionSource{}, map[string]PiProfile{}, nil
++		return PiPrimarySessionSource{}, PiStandaloneSessionSource{}, map[string]PiProfile{}, nil
+ 	}
+-	if err := rejectUnknownFields(pi, "agents.pi", "primary_session", "profiles"); err != nil {
+-		return PiPrimarySessionSource{}, nil, projectConfigFieldError(path, errField(err), err)
++	if err := rejectUnknownFields(pi, "agents.pi", "primary_session", "standalone_session", "profiles"); err != nil {
++		return PiPrimarySessionSource{}, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, errField(err), err)
+ 	}
+ 
+ 	var primary PiPrimarySessionSource
+ 	primaryTable, primaryPresent, err := projectConfigTable(pi, "primary_session", piPrimarySessionField)
+ 	if err != nil {
+-		return primary, nil, projectConfigFieldError(path, piPrimarySessionField, err)
++		return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField, err)
+ 	}
+ 	if primaryPresent {
+ 		if err := rejectUnknownFields(primaryTable, piPrimarySessionField, "profile", "pi_compatibility", "yolo_mode"); err != nil {
+-			return primary, nil, projectConfigFieldError(path, errField(err), err)
++			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, errField(err), err)
+ 		}
+ 		primary.Profile, err = optionalNonEmptyString(primaryTable, "profile")
+ 		if err != nil {
+-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".profile", err)
++			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField+".profile", err)
+ 		}
+ 		primary.PiCompatibility, err = optionalNonEmptyString(primaryTable, "pi_compatibility")
+ 		if err != nil {
+-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".pi_compatibility", err)
++			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField+".pi_compatibility", err)
+ 		}
+ 		primary.YoloMode, err = optionalBool(primaryTable, "yolo_mode")
+ 		if err != nil {
+-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".yolo_mode", err)
++			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField+".yolo_mode", err)
+ 		}
+ 		if primary.Profile == nil && primary.PiCompatibility == nil && primary.YoloMode == nil {
+-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField, errors.New("table must contain at least one supported field"))
++			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField, errors.New("table must contain at least one supported field"))
++		}
++	}
++
++	var standalone PiStandaloneSessionSource
++	standaloneTable, standalonePresent, err := projectConfigTable(pi, "standalone_session", piStandaloneSessionField)
++	if err != nil {
++		return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField, err)
++	}
++	if standalonePresent {
++		if err := rejectUnknownFields(standaloneTable, piStandaloneSessionField, "yolo_mode", "tool_allowlist"); err != nil {
++			return primary, standalone, nil, projectConfigFieldError(path, errField(err), err)
++		}
++		standalone.YoloMode, err = optionalBool(standaloneTable, "yolo_mode")
++		if err != nil {
++			return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField+".yolo_mode", err)
++		}
++		standalone.ToolAllowlist, err = optionalStringArray(standaloneTable, "tool_allowlist")
++		if err != nil {
++			return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField+".tool_allowlist", err)
++		}
++		if standalone.YoloMode == nil && standalone.ToolAllowlist == nil {
++			return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField, errors.New("table must contain at least one supported field"))
+ 		}
+ 	}
+ 
+ 	profiles := map[string]PiProfile{}
+ 	profilesTable, profilesPresent, err := projectConfigTable(pi, "profiles", "agents.pi.profiles")
+ 	if err != nil {
+-		return primary, nil, projectConfigFieldError(path, "agents.pi.profiles", err)
++		return primary, standalone, nil, projectConfigFieldError(path, "agents.pi.profiles", err)
+ 	}
+ 	if !profilesPresent {
+-		return primary, profiles, nil
++		return primary, standalone, profiles, nil
+ 	}
+ 	for name, raw := range profilesTable {
+ 		if name == "" {
+-			return primary, nil, projectConfigFieldError(path, "agents.pi.profiles", errors.New("profile name must not be empty"))
++			return primary, standalone, nil, projectConfigFieldError(path, "agents.pi.profiles", errors.New("profile name must not be empty"))
+ 		}
+ 		table, ok := raw.(map[string]any)
+ 		if !ok {
+-			return primary, nil, projectConfigFieldError(path, "agents.pi.profiles."+name, fmt.Errorf("expected table, got %T", raw))
++			return primary, standalone, nil, projectConfigFieldError(path, "agents.pi.profiles."+name, fmt.Errorf("expected table, got %T", raw))
+ 		}
+ 		profile, parseErr := parsePiProfile(table, path, name)
+ 		if parseErr != nil {
+-			return primary, nil, parseErr
++			return primary, standalone, nil, parseErr
+ 		}
+ 		profiles[name] = profile
+ 	}
+-	return primary, profiles, nil
++	return primary, standalone, profiles, nil
+ }
+ 
+ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) {
+@@ -531,6 +572,17 @@ func requiredStringArray(table map[string]any, key string) ([]string, error) {
+ 	}
+ 	return out, nil
+ }
++
++func optionalStringArray(table map[string]any, key string) (*[]string, error) {
++	if _, ok := table[key]; !ok {
++		return nil, nil
++	}
++	value, err := requiredStringArray(table, key)
++	if err != nil {
++		return nil, err
++	}
++	return &value, nil
++}
+ func equalStrings(a, b []string) bool {
+ 	if len(a) != len(b) {
+ 		return false
+@@ -572,6 +624,24 @@ func composePiPrimarySession(policy *PiPrimarySessionPolicy, source PiPrimarySes
+ func clonePiPrimarySessionSource(s PiPrimarySessionSource) PiPrimarySessionSource {
+ 	return PiPrimarySessionSource{Profile: cloneStringPointer(s.Profile), PiCompatibility: cloneStringPointer(s.PiCompatibility), YoloMode: cloneBoolPointer(s.YoloMode)}
+ }
++
++func composePiStandaloneSession(policy *PiStandaloneSessionPolicy, source PiStandaloneSessionSource, path string) {
++	if source.YoloMode != nil {
++		policy.YoloMode = PiPolicyBoolValue{Value: *source.YoloMode, Source: path, Present: true}
++	}
++	if source.ToolAllowlist != nil {
++		policy.ToolAllowlist = PiPolicyStringListValue{Value: append([]string(nil), (*source.ToolAllowlist)...), Source: path, Present: true}
++	}
++}
++
++func clonePiStandaloneSessionSource(s PiStandaloneSessionSource) PiStandaloneSessionSource {
++	clone := PiStandaloneSessionSource{YoloMode: cloneBoolPointer(s.YoloMode)}
++	if s.ToolAllowlist != nil {
++		value := append([]string(nil), (*s.ToolAllowlist)...)
++		clone.ToolAllowlist = &value
++	}
++	return clone
++}
+ func clonePiProfiles(in map[string]PiProfile) map[string]PiProfile {
+ 	out := map[string]PiProfile{}
+ 	for k, v := range in {
+diff --git a/tools/agents-infra/internal/infra/project_config.go b/tools/agents-infra/internal/infra/project_config.go
+index 2e5a6af..f2843cf 100644
+--- a/tools/agents-infra/internal/infra/project_config.go
++++ b/tools/agents-infra/internal/infra/project_config.go
+@@ -22,6 +22,7 @@ const (
+ 	claudePrimaryModelField          = claudePrimarySessionField + ".model"
+ 	claudePrimaryYoloModeField       = claudePrimarySessionField + ".yolo_mode"
+ 	piPrimarySessionField            = "agents.pi.primary_session"
++	piStandaloneSessionField         = "agents.pi.standalone_session"
+ 	targetsField                     = "agents.targets"
+ 	entrypointsField                 = "agents.entrypoints"
+ )
+@@ -116,6 +117,7 @@ type parsedProjectConfig struct {
+ 	PrimarySession       CodexPrimarySessionSource
+ 	ClaudePrimarySession ClaudePrimarySessionSource
+ 	PiPrimarySession     PiPrimarySessionSource
++	PiStandaloneSession  PiStandaloneSessionSource
+ 	PiProfiles           map[string]PiProfile
+ 	Targets              map[string]ProjectTarget
+ 	Entrypoints          map[string]string
+@@ -129,6 +131,7 @@ type ProjectConfigSource struct {
+ 	CodexPrimarySession  CodexPrimarySessionSource
+ 	ClaudePrimarySession ClaudePrimarySessionSource
+ 	PiPrimarySession     PiPrimarySessionSource
++	PiStandaloneSession  PiStandaloneSessionSource
+ 	PiProfiles           map[string]PiProfile
+ 	Targets              map[string]ProjectTarget
+ 	Entrypoints          map[string]string
+@@ -141,6 +144,7 @@ type compositeProjectConfig struct {
+ 	PrimarySession       CodexPrimarySessionPolicy
+ 	ClaudePrimarySession ClaudePrimarySessionPolicy
+ 	PiPrimarySession     PiPrimarySessionPolicy
++	PiStandaloneSession  PiStandaloneSessionPolicy
+ 	PiProfiles           map[string]PiProfile
+ 	Targets              map[string]ProjectTarget
+ 	Entrypoints          map[string]ProjectEntrypoint
+@@ -178,6 +182,7 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
+ 			CodexPrimarySession:  cloneCodexPrimarySessionSource(config.PrimarySession),
+ 			ClaudePrimarySession: cloneClaudePrimarySessionSource(config.ClaudePrimarySession),
+ 			PiPrimarySession:     clonePiPrimarySessionSource(config.PiPrimarySession),
++			PiStandaloneSession:  clonePiStandaloneSessionSource(config.PiStandaloneSession),
+ 			PiProfiles:           clonePiProfiles(config.PiProfiles),
+ 			Targets:              cloneProjectTargets(config.Targets),
+ 			Entrypoints:          cloneStringMap(config.Entrypoints),
+@@ -185,6 +190,7 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
+ 		composeCodexPrimarySession(&composite.PrimarySession, config.PrimarySession, path)
+ 		composeClaudePrimarySession(&composite.ClaudePrimarySession, config.ClaudePrimarySession, path)
+ 		composePiPrimarySession(&composite.PiPrimarySession, config.PiPrimarySession, path)
++		composePiStandaloneSession(&composite.PiStandaloneSession, config.PiStandaloneSession, path)
+ 		for name, profile := range config.PiProfiles {
+ 			profile.Source = path
+ 			composite.PiProfiles[name] = profile
+@@ -245,7 +251,7 @@ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
+ 	if err != nil {
+ 		return parsedProjectConfig{}, err
+ 	}
+-	config.PiPrimarySession, config.PiProfiles, err = parsePiConfig(agents, path)
++	config.PiPrimarySession, config.PiStandaloneSession, config.PiProfiles, err = parsePiConfig(agents, path)
+ 	if err != nil {
+ 		return parsedProjectConfig{}, err
+ 	}

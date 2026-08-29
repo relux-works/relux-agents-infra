@@ -1,0 +1,75 @@
+{
+  "command": [
+    "model-harness",
+    "run",
+    "qwen-benchmark-swift",
+    "--config",
+    "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260827-m30k8z/worktree/tools/mlx-swift-runtime-prototype/.temp/review-rev3-forged-observed/cfg.toml"
+  ],
+  "declaredAsymmetries": [],
+  "finishedAtUnixSeconds": 1787920348.6871119,
+  "peakPhysicalFootprintBytes": 29000000000,
+  "pins": {
+    "contextPolicy": "kv=unbounded;prefill-step=2048;reasoning=medium",
+    "hostIdentity": "benchmark-gate-smoke",
+    "maxOutputTokens": 256,
+    "modelDigest": "9f2c1a",
+    "modelPath": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+    "promptSuiteDigest": "aa11bb",
+    "quantization": "8bit/group64/affine",
+    "seed": 1234,
+    "temperature": 0.0,
+    "topP": 1.0
+  },
+  "provenance": {
+    "configDigest": "ca319a3f0d148dfe603c0c8497d72df491805524be788a7e5016b728dea47b35",
+    "configPath": "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260827-m30k8z/worktree/tools/mlx-swift-runtime-prototype/.temp/review-rev3-forged-observed/cfg.toml",
+    "driverCommand": [
+      "/usr/bin/python3",
+      "runtime-benchmark.py"
+    ],
+    "driverDigest": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+    "harnessCommand": [
+      "model-harness",
+      "run",
+      "qwen-benchmark-swift",
+      "--config",
+      "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260827-m30k8z/worktree/tools/mlx-swift-runtime-prototype/.temp/review-rev3-forged-observed/cfg.toml"
+    ],
+    "launchArgv": [
+      "serve",
+      "--model",
+      "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+      "--port",
+      "18031",
+      "--prefill-step-size",
+      "2048",
+      "--reasoning-effort",
+      "medium"
+    ],
+    "launchExecutable": "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python",
+    "launchExecutableDigest": "e89d60f8ccee9db684801330198797723db2ac378cd53e5cfe523128feb76599",
+    "profile": "qwen-benchmark-swift",
+    "runtimeProcessID": 17294
+  },
+  "revisions": {
+    "mlx": "0.32.2"
+  },
+  "runtime": "mlx-swift",
+  "scenarios": [
+    {
+      "completionTokens": 64,
+      "decodeTokensPerSecond": 10.0,
+      "failureMode": null,
+      "name": "short_prompt",
+      "peakPhysicalFootprintBytes": 29000000000,
+      "prefillTokensPerSecond": 100.0,
+      "processPeakSoFarBytes": 29000000000,
+      "promptTokens": 512,
+      "succeeded": true,
+      "timeToFirstTokenSeconds": 1.0,
+      "wallClockSeconds": 0.5
+    }
+  ],
+  "startedAtUnixSeconds": 1787920347.3836112
+}

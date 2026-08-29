@@ -1,0 +1,159 @@
+[
+  {
+    "mutant": "N1-digest-narrowed-to-present",
+    "description": "narrowing: the digest check keeps only 'a digest was supplied'",
+    "status": "CAUGHT",
+    "caught_by": [
+      "swift test",
+      "benchmark-gate-smoke.sh"
+    ],
+    "unit_exit": 1,
+    "smoke_exit": 1,
+    "smoke_failures": [
+      "FAIL  a malformed executable digest is refused: expected exit 4 (inadmissible), got 0"
+    ]
+  },
+  {
+    "mutant": "N2-policy-ignores-prefill-chunk",
+    "description": "narrowing: the derivation stops reading the prefill chunk",
+    "status": "CAUGHT",
+    "caught_by": [
+      "swift test",
+      "benchmark-gate-smoke.sh"
+    ],
+    "unit_exit": 1,
+    "smoke_exit": 1,
+    "smoke_failures": [
+      "FAIL  a bound pair exited 4, not 0",
+      "FAIL  a record with empty revisions is refused: exit 4 but the refusal never mentions declares no revisions",
+      "FAIL  a config digest mismatch is refused: exit 4 but the refusal never mentions different launcher configurations",
+      "FAIL  one executable behind two runtime identities is refused: exit 4 but the refusal never mentions cannot have run the same binary",
+      "FAIL  a launch that never received the pinned model is refused: exit 4 but the refusal never mentions never mentions it",
+      "FAIL  scenario time that cannot fit the interval is refused: exit 4 but the refusal never mentions could not have run in the interval"
+    ]
+  },
+  {
+    "mutant": "N3-timing-slack",
+    "description": "narrowing: the interval check keeps a 10x slack",
+    "status": "CAUGHT",
+    "caught_by": [
+      "swift test",
+      "benchmark-gate-smoke.sh"
+    ],
+    "unit_exit": 1,
+    "smoke_exit": 1,
+    "smoke_failures": [
+      "FAIL  scenario time that cannot fit the interval is refused: expected exit 4 (inadmissible), got 0"
+    ]
+  },
+  {
+    "mutant": "N4-config-digest-presence-only",
+    "description": "narrowing: config binding keeps only 'a digest was supplied'",
+    "status": "CAUGHT",
+    "caught_by": [
+      "swift test",
+      "benchmark-gate-smoke.sh"
+    ],
+    "unit_exit": 1,
+    "smoke_exit": 1,
+    "smoke_failures": [
+      "FAIL  a config digest mismatch is refused: expected exit 4 (inadmissible), got 0"
+    ]
+  },
+  {
+    "mutant": "N5-skew-directional",
+    "description": "narrowing: prompt skew is scored in the candidate/baseline direction only",
+    "status": "CAUGHT",
+    "caught_by": [
+      "swift test",
+      "benchmark-gate-smoke.sh"
+    ],
+    "unit_exit": 1,
+    "smoke_exit": 1,
+    "smoke_failures": [
+      "FAIL  prompt-token skew exited 0, not 3",
+      "FAIL  the skewed scenario was still given a verdict"
+    ]
+  },
+  {
+    "mutant": "N6-process-peak-always-scored",
+    "description": "narrowing: the whole-process peak is scored whatever the parity outcome",
+    "status": "CAUGHT",
+    "caught_by": [
+      "swift test"
+    ],
+    "unit_exit": 1,
+    "smoke_exit": 0,
+    "smoke_failures": []
+  },
+  {
+    "mutant": "N7-model-path-substring",
+    "description": "narrowing: the model-path binding keeps only 'an argv was recorded'",
+    "status": "CAUGHT",
+    "caught_by": [
+      "swift test",
+      "benchmark-gate-smoke.sh"
+    ],
+    "unit_exit": 1,
+    "smoke_exit": 1,
+    "smoke_failures": [
+      "FAIL  a launch that never received the pinned model is refused: expected exit 4 (inadmissible), got 0"
+    ]
+  },
+  {
+    "mutant": "D1-provenance-not-checked",
+    "description": "deleting: admit stops checking provenance at all",
+    "status": "CAUGHT",
+    "caught_by": [
+      "swift test",
+      "benchmark-gate-smoke.sh"
+    ],
+    "unit_exit": 1,
+    "smoke_exit": 1,
+    "smoke_failures": [
+      "FAIL  a declared contextPolicy the launch does not derive is refused: expected exit 4 (inadmissible), got 0",
+      "FAIL  an unpinned prefill chunk is refused rather than defaulted: expected exit 4 (inadmissible), got 0",
+      "FAIL  a record with empty revisions is refused: expected exit 4 (inadmissible), got 0",
+      "FAIL  a launch that never received the pinned model is refused: expected exit 4 (inadmissible), got 0",
+      "FAIL  a malformed executable digest is refused: expected exit 4 (inadmissible), got 0"
+    ]
+  },
+  {
+    "mutant": "P2-cli-launders-refusal",
+    "description": "production bypass: the subcommand logs the refusal and exits 0 anyway",
+    "status": "CAUGHT",
+    "caught_by": [
+      "benchmark-gate-smoke.sh"
+    ],
+    "unit_exit": 0,
+    "smoke_exit": 1,
+    "smoke_failures": [
+      "FAIL  a declared contextPolicy the launch does not derive is refused: expected exit 4 (inadmissible), got 0",
+      "FAIL  an unpinned prefill chunk is refused rather than defaulted: expected exit 4 (inadmissible), got 0",
+      "FAIL  a record with empty revisions is refused: expected exit 4 (inadmissible), got 0",
+      "FAIL  a config digest mismatch is refused: expected exit 4 (inadmissible), got 0",
+      "FAIL  one executable behind two runtime identities is refused: expected exit 4 (inadmissible), got 0",
+      "FAIL  a launch that never received the pinned model is refused: expected exit 4 (inadmissible), got 0"
+    ]
+  },
+  {
+    "mutant": "P3-cli-requires-no-scenarios",
+    "description": "production bypass: the subcommand stops naming the scenarios it requires",
+    "status": "CAUGHT",
+    "caught_by": [
+      "benchmark-gate-smoke.sh"
+    ],
+    "unit_exit": 0,
+    "smoke_exit": 1,
+    "smoke_failures": [
+      "FAIL  a record missing the required parity scenario is refused: expected exit 4 (inadmissible), got 3"
+    ]
+  },
+  {
+    "mutant": "P1-cli-bypasses-admit",
+    "description": "production bypass: the subcommand builds a Comparison instead of calling admit",
+    "status": "CAUGHT",
+    "caught_by": "compiler",
+    "detail": "the mutant does not compile"
+  }
+]

@@ -1,0 +1,727 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 6da4ff7..f50e219 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,18 @@
+ 
+ ## 2026-08-25
+ 
++### 2022 — Qwen Thinking Is Native, Pi Yolo Is Not
++- MILESTONE: Canonical Qwen non-`off` reasoning now requires a reasoning-capable Pi profile with `qwen-chat-template`; source-backed `medium` composes to native `--thinking medium`.
++- FIX: `agents.pi.primary_session.yolo_mode` composes with nearest-field precedence, defaults safely to false, and rejects true before executable lookup or launch with `pi_yolo_mode_unsupported` because pinned Pi exposes no unattended tool policy.
++- EVIDENCE: Full Go tests, vet, Darwin and Windows builds, and non-launching compose/print checks exit 0; narrowing the yolo gate and Qwen thinking-format gate makes their production-entrypoint tests fail with exit 1 before exact restoration.
++- SCOPE: `TASK-260825-kpky8f`; no Pi runtime launch or external model execution.
++
++### 2009 — Pi Approve Is Project Trust, Not Yolo
++- FINDING: Pinned Pi `0.84.2` parses `--approve` into `projectTrustOverride`; its docs define the flag only as one-run trust for project-local files and expose no native unattended tool-execution policy.
++- FINDING: Qwen thinking is native when the generated model has `reasoning=true`, `compat.thinkingFormat=qwen-chat-template`, and launch argv selects `--thinking medium`; Pi then sends `chat_template_kwargs.enable_thinking=true` with `preserve_thinking=true`.
++- DECISION: `agents.pi.primary_session.yolo_mode=true` must fail before executable lookup or launch; it must never map to `--approve`. Omitted/false remains the compatible safe policy.
++- SCOPE: `TASK-260825-kpky8f`; Pi config parsing, primary-session compose/launch gates, Qwen target validation, tests, README, and `SKILL.md`.
++
+ ### 1449 — Model-check Operator Contract Is Executably Pinned
+ - REGRESSION: The bounded model-check README and skill sections could be deleted while the full uncached Go suite remained green, so unattended `--approve`, evidence, timeout, cleanup, and exit semantics had no drift guard.
+ - FIX: Dedicated doc-contract tests pin both sections, derive deadline and exit fragments from production constants, and cover exact artifacts, modes, overwrite refusal, read-evidence limits, cleanup, and exit-5 precedence.
+diff --git a/README.md b/README.md
+index 1646c50..75068db 100644
+--- a/README.md
++++ b/README.md
+@@ -63,9 +63,10 @@ for launch, validation, or cleanup failure, `2` on deadline expiry, `3` for a
+ malformed or incomplete JSONL stream, `4` for unmet tool/text expectations,
+ and `5` when the model reports a failed tool execution. Raw provider output is
+ kept in mode-`0600` files inside the mode-`0700` evidence directory; terminal
+-output is sanitized. The command passes Pi `--approve`, so tool calls run
+-unattended in the caller's project directory; use only a reviewed target and a
+-controlled prompt. See [Bounded model behavior checks](#bounded-model-behavior-checks)
++output is sanitized. The command passes Pi `--approve` so reviewed
++project-local inputs are loaded for that run. Pi has no separate native
++tool-execution approval policy, so this flag is not a yolo control; use only a
++reviewed target and a controlled prompt. See [Bounded model behavior checks](#bounded-model-behavior-checks)
+ for the full evidence, timeout, and cleanup contract.
+ 
+ Setup syncs the repo into `.agents`, treats `.skills/` as the authoritative
+@@ -420,17 +421,18 @@ The cycle-10 reference policy is exactly:
+ [agents.pi.primary_session]
+ profile = "qwen-3.8-27b"
+ pi_compatibility = "github-release:earendil-works/pi@v0.84.2:darwin-arm64#sha256-c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65"
++yolo_mode = false
+ 
+ [agents.pi.profiles."qwen-3.8-27b"]
+ provider = "local-qwen"
+ model = "Qwen-3.8-27B"
+ base_url = "http://127.0.0.1:18011/v1"
+ api = "openai-completions"
+-reasoning = false
++reasoning = true
+ input = ["text"]
+ context_window = 131072
+ max_tokens = 16384
+-thinking = "off"
++thinking = "medium"
+ requested_capabilities = ["text", "tools"]
+ 
+ [agents.pi.profiles."qwen-3.8-27b".compat]
+@@ -490,13 +492,22 @@ not automate benchmarks.
+ 
+ Configs compose from filesystem root to cwd. The nearest explicit
+ `primary_session.profile` wins unless wrapper `--profile NAME` selects a
+-profile; `pi_compatibility` has nearest-field precedence and no CLI override.
++profile; `pi_compatibility` and `yolo_mode` have nearest-field precedence and
++no CLI override. An explicit child `yolo_mode = false` masks an inherited
++`true`.
+ One child definition of the same exact decoded profile name atomically replaces
+ the ancestor definition—profile fields never merge—while a child may select a
+ complete ancestor profile. Unreadable, malformed, partial, or unknown-field
+ policy is a failure, not policy absence; only genuine absence enables native Pi
+ passthrough.
+ 
++Pinned Pi `0.84.2` exposes no native unattended tool-execution policy.
++Its `--approve`/`-a` flag controls only one-run trust for project-local files;
++it is not a permission bypass. Therefore omitted or explicit
++`yolo_mode = false` preserves Pi behavior, while `yolo_mode = true` fails
++before executable lookup or launch with `pi_yolo_mode_unsupported`. Never map
++Pi yolo to `--approve`.
++
+ Profile-name identity is its exact post-TOML-decoding UTF-8 bytes. There is no
+ normalization, case folding, trimming, path cleaning, or lossy sanitization.
+ Explicit `--provider`, `--model`, and `--thinking` must resolve to the exact
+@@ -748,9 +759,10 @@ Exit semantics are stable and ordered:
+ 
+ Provider stdout/stderr is never mirrored to the terminal. Sanitized summaries
+ redact recognized secret shapes, but an operator must still inspect them before
+-attaching or publishing evidence. Because the checker always supplies Pi
+-`--approve`, its tool calls execute unattended inside the caller's project;
+-keep prompts bounded and run only reviewed targets in controlled projects.
++attaching or publishing evidence. The checker supplies Pi `--approve` only to
++load reviewed project-local inputs. Pi tools have no separate native approval
++policy, so this is not a yolo selection; keep prompts bounded and run only
++reviewed targets in controlled projects.
+ 
+ #### Security boundary, diagnostics, and failures
+ 
+@@ -855,7 +867,7 @@ reasoning = "high"
+ vendor = "qwen"
+ environment = "pi"
+ model = "Qwen3.8-27B-MLX-8bit"
+-reasoning = "off"
++reasoning = "medium"
+ profile = "qwen-3.8-27b-mlx-8bit"
+ profile_provider = "local-qwen" # optional assertion
+ endpoint = "http://127.0.0.1:18011/v1" # optional assertion
+@@ -871,7 +883,11 @@ Claude reasoning is limited to `low`, `medium`, `high`, `xhigh`, and `max`;
+ Pi uses its documented thinking levels; Codex accepts any non-empty reasoning
+ token and leaves model/effort compatibility to Codex. A Qwen target must name
+ an existing complete managed Pi profile with `api = "openai-completions"`.
+-Its model and thinking must match the profile. Optional provider and endpoint
++Its model and thinking must match the profile. A non-`off` Qwen target also
++requires profile `reasoning = true` and
++`compat.thinking_format = "qwen-chat-template"`; pinned Pi then carries the
++selected native level as `--thinking medium` and enables the Qwen chat-template
++thinking path. Optional provider and endpoint
+ fields are exact assertions; the effective qualified model, provider, and
+ endpoint always come from the selected profile definition.
+ 
+diff --git a/SKILL.md b/SKILL.md
+index d9d22e8..1891ff2 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -249,7 +249,7 @@ reasoning = "high"
+ vendor = "qwen"
+ environment = "pi"
+ model = "Qwen3.8-27B-MLX-8bit"
+-reasoning = "off"
++reasoning = "medium"
+ profile = "qwen-3.8-27b-mlx-8bit"
+ profile_provider = "local-qwen"
+ endpoint = "http://127.0.0.1:18011/v1"
+@@ -262,7 +262,10 @@ qwen-infra = "qwen"
+ 
+ Only `openai/codex`, `anthropic/claude-code`, and `qwen/pi` are admitted.
+ Qwen reuses an existing complete managed Pi profile: model and thinking must
+-match it, optional provider/endpoint values are assertions, and effective
++match it. Non-`off` reasoning additionally requires profile `reasoning = true`
++and `compat.thinking_format = "qwen-chat-template"`, so pinned Pi carries the
++level through `--thinking` and enables Qwen chat-template thinking. Optional
++provider/endpoint values are assertions, and effective
+ provider/endpoint provenance remains the profile definition. A nearer target
+ replaces the same name atomically; a nearer mapping replaces only that alias.
+ 
+@@ -371,6 +374,13 @@ standalone Pi tree check both initially and immediately before Pi spawn. It
+ never attaches or silently falls back to another runtime, port, profile, model,
+ listener, or Muse target-only decoding.
+ 
++Pinned Pi `0.84.2` has no native unattended tool-execution policy.
++`--approve`/`-a` controls only one-run trust for project-local files and must
++never be used as a yolo translation. In `[agents.pi.primary_session]`, omitted
++or explicit `yolo_mode = false` preserves Pi behavior; nearest false masks an
++inherited true. Explicit `yolo_mode = true` fails before executable lookup or
++launch with `pi_yolo_mode_unsupported`.
++
+ Managed launch refuses the exact llama.cpp model-origin environment names
+ `HF_ENDPOINT` and `MODEL_ENDPOINT` before runtime spawn and reports only the
+ name, never the value. Treat tokens and cache-location variables separately
+@@ -444,8 +454,9 @@ agents-infra model-check \
+ `--target` must be a canonical entrypoint resolving to a managed local Pi
+ profile. `--expect-tool` and `--expect-text` are repeatable; tool names match
+ exactly, while text matches only the final assistant response. The checker
+-forces JSON print/no-session mode and Pi `--approve`, so tool calls execute
+-unattended in the caller's project. Use a reviewed target, a controlled project,
++forces JSON print/no-session mode and Pi `--approve` so reviewed project-local
++inputs are loaded. Pi has no separate native tool-execution approval policy, so
++`--approve` is not a yolo control. Use a reviewed target, a controlled project,
+ and a bounded prompt.
+ 
+ The default deadline is `5m`, with an accepted Go duration range of
+diff --git a/tools/agents-infra/canonical_target_pi_main_test.go b/tools/agents-infra/canonical_target_pi_main_test.go
+index ea484e4..60a6edc 100644
+--- a/tools/agents-infra/canonical_target_pi_main_test.go
++++ b/tools/agents-infra/canonical_target_pi_main_test.go
+@@ -5,6 +5,8 @@ package main
+ import (
+ 	"os"
+ 	"path/filepath"
++	"reflect"
++	"strings"
+ 	"testing"
+ 
+ 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
+@@ -19,12 +21,16 @@ func TestRunComposeCanonicalQwenUsesProfileDerivedEffectiveCoordinates(t *testin
+ 	project := filepath.Join(root, "nested")
+ 	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+ 	mustMkdir(t, project)
+-	profileConfig := writeMainCanonicalConfig(t, root, mainTestPiConfig("/bin/echo", 18011))
++	profileBody := mainTestPiConfig("/bin/echo", 18011)
++	profileBody = strings.Replace(profileBody, `reasoning = false`, `reasoning = true`, 1)
++	profileBody = strings.Replace(profileBody, `thinking = "off"`, `thinking = "medium"`, 1)
++	profileBody = strings.Replace(profileBody, `supports_developer_role = false`, "supports_developer_role = false\nsupports_reasoning_effort = false\nthinking_format = \"qwen-chat-template\"", 1)
++	profileConfig := writeMainCanonicalConfig(t, root, profileBody)
+ 	targetConfig := writeMainCanonicalConfig(t, project, `[agents.targets.qwen]
+ vendor = "qwen"
+ environment = "pi"
+ model = "Model"
+-reasoning = "off"
++reasoning = "medium"
+ profile = "profile"
+ profile_provider = "local-provider"
+ endpoint = "http://127.0.0.1:18011/v1"
+@@ -53,18 +59,25 @@ qwen-infra = "qwen"
+ 	t.Setenv("PATH", piRoot)
+ 
+ 	output := captureStdout(t, func() {
+-		if err := runCompose([]string{"--mode", "primary-session", "--entrypoint", "qwen-infra", "--project", project, "--schema-version", "1", "--json", "--", "--model", "local-provider/Model:off"}); err != nil {
++		if err := runCompose([]string{"--mode", "primary-session", "--entrypoint", "qwen-infra", "--project", project, "--schema-version", "1", "--json", "--", "--model", "local-provider/Model:medium"}); err != nil {
+ 			t.Fatalf("runCompose: %v", err)
+ 		}
+ 	})
+ 	var plan infra.PrimarySessionLaunchPlan
+ 	decodeSingleJSONDocument(t, output, &plan)
+-	if plan.Target == nil || plan.Target.Model != "Model" || plan.Target.Source != canonicalTargetConfig {
++	if plan.Target == nil || plan.Target.Model != "Model" || plan.Target.Reasoning != "medium" || plan.Target.Source != canonicalTargetConfig {
+ 		t.Fatalf("target = %#v", plan.Target)
+ 	}
+ 	if plan.Resolved.Model.Value == nil || *plan.Resolved.Model.Value != "local-provider/Model" || plan.Resolved.Model.Source != canonicalProfileConfig {
+ 		t.Fatalf("qualified model = %#v", plan.Resolved.Model)
+ 	}
++	if plan.Resolved.Reasoning.Value == nil || *plan.Resolved.Reasoning.Value != "medium" || plan.Resolved.Reasoning.Source != canonicalProfileConfig {
++		t.Fatalf("reasoning = %#v, want medium with profile source", plan.Resolved.Reasoning)
++	}
++	wantArgvPrefix := []string{"--provider", "local-provider", "--model", "Model", "--thinking", "medium"}
++	if len(plan.LaunchVariants.Interactive.Argv) < len(wantArgvPrefix) || !reflect.DeepEqual(plan.LaunchVariants.Interactive.Argv[:len(wantArgvPrefix)], wantArgvPrefix) {
++		t.Fatalf("Pi native reasoning argv = %#v, want prefix %#v", plan.LaunchVariants.Interactive.Argv, wantArgvPrefix)
++	}
+ 	if plan.Resolved.ProfileProvider == nil || plan.Resolved.ProfileProvider.Value == nil || *plan.Resolved.ProfileProvider.Value != "local-provider" || plan.Resolved.ProfileProvider.Source != canonicalProfileConfig {
+ 		t.Fatalf("profile provider = %#v", plan.Resolved.ProfileProvider)
+ 	}
+diff --git a/tools/agents-infra/internal/infra/canonical_target.go b/tools/agents-infra/internal/infra/canonical_target.go
+index 4c50842..a06f18f 100644
+--- a/tools/agents-infra/internal/infra/canonical_target.go
++++ b/tools/agents-infra/internal/infra/canonical_target.go
+@@ -218,6 +218,14 @@ func validateResolvedPiTarget(target ProjectTarget, profiles map[string]PiProfil
+ 			Err:         errors.New("canonical Qwen target assertion does not match the selected managed Pi profile"),
+ 		}
+ 	}
++	profileMismatch := func(field, remediation string) error {
++		return &CanonicalTargetError{
++			Code:        PrimarySessionErrorInvalidTarget,
++			Context:     TargetErrorContext{Target: target.Name, Profile: profileName, Field: "agents.pi.profiles." + profileName + "." + field, Source: profile.Source},
++			Remediation: remediation,
++			Err:         errors.New("canonical Qwen target profile cannot provide the requested native Pi thinking behavior"),
++		}
++	}
+ 	if profile.API != "openai-completions" {
+ 		return mismatch("profile", "select a managed Pi profile whose api is exactly openai-completions")
+ 	}
+@@ -227,6 +235,14 @@ func validateResolvedPiTarget(target ProjectTarget, profiles map[string]PiProfil
+ 	if target.Reasoning != profile.Thinking {
+ 		return mismatch("reasoning", "set target reasoning to the selected profile thinking value exactly")
+ 	}
++	if target.Reasoning != "off" {
++		if !profile.Reasoning {
++			return profileMismatch("reasoning", "set the selected managed Pi profile reasoning field to true")
++		}
++		if profile.Compat.ThinkingFormat == nil || *profile.Compat.ThinkingFormat != "qwen-chat-template" {
++			return profileMismatch("compat.thinking_format", "set the selected Qwen profile thinking_format to qwen-chat-template")
++		}
++	}
+ 	if target.ProfileProvider != nil && *target.ProfileProvider != profile.Provider {
+ 		return mismatch("profile_provider", "remove the optional assertion or set it to the selected profile provider exactly")
+ 	}
+diff --git a/tools/agents-infra/internal/infra/canonical_target_pi_test.go b/tools/agents-infra/internal/infra/canonical_target_pi_test.go
+index 8d458db..26242cb 100644
+--- a/tools/agents-infra/internal/infra/canonical_target_pi_test.go
++++ b/tools/agents-infra/internal/infra/canonical_target_pi_test.go
+@@ -3,6 +3,7 @@
+ package infra
+ 
+ import (
++	"encoding/json"
+ 	"path/filepath"
+ 	"reflect"
+ 	"strings"
+@@ -14,7 +15,7 @@ func canonicalQwenTargetTOML(assertProvider, assertEndpoint bool) string {
+ 		"vendor=\"qwen\"\n" +
+ 		"environment=\"pi\"\n" +
+ 		"model=\"Model\"\n" +
+-		"reasoning=\"off\"\n" +
++		"reasoning=\"medium\"\n" +
+ 		"profile=\"profile\"\n"
+ 	if assertProvider {
+ 		body += "profile_provider=\"local-provider\"\n"
+@@ -31,14 +32,14 @@ func canonicalQwenProject(t *testing.T, body string) (project, home, configPath,
+ 	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+ 	piRoot := officialPiAsset(t)
+ 	piPath = filepath.Join(piRoot, "pi")
+-	configPath = writeCanonicalConfig(t, project, validPiProfileTOML("profile", "/bin/echo", 18011, false)+body)
++	configPath = writeCanonicalConfig(t, project, reasoningPiProfileTOML("profile", "/bin/echo", 18011)+body)
+ 	return
+ }
+ 
+ func TestCanonicalQwenPlanProvesProfileDerivedIdentityAndEndpointInvariants(t *testing.T) {
+ 	project, home, configPath, piPath := canonicalQwenProject(t, canonicalQwenTargetTOML(true, true))
+ 	plan, err := BuildCanonicalTargetLaunchPlan("qwen-infra", project, home,
+-		[]string{"--model", "local-provider/Model:off", "--provider=local-provider", "--thinking", "off", "--endpoint", "http://127.0.0.1:18011/v1", "--api-key=secret"},
++		[]string{"--model", "local-provider/Model:medium", "--provider=local-provider", "--thinking", "medium", "--endpoint", "http://127.0.0.1:18011/v1", "--api-key=secret"},
+ 		ChildLaunchCompositionProducer{}, func(string) (string, error) { return piPath, nil })
+ 	if err != nil {
+ 		t.Fatalf("BuildCanonicalTargetLaunchPlan: %v", err)
+@@ -58,13 +59,29 @@ func TestCanonicalQwenPlanProvesProfileDerivedIdentityAndEndpointInvariants(t *t
+ 	if plan.Pi == nil || plan.Pi.Runtime == nil || plan.Pi.Runtime.Endpoint != *plan.Resolved.Endpoint.Value {
+ 		t.Fatalf("runtime endpoint invariant = %#v", plan.Pi)
+ 	}
+-	if plan.Resolved.Reasoning.Value == nil || *plan.Resolved.Reasoning.Value != "off" || !samePath(plan.Resolved.Reasoning.Source, configPath) {
++	if plan.Resolved.Reasoning.Value == nil || *plan.Resolved.Reasoning.Value != "medium" || !samePath(plan.Resolved.Reasoning.Source, configPath) {
+ 		t.Fatalf("profile reasoning = %#v", plan.Resolved.Reasoning)
+ 	}
+-	wantArgs := []string{"--provider", "local-provider", "--model", "Model", "--thinking", "off", "--api-key", "<redacted>"}
++	wantArgs := []string{"--provider", "local-provider", "--model", "Model", "--thinking", "medium", "--api-key", "<redacted>"}
+ 	if !reflect.DeepEqual(plan.LaunchVariants.Interactive.Argv, wantArgs) {
+ 		t.Fatalf("normalized Pi argv = %#v, want %#v", plan.LaunchVariants.Interactive.Argv, wantArgs)
+ 	}
++	resolved, err := ResolveCanonicalTarget("qwen-infra", project, home)
++	if err != nil {
++		t.Fatalf("ResolveCanonicalTarget: %v", err)
++	}
++	modelsJSON, err := GeneratePiModelsJSON(*resolved.Profile)
++	if err != nil {
++		t.Fatalf("GeneratePiModelsJSON: %v", err)
++	}
++	var models piModelsDocument
++	if err := json.Unmarshal(modelsJSON, &models); err != nil {
++		t.Fatalf("decode generated models.json: %v", err)
++	}
++	generated := models.Providers["local-provider"].Models[0]
++	if !generated.Reasoning || generated.Compat["thinkingFormat"] != "qwen-chat-template" {
++		t.Fatalf("generated Pi model cannot activate Qwen thinking: %#v", generated)
++	}
+ 	rendered := RenderCanonicalTargetLaunchPlan(plan)
+ 	for _, want := range []string{"effective_model: local-provider/Model", "effective_profile_provider: local-provider", "effective_endpoint: http://127.0.0.1:18011/v1", `  - "--api-key"`, `  - "<redacted>"`} {
+ 		if !strings.Contains(rendered, want) {
+@@ -88,7 +105,7 @@ func TestCanonicalQwenAcceptsOperatorProviderWithoutLiteralLocalQwen(t *testing.
+ }
+ 
+ func TestCanonicalQwenProfileAssertionsFailClosed(t *testing.T) {
+-	baseProfile := validPiProfileTOML("profile", "/bin/echo", 18011, false)
++	baseProfile := reasoningPiProfileTOML("profile", "/bin/echo", 18011)
+ 	baseTarget := canonicalQwenTargetTOML(true, true)
+ 	tests := []struct {
+ 		name      string
+@@ -98,7 +115,10 @@ func TestCanonicalQwenProfileAssertionsFailClosed(t *testing.T) {
+ 	}{
+ 		{name: "non openai api", body: strings.Replace(baseProfile, `api = "openai-completions"`, `api = "anthropic-messages"`, 1) + baseTarget, wantCode: PrimarySessionErrorInvalidProjectConfiguration, wantField: "agents.pi.profiles.profile.api"},
+ 		{name: "model mismatch", body: baseProfile + strings.Replace(baseTarget, `model="Model"`, `model="Other"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.model"},
+-		{name: "reasoning mismatch", body: baseProfile + strings.Replace(baseTarget, `reasoning="off"`, `reasoning="high"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.reasoning"},
++		{name: "reasoning mismatch", body: baseProfile + strings.Replace(baseTarget, `reasoning="medium"`, `reasoning="off"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.reasoning"},
++		{name: "profile cannot reason", body: strings.Replace(baseProfile, `reasoning = true`, `reasoning = false`, 1) + baseTarget, wantCode: PrimarySessionErrorInvalidProjectConfiguration, wantField: "agents.pi.profiles.profile.reasoning"},
++		{name: "missing qwen thinking format", body: strings.Replace(baseProfile, "thinking_format = \"qwen-chat-template\"\n", "", 1) + baseTarget, wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.pi.profiles.profile.compat.thinking_format"},
++		{name: "wrong qwen thinking format", body: strings.Replace(baseProfile, `thinking_format = "qwen-chat-template"`, `thinking_format = "qwen"`, 1) + baseTarget, wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.pi.profiles.profile.compat.thinking_format"},
+ 		{name: "provider assertion mismatch", body: baseProfile + strings.Replace(baseTarget, `profile_provider="local-provider"`, `profile_provider="other"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.profile_provider"},
+ 		{name: "endpoint assertion mismatch", body: baseProfile + strings.Replace(baseTarget, `endpoint="http://127.0.0.1:18011/v1"`, `endpoint="http://127.0.0.1:18012/v1"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.endpoint"},
+ 		{name: "unknown profile", body: baseProfile + strings.Replace(baseTarget, `profile="profile"`, `profile="missing"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.profile"},
+@@ -120,9 +140,9 @@ func TestCanonicalQwenCompositeModelAndCoordinatesAreIdentityLocked(t *testing.T
+ 	exact := [][]string{
+ 		{"--model", "Model"},
+ 		{"--model", "local-provider/Model"},
+-		{"--model", "Model:off"},
+-		{"--model", "local-provider/Model:off"},
+-		{"--profile=profile", "--provider", "local-provider", "--thinking=off"},
++		{"--model", "Model:medium"},
++		{"--model", "local-provider/Model:medium"},
++		{"--profile=profile", "--provider", "local-provider", "--thinking=medium"},
+ 	}
+ 	for _, args := range exact {
+ 		if _, err := BuildCanonicalTargetLaunchPlan("qwen-infra", project, home, args, ChildLaunchCompositionProducer{}, func(string) (string, error) { return piPath, nil }); err != nil {
+@@ -132,9 +152,9 @@ func TestCanonicalQwenCompositeModelAndCoordinatesAreIdentityLocked(t *testing.T
+ 	conflicts := [][]string{
+ 		{"--model", "Model:high"},
+ 		{"--model", "local-provider/Model:high"},
+-		{"--model", "other/Model:off"},
++		{"--model", "other/Model:medium"},
+ 		{"--provider", "other"},
+-		{"--thinking", "high"},
++		{"--thinking", "off"},
+ 		{"--profile", "other"},
+ 		{"--endpoint", "http://127.0.0.1:18012/v1"},
+ 	}
+@@ -171,7 +191,7 @@ func TestDoctorReportsCanonicalQwenTargetAndProfileProvenance(t *testing.T) {
+ 	home, root := t.TempDir(), t.TempDir()
+ 	project := filepath.Join(root, "nested")
+ 	mustMkdir(t, project)
+-	profileConfig := writeCanonicalConfig(t, root, validPiProfileTOML("profile", "/bin/echo", 18011, false))
++	profileConfig := writeCanonicalConfig(t, root, reasoningPiProfileTOML("profile", "/bin/echo", 18011))
+ 	targetConfig := writeCanonicalConfig(t, project, canonicalQwenTargetTOML(false, false))
+ 	t.Setenv("HOME", home)
+ 	layout, err := LocalLayout("", project)
+diff --git a/tools/agents-infra/internal/infra/pi_config.go b/tools/agents-infra/internal/infra/pi_config.go
+index b751135..2d7b499 100644
+--- a/tools/agents-infra/internal/infra/pi_config.go
++++ b/tools/agents-infra/internal/infra/pi_config.go
+@@ -15,11 +15,13 @@ import (
+ type PiPrimarySessionSource struct {
+ 	Profile         *string
+ 	PiCompatibility *string
++	YoloMode        *bool
+ }
+ 
+ type PiPrimarySessionPolicy struct {
+ 	Profile         PiPolicyStringValue
+ 	PiCompatibility PiPolicyStringValue
++	YoloMode        PiPolicyBoolValue
+ }
+ 
+ type PiPolicyStringValue struct {
+@@ -28,6 +30,12 @@ type PiPolicyStringValue struct {
+ 	Present bool
+ }
+ 
++type PiPolicyBoolValue struct {
++	Value   bool
++	Source  string
++	Present bool
++}
++
+ type PiProfile struct {
+ 	Provider              string
+ 	Model                 string
+@@ -87,7 +95,7 @@ func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource,
+ 		return primary, nil, projectConfigFieldError(path, piPrimarySessionField, err)
+ 	}
+ 	if primaryPresent {
+-		if err := rejectUnknownFields(primaryTable, piPrimarySessionField, "profile", "pi_compatibility"); err != nil {
++		if err := rejectUnknownFields(primaryTable, piPrimarySessionField, "profile", "pi_compatibility", "yolo_mode"); err != nil {
+ 			return primary, nil, projectConfigFieldError(path, errField(err), err)
+ 		}
+ 		primary.Profile, err = optionalNonEmptyString(primaryTable, "profile")
+@@ -98,7 +106,11 @@ func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource,
+ 		if err != nil {
+ 			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".pi_compatibility", err)
+ 		}
+-		if primary.Profile == nil && primary.PiCompatibility == nil {
++		primary.YoloMode, err = optionalBool(primaryTable, "yolo_mode")
++		if err != nil {
++			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".yolo_mode", err)
++		}
++		if primary.Profile == nil && primary.PiCompatibility == nil && primary.YoloMode == nil {
+ 			return primary, nil, projectConfigFieldError(path, piPrimarySessionField, errors.New("table must contain at least one supported field"))
+ 		}
+ 	}
+@@ -181,6 +193,9 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error)
+ 	if !piThinkingLevels[p.Thinking] {
+ 		return p, projectConfigFieldError(path, field+".thinking", errors.New("must be a documented Pi thinking level"))
+ 	}
++	if !p.Reasoning && p.Thinking != "off" {
++		return p, projectConfigFieldError(path, field+".reasoning", errors.New("must be true when thinking is not off"))
++	}
+ 	if p.RequestedCapabilities, err = requiredStringArray(table, "requested_capabilities"); err != nil {
+ 		return p, projectConfigFieldError(path, field+".requested_capabilities", err)
+ 	}
+@@ -550,9 +565,12 @@ func composePiPrimarySession(policy *PiPrimarySessionPolicy, source PiPrimarySes
+ 	if source.PiCompatibility != nil {
+ 		policy.PiCompatibility = PiPolicyStringValue{Value: *source.PiCompatibility, Source: path, Present: true}
+ 	}
++	if source.YoloMode != nil {
++		policy.YoloMode = PiPolicyBoolValue{Value: *source.YoloMode, Source: path, Present: true}
++	}
+ }
+ func clonePiPrimarySessionSource(s PiPrimarySessionSource) PiPrimarySessionSource {
+-	return PiPrimarySessionSource{Profile: cloneStringPointer(s.Profile), PiCompatibility: cloneStringPointer(s.PiCompatibility)}
++	return PiPrimarySessionSource{Profile: cloneStringPointer(s.Profile), PiCompatibility: cloneStringPointer(s.PiCompatibility), YoloMode: cloneBoolPointer(s.YoloMode)}
+ }
+ func clonePiProfiles(in map[string]PiProfile) map[string]PiProfile {
+ 	out := map[string]PiProfile{}
+@@ -561,3 +579,24 @@ func clonePiProfiles(in map[string]PiProfile) map[string]PiProfile {
+ 	}
+ 	return out
+ }
++
++func validatePiPrimarySessionYolo(policy PiPrimarySessionPolicy) error {
++	if !policy.YoloMode.Present || !policy.YoloMode.Value {
++		return nil
++	}
++	return piError(
++		"pi_yolo_mode_unsupported",
++		fmt.Errorf(
++			"%s.yolo_mode=true from %s is unsupported by pinned Pi v0.84.2: --approve controls project-local input trust, not unattended tool execution; omit yolo_mode or set it to false",
++			piPrimarySessionField,
++			policy.YoloMode.Source,
++		),
++	)
++}
++
++func resolvedPiYolo(policy PiPrimarySessionPolicy) PrimarySessionResolvedBool {
++	if policy.YoloMode.Present {
++		return PrimarySessionResolvedBool{Value: policy.YoloMode.Value, Source: policy.YoloMode.Source}
++	}
++	return PrimarySessionResolvedBool{Value: false, Source: "default"}
++}
+diff --git a/tools/agents-infra/internal/infra/pi_launch_posix.go b/tools/agents-infra/internal/infra/pi_launch_posix.go
+index 2522813..7f7964b 100644
+--- a/tools/agents-infra/internal/infra/pi_launch_posix.go
++++ b/tools/agents-infra/internal/infra/pi_launch_posix.go
+@@ -70,6 +70,9 @@ func RunPi(opts RunPiOptions) error {
+ 	if err != nil {
+ 		return piError("invalid_project_configuration", err)
+ 	}
++	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
++		return err
++	}
+ 	override, err := ExtractPiProfileOverride(opts.Args)
+ 	if err != nil {
+ 		return err
+diff --git a/tools/agents-infra/internal/infra/pi_plan.go b/tools/agents-infra/internal/infra/pi_plan.go
+index f853f78..8e44920 100644
+--- a/tools/agents-infra/internal/infra/pi_plan.go
++++ b/tools/agents-infra/internal/infra/pi_plan.go
+@@ -115,6 +115,9 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
+ 	for _, source := range composite.Sources {
+ 		result.Sources = append(result.Sources, PrimarySessionSource{Kind: "project_config", Path: source.Path})
+ 	}
++	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
++		return err
++	}
+ 	override, err := ExtractPiProfileOverride(userArgs)
+ 	if err != nil {
+ 		return err
+@@ -139,7 +142,7 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
+ 		result.Resolved.Reasoning = PrimarySessionResolvedString{Source: "native"}
+ 		result.Resolved.Profile = PrimarySessionResolvedString{Source: "native"}
+ 		result.Resolved.PiCompatibility = PrimarySessionResolvedString{Source: "native"}
+-		result.Resolved.Yolo = PrimarySessionResolvedBool{Source: "not_applicable"}
++		result.Resolved.Yolo = resolvedPiYolo(composite.PiPrimarySession)
+ 		result.Resolved.Sandbox = PrimarySessionResolvedString{Source: "not_applicable"}
+ 		result.Resolved.Approval = PrimarySessionResolvedString{Source: "not_applicable"}
+ 		result.Pi = &PiLaunchPlanDetails{Managed: false}
+@@ -186,7 +189,7 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
+ 	result.Resolved.Reasoning = resolvedStringValue(profile.Thinking, profile.Source)
+ 	result.Resolved.Profile = resolvedStringValue(selected, selectedSource)
+ 	result.Resolved.PiCompatibility = resolvedStringValue(composite.PiPrimarySession.PiCompatibility.Value, composite.PiPrimarySession.PiCompatibility.Source)
+-	result.Resolved.Yolo = PrimarySessionResolvedBool{Source: "not_applicable"}
++	result.Resolved.Yolo = resolvedPiYolo(composite.PiPrimarySession)
+ 	result.Resolved.Sandbox = PrimarySessionResolvedString{Source: "not_applicable"}
+ 	result.Resolved.Approval = PrimarySessionResolvedString{Source: "not_applicable"}
+ 	details := &PiLaunchPlanDetails{Managed: true, LogicalProfile: selected, ProfileSource: selectedSource, PiCompatibilitySource: composite.PiPrimarySession.PiCompatibility.Source, State: &state, ModelsJSON: PiGeneratedCatalog{Path: state.ModelsJSON, SHA256: hex.EncodeToString(modelsSum[:])}, PiIdentity: &identity,
+diff --git a/tools/agents-infra/internal/infra/pi_platform_windows.go b/tools/agents-infra/internal/infra/pi_platform_windows.go
+index fbf8895..1aaef95 100644
+--- a/tools/agents-infra/internal/infra/pi_platform_windows.go
++++ b/tools/agents-infra/internal/infra/pi_platform_windows.go
+@@ -98,6 +98,9 @@ func RunPi(opts RunPiOptions) error {
+ 	if err != nil {
+ 		return piError("invalid_project_configuration", err)
+ 	}
++	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
++		return err
++	}
+ 	override, err := ExtractPiProfileOverride(opts.Args)
+ 	if err != nil {
+ 		return err
+diff --git a/tools/agents-infra/internal/infra/pi_test.go b/tools/agents-infra/internal/infra/pi_test.go
+index 93caa1e..87f2ddc 100644
+--- a/tools/agents-infra/internal/infra/pi_test.go
++++ b/tools/agents-infra/internal/infra/pi_test.go
+@@ -73,6 +73,14 @@ shutdown_timeout_seconds = 2
+ %s`, name, PiCompatibilityV0842DarwinARM64, name, port, extraCaps, name, name, runtime, argv, dflashBlock)
+ }
+ 
++func reasoningPiProfileTOML(name, runtime string, port int) string {
++	body := validPiProfileTOML(name, runtime, port, false)
++	body = strings.Replace(body, `reasoning = false`, `reasoning = true`, 1)
++	body = strings.Replace(body, `thinking = "off"`, `thinking = "medium"`, 1)
++	body = strings.Replace(body, `max_tokens_field = "max_tokens"`, "max_tokens_field = \"max_tokens\"\nthinking_format = \"qwen-chat-template\"", 1)
++	return body
++}
++
+ func TestParsePiPolicyExactSchemaAndMuseDFlash(t *testing.T) {
+ 	for _, dflash := range []bool{false, true} {
+ 		cfg, err := parseProjectConfig([]byte(validPiProfileTOML("profile", "/bin/echo", 18011, dflash)), "/project/config.toml")
+@@ -114,6 +122,8 @@ func TestParsePiPolicyRejectsMalformedUnsafeUnknownAndNarrowedInputs(t *testing.
+ 		"empty runtime argv":     strings.Replace(base, `argv = ["serve", "--model", "Model", "--host", "127.0.0.1", "--port", "18011"]`, `argv = []`, 1),
+ 		"NUL runtime argv":       strings.Replace(base, `argv = ["serve", "--model", "Model", "--host", "127.0.0.1", "--port", "18011"]`, `argv = ["\u0000"]`, 1),
+ 		"wrong api":              strings.Replace(base, `api = "openai-completions"`, `api = "openai-responses"`, 1),
++		"non-reasoning medium":   strings.Replace(base, `thinking = "off"`, `thinking = "medium"`, 1),
++		"wrong yolo type":        strings.Replace(base, "pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64), "pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64)+"\nyolo_mode = \"true\"", 1),
+ 		"capability overclaim":   strings.Replace(base, `["text", "tools"]`, `["dflash", "text", "tools"]`, 1),
+ 		"provider unicode slash": strings.Replace(base, "local-provider", "local∕provider", 1),
+ 	}
+@@ -126,6 +136,86 @@ func TestParsePiPolicyRejectsMalformedUnsafeUnknownAndNarrowedInputs(t *testing.
+ 	}
+ }
+ 
++func TestPiPrimaryYoloSafeDefaultAndNearestFalseMask(t *testing.T) {
++	piRoot := officialPiAsset(t)
++	home, parent := t.TempDir(), t.TempDir()
++	child := filepath.Join(parent, "child")
++	mustMkdir(t, child)
++	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
++	t.Setenv("HOME", home)
++	lookPath := func(string) (string, error) { return filepath.Join(piRoot, "pi"), nil }
++
++	plan, err := BuildPrimarySessionLaunchPlan("pi", child, home, []string{"--version"}, ChildLaunchCompositionProducer{}, lookPath)
++	if err != nil {
++		t.Fatalf("safe default compose: %v", err)
++	}
++	if plan.Resolved.Yolo.Value || plan.Resolved.Yolo.Source != "default" || !reflect.DeepEqual(plan.LaunchVariants.Interactive.Argv, []string{"--version"}) {
++		t.Fatalf("safe default changed direct Pi behavior: yolo=%#v argv=%#v", plan.Resolved.Yolo, plan.LaunchVariants.Interactive.Argv)
++	}
++
++	parentBody := strings.Replace(
++		validPiProfileTOML("profile", "/bin/echo", 18011, false),
++		"pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64),
++		"pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64)+"\nyolo_mode = true",
++		1,
++	)
++	writePiProjectConfig(t, parent, parentBody)
++	childConfig := filepath.Join(child, ".agents", ".configs", projectConfigFileName)
++	mustMkdir(t, filepath.Dir(childConfig))
++	mustWrite(t, childConfig, "[agents.pi.primary_session]\nyolo_mode = false\n")
++	plan, err = BuildPrimarySessionLaunchPlan("pi", child, home, nil, ChildLaunchCompositionProducer{}, lookPath)
++	if err != nil {
++		t.Fatalf("nearest false mask: %v", err)
++	}
++	canonicalChildConfig, err := filepath.EvalSymlinks(childConfig)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if plan.Resolved.Yolo.Value || !samePath(plan.Resolved.Yolo.Source, canonicalChildConfig) {
++		t.Fatalf("nearest false did not mask ancestor true: %#v", plan.Resolved.Yolo)
++	}
++}
++
++// Production call sites: BuildPrimarySessionLaunchPlan (non-launching compose)
++// and RunPi (direct launch). Both must reject before executable lookup so the
++// unsupported policy cannot fall through to native Pi or be mis-mapped to
++// Pi's unrelated --approve project-trust flag.
++func TestPiYoloTrueFailsClosedBeforeComposeOrLaunchLookup(t *testing.T) {
++	project, home := t.TempDir(), t.TempDir()
++	config := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
++	mustMkdir(t, filepath.Dir(config))
++	mustWrite(t, config, "[agents.pi.primary_session]\nyolo_mode = true\n")
++	lookedUp := false
++	lookPath := func(string) (string, error) {
++		lookedUp = true
++		return "/must/not/run", nil
++	}
++
++	assertUnsupported := func(t *testing.T, err error) {
++		t.Helper()
++		if piErrorCode(err) != "pi_yolo_mode_unsupported" {
++			t.Fatalf("error = %v, want pi_yolo_mode_unsupported", err)
++		}
++		for _, want := range []string{piPrimarySessionField + ".yolo_mode=true", config, "--approve", "project-local input trust"} {
++			if !strings.Contains(err.Error(), want) {
++				t.Fatalf("error = %q, want precise unsupported-capability detail %q", err, want)
++			}
++		}
++		if lookedUp {
++			t.Fatal("unsupported Pi yolo reached executable lookup")
++		}
++	}
++
++	t.Run("compose", func(t *testing.T) {
++		_, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, lookPath)
++		assertUnsupported(t, err)
++	})
++	t.Run("launch", func(t *testing.T) {
++		err := RunPi(RunPiOptions{ProjectDir: project, HomeDir: home, Environ: []string{"HOME=" + home}, LookPath: lookPath})
++		assertUnsupported(t, err)
++	})
++}
++
+ func TestParsePiMuseRequiresExactUniqueNonOverlappingArgvSubsequences(t *testing.T) {
+ 	base := validPiProfileTOML("profile", "/bin/echo", 18011, true)
+ 	tests := []string{
+diff --git a/tools/agents-infra/model_check_docs_test.go b/tools/agents-infra/model_check_docs_test.go
+index dd15c04..89e1f39 100644
+--- a/tools/agents-infra/model_check_docs_test.go
++++ b/tools/agents-infra/model_check_docs_test.go
+@@ -43,7 +43,8 @@ func TestBoundedModelCheckREADMEContractPinsSafetyAndExitSemantics(t *testing.T)
+ 		fmt.Sprintf("| `%d` | Provider JSONL is malformed or an otherwise successful process produced an incomplete agent lifecycle. |", infra.ModelCheckExitMalformedStream),
+ 		fmt.Sprintf("| `%d` | One or more `--expect-tool` or `--expect-text` assertions were not observed. |", infra.ModelCheckExitExpectationFailed),
+ 		fmt.Sprintf("| `%d` | A tool execution completed with `isError=true`; this takes precedence over unmet expectations. |", infra.ModelCheckExitToolFailure),
+-		"Because the checker always supplies Pi `--approve`, its tool calls execute unattended inside the caller's project",
++		"The checker supplies Pi `--approve` only to load reviewed project-local inputs.",
++		"Pi tools have no separate native approval policy, so this is not a yolo selection",
+ 	}
+ 	requireModelCheckDocFragments(t, "README.md", readme, wants)
+ }
+@@ -59,7 +60,8 @@ func TestReluxAgentsInfraSkillPinsBoundedModelCheckerWorkflow(t *testing.T) {
+ 		"--target qwen-infra",
+ 		"--output-dir .temp/model-check/qwen-skill-discovery-01",
+ 		"Always choose a fresh task-scoped output directory because existing evidence is never overwritten",
+-		"forces JSON print/no-session mode and Pi `--approve`, so tool calls execute unattended in the caller's project",
++		"forces JSON print/no-session mode and Pi `--approve` so reviewed project-local inputs are loaded",
++		"Pi has no separate native tool-execution approval policy, so `--approve` is not a yolo control",
+ 		fmt.Sprintf(
+ 			"The default deadline is `%s`, with an accepted Go duration range of `%s..%s`.",
+ 			modelCheckDocDuration(infra.DefaultModelCheckDeadline),
+diff --git a/tools/agents-infra/pi_operator_docs_test.go b/tools/agents-infra/pi_operator_docs_test.go
+index 8ba130a..4e56783 100644
+--- a/tools/agents-infra/pi_operator_docs_test.go
++++ b/tools/agents-infra/pi_operator_docs_test.go
+@@ -13,6 +13,10 @@ func TestPiOperatorContractDocumentsCycle10Boundary(t *testing.T) {
+ 	for _, want := range []string{
+ 		"### Managed Pi local-model operator contract",
+ 		`profile = "qwen-3.8-27b"`,
++		`yolo_mode = false`,
++		`reasoning = true`,
++		`thinking = "medium"`,
++		`thinking_format = "qwen-chat-template"`,
+ 		`pi_compatibility = "github-release:earendil-works/pi@v0.84.2:darwin-arm64#sha256-c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65"`,
+ 		`requested_capabilities = ["dflash", "text", "tools"]`,
+ 		`target_argv = ["--model", "Muse-Glimmer-30B"]`,
+@@ -35,6 +39,8 @@ func TestPiOperatorContractDocumentsCycle10Boundary(t *testing.T) {
+ 		"`HF_TOKEN`, cache-location variables, and unrelated environment names remain admitted",
+ 		"`LLAMA_API_KEY` values are never reported",
+ 		"pi-infra --print-config",
++		"`yolo_mode = true` fails before executable lookup or launch with `pi_yolo_mode_unsupported`",
++		"Never map Pi yolo to `--approve`",
+ 	} {
+ 		if !strings.Contains(readme, want) {
+ 			t.Fatalf("README.md missing Pi operator contract fragment %q", want)
+@@ -57,6 +63,9 @@ func TestReluxAgentsInfraSkillRoutesSafePiWorkflowToSource(t *testing.T) {
+ 		"Other `GGML_*` names remain outside this exact-name policy",
+ 		"Exact `LLAMA_API_KEY` is refused before managed state or runtime spawn",
+ 		"Keep `HF_TOKEN`, cache-location variables, `LLAMA_API_KEY` lookalikes",
++		"Non-`off` reasoning additionally requires profile `reasoning = true`",
++		"Explicit `yolo_mode = true` fails before executable lookup or launch with `pi_yolo_mode_unsupported`",
++		"`--approve`/`-a` controls only one-run trust for project-local files",
+ 	} {
+ 		if !strings.Contains(skill, want) {
+ 			t.Fatalf("SKILL.md missing managed Pi guidance %q", want)

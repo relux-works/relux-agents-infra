@@ -1,0 +1,1858 @@
+diff --git a/.research/260828_llamacpp-under-the-managed-harness.md b/.research/260828_llamacpp-under-the-managed-harness.md
+new file mode 100644
+index 0000000..949a749
+--- /dev/null
++++ b/.research/260828_llamacpp-under-the-managed-harness.md
+@@ -0,0 +1,514 @@
++# llama.cpp under the agents-infra managed harness
++
++Task: TASK-260828-2jbufw (story STORY-260828-2faxgm)
++Date: 2026-08-28
++Author role: developer
++Status: profile and lifecycle delivered. The benchmark-gate half was split
++out of this task after this document was first written: the scope of
++TASK-260828-2jbufw is now the model-harness profile only, and the gate work is
++TASK-260828-3fgca3, blocked by TASK-260827-2v13w8 and by this task. [§4](#4-the-benchmark-gate)
++and the G1/G2/G3 entries in [§5](#5-blockers) are kept here as the finding that
++motivated that split; they describe no change in this delta and are inert with
++respect to it.
++
++## Verdict, in three parts
++
++1. **`llama-server` runs as a managed child under a `model-harness` local
++   profile with the full lifecycle.** Startup, readiness, health and a directed
++   `SIGTERM` group shutdown with port release are all evidenced live
++   ([§1](#1-the-profile), [§2](#2-lifecycle)). B7 of
++   [TASK-260828-28gdmq][obs] — a directed `SIGTERM` orphaning the runtime — is
++   reproduced against `llama-server` on the harness as it was at HEAD and is
++   closed by this task.
++2. **B8 is answered on evidence** ([§3](#3-b8-what-llama-server-emits)).
++   `llama-server` is *not* like the other two runtimes. It emits no HTTP access
++   line at any verbosity, so it is strictly less observable than
++   `mlx_lm.server` on the URL channel; it emits per-request engine records
++   keyed by a `task` id, so it is strictly *more* attributable than either MLX
++   runtime; and from `-lv 5` upward it puts the **completion and tool calls**
++   on stderr, which no previously audited runtime does. The prompt never
++   appears at any tested verbosity. B4's shape — a status logged at
++   header-write time and therefore reported as `200` for a request that died
++   mid-body — **does not apply**, because there is no status line to be wrong;
++   the outcome is unknown rather than misreported.
++3. **The benchmark-compare gate cannot admit a llama.cpp candidate as it
++   stands, and no clause was relaxed to make it.** Two clauses do not fit, one
++   loudly and one silently ([§4](#4-the-benchmark-gate)). This is recorded as
++   blocker **G1** and **G2** rather than patched around, and the cost of the
++   obvious relaxation is measured with the gate's real production function.
++   Both are now carried by TASK-260828-3fgca3; nothing in this delta touches
++   the gate.
++
++[obs]: 260828_model-io-observability-through-harness.md
++
++## Host constraint and fixture
++
++TASK-260827-2v13w8 held this host's memory with the 28 GB model on port 18031
++for the whole of this task, and was still running at the end of it. The 28 GB
++GGUF staged by TASK-260828-3g87i4 was therefore **never loaded here**; every
++measurement below uses a 676 MB `Qwen2.5-0.5B-Instruct` Q8_0 fixture
++(`sha256 ca59ca7f13d0e15a8cfa77bd17e65d24f6844b554a7b6c12e07a5f89ff76844e`,
++downloaded from the ungated `Qwen/Qwen2.5-0.5B-Instruct-GGUF`). Every probe
++binds an OS-assigned ephemeral port, deliberately outside `18000-18999`, so
++that the neighbouring run's host-contention guard is never tripped by this
++task's listeners. No process belonging to another run was signalled.
++
++Observability, readiness and shutdown are properties of the harness path and
++of the runtime's logging, not of model size, so the small fixture carries every
++claim below **except** retention under sustained load, which is reported as
++untested for the same reason B6 reports it untested for the other runtimes.
++
++The runtime under test is the pinned Homebrew `llama.cpp 0.3.0`, upstream
++`v0.3.0`, commit `c1d0e7a004015f23bc0233470b747b596f29b264`, build 10621 —
++the build TASK-260828-3g87i4 installed and pinned.
++
++## 1. The profile
++
++Additive. `profiles.qwen-local` is untouched and still points at Python
++`mlx_lm.server`.
++
++```toml
++[profiles.llamacpp-local]
++mode = "local"
++executable = "/opt/homebrew/bin/llama-server"
++argv = [
++    "--model", "/absolute/path/to/model.gguf",
++    "--host", "{host}",
++    "--port", "{port}",
++    "--ctx-size", "8192",
++    "--batch-size", "2048",
++    "--ubatch-size", "2048",
++    "--reasoning-effort", "medium",
++    "--no-webui",
++]
++```
++
++No change to `internal/modelharness/config.go` was needed: the existing local
++profile shape already expresses this launch, and the exact-token `{host}` /
++`{port}` substitution renders the argv `llama-server` receives. The profile is
++documented in `README.md` and the documented bytes are handed to the production
++resolver by `TestREADMELlamaCppProfileResolvesAsDocumented`, so it is an
++artifact the build checks rather than prose beside the code.
++
++The four pinned flags are conditions the three runtimes do **not** default to
++the same way:
++
++| Condition | `mlx_lm.server` | mlx-swift | `llama-server` |
++| --- | --- | --- | --- |
++| KV bound | no flag; unbounded | `--max-kv-size`, absent by default | `--ctx-size`, **always finite** |
++| prompt-eval chunk | `--prefill-step-size`, default 2048 | `prefillStepSize`, default 512 | `--ubatch-size`, default 512 (`--batch-size` is the logical batch, default 2048) |
++| reasoning effort | `--chat-template-args '{"reasoning_effort": …}'` | `--reasoning-effort` | `--reasoning-effort` — *the same spelling* |
++
++`--no-webui` is not cosmetic: the bundled UI is enabled by default and a
++managed runtime should not serve one.
++
++### The KV row is the one that matters, and it is measured
++
++`llama.cpp` is never unbounded. With no `--ctx-size` the fixture reported
++`n_ctx = 32768` (taken from the model); with `--ctx-size 8192` it reported
++`n_ctx = 8192`, against `n_ctx_train = 32768` in both cases. Both figures are
++read off the runtime's own `/v1/models` metadata, not off the help text.
++
++## 2. Lifecycle
++
++### 2.1 Readiness and health match the contract
++
++`model-harness stress` polls `GET <endpoint>/models` and the Pi profile
++declares `readiness_path = "/models"`; the endpoint is `http://host:port/v1`,
++so readiness is `GET /v1/models` answering `200`. `llama-server` satisfies that
++unchanged:
++
++| Property | `llama-server` (fixture) |
++| --- | --- |
++| `GET /v1/models` before the weights are resident | `503` |
++| `GET /v1/models` once resident | `200`, after 1.10 s and 1.12 s on two runs |
++| model advertised | the configured file only, not a cache listing |
++| `GET /health` | `200`, `{"status":"ok"}` |
++
++That is the mlx-swift shape (readiness gated on a resident model), not the
++`mlx_lm.server` shape (`/v1/models` answers `200` about a second after launch
++with no weights resident, and lists every model in the local cache).
++`llama-server` additionally offers a real `/health`, which `mlx_lm.server`
++answers unconditionally (BUG-260827-1jhv2g) and the Swift prototype does not
++expose at all. **No gap to record here: llama.cpp meets the contract and
++exceeds it on `/health`.**
++
++### 2.2 B7, reproduced against `llama-server` and closed
++
++The same directed `SIGTERM` was sent at a standalone `model-harness run` twice
++on the same fixture and the same profile: once with the harness built from
++`HEAD`, once with the process-group shutdown.
++
++| After `kill -TERM <harness pid>` | harness at HEAD | with group shutdown |
++| --- | --- | --- |
++| harness exit | `143` | `0` |
++| `llama-server` child | **alive, reparented to pid 1** | gone |
++| the listening port | **still held** | free |
++| lifecycle records on stderr | `0` | `2` |
++| runtime process group | the harness's own (`76948`) | its own (`77012`) |
++
++The two records the fixed harness wrote:
++
++```
++model-harness: received terminated; stopping profile "llamacpp-fixture" process group 77012
++model-harness: profile "llamacpp-fixture" process group 77012 stopped after terminated (child: <nil>)
++```
++
++The orphan the HEAD control produced was cleaned up by the probe itself; no
++other run's process was signalled.
++
++### 2.3 What the fix is
++
++`internal/modelharness/run.go` now installs a handler for `SIGINT`, `SIGTERM`
++and `SIGHUP`, starts the runtime with `Setpgid` so it leads its own process
++group, forwards the received signal to `-pgid`, escalates to `SIGKILL` on the
++group after ten seconds, writes a lifecycle record in both directions, and
++returns `nil` for a completed signalled stop so a supervisor's `stop` is exit
++`0`. A signalled attempt is never restarted by `restart_on_failure`. The
++fatal-marker path also kills the group now rather than the one process the
++harness holds a handle for. Windows has no process group here and stops the
++direct child only; that is stated in `README.md` rather than implied.
++
++This picks the first of the two positions B7 left open — `model-harness run`
++owns supervisor-signal cleanup — which was B7's own recommendation.
++
++## 3. B8 — what `llama-server` emits
++
++Section 3 of [the observability report][obs] was repeated against
++`llama-server`: nonces planted in a prompt body, an `X-Request-Id` header, a
++tool schema, a streamed request and a URL path, with both harness streams
++captured to separate files and searched. Two positive controls are included so
++that a zero is a real absence and not a broken search.
++
++| Nonce planted in | stdout | stderr |
++| --- | ---: | ---: |
++| POSITIVE CONTROL — `listening on http://127.0.0.1:<port>` | 0 | **1** |
++| POSITIVE CONTROL — the model file name | 0 | **1** |
++| user message body | 0 | 0 |
++| `X-Request-Id` header | 0 | 0 |
++| tool schema function name | 0 | 0 |
++| streamed request body | 0 | 0 |
++| URL path of a 404 | 0 | 0 |
++| engine response id (`chatcmpl-…`) | 0 | 0 |
++| concurrent prompt bodies | 0 | 0 |
++| the string `POST /v1/chat/completions` anywhere | 0 | 0 |
++
++### 3.1 stdout is empty; there is no access log at all
++
++Across every run in this task `llama-server` wrote **0 bytes to stdout**. Every
++line is on stderr, as with `mlx_lm.server`.
++
++Unlike `mlx_lm.server`, there is **no HTTP access line at any verbosity**: no
++method, no path, no status, no client. The two nonces that survived on
++`mlx_lm.server` — the ones placed in a URL, which survived only because the
++access line echoes the request line — do **not** survive here. On the URL
++channel `llama-server` is strictly less observable than `mlx_lm.server`.
++
++### 3.2 What it does emit, and why that is better
++
++At the **default** verbosity, `llama-server` writes a per-request record set
++that neither MLX runtime writes:
++
++```
++slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
++slot launch_slot_: id  3 | task 0 | processing task, is_child = 0
++slot print_timing: id  3 | task 0 | prompt eval time = 65.53 ms / 187 tokens (0.35 ms per token, 2853.57 tokens per second)
++slot print_timing: id  3 | task 0 |        eval time = 430.25 ms /  29 tokens (15.37 ms per token, 65.08 tokens per second)
++slot      release: id  3 | task 0 | stop processing: n_tokens = 215, truncated = 0
++```
++
++Three concurrent completions produced three **distinct** `task` ids (63, 64,
++65) on three slots with three sets of timings. Against `mlx_lm.server` the same
++experiment produced three byte-identical access lines. So captured
++`llama-server` output *is* internally attributable per request, with token
++counts, timings and a truncation flag.
++
++It still does not close B2. The `task` id never leaves the engine: the HTTP
++response object carries `choices`, `created`, `id`, `model`, `object`,
++`system_fingerprint`, `timings` and `usage`, and no slot or task field, and the
++response headers carry only `Server: llama.cpp`. The join key exists on the
++engine side alone, which is the mirror image of the `mlx_lm.server` case where
++it existed on the Pi side alone.
++
++### 3.3 Bodies at higher verbosity — a first among the audited runtimes
++
++`-lv 5` and `-lv 10` were tested, not assumed.
++
++| Channel | `-lv 3` (default) | `-lv 5` / `-lv 10` |
++| --- | --- | --- |
++| user message / assembled prompt | absent | **absent** |
++| completion text | absent | **present** |
++| tool calls with arguments | absent | **present** |
++| tool schema | absent | **present**, as compiled GBNF |
++| `X-Request-Id` | absent | absent |
++| HTTP request line or status | absent | absent |
++
++The completion arrives as exactly one line — the parsed assistant message:
++
++```
++D Parsed message: {"role":"assistant","content":"","tool_calls":[{"type":"function","function":{"name":"get_weather_TOOLNONCE2jbufw","arguments":"{\"city\": \"Yerevan\"}"}}]}
++```
++
++That is the first audited runtime where a model **output** is recoverable from
++harness-captured bytes. The prompt is not: the user message text
++(`Reply with exactly: …`, `What is the weather in Yerevan?`) had zero hits at
++every tested level. The `<|im_start|>` fragments that do appear at `-lv 5` are
++chat-template and parser machinery, not the assembled request.
++
++Reasoning content was not separately exercised — the 0.5B fixture emits none —
++but it is a field of the same `common_chat_msg` that `Parsed message`
++serialises, alongside `content` and `tool_calls`. That is a structural reading
++of the record shape, not a measurement, and it is reported as such.
++
++`-lv 5` is not proposed as a default. One startup plus one 24-token request
++produced 158,391 bytes of stderr, dominated by one-time load lines (1,304
++`create_tensor:` lines alone), and steady-state per-request growth was not
++measured. It would also route completions and tool calls into whatever sink the
++caller pointed the harness at, and `runtime.log` is still unbounded and
++unrotated (B6).
++
++### 3.4 B4 does not apply, and the difference is in our favour
++
++The B4 shape is: a status logged at header-write time, so a request that died
++mid-body is recorded as `200`. Reproduced against `llama-server` — a 900-token
++completion started, then the runtime `SIGKILL`ed with the body in flight — the
++client got `http=000` (empty reply) and the captured stream contains **no
++status line at all**, because there is none to write.
++
++What it does contain is a signature: the in-flight request's
++`launch_slot_: id 1 | task 91 | processing task` line with **no matching
++`print_timing` or `release`**, where every completed request in the same
++capture has both.
++
++So the outcome is **unknown**, not misreported. The interim rule B4 states for
++`mlx_lm.server` — "a `200` in a runtime log is not evidence that a request
++succeeded" — has no `llama-server` counterpart to warn about. Anything
++reasoning over these logs should read a `launch_slot_` without a `release` as
++an unfinished request rather than as an absence of a request.
++
++The unsupervised harness followed the child out and reported exit `1`, which is
++the existing documented behaviour.
++
++## 4. The benchmark gate
++
++### 4.1 Why the gate half is not delivered
++
++TASK-260827-2v13w8 is mid-flight redesigning the comparison gate to put runtime
++launch, scenario driving, measurement, record construction and judgement under
++one trusted production invocation. That work is:
++
++- on branch `task-board/story/STORY-260827-m30k8z`, which this branch does not
++  contain (`tools/mlx-swift-runtime-prototype` does not exist on `main` or on
++  this story's branch), and
++- **uncommitted** in that story's worktree — `BenchmarkRunCommand.swift`,
++  `BenchmarkCompareCommand.swift`, `RuntimeBenchmark.swift` and the rest are
++  staged-but-unlanded.
++
++There is no way to add a third runtime's `RunRecord` production to that driver
++from here without forking 4,500 lines of another run's in-flight source into
++this branch, which would guarantee a conflict and would be exactly the
++"caller-authored record" shape being removed. Per the task's own sequencing
++instruction, the profile half is delivered and this is said plainly instead of
++guessed at.
++
++What *is* delivered on this side is the finding the gate owner needs, produced
++by compiling their real `RuntimeBenchmark.swift`
++(`sha256 d8377708ae4e893cb4f65b8aa4c524a9929c72f032992403b0bc808dd2291e18`)
++read-only out of that worktree and calling the production function.
++
++### 4.2 What fits without any change
++
++`RuntimeBenchmark.contextPolicy(derivedFrom:)` reads three conditions off the
++recorded argv. One of the three fits llama.cpp with **no change at all**:
++`llama-server` spells reasoning effort `--reasoning-effort LEVEL`, which is the
++identical spelling the Swift runtime uses and which the derivation already
++reads. A llama.cpp launch pinning `--reasoning-effort medium` derives
++`reasoning=medium` exactly as the other two do.
++
++### 4.3 G1 — the prefill pin refuses llama.cpp (loud)
++
++```
++llama.cpp, flags llama-server accepts
++  derived : kv=unbounded;prefill-step=unpinned;reasoning=medium
++  admitted: NO -- refused on ["prefill-step=unpinned"]
++```
++
++The derivation reads `--prefill-step-size`. `llama-server` has no such flag;
++its physical prompt-evaluation chunk is `-ub` / `--ubatch-size`. So every
++llama.cpp record is refused by `AdmissionError.unpinnedLaunchCondition`,
++whether or not the launch actually pinned the chunk. Loud, and safe.
++
++**The obvious relaxation is not safe, and the cost is measured.** Dropping
++`prefill-step=unpinned` from `RuntimeBenchmark.unpinnableConditions` is the
++smallest edit that admits llama.cpp. Run against the real function:
++
++| Launch | as shipped | with the clause relaxed |
++| --- | --- | --- |
++| llama.cpp (the launch the relaxation is for) | REFUSED | admitted |
++| mlx-swift **without** `--prefill-step-size` (defaults to 512) | REFUSED | **admitted** |
++| python-mlx-lm **without** `--prefill-step-size` (defaults to 2048) | REFUSED | **admitted** |
++
++All three derive the byte-identical string
++`kv=unbounded;prefill-step=unpinned;reasoning=medium`, so there is no way to
++relax the clause "only for llama.cpp" from the derivation alone. The relaxation
++admits a 512-token prefill chunk measured against a 2048-token one and calls
++the difference a runtime difference — the exact comparison the clause exists to
++prevent, and the one review previously measured as a 1.93x skew.
++
++**Recommendation, for the gate owner to decide:** widen the *derivation*, not
++the clause — read `-ub` / `--ubatch-size` as a third spelling of the same
++condition, exactly as `--chat-template-args` was added as a second spelling of
++reasoning effort. That keeps `unpinnableConditions` untouched and still refuses
++a llama.cpp launch that left the chunk to the default. It is a change to
++another run's in-flight file and is not made here.
++
++### 4.4 G2 — the KV pin is silently false for llama.cpp (dangerous)
++
++This is the more serious one because it *passes*.
++
++`contextPolicy` derives the KV bound from `--max-kv-size`, and reads its
++absence as `unbounded` on the stated grounds that "absent on both sides means
++the same thing". That justification holds for two runtimes and breaks on the
++third. `llama.cpp` has **no unbounded mode**: measured above, `n_ctx` is 32768
++from the model with no flag and 8192 with `--ctx-size 8192`. A llama.cpp record
++would therefore carry `kv=unbounded` while running against a finite KV cache,
++and — because `Pins.firstMismatch` requires the baseline and candidate
++`contextPolicy` to be **equal** — it would *match* an MLX baseline's genuinely
++unbounded reading. A false equality on a pin is worse than a refusal: the pin
++exists so a declared condition is a reading of the launch, and here the reading
++would be wrong while the gate stayed green.
++
++Note that this is not fixed by reading `-c` / `--ctx-size` alone. Absence of
++`-c` still means a finite bound for llama.cpp and no bound for `mlx_lm.server`,
++so the "absence means the same thing" premise cannot be restored by adding a
++spelling. Either the derivation becomes runtime-aware, or the bound is read
++from the running server's `/v1/models` metadata (which reports `n_ctx`
++directly) rather than from argv.
++
++**This is a decision about the gate's trust model — whether a pin may be
++derived from anything other than the recorded argv — and it belongs to
++TASK-260827-2v13w8.** It is recorded, not patched.
++
++### 4.5 No clause was relaxed
++
++This task changed nothing in `benchmark-compare`, `RuntimeBenchmark.swift`, or
++anything else in `tools/mlx-swift-runtime-prototype`; that tree is not on this
++branch and this branch's diff does not touch it. The narrowing evidence for the
++clause is §4.3's table, produced by running the shipped function against a
++relaxed copy of its own clause list and showing what else the relaxation lets
++through.
++
++## 5. Blockers
++
++<a id="g1"></a>
++### G1 — the prefill pin has no llama.cpp spelling
++`contextPolicy(derivedFrom:)` reads only `--prefill-step-size`; llama.cpp
++spells it `-ub`/`--ubatch-size`. Every llama.cpp record is refused.
++**Owner:** TASK-260828-3fgca3, on the gate shape TASK-260827-2v13w8 lands.
++**Recommendation:** add the spelling to the derivation. Do **not** relax
++`unpinnableConditions`; §4.3 measures what that admits.
++
++<a id="g2"></a>
++### G2 — the KV pin reads `unbounded` for a runtime that never is
++Absence of `--max-kv-size` is read as `unbounded`. llama.cpp is always bounded
++by `n_ctx`. The record would pass while asserting something false, and would
++falsely match an MLX baseline.
++**Owner:** TASK-260828-3fgca3, on the gate shape TASK-260827-2v13w8 lands.
++**Needed:** a decision on whether a pin may be derived from the running
++server's reported `n_ctx` rather than from argv alone. There is no additive
++argv spelling that restores the "absence means the same thing" premise.
++
++<a id="g3"></a>
++### G3 — the single-invocation driver does not exist on any shared branch yet
++The benchmark driver that would produce a llama.cpp `RunRecord` with the same
++`LaunchProvenance` binding is uncommitted in another story's worktree. Nothing
++here can be built against it without forking it.
++**Owner:** TASK-260828-3fgca3.
++**Resolution path:** once TASK-260827-2v13w8 lands, adding a llama.cpp pass is
++a profile plus a `--candidate-runtime llama-cpp` argument, provided G1 and G2
++are settled first.
++
++<a id="b8-closed"></a>
++### B8 — closed
++`llama-server` is no longer untested. §3 answers it on evidence for the pinned
++build 10621. The one part deliberately left open is reasoning content, reported
++as a structural reading of the record shape rather than a measurement, and
++retention under sustained load, which stays untested for the same reason B6
++reports it untested for the other runtimes.
++
++## 6. Tests added
++
++`tools/agents-infra/internal/modelharness/run_shutdown_test.go`
++
++| Test | What it bounds |
++| --- | --- |
++| `TestRunSignalledShutdownStopsTheWholeProcessGroup` | the forwarded signal reaches the runtime's grandchildren, and does so **without** the SIGKILL escalation behind it |
++| `TestRunSignalledShutdownEscalatesToKill` | a runtime that ignores `SIGTERM` is still stopped |
++| `TestRunSupervisedShutdownDoesNotRestart` | an operator stop is not a restartable failure, on a child that exits non-zero under `SIGTERM` |
++| `TestModelHarnessRunReleasesPortOnDirectedSIGTERM` | the **shipped binary**, a **real** signal, and the port released — the only one bound to `signal.Notify` actually being installed |
++
++`tools/agents-infra/llamacpp_profile_docs_test.go` resolves the README profile
++through the production resolver and pins the documented stop contract.
++
++Every test was verified against a mutant that should kill it. Production call
++sites: `Run` → `run` (`signal.Notify`) → `runWithSignals` → `runOnce` /
++`runSupervised` → `runSupervisedAttempt` → `shutdownRuntime` →
++`signalRunProcessGroup` / `killRunProcessGroup`.
++
++| # | Mutant | Killed by | Result |
++| --- | --- | --- | ---: |
++| N1 | `signalRunProcessGroup` signals `pid` instead of `-pid` | `…StopsTheWholeProcessGroup` | exit 1 |
++| N2 | `killRunProcessGroup` kills `pid` instead of `-pid` | `…EscalatesToKill` | exit 1 |
++| N3 | the signalled-attempt early return removed, so `restart_on_failure` sees the stop | `…SupervisedShutdownDoesNotRestart` | exit 1 |
++| D1 | `signal.Notify` removed entirely — the behaviour at HEAD | `…ReleasesPortOnDirectedSIGTERM` **only** | exit 1 |
++| D2 | `configureRunProcess` removed from `runOnce` | `…StopsTheWholeProcessGroup`, `…EscalatesToKill`, `…ReleasesPortOnDirectedSIGTERM` | exit 1 |
++
++Two of these are worth recording rather than just counting.
++
++**N1 survived the first time it was run**, and the reason is a real trap. With
++the child signalled directly, `exec.Cmd.Wait` still blocks on the pipes the
++grandchild inherited, so the grace period expires, and the *unmutated*
++`killRunProcessGroup` escalation then cleans up the whole group. The test saw
++a dead group and passed. A group that is SIGKILLed on every stop is not the
++contract, so the test now asserts that the group stopped **on the forwarded
++signal** — the absence of the escalation record — and N1 dies. A delete-only
++mutant, or an assertion on the end state alone, would have proved nothing here.
++
++**D1 is killed by exactly one test**, and that is the point: the three seam
++tests feed the signal channel by hand and cannot see whether a handler is
++installed at all. Only the shipped-binary test can, and under D1 it fails with
++`output=""` — literally B7's "zero bytes written".
++
++`run_shutdown_test.go` also reaps its fixture process groups in `t.Cleanup`.
++Two mutation runs in this task leaked fixture shells that ignore `SIGTERM`
++after the mutated harness failed to stop them; they were cleaned up by hand and
++the reaper prevents a repeat.
++
++## 7. Commands run and exit codes
++
++Each as a standalone process, exit code as reported by the shell.
++
++| Command | Exit |
++| --- | ---: |
++| `gofmt -l .` (in `tools/agents-infra`) | 0, no output |
++| `go vet ./...` | 0 |
++| `go build ./...` | 0 |
++| `go test ./internal/modelharness/ -count=1` | 0 |
++| `go test ./... -count=1` (declared board validation) | 0 — root 100.3 s, infra 187.2 s, modelharness 2.9 s, attachments 2.0 s |
++| N1, N2, N3, D1, D2 mutation runs | 1 each, as intended |
++| `llamacpp-observability-probe.sh` | 0 |
++| `llamacpp-verbosity-probe.sh` | 0 |
++| `llamacpp-lifecycle-probe.sh` | 0 |
++
++Both commands declared in `task-board.config.json ->
++spawn.worktree_isolation.validation` were run as declared, each in
++`tools/agents-infra`, each exit 0.
++
++## 8. Artifacts
++
++Raw evidence under `.temp/TASK-260828-2jbufw/` (gitignored), archived to the
++board as `TASK-260828-2jbufw_evidence.tar.gz`: the three probe scripts and
++their captured output, the harness stdout/stderr captures at three verbosity
++levels, the pre-fix/with-fix lifecycle report, the five mutation logs, the full
++`go test` log, and the two compiled gate probes with the digest of the source
++they were built from.
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 7c9e097..239034e 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,29 @@
+ 
+ ## 2026-08-28
+ 
++### 1906 — The Harness Attested A Stopped Group It Could Not See
++- ROOT CAUSE: `shutdownRuntime` in `tools/agents-infra/internal/modelharness/run.go` returned success the instant `exec.Cmd.Wait` reported the direct child, and printed `process group N stopped after ...` on that basis. Wait answers for the one process the harness holds a handle for. A runtime helper spawned into the same group that redirected its inherited stdout/stderr away is invisible to it: the child is reaped, Wait returns, the harness writes a stopped-group record and exits 0 while that member is still alive holding the runtime's port. Measured against the pre-fix revision at the production entry point: harness exit 0, holder pid alive at `kill(pid,0) == nil`, port unbindable.
++- FINDING: This is the attestation half of blocker B7 from TASK-260828-28gdmq, whose other half was the orphaning itself. B7 was fixed by signalling `-pgid` instead of the child; the group was still only *assumed* stopped afterwards. An operator reads the exit code precisely to rule out the state the exit code was certifying.
++- FIX: The group question is now asked of the kernel. `runProcessGroupStopped` (`run_process_posix.go`) sends signal 0 to `-pgid` and keeps the three answers apart: `ESRCH` is the only one that means empty, `EPERM` means a member is alive and not ours, anything else is a failed read reported as an error — a failed read is not an absence. `shutdownRuntime` polls it every 50 ms after the child is reaped, escalates to `SIGKILL` on the whole group if the grace expires, and writes the stopped record only once the group is empty; an unknown group state after the kill grace returns a failure instead of a stop. Windows keeps the direct-child-only answer explicitly, since this harness manages no job object there.
++- REGRESSION: Two tests, both failing against the pre-fix revision. The fixture is a compiled port holder (`TestPortHolderHelperProcess`) that ignores `SIGTERM`, holds a loopback listener, and starts with its stdio redirected away from the pipes Wait watches — all three properties at once, which no shell line can supply. `TestRunSignalledShutdownWaitsForADetachedGroupMember` drives the seam with a tuned grace; `TestModelHarnessRunDoesNotReportStoppedWhileAGroupMemberHoldsThePort` drives the shipped binary with a real directed `SIGTERM`. Both assert group disappearance and port rebind at the instant the harness claims the stop finished, with no retry window — a retry would launder the false claim into a pass. Mutants killed: report-on-Wait-alone (the pre-fix revision) and report-stopped-when-the-grace-expires-instead-of-escalating.
++- FINDING: The POSIX shutdown tests broke `GOOS=windows go test -c ./internal/modelharness` at six `syscall.Kill` lines. They now sit behind `//go:build !windows` in `run_shutdown_posix_test.go`, and `run_shutdown_test.go` keeps an unconstrained surface: `shutdownSignals` must include `os.Interrupt` on every platform, which is what makes `signal.Notify` install a handler at all.
++- SCOPE: Shutdown attestation only. The fatal-marker restart path still kills the group and relaunches without confirming the group emptied first; a survivor there collides with the replacement runtime on the same port. Not touched here, and not covered by these tests.
++
++### 1822 — llama.cpp Logs The Answer But Never The Question, And Has No Access Log At All
++- FINDING: B8 of TASK-260828-28gdmq is closed on evidence against pinned `llama.cpp 0.3.0` build 10621. `llama-server` writes **0 bytes to stdout** and emits **no HTTP access line at any verbosity** — no method, path, status or client — so the two URL-path nonces that survived on `mlx_lm.server` do not survive here. On the URL channel it is strictly *less* observable than the incumbent.
++- FINDING: It is also strictly *more* attributable. At the default verbosity it writes per-request `launch_slot_` / `print_timing` / `release` records keyed by a `task` id and a slot id, with prompt/eval token counts and a truncation flag. Three concurrent completions produced three distinct task ids where `mlx_lm.server` produced three byte-identical lines. B2 still stands: the response object and headers carry no slot or task field, so the join key exists engine-side only — the mirror image of the `mlx_lm.server` case.
++- FINDING: First audited runtime where a model **output** reaches harness-captured bytes. From `-lv 5` upward the completion and tool calls appear on stderr as one `D Parsed message: {"role":"assistant",…,"tool_calls":[…]}` line, tool schemas appear as compiled GBNF. The **prompt never does** at any tested level (3, 5, 10) — the `<|im_start|>` fragments at lv5 are template machinery, not the assembled request. Do not default a managed profile to `-lv 5`: one startup plus one 24-token request wrote 158,391 bytes, and `runtime.log` is still unrotated (B6).
++- FINDING: B4's shape does **not** apply to llama.cpp. Killed mid-body, the client got `http=000` and the capture holds no status line at all, because there is none to write. What it holds is a `launch_slot_` for that task with no matching `release`. Unknown, not misreported — read a launch without a release as an unfinished request.
++- ROOT CAUSE: B7 reproduced against `llama-server` on the harness as it was at HEAD: `kill -TERM` at a standalone `model-harness run` left harness exit 143, **0 lifecycle records**, the runtime alive reparented to pid 1, and the port still held. `runOnce` installed no signal handler and set no `SysProcAttr`, so the runtime shared the harness's process group and outlived it.
++- FIX: `run.go` handles `SIGINT`/`SIGTERM`/`SIGHUP`, starts the runtime with `Setpgid`, forwards to `-pgid`, escalates to `SIGKILL` on the group after 10 s, writes a lifecycle record both ways, and exits 0 on a completed stop. A signalled attempt is never restarted by `restart_on_failure`. Same fixture, same profile, with the fix: exit 0, runtime gone, port free, 2 records. This picks B7's own recommendation — `model-harness run` owns supervisor-signal cleanup — over the interactive-only alternative.
++- ANOMALY: The narrowing mutant N1 (`syscall.Kill(pid,…)` instead of `-pid`) **survived** its first run. `exec.Cmd.Wait` blocks on the pipes the grandchild inherited, so the grace period expires and the *unmutated* SIGKILL escalation cleans up the group; the test saw a dead group and passed. Asserting the end state alone proves nothing when a second mechanism reaches the same end state. The test now asserts the group stopped **on the forwarded signal** — the absence of the escalation record — and N1 dies.
++- FINDING: The mutant D1 (delete `signal.Notify`) is killed by exactly one of the four tests: the one that builds the shipped binary and sends a real signal. The three seam tests feed the channel by hand and cannot see whether a handler exists. Under D1 that test fails with `output=""` — literally B7's zero bytes.
++- REGRESSION RISK: `benchmark-compare` cannot admit a llama.cpp candidate and **nothing was relaxed to make it**. Two clauses in `RuntimeBenchmark.contextPolicy(derivedFrom:)`, measured by compiling TASK-260827-2v13w8's real source read-only. G1: it reads `--prefill-step-size`, llama.cpp spells it `-ub`/`--ubatch-size`, so every record is refused — loud and safe. G2 is the dangerous one: absence of `--max-kv-size` is read as `kv=unbounded`, and **llama.cpp is never unbounded** (measured `n_ctx` 32768 from the model, 8192 with `--ctx-size 8192`). A llama.cpp record would pass while asserting something false, and would falsely *match* an MLX baseline because the pin comparison demands equality.
++- DECISION: Do not relax `unpinnableConditions` to admit llama.cpp. Measured against the shipped function, dropping `prefill-step=unpinned` also admits mlx-swift without `--prefill-step-size` (512) and python-mlx-lm without it (2048) — all three derive the byte-identical string, so there is no llama.cpp-only relaxation. The additive path is to widen the *derivation* with the `-ub` spelling, as `--chat-template-args` was already added as a second spelling of reasoning effort. G2 has no additive argv fix at all and needs a trust-model decision from TASK-260827-2v13w8.
++- SCOPE: `tools/agents-infra/internal/modelharness/run.go`, new `run_process_posix.go` / `run_process_windows.go` / `run_shutdown_test.go`, new `tools/agents-infra/llamacpp_profile_docs_test.go`, `README.md`, `.research/260828_llamacpp-under-the-managed-harness.md`. `profiles.qwen-local` untouched; the llama.cpp profile is additive. Nothing in `tools/mlx-swift-runtime-prototype` was touched — it is not on this branch.
++- SCOPE SPLIT: TASK-260828-2jbufw was subsequently narrowed to the model-harness profile half only. G1/G2/G3 are carried by TASK-260828-3fgca3, blocked by TASK-260827-2v13w8 and by TASK-260828-2jbufw. The gate findings above changed no gate code — this delta touches nothing under `tools/mlx-swift-runtime-prototype`, which does not exist on this branch.
++- STATUS: TASK-260828-2jbufw profile half ready for review; gate half split out, not delivered here. All runs used a 676 MB Qwen2.5-0.5B fixture on ephemeral ports outside 18000-18999 while TASK-260827-2v13w8 held the host with the 28 GB model; no other run's process was signalled.
++
+ ### 1715 — A Gate You Prove By Reading Source Is Not Proven — The Bypass Mutant Survived
+ - ROOT CAUSE: rev2 claimed `quant_equivalence.main()` was bound to the single comparability decision by two source-string checks: `'comparability_verdict(' in inspect.getsource(main)` and a regex for bare numeric `> N` comparisons. Both are syntactic. Review kept `if False: comparability_verdict(rows)` so the first check passed, decided inline at `RATIO_CEIL + 1.0` — which the regex cannot see because the threshold is a *name* — and the entire suite exited 0 while the real CLI path admitted the FP8 ratio 3.889.
+ - FINDING: The general shape, worth carrying: a check that cannot observe behaviour cannot witness it. Source inspection tests the text of the call site, and a dead call is text. Only running the production entry point and reading what it emitted distinguishes "wired up" from "looks wired up".
+diff --git a/README.md b/README.md
+index f194ac4..02c34e5 100644
+--- a/README.md
++++ b/README.md
+@@ -556,6 +556,78 @@ zero exit is never restarted. `restart_on_failure` additionally covers an
+ unexpected non-zero child exit. Supervision is configured on the remote
+ machine's local profile rather than on the local SSH forwarding profile.
+ 
++`model-harness run` owns the stop as well as the start. It places the runtime
++in its own process group, forwards `SIGINT`, `SIGTERM` and `SIGHUP` to that
++whole group, escalates to `SIGKILL` if the group has not exited within ten
++seconds, writes a lifecycle record to stderr in both directions, and exits `0`
++when a signalled stop completes. "The group has exited" is asked of the kernel
++rather than inferred from the direct child: a runtime helper started into the
++same group that redirected its inherited stdout/stderr away is
++reaped-child-invisible and would otherwise leave the harness reporting a
++stopped group while that helper still held the port. The stopped record and the
++`0` exit are written only once the group is empty, and a group whose state
++cannot be established after the kill escalation is reported as a failure rather
++than as a stop. A signalled stop is never treated as a restartable failure, so
++a supervisor's `stop` does not relaunch the runtime through
++`restart_on_failure`. Before this the harness took a directed `SIGTERM` and
++died with zero bytes written while the runtime was reparented to pid 1 and kept
++holding its port; an interactive Ctrl-C happened to work only because the
++terminal signals the whole foreground group. On Windows there is no process
++group here and only the direct child is stopped.
++
++#### llama.cpp profile
++
++`llama-server` runs as a managed child under the same local profile shape. The
++flags below are the pinned conditions, not decoration: `--ctx-size` is the KV
++bound, `--batch-size`/`--ubatch-size` are the logical and physical prompt-
++evaluation chunks, and `--reasoning-effort` is spelled exactly as the Swift
++runtime spells it.
++
++```toml
++[profiles.llamacpp-local]
++mode = "local"
++executable = "/opt/homebrew/bin/llama-server"
++argv = [
++    "--model", "/absolute/path/to/model.gguf",
++    "--host", "{host}",
++    "--port", "{port}",
++    "--ctx-size", "8192",
++    "--batch-size", "2048",
++    "--ubatch-size", "2048",
++    "--reasoning-effort", "medium",
++    "--no-webui",
++]
++```
++
++Readiness and health match the contract the other managed runtimes are held to.
++`GET /v1/models` answers `503` until the weights are resident and `200`
++afterwards, so `readiness_path = "/models"` needs no change, and the listed
++model is the configured one rather than a cache listing. `GET /health` answers
++`200` with `{"status":"ok"}`.
++
++What the harness can observe of a `llama-server` runtime differs from the MLX
++runtimes and is stated rather than assumed:
++
++| Channel | `llama-server` |
++| --- | --- |
++| stdout | empty; every line is on stderr |
++| HTTP access line (method, path, status) | **none at any verbosity** |
++| per-request engine record | present at the default verbosity: `launch_slot_`, `print_timing` and `release` lines keyed by a `task` id and a slot id, with prompt/eval token counts |
++| prompt or assembled message array | never on the captured stream |
++| completion text and tool calls | on stderr from `-lv 5` upward, as one `Parsed message` record |
++| tool schema | on stderr from `-lv 5` upward, as the compiled GBNF grammar |
++| caller correlation header, engine response id | never on the captured stream |
++
++The `task` id makes concurrent requests distinguishable in captured output,
++which `mlx_lm.server` cannot do, but it never leaves the engine: the HTTP
++response carries no slot or task field, so captured engine records still cannot
++be joined to the caller's turn. A runtime killed with a response in flight
++leaves a `launch_slot_` line with no matching `release`; unlike an access log
++that reports `200` at header-write time, that is an unknown outcome rather than
++a false success, and it must be read as unknown. `-lv 5` is not a default here:
++it puts completions and tool calls into whatever sink the caller pointed the
++harness at, and the runtime log is unrotated and uncapped.
++
+ As of 2026-08-27, the released `mlx-lm 0.31.3` predates the upstream fix for
+ the Qwen3.5 `ArraysCache` Metal buffer-object leak. A reproducible temporary
+ installation can pin the merged upstream fix without replacing the released
+@@ -1393,7 +1465,7 @@ rg -n "Primary Parent Goal Actualization" \
+ |------|---------|---------|---------|
+ | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
+ | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+-| `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
++| `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra` and stopped as a process group on `SIGINT`/`SIGTERM`/`SIGHUP`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+ | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+ | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
+diff --git a/tools/agents-infra/internal/modelharness/run.go b/tools/agents-infra/internal/modelharness/run.go
+index 24c6694..eb3dc18 100644
+--- a/tools/agents-infra/internal/modelharness/run.go
++++ b/tools/agents-infra/internal/modelharness/run.go
+@@ -8,11 +8,26 @@ import (
+ 	"io"
+ 	"os"
+ 	"os/exec"
++	"os/signal"
+ 	"strings"
+ 	"sync"
+ 	"time"
+ )
+ 
++// runShutdownGrace is how long a signalled runtime is given to exit on its own
++// before the harness escalates to SIGKILL, and runShutdownKillGrace is how long
++// the group is then given to be reaped. They are variables so the escalation
++// path is testable without a ten-second test.
++var (
++	runShutdownGrace     = 10 * time.Second
++	runShutdownKillGrace = 5 * time.Second
++)
++
++// runShutdownPollInterval is how often the harness re-asks the kernel whether
++// the runtime's process group is empty. `exec.Cmd.Wait` answers for the direct
++// child only, so it is not an answer about the group.
++var runShutdownPollInterval = 50 * time.Millisecond
++
+ func Run(plan Plan) error {
+ 	return run(plan, os.Stdout, os.Stderr, time.Sleep)
+ }
+@@ -21,33 +36,160 @@ func run(plan Plan, stdout, stderr io.Writer, sleep func(time.Duration)) error {
+ 	if err := inspectExecutable(plan.Executable); err != nil {
+ 		return err
+ 	}
++	signals := make(chan os.Signal, 1)
++	signal.Notify(signals, shutdownSignals()...)
++	defer signal.Stop(signals)
++	return runWithSignals(plan, stdout, stderr, sleep, signals)
++}
++
++// runWithSignals is the seam the shutdown tests drive. Production reaches it
++// only through run, with a channel fed by signal.Notify.
++func runWithSignals(plan Plan, stdout, stderr io.Writer, sleep func(time.Duration), signals <-chan os.Signal) error {
+ 	if plan.Supervision == nil {
+-		return runOnce(plan, stdout, stderr)
++		return runOnce(plan, stdout, stderr, signals)
+ 	}
+-	return runSupervised(plan, stdout, stderr, sleep)
++	return runSupervised(plan, stdout, stderr, sleep, signals)
+ }
+ 
+-func runOnce(plan Plan, stdout, stderr io.Writer) error {
++func runOnce(plan Plan, stdout, stderr io.Writer, signals <-chan os.Signal) error {
+ 	command := exec.Command(plan.Executable, plan.Argv...)
+ 	command.Stdin = os.Stdin
+ 	command.Stdout = stdout
+ 	command.Stderr = stderr
+-	if err := command.Run(); err != nil {
++	configureRunProcess(command)
++	if err := command.Start(); err != nil {
+ 		return fmt.Errorf("run %s profile %q: %w", plan.Mode, plan.Profile, err)
+ 	}
+-	return nil
++	done := make(chan error, 1)
++	go func() { done <- command.Wait() }()
++	select {
++	case err := <-done:
++		if err != nil {
++			return fmt.Errorf("run %s profile %q: %w", plan.Mode, plan.Profile, err)
++		}
++		return nil
++	case sig := <-signals:
++		_, err := shutdownRuntime(plan, command, done, stderr, sig)
++		return err
++	}
++}
++
++// shutdownRuntime owns the supervisor-signal path.
++//
++// It forwards the signal to the runtime's whole process group, waits for the
++// group to become empty, escalates to SIGKILL if it does not, and authors a
++// lifecycle record either way. A signalled stop that completes is a clean stop:
++// it returns nil, so a supervisor that sends SIGTERM gets exit 0 rather than a
++// failure it did not cause.
++//
++// "The group is empty" is asked of the kernel, not inferred from
++// `exec.Cmd.Wait`. Wait reports the one process the harness holds a handle for,
++// and a runtime helper that was spawned into the same group and redirected its
++// inherited stdout/stderr away is invisible to it: the child is reaped, Wait
++// returns, and a harness that reported a stopped group there would attest a
++// finished stop while a detached member still held the runtime's port. That is
++// the attestation half of blocker B7 from TASK-260828-28gdmq, whose other half
++// was the harness orphaning the runtime outright.
++//
++// The first return value is how the runtime child itself ended, which the
++// supervision loop needs in order to tell an operator stop apart from a crash;
++// the second is whether the stop completed.
++func shutdownRuntime(plan Plan, command *exec.Cmd, done <-chan error, stderr io.Writer, sig os.Signal) (error, error) {
++	group := command.Process.Pid
++	fmt.Fprintf(stderr, "model-harness: received %v; stopping profile %q process group %d\n", sig, plan.Profile, group)
++	if err := signalRunProcessGroup(command, sig); err != nil {
++		fmt.Fprintf(stderr, "model-harness: forwarding %v to profile %q process group %d failed: %v\n", sig, plan.Profile, group, err)
++	}
++	timer := time.NewTimer(runShutdownGrace)
++	defer timer.Stop()
++	poll := time.NewTicker(runShutdownPollInterval)
++	defer poll.Stop()
++
++	waited := done
++	var childErr error
++	childReaped := false
++	escalated := false
++	var inspectErr error
++
++	// settled is the only thing allowed to authorise a "stopped" record: the
++	// child reaped *and* the kernel reporting the group empty. An inspection
++	// that failed is not an empty group — it is an unknown one, and it keeps
++	// the loop running towards the escalation instead of being read as absence.
++	settled := func() bool {
++		if !childReaped {
++			return false
++		}
++		stopped, err := runProcessGroupStopped(command)
++		inspectErr = err
++		if err != nil {
++			return false
++		}
++		return stopped
++	}
++	report := func() (error, error) {
++		fmt.Fprintf(stderr, "model-harness: profile %q process group %d stopped after %v (child: %v)\n", plan.Profile, group, sig, childErr)
++		return childErr, nil
++	}
++
++	for {
++		select {
++		case waitErr := <-waited:
++			childErr = waitErr
++			childReaped = true
++			// A nil channel never fires again; the child is reaped exactly once.
++			waited = nil
++			if settled() {
++				return report()
++			}
++			if inspectErr != nil {
++				fmt.Fprintf(stderr, "model-harness: profile %q runtime child exited (%v) but process group %d could not be inspected: %v\n", plan.Profile, childErr, group, inspectErr)
++				continue
++			}
++			fmt.Fprintf(stderr, "model-harness: profile %q runtime child exited (%v) but process group %d is not empty; waiting for the rest of the group\n", plan.Profile, childErr, group)
++		case <-poll.C:
++			if settled() {
++				return report()
++			}
++		case <-timer.C:
++			if escalated {
++				err := fmt.Errorf("run %s profile %q: process group %d did not exit after SIGKILL", plan.Mode, plan.Profile, group)
++				if inspectErr != nil {
++					err = fmt.Errorf("run %s profile %q: process group %d state is unknown after SIGKILL: %w", plan.Mode, plan.Profile, group, inspectErr)
++				}
++				fmt.Fprintf(stderr, "model-harness: %v\n", err)
++				return childErr, err
++			}
++			escalated = true
++			fmt.Fprintf(stderr, "model-harness: profile %q process group %d did not exit within %s of %v; killing it\n", plan.Profile, group, runShutdownGrace, sig)
++			if err := killRunProcessGroup(command); err != nil {
++				fmt.Fprintf(stderr, "model-harness: killing profile %q process group %d failed: %v\n", plan.Profile, group, err)
++			}
++			timer.Reset(runShutdownKillGrace)
++		}
++	}
+ }
+ 
+ type runAttemptResult struct {
+ 	err         error
+ 	fatalMarker string
++	// signalled is non-nil when a supervisor signal ended the attempt. Such an
++	// attempt is never restarted: the operator asked for a stop, not a replacement.
++	signalled os.Signal
++	// signalErr is the outcome of the group shutdown that signalled triggered.
++	signalErr error
+ }
+ 
+-func runSupervised(plan Plan, stdout, stderr io.Writer, sleep func(time.Duration)) error {
++func runSupervised(plan Plan, stdout, stderr io.Writer, sleep func(time.Duration), signals <-chan os.Signal) error {
+ 	policy := plan.Supervision
+ 	restarts := make([]time.Time, 0, policy.MaxRestarts)
+ 	for {
+-		result := runSupervisedAttempt(plan, stdout, stderr, policy.FatalOutputSubstrings)
++		result := runSupervisedAttempt(plan, stdout, stderr, policy.FatalOutputSubstrings, signals)
++		// An operator stop is never a restartable failure. Falling through here
++		// hands a child that exited non-zero under SIGTERM to restart_on_failure,
++		// which relaunches the runtime the operator just asked to stop.
++		if result.signalled != nil {
++			return result.signalErr
++		}
+ 		if result.err == nil && result.fatalMarker == "" {
+ 			return nil
+ 		}
+@@ -74,12 +216,13 @@ func runSupervised(plan Plan, stdout, stderr io.Writer, sleep func(time.Duration
+ 	}
+ }
+ 
+-func runSupervisedAttempt(plan Plan, stdout, stderr io.Writer, markers []string) runAttemptResult {
++func runSupervisedAttempt(plan Plan, stdout, stderr io.Writer, markers []string, signals <-chan os.Signal) runAttemptResult {
+ 	fatal := make(chan string, 1)
+ 	command := exec.Command(plan.Executable, plan.Argv...)
+ 	command.Stdin = os.Stdin
+ 	command.Stdout = newFatalOutputWriter(stdout, markers, fatal)
+ 	command.Stderr = newFatalOutputWriter(stderr, markers, fatal)
++	configureRunProcess(command)
+ 	if err := command.Start(); err != nil {
+ 		return runAttemptResult{err: err}
+ 	}
+@@ -87,8 +230,16 @@ func runSupervisedAttempt(plan Plan, stdout, stderr io.Writer, markers []string)
+ 	go func() { done <- command.Wait() }()
+ 
+ 	select {
++	case sig := <-signals:
++		// The child's own exit is reported verbatim in err. A runtime that exits
++		// non-zero when it is asked to stop is a normal stop, not a crash, and
++		// the loop below is what has to draw that line.
++		childErr, shutdownErr := shutdownRuntime(plan, command, done, stderr, sig)
++		return runAttemptResult{signalled: sig, err: childErr, signalErr: shutdownErr}
+ 	case marker := <-fatal:
+-		killErr := command.Process.Kill()
++		// The condemned runtime's whole group goes, not just the process the
++		// harness holds a handle for.
++		killErr := killRunProcessGroup(command)
+ 		waitErr := <-done
+ 		if waitErr == nil {
+ 			waitErr = killErr
+diff --git a/tools/agents-infra/internal/modelharness/run_process_posix.go b/tools/agents-infra/internal/modelharness/run_process_posix.go
+new file mode 100644
+index 0000000..fc5d476
+--- /dev/null
++++ b/tools/agents-infra/internal/modelharness/run_process_posix.go
+@@ -0,0 +1,78 @@
++//go:build !windows
++
++package modelharness
++
++import (
++	"errors"
++	"fmt"
++	"os"
++	"os/exec"
++	"syscall"
++)
++
++// shutdownSignals are the signals a service supervisor or a scripted stop
++// sends at a standalone `model-harness run`. Before these were handled the
++// harness died on the first one with zero bytes written while the runtime it
++// started was reparented to pid 1 and kept holding its port.
++func shutdownSignals() []os.Signal {
++	return []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP}
++}
++
++// configureRunProcess puts the runtime child in its own process group so the
++// harness can stop the runtime *and* anything the runtime spawned with a single
++// delivery, instead of stopping only the process it happens to hold a handle
++// for.
++func configureRunProcess(command *exec.Cmd) {
++	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
++}
++
++// signalRunProcessGroup delivers sig to the whole child process group.
++//
++// The negative sign is the entire point: `syscall.Kill(pid, ...)` reaches the
++// direct child alone, which is exactly the shape that leaves a grandchild
++// holding the listening socket after the harness is gone.
++func signalRunProcessGroup(command *exec.Cmd, sig os.Signal) error {
++	if command.Process == nil {
++		return nil
++	}
++	unixSignal, ok := sig.(syscall.Signal)
++	if !ok {
++		unixSignal = syscall.SIGTERM
++	}
++	return syscall.Kill(-command.Process.Pid, unixSignal)
++}
++
++// killRunProcessGroup is the escalation, and the fatal-marker path's stop.
++func killRunProcessGroup(command *exec.Cmd) error {
++	if command.Process == nil {
++		return nil
++	}
++	return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
++}
++
++// runProcessGroupStopped asks the kernel whether the runtime's process group is
++// empty. Signal 0 performs the permission and existence checks without
++// delivering anything, and aimed at -pgid it answers for every member rather
++// than for the one process the harness holds a handle for.
++//
++// The three answers are different facts and are kept apart. ESRCH is the only
++// one that means "empty". EPERM means the group still has a member that is not
++// ours to signal, which is the opposite of stopped. Anything else is a failed
++// read, and a failed read is not an absence: it is reported as an error so the
++// caller escalates instead of attesting a stop it cannot see.
++func runProcessGroupStopped(command *exec.Cmd) (bool, error) {
++	if command.Process == nil {
++		return true, nil
++	}
++	err := syscall.Kill(-command.Process.Pid, 0)
++	switch {
++	case err == nil:
++		return false, nil
++	case errors.Is(err, syscall.ESRCH):
++		return true, nil
++	case errors.Is(err, syscall.EPERM):
++		return false, nil
++	default:
++		return false, fmt.Errorf("inspect process group %d: %w", command.Process.Pid, err)
++	}
++}
+diff --git a/tools/agents-infra/internal/modelharness/run_process_windows.go b/tools/agents-infra/internal/modelharness/run_process_windows.go
+new file mode 100644
+index 0000000..1f6ade5
+--- /dev/null
++++ b/tools/agents-infra/internal/modelharness/run_process_windows.go
+@@ -0,0 +1,44 @@
++//go:build windows
++
++package modelharness
++
++import (
++	"os"
++	"os/exec"
++)
++
++// shutdownSignals is os.Interrupt only: Windows has no SIGTERM or SIGHUP, and
++// a service stop arrives as a console control event Go surfaces as
++// os.Interrupt.
++func shutdownSignals() []os.Signal {
++	return []os.Signal{os.Interrupt}
++}
++
++// configureRunProcess is a no-op: process groups here are a job-object
++// question, which this harness does not manage. Windows shutdown therefore
++// stops the direct child only, and that limitation is stated rather than
++// papered over.
++func configureRunProcess(command *exec.Cmd) {}
++
++func signalRunProcessGroup(command *exec.Cmd, sig os.Signal) error {
++	if command.Process == nil {
++		return nil
++	}
++	return command.Process.Kill()
++}
++
++func killRunProcessGroup(command *exec.Cmd) error {
++	if command.Process == nil {
++		return nil
++	}
++	return command.Process.Kill()
++}
++
++// runProcessGroupStopped can only answer for the direct child. This harness
++// manages no job object here, so it holds nothing that would let it observe or
++// stop what the runtime spawned; the reaped child is the whole of what it
++// controls. The POSIX group contract is not silently claimed on this platform —
++// the limitation stated in configureRunProcess is the same one here.
++func runProcessGroupStopped(command *exec.Cmd) (bool, error) {
++	return true, nil
++}
+diff --git a/tools/agents-infra/internal/modelharness/run_shutdown_posix_test.go b/tools/agents-infra/internal/modelharness/run_shutdown_posix_test.go
+new file mode 100644
+index 0000000..6e088ec
+--- /dev/null
++++ b/tools/agents-infra/internal/modelharness/run_shutdown_posix_test.go
+@@ -0,0 +1,664 @@
++//go:build !windows
++
++// The process-group shutdown contract is POSIX-only: signalling a group, and
++// asking the kernel whether that group is empty, have no equivalent here on
++// Windows, where the harness manages the direct child alone. Keeping these
++// tests behind the same constraint as run_process_posix.go is what lets
++// `GOOS=windows go test -c ./internal/modelharness` compile; the
++// platform-agnostic part of the shutdown surface is tested in
++// run_shutdown_test.go, which has no constraint.
++package modelharness
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"net"
++	"os"
++	"os/exec"
++	"os/signal"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"sync"
++	"syscall"
++	"testing"
++	"time"
++)
++
++// The lifecycle contract these tests hold `model-harness run` to is the one
++// TASK-260828-28gdmq recorded as blocker B7: a directed SIGTERM at a standalone
++// `model-harness run` used to leave the harness dead with zero bytes written
++// while the runtime it started was reparented to pid 1 and kept holding its
++// listening port. A service supervisor or a scripted stop sends exactly that
++// signal, and llama-server is stopped that way like every other managed
++// runtime, so the property has to hold for the group and not just for the
++// process the harness holds a handle for.
++
++// TestRunSignalledShutdownStopsTheWholeProcessGroup is the narrowing test.
++//
++// The runtime child spawns a grandchild — a real runtime forks helpers, and a
++// shell-wrapped launch is a grandchild by construction — and the assertion is
++// that the grandchild is gone too. Signalling `command.Process.Pid` instead of
++// `-command.Process.Pid` still stops the child and still returns cleanly, so a
++// test that only checked the direct child or the harness exit status would pass
++// against that mutant. This one fails.
++func TestRunSignalledShutdownStopsTheWholeProcessGroup(t *testing.T) {
++	dir := t.TempDir()
++	childPID := filepath.Join(dir, "child.pid")
++	grandchildPID := filepath.Join(dir, "grandchild.pid")
++	plan := shellPlan("group-shutdown", groupScript(childPID, grandchildPID))
++	var child, grandchild int
++	reapFixture(t, &child, &grandchild)
++
++	signals := make(chan os.Signal, 1)
++	var stdout, stderr lockedBuffer
++	done := make(chan error, 1)
++	go func() { done <- runWithSignals(plan, &stdout, &stderr, func(time.Duration) {}, signals) }()
++
++	child = waitForPIDFile(t, childPID)
++	grandchild = waitForPIDFile(t, grandchildPID)
++	if child == grandchild {
++		t.Fatalf("child and grandchild are the same process (%d); the fixture proves nothing", child)
++	}
++
++	signals <- syscall.SIGTERM
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatalf("signalled shutdown returned %v; a supervisor stop the harness completed is not a failure", err)
++		}
++	case <-time.After(30 * time.Second):
++		t.Fatal("harness did not return after SIGTERM")
++	}
++
++	assertProcessGone(t, "runtime child", child)
++	assertProcessGone(t, "runtime grandchild", grandchild)
++
++	// The group must stop on the FORWARDED signal, not on the SIGKILL
++	// escalation behind it. Without this the escalation masks the forwarding:
++	// a mutant that signals only the direct child still ends with a dead group,
++	// because `exec.Cmd.Wait` blocks on the pipes the grandchild inherited, the
++	// grace period expires, and the unmutated group kill cleans up what the
++	// forwarded signal should have reached. That is a runtime SIGKILLed on
++	// every stop, which is not the contract.
++	if strings.Contains(stderr.String(), "did not exit within") {
++		t.Fatalf("the group survived the forwarded signal and had to be killed; stderr=%q", stderr.String())
++	}
++
++	// The lifecycle record B7 found missing. Zero bytes written was half the
++	// finding: nothing recorded that a stop had been asked for or completed.
++	for _, want := range []string{"received terminated", "stopping profile \"group-shutdown\"", "stopped after terminated"} {
++		if !strings.Contains(stderr.String(), want) {
++			t.Fatalf("stderr does not record %q; stderr=%q", want, stderr.String())
++		}
++	}
++}
++
++// TestRunSignalledShutdownEscalatesToKill covers the runtime that takes SIGTERM
++// and does not leave. Without the escalation the harness would wait forever and
++// the supervisor's stop would never complete.
++func TestRunSignalledShutdownEscalatesToKill(t *testing.T) {
++	restoreGrace := runShutdownGrace
++	restoreKill := runShutdownKillGrace
++	runShutdownGrace = 300 * time.Millisecond
++	runShutdownKillGrace = 10 * time.Second
++	t.Cleanup(func() {
++		runShutdownGrace = restoreGrace
++		runShutdownKillGrace = restoreKill
++	})
++
++	dir := t.TempDir()
++	childPID := filepath.Join(dir, "child.pid")
++	grandchildPID := filepath.Join(dir, "grandchild.pid")
++	// trap '' TERM makes the child ignore SIGTERM outright.
++	plan := shellPlan("stubborn", "trap '' TERM INT HUP\n"+groupScript(childPID, grandchildPID))
++	var child, grandchild int
++	reapFixture(t, &child, &grandchild)
++
++	signals := make(chan os.Signal, 1)
++	var stdout, stderr lockedBuffer
++	done := make(chan error, 1)
++	go func() { done <- runWithSignals(plan, &stdout, &stderr, func(time.Duration) {}, signals) }()
++
++	child = waitForPIDFile(t, childPID)
++	grandchild = waitForPIDFile(t, grandchildPID)
++
++	signals <- syscall.SIGTERM
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatalf("escalated shutdown returned %v", err)
++		}
++	case <-time.After(30 * time.Second):
++		t.Fatal("harness did not return after escalating to SIGKILL")
++	}
++	assertProcessGone(t, "stubborn child", child)
++	assertProcessGone(t, "stubborn grandchild", grandchild)
++	if !strings.Contains(stderr.String(), "did not exit within") {
++		t.Fatalf("escalation was not recorded; stderr=%q", stderr.String())
++	}
++}
++
++// TestRunSupervisedShutdownDoesNotRestart separates a stop from a failure. The
++// supervision policy replaces a runtime that died on its own; it must not
++// replace one the operator asked to stop, or `systemctl stop` becomes an
++// infinite relaunch.
++func TestRunSupervisedShutdownDoesNotRestart(t *testing.T) {
++	dir := t.TempDir()
++	childPID := filepath.Join(dir, "child.pid")
++	grandchildPID := filepath.Join(dir, "grandchild.pid")
++	launches := filepath.Join(dir, "launches")
++	// The child exits non-zero under SIGTERM, which is what a real runtime does.
++	// That is exactly the exit restart_on_failure is configured to replace, so
++	// the supervision loop has to tell "the operator stopped it" apart from
++	// "it fell over" on the same exit status.
++	plan := shellPlan("supervised-stop",
++		fmt.Sprintf("printf 'x' >> %s\n", shellQuote(launches))+
++			"trap 'exit 143' TERM\n"+groupScript(childPID, grandchildPID))
++	var child, grandchild int
++	reapFixture(t, &child, &grandchild)
++	plan.Supervision = &SupervisionPolicy{
++		FatalOutputSubstrings:    []string{"Resource limit ("},
++		RestartOnFailure:         true,
++		MaxRestarts:              3,
++		RestartWindowSeconds:     60,
++		RestartDelayMilliseconds: 1,
++	}
++
++	signals := make(chan os.Signal, 1)
++	var stdout, stderr lockedBuffer
++	done := make(chan error, 1)
++	go func() { done <- runWithSignals(plan, &stdout, &stderr, func(time.Duration) {}, signals) }()
++
++	child = waitForPIDFile(t, childPID)
++	grandchild = waitForPIDFile(t, grandchildPID)
++	signals <- syscall.SIGTERM
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatalf("supervised signalled shutdown returned %v", err)
++		}
++	case <-time.After(30 * time.Second):
++		t.Fatal("supervised harness did not return after SIGTERM")
++	}
++	assertProcessGone(t, "supervised child", child)
++	assertProcessGone(t, "supervised grandchild", grandchild)
++	if strings.Contains(stderr.String(), "restarting profile") {
++		t.Fatalf("a signalled stop was treated as a runtime failure and restarted; stderr=%q", stderr.String())
++	}
++	launched, err := os.ReadFile(launches)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if string(launched) != "x" {
++		t.Fatalf("runtime was launched %d times after one stop; want 1", len(launched))
++	}
++}
++
++// TestModelHarnessRunReleasesPortOnDirectedSIGTERM drives the shipped binary
++// with a real signal, because everything above feeds the channel by hand and so
++// cannot prove that `run` installs a handler at all. Deleting the
++// `signal.Notify` call leaves every seam test above passing and fails here.
++//
++// It also asserts the consequence the operator actually cares about: the port
++// the runtime's group held is bindable again once the harness has returned.
++func TestModelHarnessRunReleasesPortOnDirectedSIGTERM(t *testing.T) {
++	if testing.Short() {
++		t.Skip("builds the model-harness binary")
++	}
++	netcat, err := exec.LookPath("nc")
++	if err != nil {
++		t.Skip("requires nc to hold a port from a shell grandchild")
++	}
++
++	dir := t.TempDir()
++	binary := filepath.Join(dir, "model-harness")
++	build := exec.Command("go", "build", "-o", binary, "../../cmd/model-harness")
++	build.Stderr = os.Stderr
++	if err := build.Run(); err != nil {
++		t.Fatalf("build model-harness: %v", err)
++	}
++
++	port := reserveEphemeralPort(t)
++	childPID := filepath.Join(dir, "child.pid")
++	grandchildPID := filepath.Join(dir, "grandchild.pid")
++	script := fmt.Sprintf(
++		"%s -l %d >/dev/null 2>&1 &\nprintf '%%s' \"$!\" > %s\nprintf '%%s' \"$$\" > %s\nwhile true; do sleep 0.2; done\n",
++		shellQuote(netcat), port, shellQuote(grandchildPID), shellQuote(childPID))
++	// The launcher config is the production input: `model-harness run` reads a
++	// profile out of it rather than taking an executable on the command line.
++	config := filepath.Join(dir, "config.toml")
++	configBody := "[profiles.port-holder]\nmode = \"local\"\nexecutable = \"/bin/sh\"\nargv = [" +
++		strings.Join([]string{
++			tomlString("-c"),
++			tomlString(script),
++			tomlString("model-harness-test"),
++			tomlString("{host}"),
++			tomlString("{port}"),
++		}, ", ") + "]\n"
++	if err := os.WriteFile(config, []byte(configBody), 0o600); err != nil {
++		t.Fatal(err)
++	}
++
++	harness := exec.Command(binary, "run", "port-holder", "--config", config, "--host", "127.0.0.1", "--port", strconv.Itoa(port))
++	var harnessErr lockedBuffer
++	harness.Stderr = &harnessErr
++	harness.Stdout = &harnessErr
++	if err := harness.Start(); err != nil {
++		t.Fatalf("start harness: %v", err)
++	}
++	exited := make(chan error, 1)
++	go func() { exited <- harness.Wait() }()
++	t.Cleanup(func() {
++		if harness.Process != nil {
++			_ = harness.Process.Kill()
++		}
++		// The runtime child is the group leader here, so this is the pid whose
++		// group is safe to aim at. The harness itself is not a group leader and
++		// a negative signal at its pid could reach an unrelated group.
++		for _, path := range []string{childPID, grandchildPID} {
++			raw, err := os.ReadFile(path)
++			if err != nil {
++				continue
++			}
++			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(raw))); convErr == nil && pid > 0 {
++				_ = syscall.Kill(-pid, syscall.SIGKILL)
++				_ = syscall.Kill(pid, syscall.SIGKILL)
++			}
++		}
++	})
++
++	child := waitForPIDFile(t, childPID)
++	grandchild := waitForPIDFile(t, grandchildPID)
++	waitForListener(t, port)
++
++	if err := syscall.Kill(harness.Process.Pid, syscall.SIGTERM); err != nil {
++		t.Fatalf("signal harness: %v", err)
++	}
++	select {
++	case err := <-exited:
++		if err != nil {
++			t.Fatalf("harness exited %v after SIGTERM; want a clean stop. output=%q", err, harnessErr.String())
++		}
++	case <-time.After(60 * time.Second):
++		t.Fatalf("harness did not exit after SIGTERM; output=%q", harnessErr.String())
++	}
++
++	assertProcessGone(t, "runtime child", child)
++	assertProcessGone(t, "port-holding grandchild", grandchild)
++	if strings.Contains(harnessErr.String(), "did not exit within") {
++		t.Fatalf("the shipped binary had to SIGKILL a group that should have stopped on SIGTERM; output=%q", harnessErr.String())
++	}
++	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
++	if err != nil {
++		t.Fatalf("port %d is still held after the harness stopped: %v; output=%q", port, err, harnessErr.String())
++	}
++	_ = listener.Close()
++	if !strings.Contains(harnessErr.String(), "stopping profile \"port-holder\"") {
++		t.Fatalf("the shipped binary wrote no lifecycle record for the stop; output=%q", harnessErr.String())
++	}
++}
++
++// lockedBuffer exists because `exec.Cmd` copies child output into a non-*os.File
++// writer from its own goroutine, while `shutdownRuntime` writes lifecycle
++// records into the same writer from the caller's. In production both are fd 2
++// and the kernel serialises them; in a test they are one bytes.Buffer and must
++// be locked. Without this the harness's own records are silently lost and every
++// assertion about them becomes a coin flip.
++type lockedBuffer struct {
++	mu     sync.Mutex
++	buffer bytes.Buffer
++}
++
++func (b *lockedBuffer) Write(p []byte) (int, error) {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return b.buffer.Write(p)
++}
++
++func (b *lockedBuffer) String() string {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return b.buffer.String()
++}
++
++// reapFixture guarantees the fixture group is gone when the test ends, however
++// the test ended. Without it a mutation run that breaks shutdown leaves the
++// fixture shells running after `go test` reports, which is how leaked runtime
++// fixtures got into this repository's history before.
++func reapFixture(t *testing.T, pids ...*int) {
++	t.Cleanup(func() {
++		for _, pid := range pids {
++			if pid == nil || *pid <= 0 {
++				continue
++			}
++			_ = syscall.Kill(-*pid, syscall.SIGKILL)
++			_ = syscall.Kill(*pid, syscall.SIGKILL)
++		}
++	})
++}
++
++// groupScript keeps a runtime child alive with a grandchild beside it, both
++// recording their pids so the test can assert on the group rather than on the
++// one process the harness holds.
++func groupScript(childPID, grandchildPID string) string {
++	return fmt.Sprintf(
++		"( while true; do sleep 0.2; done ) &\nprintf '%%s' \"$!\" > %s\nprintf '%%s' \"$$\" > %s\nwhile true; do sleep 0.2; done\n",
++		shellQuote(grandchildPID), shellQuote(childPID))
++}
++
++func shellPlan(profile, script string) Plan {
++	return Plan{
++		Profile:    profile,
++		Mode:       "local",
++		Executable: "/bin/sh",
++		Argv:       []string{"-c", script, "model-harness-test"},
++	}
++}
++
++func tomlString(value string) string {
++	replaced := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\t", `\t`).Replace(value)
++	return `"` + replaced + `"`
++}
++
++func waitForPIDFile(t *testing.T, path string) int {
++	t.Helper()
++	deadline := time.Now().Add(20 * time.Second)
++	for time.Now().Before(deadline) {
++		raw, err := os.ReadFile(path)
++		if err == nil {
++			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(raw))); convErr == nil && pid > 0 {
++				return pid
++			}
++		}
++		time.Sleep(20 * time.Millisecond)
++	}
++	t.Fatalf("no pid was written to %s", path)
++	return 0
++}
++
++func waitForListener(t *testing.T, port int) {
++	t.Helper()
++	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
++	deadline := time.Now().Add(20 * time.Second)
++	for time.Now().Before(deadline) {
++		connection, err := net.DialTimeout("tcp", address, 500*time.Millisecond)
++		if err == nil {
++			_ = connection.Close()
++			return
++		}
++		time.Sleep(50 * time.Millisecond)
++	}
++	t.Fatalf("nothing ever listened on %s; the fixture never held the port", address)
++}
++
++// assertProcessGone distinguishes a dead process from an unreadable answer.
++// syscall.Kill with signal 0 reports ESRCH for "no such process" and EPERM for
++// "alive but not yours"; only the first is death, and an EPERM would be a
++// failed read rather than an absence.
++func assertProcessGone(t *testing.T, label string, pid int) {
++	t.Helper()
++	deadline := time.Now().Add(20 * time.Second)
++	var last error
++	for time.Now().Before(deadline) {
++		last = syscall.Kill(pid, 0)
++		if errors.Is(last, syscall.ESRCH) {
++			return
++		}
++		time.Sleep(20 * time.Millisecond)
++	}
++	t.Fatalf("%s (pid %d) is still alive after the harness stopped: kill(pid, 0) = %v", label, pid, last)
++}
++
++func reserveEphemeralPort(t *testing.T) int {
++	t.Helper()
++	listener, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	port := listener.Addr().(*net.TCPAddr).Port
++	if err := listener.Close(); err != nil {
++		t.Fatal(err)
++	}
++	return port
++}
++
++// The rest of this file is the regression for the second half of blocker B7:
++// the harness attesting a finished stop it could not see.
++//
++// `shutdownRuntime` used to report "process group N stopped" the instant
++// `exec.Cmd.Wait` returned. Wait answers for the direct child alone, so a
++// runtime helper spawned into the same group that redirected its inherited
++// stdout/stderr away is invisible to it. The harness printed a stopped group,
++// returned exit 0, and left that member alive holding the runtime's port —
++// which is precisely the state an operator reads the exit code to rule out.
++
++const (
++	portHolderPortEnv    = "MODEL_HARNESS_TEST_PORT_HOLDER_PORT"
++	portHolderPIDFileEnv = "MODEL_HARNESS_TEST_PORT_HOLDER_PID_FILE"
++)
++
++// TestPortHolderHelperProcess is not a test. It is the fixture the two tests
++// below need, and it has to be a compiled program rather than a shell line
++// because all three of its properties matter at once: it ignores SIGTERM, it
++// holds a real loopback listener, and it is started with its stdio redirected
++// away from the pipes exec.Cmd.Wait watches. A shell subshell cannot do the
++// first while a separate binary holds the socket — the signal would reach the
++// binary and free the port.
++func TestPortHolderHelperProcess(t *testing.T) {
++	port := os.Getenv(portHolderPortEnv)
++	if port == "" {
++		t.Skip("helper-process entry point; only runs when the fixture env is set")
++	}
++	// Notify without ever draining is how a process ignores a signal in Go: the
++	// runtime installs a handler, so the default terminate action never fires.
++	signal.Notify(make(chan os.Signal, 8), syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
++	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "port holder could not listen on %s: %v\n", port, err)
++		os.Exit(1)
++	}
++	if path := os.Getenv(portHolderPIDFileEnv); path != "" {
++		if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
++			fmt.Fprintf(os.Stderr, "port holder could not record its pid: %v\n", err)
++			os.Exit(1)
++		}
++	}
++	for {
++		connection, err := listener.Accept()
++		if err != nil {
++			time.Sleep(50 * time.Millisecond)
++			continue
++		}
++		_ = connection.Close()
++	}
++}
++
++// portHolderScript is the runtime fixture: a child that exits promptly and
++// politely on SIGTERM, and one group member beside it that does not.
++func portHolderScript(t *testing.T, childPID, holderPID string, port int) string {
++	t.Helper()
++	helper, err := os.Executable()
++	if err != nil {
++		t.Fatal(err)
++	}
++	return fmt.Sprintf(
++		"%s=%d %s=%s %s -test.run=TestPortHolderHelperProcess >/dev/null 2>&1 </dev/null &\n"+
++			"printf '%%s' \"$$\" > %s\n"+
++			"trap 'exit 143' TERM\n"+
++			"while true; do sleep 0.2; done\n",
++		portHolderPortEnv, port,
++		portHolderPIDFileEnv, shellQuote(holderPID),
++		shellQuote(helper),
++		shellQuote(childPID))
++}
++
++// TestRunSignalledShutdownWaitsForADetachedGroupMember drives the seam.
++//
++// Two mutants were run against it and both fail here. Returning on Wait alone —
++// the revision this fixes — reports a stopped group while the holder is still
++// bound to the port. Keeping the group check but reporting stopped once the
++// grace expires, instead of escalating to the group, ends the same way: the
++// holder ignores SIGTERM, so only the SIGKILL escalation ever clears it.
++func TestRunSignalledShutdownWaitsForADetachedGroupMember(t *testing.T) {
++	restoreGrace := runShutdownGrace
++	restoreKill := runShutdownKillGrace
++	runShutdownGrace = 400 * time.Millisecond
++	runShutdownKillGrace = 10 * time.Second
++	t.Cleanup(func() {
++		runShutdownGrace = restoreGrace
++		runShutdownKillGrace = restoreKill
++	})
++
++	dir := t.TempDir()
++	childPID := filepath.Join(dir, "child.pid")
++	holderPID := filepath.Join(dir, "holder.pid")
++	port := reserveEphemeralPort(t)
++	plan := shellPlan("detached-member", portHolderScript(t, childPID, holderPID, port))
++	var child, holder int
++	reapFixture(t, &child, &holder)
++
++	signals := make(chan os.Signal, 1)
++	var stdout, stderr lockedBuffer
++	done := make(chan error, 1)
++	go func() { done <- runWithSignals(plan, &stdout, &stderr, func(time.Duration) {}, signals) }()
++
++	child = waitForPIDFile(t, childPID)
++	holder = waitForPIDFile(t, holderPID)
++	waitForListener(t, port)
++
++	signals <- syscall.SIGTERM
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatalf("signalled shutdown returned %v; stderr=%q", err, stderr.String())
++		}
++	case <-time.After(60 * time.Second):
++		t.Fatalf("harness did not return after SIGTERM; stderr=%q", stderr.String())
++	}
++
++	// No polling window here on purpose. The harness has already claimed the
++	// stop finished; anything still alive at this instant makes that claim
++	// false, and a retry loop would launder it into a pass.
++	assertProcessGoneNow(t, "runtime child", child, stderr.String())
++	assertProcessGoneNow(t, "detached port holder", holder, stderr.String())
++	assertPortFree(t, port, stderr.String())
++
++	if !strings.Contains(stderr.String(), "is not empty") {
++		t.Fatalf("the harness never recorded that the group outlived its child; stderr=%q", stderr.String())
++	}
++	if !strings.Contains(stderr.String(), "did not exit within") {
++		t.Fatalf("a member that ignores SIGTERM must be escalated to, and the escalation recorded; stderr=%q", stderr.String())
++	}
++	if !strings.Contains(stderr.String(), "stopped after terminated") {
++		t.Fatalf("no stopped record was written once the group was actually empty; stderr=%q", stderr.String())
++	}
++}
++
++// TestModelHarnessRunDoesNotReportStoppedWhileAGroupMemberHoldsThePort is the
++// same property at the production entry point: the shipped `model-harness run`
++// binary, a profile read out of a launcher config, and a real directed SIGTERM.
++// Everything the seam test proves is proved here about the exit code an
++// operator's supervisor actually reads.
++func TestModelHarnessRunDoesNotReportStoppedWhileAGroupMemberHoldsThePort(t *testing.T) {
++	if testing.Short() {
++		t.Skip("builds the model-harness binary and waits out the shipped shutdown grace")
++	}
++	dir := t.TempDir()
++	binary := filepath.Join(dir, "model-harness")
++	build := exec.Command("go", "build", "-o", binary, "../../cmd/model-harness")
++	build.Stderr = os.Stderr
++	if err := build.Run(); err != nil {
++		t.Fatalf("build model-harness: %v", err)
++	}
++
++	port := reserveEphemeralPort(t)
++	childPID := filepath.Join(dir, "child.pid")
++	holderPID := filepath.Join(dir, "holder.pid")
++	script := portHolderScript(t, childPID, holderPID, port)
++	config := filepath.Join(dir, "config.toml")
++	configBody := "[profiles.detached-member]\nmode = \"local\"\nexecutable = \"/bin/sh\"\nargv = [" +
++		strings.Join([]string{
++			tomlString("-c"),
++			tomlString(script),
++			tomlString("model-harness-test"),
++			tomlString("{host}"),
++			tomlString("{port}"),
++		}, ", ") + "]\n"
++	if err := os.WriteFile(config, []byte(configBody), 0o600); err != nil {
++		t.Fatal(err)
++	}
++
++	harness := exec.Command(binary, "run", "detached-member", "--config", config, "--host", "127.0.0.1", "--port", strconv.Itoa(port))
++	var harnessErr lockedBuffer
++	harness.Stderr = &harnessErr
++	harness.Stdout = &harnessErr
++	if err := harness.Start(); err != nil {
++		t.Fatalf("start harness: %v", err)
++	}
++	exited := make(chan error, 1)
++	go func() { exited <- harness.Wait() }()
++	t.Cleanup(func() {
++		if harness.Process != nil {
++			_ = harness.Process.Kill()
++		}
++		for _, path := range []string{childPID, holderPID} {
++			raw, err := os.ReadFile(path)
++			if err != nil {
++				continue
++			}
++			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(raw))); convErr == nil && pid > 0 {
++				_ = syscall.Kill(-pid, syscall.SIGKILL)
++				_ = syscall.Kill(pid, syscall.SIGKILL)
++			}
++		}
++	})
++
++	child := waitForPIDFile(t, childPID)
++	holder := waitForPIDFile(t, holderPID)
++	waitForListener(t, port)
++
++	if err := syscall.Kill(harness.Process.Pid, syscall.SIGTERM); err != nil {
++		t.Fatalf("signal harness: %v", err)
++	}
++	select {
++	case err := <-exited:
++		if err != nil {
++			t.Fatalf("harness exited %v after SIGTERM; want a clean stop. output=%q", err, harnessErr.String())
++		}
++	case <-time.After(90 * time.Second):
++		t.Fatalf("harness did not exit after SIGTERM; output=%q", harnessErr.String())
++	}
++
++	assertProcessGoneNow(t, "runtime child", child, harnessErr.String())
++	assertProcessGoneNow(t, "detached port holder", holder, harnessErr.String())
++	assertPortFree(t, port, harnessErr.String())
++	if !strings.Contains(harnessErr.String(), "stopped after terminated") {
++		t.Fatalf("the shipped binary reported exit 0 without a stopped record; output=%q", harnessErr.String())
++	}
++}
++
++// assertProcessGoneNow is assertProcessGone without the grace. It is used after
++// the harness has already reported the stop finished, where a wait-and-retry
++// would be evidence about the operating system rather than about the harness.
++func assertProcessGoneNow(t *testing.T, label string, pid int, record string) {
++	t.Helper()
++	err := syscall.Kill(pid, 0)
++	if errors.Is(err, syscall.ESRCH) {
++		return
++	}
++	t.Fatalf("%s (pid %d) was alive at the instant the harness reported the group stopped: kill(pid, 0) = %v; record=%q", label, pid, err, record)
++}
++
++// assertPortFree is the consequence an operator cares about: the next start of
++// the same profile must be able to bind. A stop that returns 0 while the port
++// is still held is the failure this whole file exists for.
++func assertPortFree(t *testing.T, port int, record string) {
++	t.Helper()
++	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
++	if err != nil {
++		t.Fatalf("port %d is still held after the harness reported the group stopped: %v; record=%q", port, err, record)
++	}
++	_ = listener.Close()
++}
+diff --git a/tools/agents-infra/internal/modelharness/run_shutdown_test.go b/tools/agents-infra/internal/modelharness/run_shutdown_test.go
+new file mode 100644
+index 0000000..9474e32
+--- /dev/null
++++ b/tools/agents-infra/internal/modelharness/run_shutdown_test.go
+@@ -0,0 +1,47 @@
++// This file carries the part of the shutdown surface that has to hold on every
++// platform, and it carries no build constraint on purpose: the process-group
++// tests in run_shutdown_posix_test.go call syscall.Kill, which does not exist
++// on Windows, so `GOOS=windows go test -c ./internal/modelharness` fails to
++// build the package's tests at all unless the POSIX-only body is constrained
++// and something compilable is left behind.
++
++package modelharness
++
++import (
++	"os"
++	"os/exec"
++	"testing"
++)
++
++// TestShutdownSignalsHandleTheConsoleStop pins the one signal every platform
++// has to answer. Windows has no SIGTERM or SIGHUP, but a console stop and Ctrl-C
++// both arrive as os.Interrupt, and on POSIX syscall.SIGINT is that same value.
++// A shutdownSignals that does not list it means `signal.Notify` never installs a
++// handler, the process dies on the default action with nothing written, and the
++// runtime it started is orphaned — blocker B7 from TASK-260828-28gdmq exactly.
++func TestShutdownSignalsHandleTheConsoleStop(t *testing.T) {
++	signals := shutdownSignals()
++	if len(signals) == 0 {
++		t.Fatal("shutdownSignals is empty; run would install no handler and die on the default action")
++	}
++	for _, signal := range signals {
++		if signal == os.Interrupt {
++			return
++		}
++	}
++	t.Fatalf("shutdownSignals %v does not include os.Interrupt; a console stop would kill the harness and orphan the runtime", signals)
++}
++
++// TestRunProcessGroupStoppedOnAnUnstartedCommand fixes the boundary the
++// shutdown loop leans on. There is no process, so there is nothing left to wait
++// for, and that has to be reported as stopped rather than as an error — on
++// Windows too, where the answer covers the direct child alone.
++func TestRunProcessGroupStoppedOnAnUnstartedCommand(t *testing.T) {
++	stopped, err := runProcessGroupStopped(&exec.Cmd{})
++	if err != nil {
++		t.Fatalf("inspecting an unstarted command returned %v", err)
++	}
++	if !stopped {
++		t.Fatal("an unstarted command has no group left to wait for; want stopped")
++	}
++}
+diff --git a/tools/agents-infra/llamacpp_profile_docs_test.go b/tools/agents-infra/llamacpp_profile_docs_test.go
+new file mode 100644
+index 0000000..2ef557a
+--- /dev/null
++++ b/tools/agents-infra/llamacpp_profile_docs_test.go
+@@ -0,0 +1,117 @@
++package main
++
++import (
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++
++	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/modelharness"
++)
++
++// TestREADMELlamaCppProfileResolvesAsDocumented takes the llama.cpp profile out
++// of README.md and hands those exact bytes to the production resolver, so the
++// documented profile is an artifact the build checks rather than prose next to
++// the code. A README profile that no longer resolves — a renamed field, a
++// dropped placeholder, a flag moved out of the pinned set — fails here.
++func TestREADMELlamaCppProfileResolvesAsDocumented(t *testing.T) {
++	readme, err := os.ReadFile(filepath.Join(sourceRepoRoot(t), "README.md"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	profile := documentedTOMLBlock(t, string(readme), "[profiles.llamacpp-local]")
++
++	// The resolver refuses a non-absolute or non-regular config path, so the
++	// documented bytes are written out and resolved exactly as an operator's
++	// own config would be.
++	path := filepath.Join(t.TempDir(), "config.toml")
++	if err := os.WriteFile(path, []byte(profile), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	plan, err := modelharness.Resolve(path, "llamacpp-local", "127.0.0.1", 18011)
++	if err != nil {
++		t.Fatalf("the documented llama.cpp profile does not resolve: %v", err)
++	}
++	if plan.Endpoint != "http://127.0.0.1:18011/v1" {
++		t.Fatalf("endpoint = %q", plan.Endpoint)
++	}
++	want := []string{
++		"--model", "/absolute/path/to/model.gguf",
++		"--host", "127.0.0.1",
++		"--port", "18011",
++		"--ctx-size", "8192",
++		"--batch-size", "2048",
++		"--ubatch-size", "2048",
++		"--reasoning-effort", "medium",
++		"--no-webui",
++	}
++	if !reflect.DeepEqual(plan.Argv, want) {
++		t.Fatalf("rendered argv = %#v, want %#v", plan.Argv, want)
++	}
++
++	// The pinned launch conditions. Each is a condition the runtimes under
++	// comparison do not default to the same way, so dropping one from the
++	// documented profile silently changes what a llama.cpp run measures.
++	for _, pinned := range []string{"--ctx-size", "--batch-size", "--ubatch-size", "--reasoning-effort"} {
++		if !containsToken(plan.Argv, pinned) {
++			t.Fatalf("documented profile no longer pins %s; argv=%#v", pinned, plan.Argv)
++		}
++	}
++}
++
++// TestREADMEDocumentsTheHarnessStopContract pins the lifecycle promises the
++// implementation now makes. `model-harness run` is invoked by supervisors and
++// scripts that only know what this document says.
++func TestREADMEDocumentsTheHarnessStopContract(t *testing.T) {
++	readme := normalizedOperatorDoc(t, filepath.Join(sourceRepoRoot(t), "README.md"))
++	for _, want := range []string{
++		"It places the runtime in its own process group",
++		"forwards `SIGINT`, `SIGTERM` and `SIGHUP` to that whole group",
++		"escalates to `SIGKILL` if the group has not exited within ten seconds",
++		"exits `0` when a signalled stop completes",
++		"A signalled stop is never treated as a restartable failure",
++		"On Windows there is no process group here and only the direct child is stopped.",
++		"`GET /v1/models` answers `503` until the weights are resident",
++		"| stdout | empty; every line is on stderr |",
++		"| HTTP access line (method, path, status) | **none at any verbosity** |",
++		"that is an unknown outcome rather than a false success",
++	} {
++		if !strings.Contains(readme, want) {
++			t.Fatalf("README.md no longer documents %q", want)
++		}
++	}
++}
++
++// documentedTOMLBlock returns the fenced toml block that contains marker.
++func documentedTOMLBlock(t *testing.T, document, marker string) string {
++	t.Helper()
++	rest := document
++	for {
++		start := strings.Index(rest, "```toml\n")
++		if start < 0 {
++			break
++		}
++		rest = rest[start+len("```toml\n"):]
++		end := strings.Index(rest, "```")
++		if end < 0 {
++			break
++		}
++		block := rest[:end]
++		if strings.Contains(block, marker) {
++			return block
++		}
++		rest = rest[end:]
++	}
++	t.Fatalf("README.md has no toml block containing %q", marker)
++	return ""
++}
++
++func containsToken(argv []string, token string) bool {
++	for _, candidate := range argv {
++		if candidate == token {
++			return true
++		}
++	}
++	return false
++}

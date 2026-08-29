@@ -1,0 +1,120 @@
+TASK-260826-fcu5pe — reviewer mutation log
+Reviewer run: RUN-260826-ae2fa5 (claude-opus-5), CR rev5
+Candidate tree: 40a83fe6f3b1544494969edc861f3fe23ffc4757 (commit 91adc73)
+Mutation tree: /tmp/rev5-full (git archive of the candidate; verified byte-identical to the
+  candidate worktree for every tracked file, and reverted byte-identical after every mutant)
+Baseline (pristine /tmp/rev5-full): go test ./... -count=1 -> ok / ok / ok, 3m25s wall
+
+Scoring rule: a mutant is KILLED only when the run exits non-zero AND the expected NAMED
+subtest is among the reported failures. A failure of a `valid`/positive-control subtest is
+scored RED_WRONG_TEST, never a kill.
+
+================================================================================
+PART A — the ten survivors reported by CR rev4 review (RUN-260826-6697f3 sections 4-6)
+Every one is now killed by a named witness.
+================================================================================
+
+id                       production site                              mutation                                                        result   named witness that failed                                                                                        s
+------------------------ ------------------------------------------- --------------------------------------------------------------- -------- ---------------------------------------------------------------------------------------------------------------- ----
+O-argv                   pi_shared_operator_darwin.go:459            drop !equalStrings(brokerObservation.Argv, record.Broker.Argv)   KILLED   ...NarrowingBeforeSignal/recorded_argv                                                                            3.7
+O-starttime              pi_shared_operator_darwin.go:459            drop brokerObservation.StartTime != record.Broker.StartTime      KILLED   ...NarrowingBeforeSignal/pid_reuse_start_time                                                                     2.8
+O-uid                    pi_shared_operator_darwin.go:459            drop brokerObservation.UID != uint32(os.Geteuid())               KILLED   ...NarrowingBeforeSignal/recorded_uid_root                                                                        3.9
+O-execdev                pi_shared_operator_darwin.go:470            narrow executable identity to Ino only, drop Dev                 KILLED   ...NarrowingBeforeSignal/broker_executable_same_inode_wrong_device                                                3.6
+O-livestart              pi_shared_operator_darwin.go:410            drop observation.StartTime == record.StartTime                   KILLED   TestSharedRuntimeStatusMarksReusedRecordedBrokerPIDUnverifiedStale                                                3.2
+C-profiledigest-empty    pi_shared_client_darwin.go:387              exempt the empty value from the profile_digest comparison        KILLED   ...RejectsEveryGateDeleteAndNarrowWitness/empty_profile_digest                                                   24.4
+C-hello-effectivesharing pi_shared_client_darwin.go:368              drop || response.EffectiveSharing == nil from hello_ok           KILLED   ...RejectsEveryGateDeleteAndNarrowWitness/hello_effective_sharing_absent                                         20.0
+L-schema-empty           pi_shared_launcher_darwin.go:71             exempt the empty value from the schema comparison                KILLED   ...ComparesEveryAuthorizationValueAtProductionEntry/schema_empty                                                  6.1
+L-runtimekey-empty       pi_shared_launcher_darwin.go:74             exempt the empty value from the runtime_key comparison           KILLED   ...ComparesEveryAuthorizationValueAtProductionEntry/runtime_key_empty                                             6.1
+L-recomputed-prefix8     pi_shared_launcher_darwin.go:45             compare only the first 8 characters of the recomputed key        KILLED   ...RejectsAuthorizationChannelGuardBypassesAtProductionEntry/runtime_key_argument_differs_only_after_shared_prefix 6.6
+
+Full test-name expansions:
+  ...NarrowingBeforeSignal                     = TestSharedRuntimeForceStopRejectsRecordedBrokerIdentityNarrowingBeforeSignal
+  ...RejectsEveryGateDeleteAndNarrowWitness    = TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness
+  ...ComparesEveryAuthorizationValue...        = TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry
+  ...RejectsAuthorizationChannelGuardBypasses… = TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry
+
+================================================================================
+PART B — composite: all ten applied in ONE build, configured landing gate
+(this is CR rev4 review section 9 item 6, re-derived by this reviewer)
+================================================================================
+
+  cd tools/agents-infra && go build ./...          -> BUILD_OK
+  cd tools/agents-infra && go vet ./internal/infra -> VET_OK
+  cd tools/agents-infra && go test ./... -count=1  -> COMPOSITE_EXIT=1   (4m44s wall)
+
+Named failures observed, and NOTHING else:
+  TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/empty_profile_digest
+  TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness/hello_effective_sharing_absent
+  TestSharedRuntimeForceStopRejectsRecordedBrokerIdentityNarrowingBeforeSignal/broker_executable_same_inode_wrong_device
+  TestSharedRuntimeForceStopRejectsRecordedBrokerIdentityNarrowingBeforeSignal/pid_reuse_start_time
+  TestSharedRuntimeForceStopRejectsRecordedBrokerIdentityNarrowingBeforeSignal/recorded_argv
+  TestSharedRuntimeForceStopRejectsRecordedBrokerIdentityNarrowingBeforeSignal/recorded_uid_root
+  TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/runtime_key_empty
+  TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry/schema_empty
+  TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry/runtime_key_argument_differs_only_after_shared_prefix
+  TestSharedRuntimeStatusMarksReusedRecordedBrokerPIDUnverifiedStale
+Zero positive-control (`valid`) failures. Zero collateral failures.
+Raw go test -json: /tmp/rev5-mut/composite.json
+
+================================================================================
+PART C — new attacks by this reviewer on the seam introduced in revision 5
+pi_shared_operator_darwin.go now injects sharedRuntimeOperatorDependencies. The seam
+itself is a narrowable surface, so it was attacked directly.
+================================================================================
+
+id                        mutation of the production wiring in stopRecordedSharedRuntime:449  result     detail
+------------------------- ------------------------------------------------------------------ ---------- --------------------------------------------------------------
+W-execidentity-own        processExecIdentity -> always return the caller's own identity      KILLED     TestSharedRuntimeForceStopRefusesForgedBrokerIdentityWithoutSignal
+W-kill-noop               kill -> func(int, syscall.Signal) error { return nil }              SURVIVED   whole package go test ./internal/infra -count=1 -> ok, 171.3s
+W-inspect-uid-forced      inspectProcess -> overwrite observation.UID with the caller euid    SURVIVED   targeted masks green; see finding R2/R3 in the verdict
+
+W-kill-noop is a POSITIVE-control gap, not a bypass: with the signal suppressed
+waitRecordedBrokerGone still refuses and StopSharedRuntime returns an error, so the operator
+sees a failed stop rather than a false success.
+
+================================================================================
+PART D — other gates attacked by this reviewer
+================================================================================
+
+id                        production site                        mutation                                                         result     detail
+------------------------- -------------------------------------- ---------------------------------------------------------------- ---------- ------------------------------------------------------------
+U1-unreachable-always     pi_shared_operator_darwin.go:316       isSharedBrokerUnreachable -> always true                          KILLED     TestSharedRuntimeForceStopCannotBypassReachableBrokerAttestation
+U2-live-uid               pi_shared_operator_darwin.go:410       drop observation.UID == uint32(os.Geteuid())                      SURVIVED   status classification only (single caller, :226)
+U3-readfail-as-absence    :522 waitRecordedBrokerGone            replace sharedProcessGone(err) with (err != nil)                  SURVIVED   see below
+                          :412 reclaimSharedRuntime              (same, applied together in one build)
+                          :457 waitRecordedRuntimeGone           (same)
+
+U3 clean measurement:
+  go test ./internal/infra -count=1 \
+    -skip '^TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry$'
+  -> ok, 202.752s   (SURVIVED)
+  The unskipped run of the same mutant went red ONLY on
+  .../authorization_frame_is_one_byte_over_the_bound at 15.02s — the positive control, which
+  this mutation cannot reach (the launcher never calls sharedProcessGone). Scored
+  RED_WRONG_TEST, not a kill. That is the flake quantified in PART E.
+
+  pi_shared_client_darwin.go:199 uses sharedProcessGone(processErr) and was NOT mutated by
+  this pass; the same shape applies there and is reported as unknown, not as bound.
+
+================================================================================
+PART E — the 15 s launcher positive control, quantified on a PRISTINE candidate tree
+CR rev4 review section 8 recorded this flake and estimated the rate as low.
+================================================================================
+
+Machine load average during this review: 228-261 (sysctl vm.loadavg), heavily contended box.
+
+  run                                                                        result
+  -------------------------------------------------------------------------- -----------------------------------------
+  pristine full package, start of review (go test ./... -count=1)             green
+  pristine targeted rep 1                                                     FAIL, 17.29s package elapsed
+  pristine targeted reps 2-5                                                  green (1.48s / 2.08s / 8.51s / 14.52s)
+  U3 mutant full package (mutation unreachable from launcher)                 FAIL at 15.02s on the positive control
+  pristine targeted reps 6-13 (later, quieter)                                green 8/8, subtest 1.67-2.37s
+
+Observed: 2 failures across ~14 executions, plus a 14.52s near-miss against a 15.00s bound
+(sharedLauncherPositiveControlTimeout, pi_shared_launcher_test.go:23). The wall-clock bound is
+load-sensitive; under contention the subtest runs 7x its quiet-machine time. Failure mode is a
+FALSE RED, so it cannot admit a bad change — but the configured landing gate
+`go test ./... -count=1` is not deterministically green on a loaded host, and a wall-clock
+positive control inside a mutation-calibration suite can mis-score mutants (CR rev4 review
+section 8 hit exactly that). Converting the wait to observation-driven remains the right fix.

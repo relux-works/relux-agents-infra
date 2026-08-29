@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 15,
+  "expected_previous_revision": 14,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 14
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Complete the existing agents-infra local setup, instruction materialization, provider rendering, canonical vendor targets, Qwen/Pi local-model profiles, bounded model-check tooling, shared local-Qwen runtime broker, and local/remote model-harness work; preserve precise fail-closed config semantics and no automatic migrations; keep canonical OpenAI Codex gpt-5.6-sol/high and Anthropic Claude Opus 5/high targets; keep Qwen native reasoning at medium with YOLO tool use and inherited skills; stabilize exact Pi session restore, 75000-token context with compaction beginning at 50000, bounded memory, request/compaction timeouts, and multi-week unattended operation; retain a synthetic capacity stress test and separately configurable local/remote runtime mode; track this infrastructure work in task-board but execute it inline without spawns or subagents; do not register local Qwen as a task-board execution backend yet; never grant Pi unrestricted sudo/root authority.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 15
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "The active local-Qwen session now exposes repeatable compaction-summary request timeouts and restore/longevity requirements, and the user explicitly requested board tracking with all implementation performed inline without spawned agents.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "alexis"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-27T06:27:00.929979Z",
+  "created_by": "alexis",
+  "reason": "The active local-Qwen session now exposes repeatable compaction-summary request timeouts and restore/longevity requirements, and the user explicitly requested board tracking with all implementation performed inline without spawned agents."
+}

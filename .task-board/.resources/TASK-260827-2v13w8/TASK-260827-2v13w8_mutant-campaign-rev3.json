@@ -1,0 +1,125 @@
+{
+  "allCaught": true,
+  "generatedAt": "2026-08-28T11:03:11Z",
+  "mutants": [
+    {
+      "caught": true,
+      "caughtBy": [
+        "contract suite",
+        "production-entry smoke"
+      ],
+      "compiles": true,
+      "file": "Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift",
+      "id": "N1",
+      "intent": "admitAttestation checks only the runtime name, not pid/executable/config/profile",
+      "kind": "narrowing"
+    },
+    {
+      "caught": true,
+      "caughtBy": [
+        "contract suite"
+      ],
+      "compiles": true,
+      "file": "Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift",
+      "id": "N2",
+      "intent": "the observation may end a day after the pass it certifies",
+      "kind": "narrowing"
+    },
+    {
+      "caught": true,
+      "caughtBy": [
+        "contract suite",
+        "production-entry smoke"
+      ],
+      "compiles": true,
+      "file": "Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift",
+      "id": "N3",
+      "intent": "scenario wall clock may exceed the watched window by 10000x",
+      "kind": "narrowing"
+    },
+    {
+      "caught": true,
+      "caughtBy": [
+        "contract suite",
+        "production-entry smoke"
+      ],
+      "compiles": true,
+      "file": "Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift",
+      "id": "N4",
+      "intent": "the judging binary need only have *some* digest, not the observing one",
+      "kind": "narrowing"
+    },
+    {
+      "caught": true,
+      "caughtBy": [
+        "contract suite"
+      ],
+      "compiles": true,
+      "file": "Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift",
+      "id": "N5",
+      "intent": "an unstated reasoning effort reads as the template default instead of unpinned",
+      "kind": "narrowing"
+    },
+    {
+      "caught": true,
+      "caughtBy": [
+        "contract suite"
+      ],
+      "compiles": true,
+      "file": "Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift",
+      "id": "N6",
+      "intent": "an attestation that was opened and never closed is read as closed at the record's end",
+      "kind": "narrowing"
+    },
+    {
+      "caught": true,
+      "caughtBy": [
+        "contract suite",
+        "production-entry smoke"
+      ],
+      "compiles": true,
+      "file": "Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift",
+      "id": "D1",
+      "intent": "the reasoning policy is no longer a condition that must be pinned",
+      "kind": "deleting"
+    },
+    {
+      "caught": true,
+      "caughtBy": [
+        "production-entry smoke"
+      ],
+      "compiles": true,
+      "file": "Sources/mlx-swift-runtime-prototype/BenchmarkCompareCommand.swift",
+      "id": "P1",
+      "intent": "an absent attestation is synthesized from the record instead of refused",
+      "kind": "production bypass"
+    },
+    {
+      "caught": true,
+      "caughtBy": [
+        "production-entry smoke"
+      ],
+      "compiles": true,
+      "file": "Sources/mlx-swift-runtime-prototype/BenchmarkCompareCommand.swift",
+      "id": "P2",
+      "intent": "the comparison is judged with the digest the attestation names instead of this binary's",
+      "kind": "production bypass"
+    },
+    {
+      "caught": true,
+      "caughtBy": [
+        "production-entry smoke"
+      ],
+      "compiles": true,
+      "file": "Sources/mlx-swift-runtime-prototype/BenchmarkCompareCommand.swift",
+      "id": "P3",
+      "intent": "--attestations silently defaults instead of being required",
+      "kind": "production bypass"
+    }
+  ],
+  "smokeOnly": [
+    "P1",
+    "P2",
+    "P3"
+  ]
+}

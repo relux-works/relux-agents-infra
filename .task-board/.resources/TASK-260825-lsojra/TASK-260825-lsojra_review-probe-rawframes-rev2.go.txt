@@ -1,0 +1,290 @@
+//go:build darwin
+
+package infra
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Reviewer probe RUN-260825-e2bfd4: drive the real runtime-launch entry point
+// with raw forged bytes a five-member struct cannot express.
+func TestReviewProbeRawFramesAtProductionEntry(t *testing.T) {
+	fixture := newSharedLauncherFixture(t)
+	type want struct {
+		admit  bool
+		code   string
+		reason string
+		field  string
+	}
+	cases := []struct {
+		name  string
+		build func(frame sharedRuntimeAuthorizationFrame) []byte
+		want  want
+	}{
+		{
+			name: "R1 all five members written with unicode escapes must be ADMITTED",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				return authBuildObject([]authGeneratedMember{
+					authEscapedMember("schema", authQuoted(f.Schema)),
+					authEscapedMember("protocol_version", fmt.Sprintf("%d", f.ProtocolVersion)),
+					authEscapedMember("runtime_key", authQuoted(f.RuntimeKey)),
+					authEscapedMember("launcher_pid", fmt.Sprintf("%d", f.LauncherPID)),
+					authEscapedMember("exec_plan_digest", authQuoted(f.ExecPlanDigest)),
+				})
+			},
+			want: want{admit: true},
+		},
+		{
+			name: "R2 schema plus its escaped form is the same member twice",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				return authBuildObject([]authGeneratedMember{
+					authMember("schema", authQuoted(f.Schema)),
+					authEscapedMember("schema", authQuoted(f.Schema)),
+					authMember("protocol_version", fmt.Sprintf("%d", f.ProtocolVersion)),
+					authMember("runtime_key", authQuoted(f.RuntimeKey)),
+					authMember("launcher_pid", fmt.Sprintf("%d", f.LauncherPID)),
+					authMember("exec_plan_digest", authQuoted(f.ExecPlanDigest)),
+				})
+			},
+			want: want{reason: "frame_duplicate_field", field: "schema"},
+		},
+		{
+			name: "R3 case variant carrying the allowed member own valid value",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				return authBuildObject(append(authValidMembers(f), authMember("Schema", authQuoted(f.Schema))))
+			},
+			want: want{reason: "frame_unknown_field", field: "Schema"},
+		},
+		{
+			name: "R4 empty member name",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				return authBuildObject(append(authValidMembers(f), authMember("", authQuoted(f.Schema))))
+			},
+			want: want{reason: "frame_unknown_field", field: ""},
+		},
+		{
+			name: "R5 allowed name used as a prefix",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				return authBuildObject(append(authValidMembers(f), authMember("exec_plan_digest_v2", authQuoted(f.ExecPlanDigest))))
+			},
+			want: want{reason: "frame_unknown_field", field: "exec_plan_digest_v2"},
+		},
+		{
+			name: "R6 trailing second object after a fully valid frame",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				valid := authBuildObject(authValidMembers(f))
+				return append(append([]byte{}, valid...), valid...)
+			},
+			want: want{reason: "frame_not_single_object"},
+		},
+		{
+			name: "R7 valid five plus trailing garbage token",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				return append(authBuildObject(authValidMembers(f)), []byte(" 7")...)
+			},
+			want: want{reason: "frame_not_single_object"},
+		},
+		{
+			name: "R8 array instead of object",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				return []byte(`[{"schema":"x"}]`)
+			},
+			want: want{reason: "frame_not_single_object"},
+		},
+		{
+			name: "R9 missing member only",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				members := authValidMembers(f)
+				return authBuildObject(append(members[:2:2], members[3:]...))
+			},
+			want: want{reason: "frame_missing_field", field: "runtime_key"},
+		},
+		{
+			name: "R10 whole valid frame repeated inline (each member twice)",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				members := authValidMembers(f)
+				return authBuildObject(append(append([]authGeneratedMember{}, members...), members...))
+			},
+			want: want{reason: "frame_duplicate_field", field: "schema"},
+		},
+		{
+			name: "R11 duplicate exec_plan_digest with its own valid value (last member)",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				return authBuildObject(append(authValidMembers(f), authMember("exec_plan_digest", authQuoted(f.ExecPlanDigest))))
+			},
+			want: want{reason: "frame_duplicate_field", field: "exec_plan_digest"},
+		},
+		{
+			name: "R12 unknown member with a huge nested value under the size bound",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				value := "[" + strings.Repeat("[", 200) + strings.Repeat("]", 200) + "]"
+				return authBuildObject(append(authValidMembers(f), authGeneratedMember{wire: authQuoted("blob"), decoded: "blob", value: value}))
+			},
+			want: want{reason: "frame_unknown_field", field: "blob"},
+		},
+		{
+			name: "R13 spaces and tabs between every token of an otherwise valid frame",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				var b strings.Builder
+				b.WriteString("{\t ")
+				for i, m := range authValidMembers(f) {
+					if i > 0 {
+						b.WriteString(" \t,  ")
+					}
+					b.WriteString(m.wire)
+					b.WriteString("  :\t")
+					b.WriteString(m.value)
+				}
+				b.WriteString("\t}")
+				return []byte(b.String())
+			},
+			want: want{admit: true},
+		},
+		{
+			name: "R14 every member name fully escaped rune by rune must be ADMITTED",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				esc := func(name, value string) authGeneratedMember {
+					var b strings.Builder
+					b.WriteByte('"')
+					for _, r := range name {
+						fmt.Fprintf(&b, "\\u%04x", r)
+					}
+					b.WriteByte('"')
+					return authGeneratedMember{wire: b.String(), decoded: name, value: value}
+				}
+				return authBuildObject([]authGeneratedMember{
+					esc("schema", authQuoted(f.Schema)),
+					esc("protocol_version", fmt.Sprintf("%d", f.ProtocolVersion)),
+					esc("runtime_key", authQuoted(f.RuntimeKey)),
+					esc("launcher_pid", fmt.Sprintf("%d", f.LauncherPID)),
+					esc("exec_plan_digest", authQuoted(f.ExecPlanDigest)),
+				})
+			},
+			want: want{admit: true},
+		},
+		{
+			name: "R15 unknown member placed FIRST",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				return authBuildObject(append([]authGeneratedMember{authMember("future_extension", "true")}, authValidMembers(f)...))
+			},
+			want: want{reason: "frame_unknown_field", field: "future_extension"},
+		},
+		{
+			name: "R16 duplicate protocol_version whose second value is WRONG must be a shape refusal, not a value mismatch",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				return authBuildObject(append(authValidMembers(f), authMember("protocol_version", "999")))
+			},
+			want: want{reason: "frame_duplicate_field", field: "protocol_version"},
+		},
+		{
+			name: "R17 unknown member AND a wrong value: shape must win",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				members := authValidMembers(f)
+				members[1] = authMember("protocol_version", "5")
+				return authBuildObject(append(members, authMember("caller_chosen_field", "1")))
+			},
+			want: want{reason: "frame_unknown_field", field: "caller_chosen_field"},
+		},
+		{
+			name: "R18 protocol_version 5 must be refused by equality, never by a range test",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				members := authValidMembers(f)
+				members[1] = authMember("protocol_version", "5")
+				return authBuildObject(members)
+			},
+			want: want{code: "runtime_authorization_mismatch", field: "protocol_version"},
+		},
+		{
+			name: "R19 protocol_version 999 (a future version) must also be refused",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				members := authValidMembers(f)
+				members[1] = authMember("protocol_version", "999")
+				return authBuildObject(members)
+			},
+			want: want{code: "runtime_authorization_mismatch", field: "protocol_version"},
+		},
+		{
+			name: "R20 protocol_version delivered as a JSON string",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				members := authValidMembers(f)
+				members[1] = authMember("protocol_version", authQuoted("6"))
+				return authBuildObject(members)
+			},
+			want: want{reason: "frame_unparseable"},
+		},
+		{
+			name: "R21 launcher_pid of the broker parent instead of this launcher",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte {
+				members := authValidMembers(f)
+				members[3] = authMember("launcher_pid", fmt.Sprintf("%d", os.Getpid()))
+				return authBuildObject(members)
+			},
+			want: want{code: "runtime_authorization_mismatch", field: "launcher_pid"},
+		},
+		{
+			name:  "R22 empty frame body",
+			build: func(f sharedRuntimeAuthorizationFrame) []byte { return []byte("{}") },
+			want:  want{reason: "frame_missing_field", field: "schema"},
+		},
+	}
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			_ = os.Remove(fixture.marker)
+			run := startSharedLauncherRun(t, fixture, true)
+			raw := testCase.build(validSharedLauncherFrame(fixture, run.command.Process.Pid))
+			t.Logf("delivered bytes: %s", raw)
+			run.authorize(t, raw)
+			if testCase.want.admit {
+				deadline := time.Now().Add(3 * time.Second)
+				reached := false
+				for time.Now().Before(deadline) {
+					if _, err := os.Stat(fixture.marker); err == nil {
+						reached = true
+						break
+					}
+					time.Sleep(20 * time.Millisecond)
+				}
+				if !reached {
+					waitErr := run.wait(t, time.Second)
+					t.Fatalf("PROBE FAIL: production gate refused a frame it must admit: wait=%v stderr=%q", waitErr, run.stderr.String())
+				}
+				_ = run.command.Process.Kill()
+				_ = run.wait(t, 3*time.Second)
+				return
+			}
+			if err := run.wait(t, 3*time.Second); err == nil {
+				t.Fatalf("PROBE FAIL: forged frame reached a successful exit")
+			}
+			refusal := sharedRuntimeErrorFromOutput(t, run.stderr.String())
+			wantCode := testCase.want.code
+			if wantCode == "" {
+				wantCode = "protocol_violation"
+			}
+			if refusal.Code != wantCode || refusal.Reason != testCase.want.reason || refusal.MismatchField != testCase.want.field {
+				t.Fatalf("PROBE FAIL: refusal=%#v want code=%q reason=%q field=%q", refusal, wantCode, testCase.want.reason, testCase.want.field)
+			}
+			if _, err := os.Stat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("PROBE FAIL: refused launcher executed the target: %v", err)
+			}
+			if run.carriedTarget() {
+				t.Fatalf("PROBE FAIL: refused launcher carried the target exec path")
+			}
+		})
+	}
+}
+
+func authValidMembers(f sharedRuntimeAuthorizationFrame) []authGeneratedMember {
+	return []authGeneratedMember{
+		authMember("schema", authQuoted(f.Schema)),
+		authMember("protocol_version", fmt.Sprintf("%d", f.ProtocolVersion)),
+		authMember("runtime_key", authQuoted(f.RuntimeKey)),
+		authMember("launcher_pid", fmt.Sprintf("%d", f.LauncherPID)),
+		authMember("exec_plan_digest", authQuoted(f.ExecPlanDigest)),
+	}
+}

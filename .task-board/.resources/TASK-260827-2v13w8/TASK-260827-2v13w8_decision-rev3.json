@@ -1,0 +1,119 @@
+{
+  "accepted" : false,
+  "blockers" : [
+    "long_prompt_8k\/time_to_first_token_seconds ratio 1.2100481339307145 is outside the admissible band <= 1.1 (baseline 76.97358918190002, candidate 93.14174795150757)",
+    "long_prompt_8k\/prefill_tokens_per_second ratio 0.8264134061771614 is outside the admissible band >= 0.9 (baseline 101.12559493107761, candidate 83.57154735868374)",
+    "long_prompt_8k\/peak_physical_footprint_bytes ratio 1.1441476288805037 is outside the admissible band <= 1.1 (baseline 33875940256.0, candidate 38759076720.0)"
+  ],
+  "declaredAsymmetries" : [
+    "deployed with --prompt-cache-size 1 --prompt-cache-bytes 8GB; multi-turn prefix reuse is served from that cache",
+    "loads the model in the generation thread at startup, so \/v1\/models answers 200 about a second after launch with no weights resident",
+    "\/v1\/models lists every MLX model in the local Hugging Face cache and appends the configured one last, so data[0].id is not the configured model",
+    "installed revision 9150698 still answers \/health with an unconditional 200 (BUG-260827-1jhv2g); the generation-thread liveness tie is not installed",
+    "no prompt cache across requests: every request builds a fresh KV cache, so a shared multi-turn prefix is re-prefilled every turn",
+    "one generation at a time: GenerationEngine is an actor, so requests serialize even though the Pi profile allows max_leases = 8",
+    "readiness is gated on a resident model: \/v1\/models answers 503 until the weights are loaded, and advertises only the configured model",
+    "served by MLXLLM.LLMModelFactory (text-only); the vision tower is not loaded and the HTTP contract refuses image and audio content"
+  ],
+  "deltas" : [
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 41,
+      "candidate" : 41,
+      "metric" : "prompt_tokens",
+      "ratio" : 1,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 0.954064130783081,
+      "candidate" : 0.9295780658721924,
+      "metric" : "time_to_first_token_seconds",
+      "ratio" : 0.9743349905726034,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 42.974050356916614,
+      "candidate" : 44.106032086214356,
+      "metric" : "prefill_tokens_per_second",
+      "ratio" : 1.0263410527957264,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 10.845103818479814,
+      "candidate" : 10.848159456107352,
+      "metric" : "decode_tokens_per_second",
+      "ratio" : 1.0002817527318024,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 29402518432,
+      "candidate" : 29116371800,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 0.9902679550167861,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 7784,
+      "candidate" : 7784,
+      "metric" : "prompt_tokens",
+      "ratio" : 1,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 76.97358918190002,
+      "candidate" : 93.14174795150757,
+      "metric" : "time_to_first_token_seconds",
+      "ratio" : 1.2100481339307145,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "outside"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 101.12559493107761,
+      "candidate" : 83.57154735868374,
+      "metric" : "prefill_tokens_per_second",
+      "ratio" : 0.8264134061771614,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "outside"
+    },
+    {
+      "admissibleRatio" : ">= 0.9",
+      "baseline" : 10.383963533112627,
+      "candidate" : 10.470663367353113,
+      "metric" : "decode_tokens_per_second",
+      "ratio" : 1.0083493970259059,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 33875940256,
+      "candidate" : 38759076720,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 1.1441476288805037,
+      "scenario" : "long_prompt_8k",
+      "verdict" : "outside"
+    },
+    {
+      "admissibleRatio" : "<= 1.1",
+      "baseline" : 48535573456,
+      "candidate" : 52995871648,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 1.091897506805879,
+      "scenario" : "process",
+      "verdict" : "within"
+    }
+  ]
+}

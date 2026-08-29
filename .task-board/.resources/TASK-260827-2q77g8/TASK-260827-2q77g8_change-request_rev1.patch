@@ -1,0 +1,2048 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 480c7a7..b2dcef6 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,18 @@
+ 
+ ## 2026-08-27
+ 
++### 2325 — Releasing A Failed Batch Is Not The Same As Surviving One
++- DECISION: `mlx_lm.server`'s generation regression has a second half nobody had carried across. `TASK-260827-2h39ya` pinned the terminal case — a backend that is gone must stop answering `/health` 200. The common case is the opposite: a generation that fails mid-batch on a runtime still able to serve. In Python that was equally unsurvivable (the exception escaped the batch loop and killed the thread); in Swift the error propagates to its caller, so the runtime *can* recover, and now does so deliberately rather than by hoping ARC reaches the session before the next request needs the memory.
++- FINDING: The prototype could not demonstrate recovery at all, for reasons that were all in the test seam rather than the runtime. `--fault-inject-generation-error` failed *every* attempt, so "a later request succeeds" was unprovable by construction; and it threw *before* any `ChatSession` existed, so nothing had been allocated and "releases invalid batch state" was unprovable too — a runtime that leaked every KV cache it ever built would have passed a check written that way. A seam that cannot be bounded or positioned is not a seam.
++- FIX: New `GenerationBatchRecovery` splits recovery into two independent facts. The batch entry and its KV cache are released under *every* verdict, including a condemned one — the supervisor is about to start a replacement that needs the host's memory. MLX's *shared* buffer pool is dropped only when the failure implicates it (`metal-allocation-oversize`, conjunctive on `[metal::malloc]` **and** `Attempting to allocate`, from `allocator.cpp:111-117`). Collapsing the two would force a choice between never returning the pool, so an allocation failure repeats forever, and always returning it, so one malformed request throws away the pool that makes every other request fast.
++- FINDING: The readiness transition must keep exactly one owner. The plan reports a condemning signature but never acts on it, so recovery cannot resurrect a worker `GenerationWorkerHealth` condemned. Phase 6a proves it: the injection has budget for exactly one fault, so a runtime that merely rearmed its engine would serve the next request — it must be refused 503 instead.
++- FINDING: The ledger has to outlive the engine. Condemnation drops the engine, and "did the dead worker leak its batch" is a question only asked after there is no engine left; a ledger stored inside it would answer by disappearing, which reads exactly like a clean runtime. `GenerationBatchLedgerStore` is process-scoped, and `GET /debug/generation-state` answers 200 even once condemned. `active` is the only non-monotonic counter, and `batches_released` is tracked separately from `failed` rather than derived — deriving it would make the invariant unfalsifiable.
++- FINDING: A token threshold above 1 makes the suite depend on how chatty the model feels. At `--after-tokens 3` two phases silently did not inject, because this 0.5B chat model answered the prompt in a single token; both failed loudly (200 where 500 was demanded) but for a reason with nothing to do with the runtime. Fixed at 1 — by the first chunk the whole prompt is already in the KV cache — plus a pinned `seed` so what the runtime is asked to recover from does not vary run to run.
++- FINDING: The supervisor race from 2205 recurred exactly, and was rediscovered as six `000` connection-refused results: with `fatal_output_substrings` attached, `model-harness` kills the runtime within milliseconds of the marker and destroys the 503 window. The condemnation phase is split unsupervised/supervised for the same reason `dead-generation-smoke.sh` splits its own. Worth expecting in any future phase that wants to observe a condemned runtime.
++- EVIDENCE: `scripts/generation-batch-recovery-smoke.sh`, 63 checks, exit 0, real Release binary under real `model-harness`. Contract suite 151 tests exit 0; `dead-generation-smoke.sh` still 45 checks exit 0, so the 2h39ya contract is intact. Seven mutants each redden it: the unreleased slot, always-rebuild, never-rebuild, a disjunctive matcher, `generate` never calling the ledger at all (17 smoke failures, the leak visible as `active=1`), and a failed generation returned as a truncated 200 (`finish_reason:"stop"` on a one-token answer). The always-rebuild mutant reddens *only* the narrowing phase, which is what a narrowing gate should do.
++- STATUS: `TASK-260827-2q77g8` handed to review. Python `mlx-lm` remains the default local runtime; nothing installed changed.
++
++
+ ### 2242 — A Refusal Boundary Wide Enough To Catch Its Own Neighbour
+ - REGRESSION: Review defeated the dead-generation health gate shipped at 2205. `GenerationWorkerHealth.invalidatingSignatures` listed `metal::malloc` and `Resource limit` as two *independent* substrings, so `RequestError: Resource limit for this request is 8 tokens` — a request-scoped refusal that shares two words with the incident and nothing else — condemned a healthy runtime through the production entry point: `/health` and `/v1/models` to 503, engine dropped, fatal marker emitted, supervised restart. The cure fired on the disease it was supposed to distinguish itself from.
+ - ROOT CAUSE: The incident evidence is one message that asserts *two* facts at once — that MLX's Metal allocator produced it, and that the allocator is exhausted. Splitting it into independent OR-matched fragments kept the positive case working and silently widened the fatal class to every message carrying either half.
+diff --git a/README.md b/README.md
+index 77775f9..4208cdd 100644
+--- a/README.md
++++ b/README.md
+@@ -1395,7 +1395,7 @@ rg -n "Primary Parent Goal Actualization" \
+ | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+ | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
+-| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, and smoke transcripts under the caller's `OUT` directory |
++| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, and smoke transcripts under the caller's `OUT` directory |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+ | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+diff --git a/tools/mlx-swift-runtime-prototype/README.md b/tools/mlx-swift-runtime-prototype/README.md
+index 8fefe4e..362a978 100644
+--- a/tools/mlx-swift-runtime-prototype/README.md
++++ b/tools/mlx-swift-runtime-prototype/README.md
+@@ -100,7 +100,9 @@ DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve \
+ | `--max-kv-size` | Rotating KV-cache bound. Unset means an unbounded cache. |
+ | `--default-max-tokens` | Applied when a request omits `max_tokens`. Default 2048. |
+ | `--reasoning-effort` | Chat-template kwarg: `low`, `medium` or `xhigh`. |
+-| `--fault-inject-generation-error` | Acceptance-suite fault seam. Makes every generation fail with this exact text instead of reaching MLX. Off unless given. See [Dead generation worker](#dead-generation-worker). |
++| `--fault-inject-generation-error` | Acceptance-suite fault seam. Makes generation fail with this exact text. Off unless given. See [Dead generation worker](#dead-generation-worker). |
++| `--fault-inject-generation-error-count` | Bounds the seam to the first N generation attempts. Unset means every attempt, which is what the dead-generation suite needs. A bound is what makes *recovery* observable. Requires `--fault-inject-generation-error`. |
++| `--fault-inject-generation-error-after-tokens` | Fires the seam only after N tokens have reached the client, so the batch and its KV cache exist at the moment of failure. Default `0` — fire before MLX is touched. Requires `--fault-inject-generation-error`. |
+ 
+ `{host}` and `{port}` are the literal tokens `model-harness` substitutes, so the
+ argv above drops straight into a local profile — see
+@@ -113,6 +115,7 @@ argv above drops straight into a local profile — see
+ | `GET /v1/models` | `503` with an empty OpenAI list until the weights are resident; then `200` advertising exactly the configured model ID. |
+ | `GET /health` | `200 {"status":"ok"}` only when the runtime can actually generate. `503` while loading, while shutting down, after a failed load, and after the generation worker is condemned — the last as `{"status":"unavailable"}`. |
+ | `POST /v1/chat/completions` | Non-streaming JSON, or SSE when `stream: true`. |
++| `GET /debug/generation-state` | Read-only batch/cache accounting: in-flight generations, started/completed/failed, batches released, shared-cache rebuilds, and MLX allocator figures. Always `200`, including once the worker is condemned. See [Generation batch recovery](#generation-batch-recovery). |
+ 
+ Response shape tracks `mlx_lm.server` rather than a generic OpenAI client,
+ because that is the runtime the Pi profile is configured against today:
+@@ -212,6 +215,97 @@ Only a `ready` runtime transitions. A generation that fails because `SIGTERM`
+ arrived mid-request must not be reported as a dead worker, and must not ask the
+ harness to restart a process that was deliberately asked to stop.
+ 
++## Generation batch recovery
++
++The section above is about the failure a runtime cannot survive. This one is
++about the far more common one it must: a generation that blows up mid-batch on
++a runtime that is still perfectly able to serve the next caller.
++
++In `mlx_lm.server` that case was not survivable either. The exception escaped
++the batch loop, killed the generation thread, and took the batch entry and its
++KV cache with it into a process that kept listening. Here the error propagates
++to its caller, so the runtime *can* recover — and therefore does so
++deliberately and observably, rather than by hoping ARC gets to the session
++before the next request needs the memory.
++
++When a generation fails, `GenerationBatchRecovery.plan(after:)` decides what
++its state owes back:
++
++| | Always | Only when implicated |
++| --- | --- | --- |
++| **Batch entry + its KV cache** | released | — |
++| **MLX's shared buffer pool** | — | dropped via `Memory.clearCache()` |
++
++The split is the whole design. The per-request KV cache belongs to the request,
++so it is returned under *every* verdict, including a condemned one — the
++supervisor is about to start a replacement that needs the host's memory. The
++shared pool is different: it is what makes every *other* request fast, and
++clearing it for an ordinary request-scoped error would be a self-inflicted
++latency regression paid for a failure that never touched it.
++
++One signature currently implicates the pool:
++
++| Signature | Requires | Why |
++| --- | --- | --- |
++| `metal-allocation-oversize` | `[metal::malloc]` **and** `Attempting to allocate` | `mlx/backend/metal/allocator.cpp:111-117`. The allocator refused one oversized buffer; the backend can still serve, so this deliberately does **not** condemn. But the pool is holding freed-but-unreturned buffers that the next allocation of that size has to get past, and dropping them is the documented way to return them. |
++
++Conjunctive, for the same reason `GenerationWorkerHealth`'s signatures are —
++the fragments assert two things at once and either half alone is a phrase an
++unrelated failure can carry. A condemning failure implies a rebuild too; the
++one recorded condemnation *is* pool exhaustion.
++
++The readiness transition has exactly one owner, `GenerationWorkerHealth`. The
++plan reports the condemning signature but never acts on it, so recovery cannot
++resurrect a worker the health gate condemned: a request arriving after
++condemnation is still refused `503` at the readiness gate, even when the
++injected fault would not have repeated.
++
++`GET /debug/generation-state` publishes the accounting, and outlives the engine
++that condemnation drops. `active` is the only non-monotonic counter, which is
++the point: a runtime that failed a generation without giving the slot back
++shows up there and nowhere else. `batches_released` is tracked separately from
++`failed` rather than derived from it — deriving it would make the invariant
++unfalsifiable.
++
++## Generation-batch-recovery smoke
++
++```bash
++BINARY=./DerivedData/Build/Products/Release/mlx-swift-runtime-prototype \
++HARNESS=/Users/alexis/.local/bin/model-harness \
++MODEL=/Users/alexis/.cache/huggingface/hub/models--mlx-community--Qwen1.5-0.5B-Chat-4bit/snapshots/659d8dafc39202a6688bb46242d60440702489b1 \
++PORT=18021 OUT=./batch-recovery-out \
++scripts/generation-batch-recovery-smoke.sh
++```
++
++63 checks on the real Release binary under the real `model-harness`, in seven
++phases:
++
++| Phase | What it establishes |
++| --- | --- |
++| recovery | A fault fired *after* real tokens reached the client ends that request `500` — never a truncated `200` — leaves `/health` at `200`, returns the batch slot, and the **next request completes on the same process** with exactly one listener ever bound. |
++| streaming | The same through SSE, which is a separate production call site: partial chunks, then a terminal error frame and **no** `finish_reason`, then a clean next stream. |
++| multi-fault | `--fault-inject-generation-error-count 2` fails exactly two requests and serves the third, so the seam's own arithmetic is checked rather than assumed. |
++| rebuild | An allocation-pressure failure also drops the shared pool, and still does **not** condemn the worker. |
++| no-rebuild | **Narrowing.** An ordinary failure releases the batch and leaves the shared pool alone. |
++| condemned (unsupervised) | **Narrowing.** The recorded exhaustion still moves `/health` to `503`, still refuses the next request, still emits the marker — and still releases its batch. |
++| condemned (supervised) | The marker still produces a supervised restart and the replacement answers `200`. |
++
++The last two phases are separate runs for the same reason the dead-generation
++suite splits its own: with a policy attached, `model-harness` kills the runtime
++within milliseconds of the marker, destroying the `503` window the phase exists
++to observe.
++
++The narrowing phases are what make the rest mean anything. Everything in the
++first four is satisfied by a runtime that recovered from *every* failure,
++including the one that means the backend is gone — and that runtime would hand
++the next caller a dead worker while answering `/health` `200`, which is the
++exact incident the dead-generation work exists to end.
++
++Unlike the dead-generation smoke, this one **does** reach the weights: the
++fault fires after real tokens, which is the only way the batch has anything to
++release. Requests pin `seed`, so what the runtime is asked to recover from does
++not vary run to run.
++
+ ## Lifecycle
+ 
+ 1. The model directory is admitted before anything binds.
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/GenerationBatchRecovery.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/GenerationBatchRecovery.swift
+new file mode 100644
+index 0000000..d97e272
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/GenerationBatchRecovery.swift
+@@ -0,0 +1,268 @@
++import Foundation
++
++/// What a failed generation must do to the state it was holding.
++///
++/// The three fields are deliberately independent. A runtime that collapsed
++/// them into one flag would have to pick between two wrong behaviours: never
++/// dropping the shared buffer pool, so an allocation failure repeats on every
++/// later request, or always dropping it, so one malformed request throws away
++/// the pool that makes every *other* request fast.
++public struct GenerationRecoveryPlan: Sendable, Equatable {
++    /// Release this generation's batch entry and the KV cache hanging off it.
++    ///
++    /// Always true, and that is the point: the per-request cache belongs to the
++    /// request, so it must not survive the request under *any* verdict. The
++    /// field exists so the invariant is asserted at the plan rather than
++    /// assumed at the call site — the recorded regression is precisely a
++    /// runtime that kept per-request state alive after the request died.
++    public let releasesBatch: Bool
++
++    /// Drop MLX's shared buffer pool as well.
++    ///
++    /// Conditional, and narrow. The pool is shared across every request, and
++    /// clearing it is the documented remedy for exactly one class of failure:
++    /// the allocator refusing a buffer while the pool holds freed ones it has
++    /// not returned to the system. Clearing it for an ordinary request-scoped
++    /// error would be a self-inflicted latency regression on every subsequent
++    /// generation, paid for a failure that never touched the pool.
++    public let rebuildsSharedCache: Bool
++
++    /// The condemning signature, or `nil` when the failure belongs to the
++    /// request.
++    ///
++    /// Reported, not acted on. The readiness transition has exactly one owner —
++    /// `RuntimeState.recordGenerationFailure` via
++    /// ``GenerationWorkerHealth/readiness(after:observing:)`` — and a second
++    /// place that could condemn the worker would be a second place that could
++    /// get it wrong. This field exists so the released-batch record says *why*
++    /// the shared pool was rebuilt, and so the two classifiers can be pinned
++    /// to each other by test rather than drifting apart.
++    public let condemnedSignature: String?
++
++    public var condemnsWorker: Bool { condemnedSignature != nil }
++}
++
++/// Recovery of batch and cache state after a generation fails.
++///
++/// This carries the second half of the `mlx_lm.server` generation regression
++/// into the Swift runtime. ``GenerationWorkerHealth`` covers the terminal case:
++/// a backend that is gone must stop answering `/health` `200`. It says nothing
++/// about the far more common case — a generation that fails, mid-batch, on a
++/// runtime that is still perfectly able to serve the next caller.
++///
++/// In Python that case was not survivable at all: the exception escaped the
++/// batch loop, killed the generation thread, and took the batch entry and its
++/// KV cache with it into a process that kept listening. Here the error
++/// propagates to its caller, which means the runtime *can* recover — and
++/// therefore must, deliberately and observably, rather than by hoping ARC gets
++/// to the session before the next request needs the memory.
++///
++/// Production call sites: `GenerationEngine.generate(_:emit:)` runs every
++/// generation through ``GenerationBatchLedger``, and `Router.route` publishes
++/// the ledger on `GET /debug/generation-state` via ``GenerationBatchReport``,
++/// both in the `mlx-swift-runtime-prototype` executable target.
++public enum GenerationBatchRecovery {
++    /// Failure signatures that mean the *shared* buffer pool is implicated and
++    /// should be dropped before the next request is attempted.
++    ///
++    /// Conjunctive for the same reason ``GenerationWorkerHealth`` is: each
++    /// entry names a condition that asserts two facts at once, and either half
++    /// alone is a phrase an unrelated failure can carry.
++    ///
++    /// - `metal-allocation-oversize` — `mlx/backend/metal/allocator.cpp:111-117`
++    ///   emits `[metal::malloc] Attempting to allocate N bytes which is greater
++    ///   than the maximum allowed buffer size`. This throw is deliberately
++    ///   *not* in ``GenerationWorkerHealth/invalidatingSignatures``: it rejects
++    ///   one oversized allocation and leaves the backend able to serve. It is
++    ///   here instead, because the pool holding freed-but-unreturned buffers is
++    ///   exactly what the next allocation of that size has to get past, and
++    ///   `Memory.clearCache()` is the documented way to return them.
++    public static let sharedCachePressureSignatures:
++        [GenerationWorkerHealth.BackendFailureSignature] = [
++            GenerationWorkerHealth.BackendFailureSignature(
++                name: "metal-allocation-oversize",
++                requiredFragments: ["[metal::malloc]", "Attempting to allocate"])
++        ]
++
++    /// Classify a failed generation into the state it must give back.
++    ///
++    /// - Parameter description: the failure exactly as it will be reported to
++    ///   the caller. Matched rather than typed, because MLX surfaces these as
++    ///   opaque backend errors with nothing to switch on.
++    public static func plan(after description: String) -> GenerationRecoveryPlan {
++        var condemnedSignature: String?
++        if case .workerInvalidated(let name) = GenerationWorkerHealth.classify(
++            failure: description)
++        {
++            condemnedSignature = name
++        }
++        // A condemned backend rebuilds the pool too. The one recorded
++        // condemnation *is* pool exhaustion, and returning the buffers before
++        // the supervisor replaces the process is the difference between the
++        // replacement loading weights into a freed host and racing a corpse
++        // for them.
++        let pressured =
++            condemnedSignature != nil
++            || sharedCachePressureSignatures.contains { $0.matches(description) }
++        return GenerationRecoveryPlan(
++            releasesBatch: true,
++            rebuildsSharedCache: pressured,
++            condemnedSignature: condemnedSignature)
++    }
++}
++
++/// Accounting for in-flight generations and the state each one holds.
++///
++/// A value type on purpose: the arithmetic is the contract, and it is worth
++/// testing without an actor, a model or a port. The runtime keeps exactly one
++/// of these, and it outlives the engine — after the worker is condemned the
++/// engine is dropped, and "did the dead worker leak its batch" is a question
++/// that only becomes interesting *after* there is no engine left to ask.
++public struct GenerationBatchLedger: Sendable, Equatable {
++    /// A handle to one in-flight generation.
++    ///
++    /// Opaque and non-reusable. Slot identity is what lets ``fail(_:observing:)``
++    /// refuse to close a generation twice; an index into a pool would be
++    /// recycled and a late second failure would silently close somebody else's
++    /// live generation.
++    public struct Slot: Sendable, Equatable, Hashable {
++        public let id: Int
++        fileprivate init(id: Int) { self.id = id }
++    }
++
++    private var open: Set<Int> = []
++    private var nextID = 1
++
++    /// Generations begun.
++    public private(set) var started = 0
++    /// Generations that ran to a completion packet.
++    public private(set) var completed = 0
++    /// Generations that ended in an error, of any verdict.
++    public private(set) var failed = 0
++    /// Batch entries released after a failure.
++    ///
++    /// Tracked separately from ``failed`` rather than derived from it. Equal
++    /// counts are the invariant being checked, so deriving one from the other
++    /// would make the check unfalsifiable: a runtime that forgot to release
++    /// would still report that it had.
++    public private(set) var batchesReleased = 0
++    /// Times the shared MLX buffer pool was dropped.
++    public private(set) var sharedCacheRebuilds = 0
++
++    public init() {}
++
++    /// Generations currently in flight.
++    ///
++    /// The number that must return to zero once the traffic stops. A leak shows
++    /// up here and nowhere else — every other counter is monotonic and a
++    /// forgotten release leaves them all looking plausible.
++    public var active: Int { open.count }
++
++    public mutating func begin() -> Slot {
++        let slot = Slot(id: nextID)
++        nextID += 1
++        open.insert(slot.id)
++        started += 1
++        return slot
++    }
++
++    /// Close a generation that produced its completion packet.
++    ///
++    /// - Returns: `false` when the slot is not open, leaving every counter
++    ///   untouched.
++    @discardableResult
++    public mutating func finish(_ slot: Slot) -> Bool {
++        guard open.remove(slot.id) != nil else { return false }
++        completed += 1
++        return true
++    }
++
++    /// Close a generation that failed, and say what its state owes back.
++    ///
++    /// - Returns: `nil` when the slot is not open. A generation is closed once:
++    ///   a second failure arriving for a slot that already fell over — an
++    ///   `emit` throwing while unwinding from the error that caused it — must
++    ///   not be counted, must not release a batch that is already gone, and
++    ///   must not clear the shared pool a second time.
++    public mutating func fail(_ slot: Slot, observing description: String)
++        -> GenerationRecoveryPlan?
++    {
++        guard open.remove(slot.id) != nil else { return nil }
++        failed += 1
++        let plan = GenerationBatchRecovery.plan(after: description)
++        if plan.releasesBatch { batchesReleased += 1 }
++        if plan.rebuildsSharedCache { sharedCacheRebuilds += 1 }
++        return plan
++    }
++}
++
++/// The `GET /debug/generation-state` answer.
++///
++/// Exists because "the batch was released" is otherwise only assertable from a
++/// log line, and a log line records that a release was *announced*. This
++/// records that nothing is still held, at whatever moment the operator asks.
++///
++/// Always `200`, including once the worker is condemned. The endpoint reports
++/// state rather than serving capacity, and mirroring `/health`'s `503` here
++/// would black it out at exactly the moment its answer matters — which is also
++/// why the ledger is kept outside the engine that condemnation drops.
++///
++/// Production call site: `Router.route(method:path:body:)` in the
++/// `mlx-swift-runtime-prototype` executable target.
++public struct GenerationBatchReport: Sendable, Equatable {
++    /// MLX allocator counters, passed in rather than read here so this type
++    /// stays free of the MLX dependency and testable under `swift test`.
++    public struct MemoryUsage: Sendable, Equatable {
++        public let activeBytes: Int
++        public let cacheBytes: Int
++        public let peakBytes: Int
++
++        public init(activeBytes: Int, cacheBytes: Int, peakBytes: Int) {
++            self.activeBytes = activeBytes
++            self.cacheBytes = cacheBytes
++            self.peakBytes = peakBytes
++        }
++    }
++
++    public let status: Int
++    public let body: JSONValue
++
++    public static func make(
++        readiness: RuntimeReadiness,
++        ledger: GenerationBatchLedger,
++        memory: MemoryUsage?
++    ) -> GenerationBatchReport {
++        var fields: [String: JSONValue] = [
++            "readiness": .string(label(readiness)),
++            "batch": .object([
++                "active": .int(ledger.active),
++                "started": .int(ledger.started),
++                "completed": .int(ledger.completed),
++                "failed": .int(ledger.failed),
++                "batches_released": .int(ledger.batchesReleased),
++                "shared_cache_rebuilds": .int(ledger.sharedCacheRebuilds),
++            ]),
++        ]
++        // Absent rather than zero when unavailable. Zeroed allocator counters
++        // are a reading a caller would act on; a missing key is not.
++        fields["mlx"] =
++            memory.map {
++                .object([
++                    "active_bytes": .int($0.activeBytes),
++                    "cache_bytes": .int($0.cacheBytes),
++                    "peak_bytes": .int($0.peakBytes),
++                ])
++            } ?? .null
++        return GenerationBatchReport(status: 200, body: .object(fields))
++    }
++
++    private static func label(_ readiness: RuntimeReadiness) -> String {
++        switch readiness {
++        case .loading: return "loading"
++        case .ready: return "ready"
++        case .failed: return "failed"
++        case .generationWorkerFailed: return "generation_worker_failed"
++        case .shuttingDown: return "shutting_down"
++        }
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeOptions.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeOptions.swift
+index 963c74c..68e91dd 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeOptions.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeOptions.swift
+@@ -50,6 +50,37 @@ public struct RuntimeOptions: Sendable, Equatable {
+     /// cannot be affected by it.
+     public let faultInjectedGenerationError: String?
+ 
++    /// How many generation attempts the fault seam is allowed to fail, or
++    /// `nil` for every attempt.
++    ///
++    /// `nil` is the default because it is what the dead-generation-worker
++    /// suite already depends on: that regression is terminal, so an injection
++    /// that healed itself after one request would be testing a different
++    /// runtime than the one being pinned.
++    ///
++    /// A bound is what makes *recovery* observable at all. The acceptance
++    /// question here is whether a request that follows a failed one succeeds
++    /// on the same process, and a seam that fails every attempt can only ever
++    /// answer "no" — not because the runtime failed to recover, but because
++    /// the seam refused to let it.
++    public let faultInjectedGenerationErrorCount: Int?
++
++    /// How many generated tokens must reach the client before the fault seam
++    /// fires. `0` fires before MLX is touched at all.
++    ///
++    /// `0` is the default, matching the dead-generation-worker suite: that
++    /// path never reaches the weights, which is what lets it run on a 261 MB
++    /// model instead of a 29 GB one.
++    ///
++    /// A non-zero threshold is what makes *batch* recovery observable. Failing
++    /// before a `ChatSession` exists releases nothing, so a runtime that leaked
++    /// every KV cache it ever built would pass a check written that way. Firing
++    /// after N tokens means the batch entry, its cache, and partial output
++    /// already delivered to the client all exist at the moment of failure —
++    /// which is also the only way to establish that partial output is *not*
++    /// then returned as a truncated success.
++    public let faultInjectedGenerationErrorAfterTokens: Int
++
+     public init(
+         modelPath: String,
+         modelID: String,
+@@ -58,7 +89,9 @@ public struct RuntimeOptions: Sendable, Equatable {
+         maxKVSize: Int?,
+         defaultMaxTokens: Int,
+         reasoningEffort: String?,
+-        faultInjectedGenerationError: String? = nil
++        faultInjectedGenerationError: String? = nil,
++        faultInjectedGenerationErrorCount: Int? = nil,
++        faultInjectedGenerationErrorAfterTokens: Int = 0
+     ) {
+         self.modelPath = modelPath
+         self.modelID = modelID
+@@ -68,6 +101,8 @@ public struct RuntimeOptions: Sendable, Equatable {
+         self.defaultMaxTokens = defaultMaxTokens
+         self.reasoningEffort = reasoningEffort
+         self.faultInjectedGenerationError = faultInjectedGenerationError
++        self.faultInjectedGenerationErrorCount = faultInjectedGenerationErrorCount
++        self.faultInjectedGenerationErrorAfterTokens = faultInjectedGenerationErrorAfterTokens
+     }
+ }
+ 
+@@ -85,6 +120,8 @@ public enum RuntimeOptionsError: Error, Equatable, CustomStringConvertible {
+     case nonPositiveInteger(flag: String, value: Int)
+     case unsupportedReasoningEffort(String)
+     case emptyFaultInjection
++    case negativeInteger(flag: String, value: Int)
++    case faultInjectionModifierWithoutInjection(String)
+ 
+     public var description: String {
+         switch self {
+@@ -118,6 +155,12 @@ public enum RuntimeOptionsError: Error, Equatable, CustomStringConvertible {
+                 "--reasoning-effort must be one of low, medium, xhigh; got \(value.debugDescription)"
+         case .emptyFaultInjection:
+             return "--fault-inject-generation-error requires a non-empty failure message"
++        case .negativeInteger(let flag, let value):
++            return "flag \(flag.debugDescription) requires a non-negative integer, got \(value)"
++        case .faultInjectionModifierWithoutInjection(let flag):
++            return
++                "flag \(flag.debugDescription) requires --fault-inject-generation-error; "
++                + "on its own it configures a fault seam that is not armed"
+         }
+     }
+ }
+@@ -151,6 +194,8 @@ extension RuntimeOptions {
+         let known: Set<String> = [
+             "--model", "--model-id", "--host", "--port", "--max-kv-size", "--default-max-tokens",
+             "--reasoning-effort", "--fault-inject-generation-error",
++            "--fault-inject-generation-error-count",
++            "--fault-inject-generation-error-after-tokens",
+         ]
+         while index < arguments.count {
+             let flag = arguments[index]
+@@ -213,6 +258,32 @@ extension RuntimeOptions {
+             throw RuntimeOptionsError.emptyFaultInjection
+         }
+ 
++        // Both modifiers shape a seam they cannot arm. Given without
++        // `--fault-inject-generation-error` they would be accepted and do
++        // nothing, so an acceptance run that meant to bound its injection and
++        // mistyped the message flag would observe a runtime that never failed
++        // and read it as recovery. Refused at parse time, like the empty
++        // message above.
++        for modifier in [
++            "--fault-inject-generation-error-count",
++            "--fault-inject-generation-error-after-tokens",
++        ] where values[modifier] != nil && values["--fault-inject-generation-error"] == nil {
++            throw RuntimeOptionsError.faultInjectionModifierWithoutInjection(modifier)
++        }
++
++        // Positive: a count of zero is a seam that is armed and disarmed at the
++        // same time. Whatever it was meant to say, it is not what it says.
++        let faultCount = try values["--fault-inject-generation-error-count"].map {
++            try positiveInteger(flag: "--fault-inject-generation-error-count", value: $0)
++        }
++        // Non-negative: zero is meaningful here and is the default -- fire
++        // before MLX is touched.
++        let faultAfterTokens =
++            try values["--fault-inject-generation-error-after-tokens"].map {
++                try nonNegativeInteger(
++                    flag: "--fault-inject-generation-error-after-tokens", value: $0)
++            } ?? 0
++
+         return (
+             subcommand,
+             RuntimeOptions(
+@@ -223,10 +294,22 @@ extension RuntimeOptions {
+                 maxKVSize: maxKVSize,
+                 defaultMaxTokens: defaultMaxTokens,
+                 reasoningEffort: values["--reasoning-effort"],
+-                faultInjectedGenerationError: values["--fault-inject-generation-error"])
++                faultInjectedGenerationError: values["--fault-inject-generation-error"],
++                faultInjectedGenerationErrorCount: faultCount,
++                faultInjectedGenerationErrorAfterTokens: faultAfterTokens)
+         )
+     }
+ 
++    private static func nonNegativeInteger(flag: String, value: String) throws -> Int {
++        guard let parsed = Int(value) else {
++            throw RuntimeOptionsError.invalidInteger(flag: flag, value: value)
++        }
++        guard parsed >= 0 else {
++            throw RuntimeOptionsError.negativeInteger(flag: flag, value: parsed)
++        }
++        return parsed
++    }
++
+     private static func positiveInteger(flag: String, value: String) throws -> Int {
+         guard let parsed = Int(value) else {
+             throw RuntimeOptionsError.invalidInteger(flag: flag, value: value)
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BatchLedgerStore.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BatchLedgerStore.swift
+new file mode 100644
+index 0000000..8c38862
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BatchLedgerStore.swift
+@@ -0,0 +1,77 @@
++import Foundation
++import MLX
++import MLXSwiftRuntimeContract
++
++/// The runtime's single ``GenerationBatchLedger``, and the place recovery is
++/// actually performed.
++///
++/// Deliberately *not* owned by `GenerationEngine`. Condemnation drops the
++/// engine — that is the whole point of `RuntimeState.recordGenerationFailure` —
++/// and an operator asking "did the worker that just died leave anything behind"
++/// is asking after the engine is gone. A ledger stored inside the engine would
++/// answer that question by disappearing, which reads exactly like a clean
++/// runtime.
++///
++/// One process, one store, created in `Main` and shared by `GenerationEngine`
++/// (which begins, finishes and fails slots) and `Router` (which publishes it on
++/// `GET /debug/generation-state`).
++actor GenerationBatchLedgerStore {
++    private var ledger = GenerationBatchLedger()
++
++    func snapshot() -> GenerationBatchLedger { ledger }
++
++    func begin() -> GenerationBatchLedger.Slot { ledger.begin() }
++
++    func finish(_ slot: GenerationBatchLedger.Slot) {
++        ledger.finish(slot)
++    }
++
++    /// Close a failed generation and carry out the plan its failure implies.
++    ///
++    /// The release of the batch entry itself is the caller's: the KV cache
++    /// hangs off the `ChatSession` that `GenerationEngine.generate` holds in a
++    /// local, and unwinding out of that scope is what drops it. What happens
++    /// here is the part that is *not* automatic — returning MLX's shared
++    /// buffer pool to the system, which nothing unwinds — plus the record that
++    /// makes both observable.
++    ///
++    /// - Returns: the plan that was applied, or `nil` if the slot was already
++    ///   closed, in which case nothing was applied and nothing was counted.
++    @discardableResult
++    func fail(_ slot: GenerationBatchLedger.Slot, observing description: String)
++        -> GenerationRecoveryPlan?
++    {
++        guard let plan = ledger.fail(slot, observing: description) else { return nil }
++        if plan.rebuildsSharedCache {
++            // Frees every buffer MLX is holding but not using. On the recorded
++            // allocation failure this is the difference between the next
++            // request finding room and hitting the same wall; on a condemned
++            // worker it returns the host's memory before the supervisor starts
++            // a replacement that needs it.
++            Memory.clearCache()
++        }
++        StandardOutput.shared.event(
++            RuntimeEvent(
++                name: "generation_batch_released",
++                fields: [
++                    "slot": .int(slot.id),
++                    "active": .int(ledger.active),
++                    "failed": .int(ledger.failed),
++                    "batches_released": .int(ledger.batchesReleased),
++                    "shared_cache_rebuilds": .int(ledger.sharedCacheRebuilds),
++                    "rebuilt_shared_cache": .bool(plan.rebuildsSharedCache),
++                    "condemned_signature": plan.condemnedSignature.map { .string($0) } ?? .null,
++                    "detail": .string(description),
++                ]))
++        return plan
++    }
++
++    /// Allocator counters as of now, for `GET /debug/generation-state`.
++    func memoryUsage() -> GenerationBatchReport.MemoryUsage {
++        let snapshot = Memory.snapshot()
++        return GenerationBatchReport.MemoryUsage(
++            activeBytes: snapshot.activeMemory,
++            cacheBytes: snapshot.cacheMemory,
++            peakBytes: snapshot.peakMemory)
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/GenerationEngine.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/GenerationEngine.swift
+index ba8f5a0..0e08a33 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/GenerationEngine.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/GenerationEngine.swift
+@@ -1,4 +1,5 @@
+ import Foundation
++import MLX
+ import MLXLMCommon
+ import MLXSwiftRuntimeContract
+ 
+@@ -41,23 +42,79 @@ enum GenerationError: Error, CustomStringConvertible {
+ actor GenerationEngine {
+     private let model: LoadedModel
+     private let options: RuntimeOptions
++    private let ledger: GenerationBatchLedgerStore
+ 
+-    init(model: LoadedModel, options: RuntimeOptions) {
++    /// Fault-seam budget left, or `nil` when the seam fires on every attempt.
++    ///
++    /// Engine state rather than a re-read of `options`, because it is consumed.
++    /// It is decremented at the moment the seam actually throws, never when a
++    /// generation merely *becomes eligible* to be failed: a threshold set higher
++    /// than the request's `max_tokens` must leave the budget intact and let that
++    /// request succeed, so an acceptance run that mis-sizes its injection
++    /// reports a `200` where it demanded a `500` instead of silently spending
++    /// the injection on nothing.
++    private var faultInjectionsRemaining: Int?
++
++    init(model: LoadedModel, options: RuntimeOptions, ledger: GenerationBatchLedgerStore) {
+         self.model = model
+         self.options = options
++        self.ledger = ledger
++        self.faultInjectionsRemaining = options.faultInjectedGenerationErrorCount
++    }
++
++    /// Take one unit of fault-seam budget, if the seam is armed and has any.
++    ///
++    /// - Returns: the message to throw, or `nil` when the seam is not armed or
++    ///   is spent. Spending the budget is what lets the *next* request through
++    ///   on the same process, which is the property the recovery suite exists
++    ///   to establish.
++    private func consumeFaultInjection() -> String? {
++        guard let message = options.faultInjectedGenerationError else { return nil }
++        guard let remaining = faultInjectionsRemaining else { return message }
++        guard remaining > 0 else { return nil }
++        faultInjectionsRemaining = remaining - 1
++        return message
+     }
+ 
+     var modelType: String { model.modelType }
+     var factory: String { model.factory }
+ 
++    /// Run one generation, accounted for in the shared ledger.
++    ///
++    /// The `do`/`catch` is the production call site for
++    /// ``GenerationBatchRecovery``. Every exit from `run` closes the slot
++    /// exactly once — the failing path through ``GenerationBatchLedgerStore/fail(_:observing:)``,
++    /// which also returns MLX's shared buffer pool when the failure implicates
++    /// it, and the succeeding path through `finish`. The error is rethrown
++    /// unchanged: recovering the runtime's own state must not turn a failed
++    /// generation into a partial answer, so the caller still gets the failure
++    /// and still reports it as one.
+     func generate(
+         _ request: AdmittedChatCompletion,
+         emit: @Sendable (GenerationEvent) async throws -> Void
+     ) async throws {
+-        // The acceptance seam fires before any MLX call, so an injected run
+-        // exercises the failure path without touching the GPU and without
+-        // depending on how far into generation the real fault would have got.
+-        if let injected = options.faultInjectedGenerationError {
++        let slot = await ledger.begin()
++        do {
++            try await run(request, emit: emit)
++        } catch {
++            await ledger.fail(slot, observing: String(describing: error))
++            throw error
++        }
++        await ledger.finish(slot)
++    }
++
++    private func run(
++        _ request: AdmittedChatCompletion,
++        emit: @Sendable (GenerationEvent) async throws -> Void
++    ) async throws {
++        let injectAfterTokens = options.faultInjectedGenerationErrorAfterTokens
++
++        // With no token threshold the seam fires before any MLX call, so an
++        // injected run exercises the failure path without touching the GPU and
++        // without depending on how far into generation the real fault would
++        // have got. This is the dead-generation-worker suite's path and its
++        // behaviour is unchanged.
++        if injectAfterTokens == 0, let injected = consumeFaultInjection() {
+             throw GenerationError.injected(injected)
+         }
+ 
+@@ -89,6 +146,7 @@ actor GenerationEngine {
+             toolDispatch: nil)
+ 
+         var splitter = ReasoningSplitter(mode: .startsInReasoning)
++        var generatedTokens = 0
+         var toolCallIndex = 0
+         var sawToolCall = false
+         var usage: CompletionUsage?
+@@ -103,6 +161,18 @@ actor GenerationEngine {
+                 if !split.isEmpty {
+                     try await emit(.delta(reasoning: split.reasoning, content: split.content))
+                 }
++                generatedTokens += 1
++                // Fired *after* the chunk is emitted, on purpose. By this point
++                // the session's KV cache holds real state and the client has
++                // already received real output -- which is what makes both
++                // halves of the recovery contract observable: the batch has
++                // something to release, and the partial output must still not
++                // come back as a truncated success.
++                if injectAfterTokens > 0, generatedTokens >= injectAfterTokens,
++                    let injected = consumeFaultInjection()
++                {
++                    throw GenerationError.injected(injected)
++                }
+             case .toolCall(let call):
+                 sawToolCall = true
+                 let payload = ContractBridge.toolCallPayload(
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Main.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Main.swift
+index 333030b..4327a82 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Main.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Main.swift
+@@ -56,9 +56,16 @@ struct Main {
+         }
+ 
+         let state = RuntimeState()
++        // One ledger per process, shared by the engine that fills it and the
++        // router that publishes it. Created here rather than with the engine
++        // because it has to outlive the engine: condemnation drops the engine,
++        // and what the dead worker released is only worth asking about after
++        // that.
++        let ledger = GenerationBatchLedgerStore()
+         let router = Router(
+             options: options,
+             state: state,
++            ledger: ledger,
+             created: Int(Date().timeIntervalSince1970),
+             systemFingerprint: "mlx-swift-runtime-prototype-\(mlxSwiftLMRevision)")
+ 
+@@ -87,7 +94,8 @@ struct Main {
+         let loadTask = Task {
+             do {
+                 let loaded = try await ModelLoader.load(path: options.modelPath)
+-                let engine = GenerationEngine(model: loaded, options: options)
++                let engine = GenerationEngine(
++                    model: loaded, options: options, ledger: ledger)
+                 await state.markReady(engine: engine)
+                 StandardOutput.shared.event(
+                     RuntimeEvent.modelLoaded(
+@@ -136,7 +144,9 @@ struct Main {
+         usage: mlx-swift-runtime-prototype serve --model <absolute-dir> --port <port> \
+         [--model-id <id>] [--host 127.0.0.1] [--max-kv-size <n>] \
+         [--default-max-tokens <n>] [--reasoning-effort low|medium|xhigh] \
+-        [--fault-inject-generation-error <message>]
++        [--fault-inject-generation-error <message>] \
++        [--fault-inject-generation-error-count <n>] \
++        [--fault-inject-generation-error-after-tokens <n>]
+                mlx-swift-runtime-prototype preflight --model <absolute-dir> \
+         [--reasoning-effort low|medium|xhigh]
+         """
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Router.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Router.swift
+index 4be0a4e..ded1690 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Router.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/Router.swift
+@@ -19,6 +19,7 @@ enum RouterOutcome: Sendable {
+ struct Router: Sendable {
+     let options: RuntimeOptions
+     let state: RuntimeState
++    let ledger: GenerationBatchLedgerStore
+     let created: Int
+     let systemFingerprint: String
+ 
+@@ -46,6 +47,8 @@ struct Router: Sendable {
+             return .json(status: listing.status, body: listing.body)
+         case ("POST", "/v1/chat/completions"):
+             return await chatCompletions(body: body)
++        case ("GET", "/debug/generation-state"):
++            return await generationState()
+         default:
+             return .json(
+                 status: 404,
+@@ -60,6 +63,25 @@ struct Router: Sendable {
+         return .json(status: report.status, body: report.body)
+     }
+ 
++    /// Production call site for ``GenerationBatchReport``.
++    ///
++    /// Read-only, loopback-only, and separate from `/health` on purpose:
++    /// `/health` answers "should you send me traffic", which is a question a
++    /// condemned runtime answers `503`, and this answers "what are you still
++    /// holding", which a condemned runtime has to be able to answer at all.
++    private func generationState() async -> RouterOutcome {
++        // Allocator figures only once MLX has actually been driven. Before
++        // that they are not a low reading, they are no reading, and the report
++        // omits them rather than publishing zeros somebody would size a host
++        // from.
++        let memory = await state.hasInitializedBackend() ? await ledger.memoryUsage() : nil
++        let report = GenerationBatchReport.make(
++            readiness: await state.currentReadiness(),
++            ledger: await ledger.snapshot(),
++            memory: memory)
++        return .json(status: report.status, body: report.body)
++    }
++
+     /// Report a generation failure to the runtime's health state.
+     ///
+     /// Production call site for ``GenerationWorkerHealth``. Called from both
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/RuntimeState.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/RuntimeState.swift
+index e08b9a4..f748dea 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/RuntimeState.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/RuntimeState.swift
+@@ -8,13 +8,25 @@ import MLXSwiftRuntimeContract
+ actor RuntimeState {
+     private var readiness: RuntimeReadiness = .loading
+     private var engine: GenerationEngine?
++    private var backendInitialized = false
+ 
+     func currentReadiness() -> RuntimeReadiness { readiness }
+ 
+     func currentEngine() -> GenerationEngine? { engine }
+ 
++    /// Whether MLX has ever been driven in this process.
++    ///
++    /// Tracked separately from the engine because the engine is dropped on
++    /// condemnation while MLX's allocator counters remain both readable and
++    /// interesting -- "how much did the dead worker give back" is a question
++    /// asked after there is no engine left. Kept as a latch rather than derived
++    /// from readiness, so a load that failed *before* touching MLX reports no
++    /// allocator figures instead of reporting zeros as measurements.
++    func hasInitializedBackend() -> Bool { backendInitialized }
++
+     func markReady(engine: GenerationEngine) {
+         self.engine = engine
++        backendInitialized = true
+         readiness = .ready
+     }
+ 
+diff --git a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/GenerationBatchRecoveryTests.swift b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/GenerationBatchRecoveryTests.swift
+new file mode 100644
+index 0000000..3800461
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/GenerationBatchRecoveryTests.swift
+@@ -0,0 +1,484 @@
++import Foundation
++import Testing
++
++@testable import MLXSwiftRuntimeContract
++
++@Suite("generation batch recovery plan")
++struct GenerationBatchRecoveryPlanTests {
++    /// Verbatim from the `BUG-260827-1jhv2g` incident record.
++    static let incident = "RuntimeError: [metal::malloc] Resource limit (499000) exceeded"
++    /// `mlx/backend/metal/allocator.cpp:111-117`, the allocator's *other* throw.
++    static let oversize =
++        "RuntimeError: [metal::malloc] Attempting to allocate 4294967296 bytes which is "
++        + "greater than the maximum allowed buffer size"
++    /// A failure that belongs entirely to the request.
++    static let requestScoped = "generation ended without completion info; token usage is unknown"
++
++    // MARK: - The always-true half
++
++    @Test(
++        "every failure releases its batch, whatever the verdict",
++        arguments: [incident, oversize, requestScoped, "", "something nobody has ever seen"])
++    func alwaysReleasesBatch(description: String) {
++        // The per-request KV cache belongs to the request. Any verdict under
++        // which it survived the request would be the recorded leak.
++        #expect(GenerationBatchRecovery.plan(after: description).releasesBatch)
++    }
++
++    // MARK: - The conditional half
++
++    @Test("an ordinary request-scoped failure does not touch the shared pool")
++    func requestScopedLeavesSharedCacheAlone() {
++        let plan = GenerationBatchRecovery.plan(after: Self.requestScoped)
++        // NARROWING. Everything else in this suite is satisfied by a runtime
++        // that clears the shared pool on every error, which would pay a
++        // cold-pool latency cost on every subsequent generation for a failure
++        // that never touched the pool. Only this expectation separates
++        // "rebuilds when implicated" from "rebuilds always".
++        #expect(!plan.rebuildsSharedCache)
++        #expect(!plan.condemnsWorker)
++        #expect(plan.condemnedSignature == nil)
++    }
++
++    @Test("an oversized-allocation failure rebuilds the shared pool but keeps the worker")
++    func oversizeRebuildsWithoutCondemning() {
++        let plan = GenerationBatchRecovery.plan(after: Self.oversize)
++        #expect(plan.rebuildsSharedCache)
++        // The whole point of this signature: the allocator refused one buffer
++        // and is still able to serve. Condemning here would take a healthy
++        // runtime out of rotation over a single oversized request.
++        #expect(!plan.condemnsWorker)
++    }
++
++    @Test("the recorded exhaustion condemns the worker and rebuilds the pool")
++    func incidentCondemnsAndRebuilds() {
++        let plan = GenerationBatchRecovery.plan(after: Self.incident)
++        #expect(plan.condemnedSignature == "metal-allocator-resource-limit")
++        #expect(plan.rebuildsSharedCache)
++        #expect(plan.releasesBatch)
++    }
++
++    @Test("a condemned shader-library failure still releases and rebuilds")
++    func shaderLibraryCondemns() {
++        let plan = GenerationBatchRecovery.plan(
++            after: "MLXError: Failed to load the default metallib after 4 lookups")
++        #expect(plan.condemnedSignature == "metal-shader-library-unreachable")
++        #expect(plan.rebuildsSharedCache)
++        #expect(plan.releasesBatch)
++    }
++
++    // MARK: - Narrowing the pressure signature
++
++    @Test(
++        "a message carrying only one fragment of the pressure signature does not rebuild",
++        arguments: [
++            // The allocator tag alone. Shared with the *condemning* signature
++            // too, so a disjunctive matcher here would both rebuild the pool
++            // and — via the neighbouring gate — be one edit away from
++            // condemning on it.
++            "RuntimeError: [metal::malloc] something else went wrong",
++            // The prose alone, from a message that has nothing to do with the
++            // Metal allocator.
++            "RequestError: Attempting to allocate a tool call id",
++        ])
++    func pressureSignatureIsConjunctive(description: String) {
++        let plan = GenerationBatchRecovery.plan(after: description)
++        #expect(!plan.rebuildsSharedCache)
++        #expect(!plan.condemnsWorker)
++    }
++
++    @Test("a pressure signature that lost its fragments matches nothing")
++    func emptyPressureSignatureFailsClosed() {
++        // Same fail-closed rule as GenerationWorkerHealth: `allSatisfy` is
++        // vacuously true on an empty sequence, so a signature stripped by a bad
++        // edit would otherwise rebuild the pool on literally every failure.
++        let signature = GenerationWorkerHealth.BackendFailureSignature(
++            name: "stripped", requiredFragments: [])
++        #expect(!signature.matches(Self.oversize))
++        #expect(!signature.matches(""))
++    }
++
++    @Test("the pressure list does not overlap the condemning list")
++    func pressureAndCondemnationStayDistinct() {
++        // The two lists are read by different gates with opposite consequences
++        // — keep serving versus take out of rotation. A name appearing in both
++        // would mean one message with two verdicts.
++        let condemning = Set(GenerationWorkerHealth.invalidatingSignatures.map(\.name))
++        let pressure = Set(GenerationBatchRecovery.sharedCachePressureSignatures.map(\.name))
++        #expect(condemning.isDisjoint(with: pressure))
++    }
++
++    @Test("the plan's condemnation verdict is the health gate's verdict")
++    func condemnationDelegatesToTheHealthGate() {
++        // Pins the two classifiers together. The readiness transition is owned
++        // by GenerationWorkerHealth alone; if this plan started reporting a
++        // condemnation the health gate does not make (or missing one it does),
++        // the released-batch record would name a reason that never reached
++        // /health.
++        for description in [
++            Self.incident, Self.oversize, Self.requestScoped,
++            "MLXError: Failed to load the default metallib after 4 lookups",
++            "RequestError: Resource limit for this request is 8 tokens", "",
++        ] {
++            let plan = GenerationBatchRecovery.plan(after: description)
++            switch GenerationWorkerHealth.classify(failure: description) {
++            case .requestScoped:
++                #expect(plan.condemnedSignature == nil, "\(description)")
++            case .workerInvalidated(let signature):
++                #expect(plan.condemnedSignature == signature, "\(description)")
++            }
++        }
++    }
++
++    @Test("the over-broad neighbour is neither condemned nor rebuilt")
++    func overbroadNeighbourStaysRequestScoped() {
++        // The revision-1 defect message from `TASK-260827-2h39ya`. It carries
++        // `Resource limit` and no allocator context; a second gate that matched
++        // it would reintroduce the same regression through a new door.
++        let plan = GenerationBatchRecovery.plan(
++            after: "RequestError: Resource limit for this request is 8 tokens")
++        #expect(!plan.condemnsWorker)
++        #expect(!plan.rebuildsSharedCache)
++    }
++}
++
++@Suite("generation batch ledger")
++struct GenerationBatchLedgerTests {
++    static let requestScoped = "generation ended without completion info; token usage is unknown"
++    static let oversize =
++        "RuntimeError: [metal::malloc] Attempting to allocate 4294967296 bytes which is "
++        + "greater than the maximum allowed buffer size"
++
++    @Test("a fresh ledger holds nothing")
++    func startsEmpty() {
++        let ledger = GenerationBatchLedger()
++        #expect(ledger.active == 0)
++        #expect(ledger.started == 0)
++        #expect(ledger.completed == 0)
++        #expect(ledger.failed == 0)
++        #expect(ledger.batchesReleased == 0)
++        #expect(ledger.sharedCacheRebuilds == 0)
++    }
++
++    @Test("a completed generation leaves nothing in flight")
++    func completionClosesTheSlot() {
++        var ledger = GenerationBatchLedger()
++        let slot = ledger.begin()
++        #expect(ledger.active == 1)
++        let closed = ledger.finish(slot)
++        #expect(closed)
++        #expect(ledger.active == 0)
++        #expect(ledger.completed == 1)
++        // Nothing failed, so nothing was released. A ledger that counted a
++        // release here would report a leak-free runtime by construction.
++        #expect(ledger.batchesReleased == 0)
++    }
++
++    @Test("a failed generation leaves nothing in flight and records the release")
++    func failureClosesTheSlotAndReleases() {
++        var ledger = GenerationBatchLedger()
++        let slot = ledger.begin()
++        let plan = ledger.fail(slot, observing: Self.requestScoped)
++        #expect(plan?.releasesBatch == true)
++        // THE INVARIANT. `active` is the only non-monotonic counter, so a
++        // runtime that failed a generation without giving the slot back shows
++        // up here and nowhere else.
++        #expect(ledger.active == 0)
++        #expect(ledger.failed == 1)
++        #expect(ledger.batchesReleased == 1)
++        #expect(ledger.sharedCacheRebuilds == 0)
++    }
++
++    @Test("a pressure failure is counted as a rebuild")
++    func pressureFailureCountsARebuild() {
++        var ledger = GenerationBatchLedger()
++        let slot = ledger.begin()
++        let plan = ledger.fail(slot, observing: Self.oversize)
++        #expect(plan?.rebuildsSharedCache == true)
++        #expect(ledger.sharedCacheRebuilds == 1)
++        #expect(ledger.batchesReleased == 1)
++    }
++
++    @Test("a second failure for the same slot changes nothing")
++    func doubleFailIsRefused() {
++        var ledger = GenerationBatchLedger()
++        let slot = ledger.begin()
++        _ = ledger.fail(slot, observing: Self.oversize)
++        let after = ledger
++        // An `emit` throwing while the runtime unwinds from the error that
++        // caused it arrives here twice for one generation. Counting it twice
++        // would inflate `batchesReleased` past `failed` and clear the shared
++        // pool a second time for a batch that no longer exists.
++        let second = ledger.fail(slot, observing: Self.oversize)
++        #expect(second == nil)
++        #expect(ledger == after)
++    }
++
++    @Test("finishing an already-failed slot changes nothing")
++    func finishAfterFailIsRefused() {
++        var ledger = GenerationBatchLedger()
++        let slot = ledger.begin()
++        _ = ledger.fail(slot, observing: Self.requestScoped)
++        let after = ledger
++        let reclosed = ledger.finish(slot)
++        #expect(!reclosed)
++        #expect(ledger == after)
++        // Specifically: the failure was not laundered into a completion.
++        #expect(ledger.completed == 0)
++    }
++
++    @Test("a slot from another ledger is not honoured")
++    func foreignSlotIsRefused() {
++        var issuing = GenerationBatchLedger()
++        let slot = issuing.begin()
++        var other = GenerationBatchLedger()
++        let untouched = other
++        let foreignFail = other.fail(slot, observing: Self.requestScoped)
++        #expect(foreignFail == nil)
++        let foreignFinish = other.finish(slot)
++        #expect(!foreignFinish)
++        #expect(other == untouched)
++    }
++
++    @Test("slot identity is not recycled")
++    func slotsAreNotRecycled() {
++        var ledger = GenerationBatchLedger()
++        let first = ledger.begin()
++        _ = ledger.finish(first)
++        let second = ledger.begin()
++        // If the second generation reused the first's id, a late failure from
++        // the first would close the second — a live generation silently
++        // released while it is still producing tokens.
++        #expect(first != second)
++        let stale = ledger.fail(first, observing: Self.requestScoped)
++        #expect(stale == nil)
++        #expect(ledger.active == 1)
++    }
++
++    @Test("concurrent generations are accounted for independently")
++    func interleavedSlots() {
++        var ledger = GenerationBatchLedger()
++        let a = ledger.begin()
++        let b = ledger.begin()
++        #expect(ledger.active == 2)
++        _ = ledger.fail(a, observing: Self.requestScoped)
++        #expect(ledger.active == 1)
++        let closedB = ledger.finish(b)
++        #expect(closedB)
++        #expect(ledger.active == 0)
++        #expect(ledger.started == 2)
++        #expect(ledger.completed == 1)
++        #expect(ledger.failed == 1)
++        #expect(ledger.batchesReleased == 1)
++    }
++
++    @Test("active is exactly what has not been closed")
++    func activeMatchesTheArithmetic() {
++        var ledger = GenerationBatchLedger()
++        var open: [GenerationBatchLedger.Slot] = []
++        for index in 0 ..< 12 {
++            let slot = ledger.begin()
++            if index % 3 == 0 {
++                _ = ledger.fail(slot, observing: Self.requestScoped)
++            } else if index % 3 == 1 {
++                _ = ledger.finish(slot)
++            } else {
++                open.append(slot)
++            }
++        }
++        #expect(ledger.active == open.count)
++        #expect(ledger.active == ledger.started - ledger.completed - ledger.failed)
++        #expect(ledger.batchesReleased == ledger.failed)
++    }
++}
++
++@Suite("GET /debug/generation-state")
++struct GenerationBatchReportTests {
++    static func body(
++        readiness: RuntimeReadiness = .ready,
++        ledger: GenerationBatchLedger = GenerationBatchLedger(),
++        memory: GenerationBatchReport.MemoryUsage? = nil
++    ) -> [String: JSONValue] {
++        let report = GenerationBatchReport.make(
++            readiness: readiness, ledger: ledger, memory: memory)
++        #expect(report.status == 200)
++        guard case .object(let fields) = report.body else {
++            Issue.record("report body is not an object")
++            return [:]
++        }
++        return fields
++    }
++
++    @Test("a condemned runtime still answers 200 with its state")
++    func condemnedRuntimeStillReports() {
++        // The endpoint reports state, not serving capacity. Mirroring
++        // /health's 503 here would black it out at exactly the moment its
++        // answer matters — right after the worker was condemned, when the
++        // question is what the dead worker gave back.
++        var ledger = GenerationBatchLedger()
++        let slot = ledger.begin()
++        _ = ledger.fail(
++            slot, observing: "RuntimeError: [metal::malloc] Resource limit (499000) exceeded")
++        let fields = Self.body(
++            readiness: .generationWorkerFailed("condemned"), ledger: ledger)
++        #expect(fields["readiness"] == .string("generation_worker_failed"))
++        guard case .object(let batch) = fields["batch"] else {
++            Issue.record("no batch object")
++            return
++        }
++        #expect(batch["active"] == .int(0))
++        #expect(batch["failed"] == .int(1))
++        #expect(batch["batches_released"] == .int(1))
++        #expect(batch["shared_cache_rebuilds"] == .int(1))
++    }
++
++    @Test(
++        "readiness is labelled for every case",
++        arguments: [
++            (RuntimeReadiness.loading, "loading"),
++            (.ready, "ready"),
++            (.failed("boom"), "failed"),
++            (.generationWorkerFailed("boom"), "generation_worker_failed"),
++            (.shuttingDown, "shutting_down"),
++        ])
++    func labelsReadiness(readiness: RuntimeReadiness, label: String) {
++        #expect(Self.body(readiness: readiness)["readiness"] == .string(label))
++    }
++
++    @Test("allocator figures are absent, not zero, before MLX has been driven")
++    func memoryIsNullWhenUnavailable() {
++        // A zeroed reading is a number somebody would size a host from. A null
++        // is not. Absence and a low value are different facts.
++        #expect(Self.body(memory: nil)["mlx"] == .null)
++    }
++
++    @Test("allocator figures are published when available")
++    func memoryIsPublishedWhenAvailable() {
++        let fields = Self.body(
++            memory: GenerationBatchReport.MemoryUsage(
++                activeBytes: 11, cacheBytes: 22, peakBytes: 33))
++        #expect(
++            fields["mlx"]
++                == .object([
++                    "active_bytes": .int(11), "cache_bytes": .int(22), "peak_bytes": .int(33),
++                ]))
++    }
++}
++
++@Suite("bounded generation fault injection seam")
++struct BoundedFaultInjectionTests {
++    static let base = ["serve", "--model", "/models/qwen", "--port", "18011"]
++    static let message = "RuntimeError: [metal::malloc] Resource limit (499000) exceeded"
++
++    static func serve(_ extra: [String]) -> [String] { base + extra }
++
++    @Test("both bounds are unset unless asked for")
++    func defaultsPreserveTheTerminalSeam() throws {
++        // The dead-generation-worker suite depends on this: that regression is
++        // terminal, so an injection that silently healed after one request
++        // would be pinning a different runtime.
++        let (_, options) = try RuntimeOptions.parse(
++            arguments: Self.serve(["--fault-inject-generation-error", Self.message]))
++        #expect(options.faultInjectedGenerationErrorCount == nil)
++        #expect(options.faultInjectedGenerationErrorAfterTokens == 0)
++    }
++
++    @Test("a bounded, deferred injection parses")
++    func parsesBounds() throws {
++        let (_, options) = try RuntimeOptions.parse(
++            arguments: Self.serve([
++                "--fault-inject-generation-error", Self.message,
++                "--fault-inject-generation-error-count", "2",
++                "--fault-inject-generation-error-after-tokens", "4",
++            ]))
++        #expect(options.faultInjectedGenerationErrorCount == 2)
++        #expect(options.faultInjectedGenerationErrorAfterTokens == 4)
++    }
++
++    @Test(
++        "a bound without an injection to bound is refused",
++        arguments: [
++            "--fault-inject-generation-error-count",
++            "--fault-inject-generation-error-after-tokens",
++        ])
++    func refusesModifierWithoutInjection(flag: String) {
++        // NEGATIVE. Accepted-and-ignored is the dangerous outcome here: an
++        // acceptance run that meant to inject a fault and mistyped the message
++        // flag would watch a runtime that never fails and read that as
++        // recovery.
++        #expect(throws: RuntimeOptionsError.faultInjectionModifierWithoutInjection(flag)) {
++            try RuntimeOptions.parse(arguments: Self.serve([flag, "1"]))
++        }
++    }
++
++    @Test("a zero or negative count is refused", arguments: ["0", "-1"])
++    func refusesNonPositiveCount(value: String) {
++        // A count of zero arms and disarms the seam in one argv. Whatever it
++        // was meant to say, the runtime it produces is indistinguishable from
++        // one with no seam at all.
++        #expect(
++            throws: RuntimeOptionsError.nonPositiveInteger(
++                flag: "--fault-inject-generation-error-count", value: Int(value)!)
++        ) {
++            try RuntimeOptions.parse(
++                arguments: Self.serve([
++                    "--fault-inject-generation-error", Self.message,
++                    "--fault-inject-generation-error-count", value,
++                ]))
++        }
++    }
++
++    @Test("a negative token threshold is refused")
++    func refusesNegativeThreshold() {
++        #expect(
++            throws: RuntimeOptionsError.negativeInteger(
++                flag: "--fault-inject-generation-error-after-tokens", value: -1)
++        ) {
++            try RuntimeOptions.parse(
++                arguments: Self.serve([
++                    "--fault-inject-generation-error", Self.message,
++                    "--fault-inject-generation-error-after-tokens", "-1",
++                ]))
++        }
++    }
++
++    @Test("a zero token threshold is accepted and means immediately")
++    func acceptsZeroThreshold() throws {
++        let (_, options) = try RuntimeOptions.parse(
++            arguments: Self.serve([
++                "--fault-inject-generation-error", Self.message,
++                "--fault-inject-generation-error-after-tokens", "0",
++            ]))
++        #expect(options.faultInjectedGenerationErrorAfterTokens == 0)
++    }
++
++    @Test(
++        "a non-integer bound is refused",
++        arguments: [
++            "--fault-inject-generation-error-count",
++            "--fault-inject-generation-error-after-tokens",
++        ])
++    func refusesNonIntegerBound(flag: String) {
++        #expect(throws: RuntimeOptionsError.invalidInteger(flag: flag, value: "lots")) {
++            try RuntimeOptions.parse(
++                arguments: Self.serve([
++                    "--fault-inject-generation-error", Self.message, flag, "lots",
++                ]))
++        }
++    }
++
++    @Test(
++        "a repeated bound is refused",
++        arguments: [
++            "--fault-inject-generation-error-count",
++            "--fault-inject-generation-error-after-tokens",
++        ])
++    func refusesDuplicateBound(flag: String) {
++        #expect(throws: RuntimeOptionsError.duplicateFlag(flag)) {
++            try RuntimeOptions.parse(
++                arguments: Self.serve([
++                    "--fault-inject-generation-error", Self.message, flag, "1", flag, "2",
++                ]))
++        }
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/examples/model-harness.prototype.toml b/tools/mlx-swift-runtime-prototype/examples/model-harness.prototype.toml
+index 1efb5a4..1892e2f 100644
+--- a/tools/mlx-swift-runtime-prototype/examples/model-harness.prototype.toml
++++ b/tools/mlx-swift-runtime-prototype/examples/model-harness.prototype.toml
+@@ -39,6 +39,14 @@ argv = [
+ # runtime. A plain non-zero exit -- a refused model directory, a missing shader
+ # library, a rejected flag -- is a configuration error that a restart loop would
+ # hide instead of report.
++#
++# There is deliberately no policy for a *recoverable* generation failure, and
++# there should not be one. A generation that fails mid-batch on a runtime that
++# can still serve releases its batch entry and KV cache, keeps the worker, and
++# lets the next request through on the same process -- see `GET
++# /debug/generation-state` and `scripts/generation-batch-recovery-smoke.sh`.
++# Restarting on that would throw away a resident multi-GiB model to recover
++# from a single failed request.
+ [profiles.qwen-mlx-swift-prototype.supervision]
+ fatal_output_substrings = ["generation_worker_unavailable"]
+ restart_on_failure = false
+diff --git a/tools/mlx-swift-runtime-prototype/scripts/generation-batch-recovery-smoke.sh b/tools/mlx-swift-runtime-prototype/scripts/generation-batch-recovery-smoke.sh
+new file mode 100755
+index 0000000..90ac382
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/scripts/generation-batch-recovery-smoke.sh
+@@ -0,0 +1,628 @@
++#!/usr/bin/env bash
++# Generation-batch failure recovery, end to end (TASK-260827-2q77g8).
++#
++# Carries the *recoverable* half of the mlx-lm generation regression into the
++# MLX Swift runtime's acceptance suite. `scripts/dead-generation-smoke.sh`
++# already pins the terminal half: a backend that is gone must stop answering
++# `/health` 200. It says nothing about the far more common case -- a generation
++# that blows up mid-batch on a runtime that is still perfectly able to serve the
++# next caller.
++#
++# In Python that case was not survivable: the exception escaped the batch loop,
++# killed the generation thread, and took the batch entry and its KV cache with
++# it into a process that kept listening. Here the error propagates to its
++# caller, so the runtime *can* recover -- and this script is what establishes
++# that it does, observably, rather than by hoping ARC gets there first.
++#
++# Six phases:
++#
++#   1. recovery      -- a failure injected AFTER real tokens have reached the
++#                       client ends that request with 500 (never a truncated
++#                       200), leaves /health at 200, returns the batch slot,
++#                       and the NEXT request succeeds on the same process with
++#                       no restart
++#   2. streaming     -- the same, through the SSE call site, which is a separate
++#                       production path into the same state
++#   3. multi-fault   -- --fault-inject-generation-error-count 2 fails exactly
++#                       two requests and serves the third, so the seam's own
++#                       arithmetic is checked rather than assumed
++#   4. rebuild       -- an allocation-pressure failure ALSO drops MLX's shared
++#                       buffer pool, and still does not condemn the worker
++#   5. no-rebuild    -- NARROWING. An ordinary request-scoped failure releases
++#                       the batch and does NOT drop the shared pool
++#   6. condemned     -- NARROWING. The recorded exhaustion still condemns:
++#                       /health 503, later requests refused 503, marker
++#                       emitted -- and the batch is still released
++#
++# (5) is what makes (4) mean anything: a runtime that cleared the shared pool on
++# every error would pass (4) and pay a cold-pool cost on every later generation.
++#
++# (6) is what makes the whole script mean anything. Everything in 1-5 is
++# satisfied by a runtime that recovered from *every* failure -- including the
++# one that means the backend is gone. That runtime would hand the next caller a
++# dead worker while reporting 200, which is precisely the incident 2h39ya
++# exists to end. (6) requires the recovery path to have left that contract
++# intact.
++#
++#   BINARY=./DerivedData/Build/Products/Release/mlx-swift-runtime-prototype \
++#   HARNESS=/Users/alexis/.local/bin/model-harness \
++#   MODEL=/Users/alexis/.cache/huggingface/hub/models--mlx-community--Qwen1.5-0.5B-Chat-4bit/snapshots/659d8dafc39202a6688bb46242d60440702489b1 \
++#   PORT=18021 OUT=./batch-recovery-out \
++#   scripts/generation-batch-recovery-smoke.sh
++#
++# Unlike the dead-generation smoke, this one DOES reach the weights: the fault
++# fires after real tokens, which is the only way the batch has anything to
++# release. The 261 MB model is still enough, and still leaves the host able to
++# hold whatever else is resident.
++
++set -uo pipefail
++# Job control, so each managed run becomes its own process group. `model-harness`
++# does not forward signals to the runtime it spawns, so signalling the harness
++# alone orphans a live listener -- and an orphan holding this port is exactly how
++# a later phase could pass by talking to the wrong process.
++set -m
++
++BINARY="${BINARY:?set BINARY to the xcodebuild Release product}"
++HARNESS="${HARNESS:?set HARNESS to the model-harness executable}"
++MODEL="${MODEL:?set MODEL to an absolute local model directory}"
++PORT="${PORT:-18021}"
++HOST=127.0.0.1
++OUT="${OUT:-./batch-recovery-out}"
++BASE="http://${HOST}:${PORT}"
++
++# A failure that belongs to the request. Shares nothing with any signature.
++BENIGN='RuntimeError: mid-batch generation step failed'
++# `mlx/backend/metal/allocator.cpp:111-117`. Implicates the shared buffer pool
++# -- the pool is holding freed buffers the next allocation has to get past --
++# and deliberately does NOT condemn: the allocator refused one buffer and can
++# still serve.
++OVERSIZE='RuntimeError: [metal::malloc] Attempting to allocate 4294967296 bytes which is greater than the maximum allowed buffer size'
++# Verbatim from the BUG-260827-1jhv2g incident record. Condemns.
++INCIDENT='RuntimeError: [metal::malloc] Resource limit (499000) exceeded'
++MARKER='generation_worker_unavailable'
++# Tokens that must reach the client before the fault fires. Non-zero on purpose:
++# a fault thrown before the ChatSession exists releases nothing, so a runtime
++# that leaked every KV cache it ever built would pass a check written that way.
++#
++# One, not more. By the first chunk the whole prompt is already in the KV cache,
++# the session exists and output has reached the client -- everything the
++# recovery has to give back. A higher threshold buys nothing and costs
++# robustness: this 0.5B chat model answers some prompts in a single token, and a
++# threshold it never reaches turns a phase into a run where the fault simply did
++# not happen. That fails loudly rather than silently -- each phase below demands
++# its 500 -- but a check whose outcome depends on how chatty a model feels is
++# not a check.
++AFTER_TOKENS=1
++MAX_TOKENS=24
++# Fixed, and forwarded to the sampler. Without it each phase generates a
++# different answer of a different length, so what the runtime is asked to
++# recover from varies run to run, and a phase that passed yesterday can fail
++# today for a reason that has nothing to do with the runtime.
++SEED=20260827
++
++case "$BINARY" in /*) ;; *) BINARY="$PWD/${BINARY#./}" ;; esac
++case "$OUT" in /*) ;; *) OUT="$PWD/${OUT#./}" ;; esac
++
++mkdir -p "$OUT"
++CONFIG="$OUT/model-harness-batch-recovery.toml"
++
++FAILURES=0
++pass() { printf 'PASS  %s\n' "$*"; }
++fail() { printf 'FAIL  %s\n' "$*"; FAILURES=$((FAILURES + 1)); }
++info() { printf 'INFO  %s\n' "$*"; }
++
++status_of() { curl -sS --max-time 15 -o "$2" -w '%{http_code}' "$1" 2>/dev/null; }
++
++chat() {
++    curl -sS --max-time 120 -o "$1" -w '%{http_code}' \
++        -H 'Content-Type: application/json' -X POST "$BASE/v1/chat/completions" \
++        --data-binary "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Count from one to twenty.\"}],\"max_tokens\":$MAX_TOKENS,\"seed\":$SEED}" \
++        2>/dev/null
++}
++
++stream_chat() {
++    curl -sS --max-time 120 -o "$1" \
++        -H 'Content-Type: application/json' -X POST "$BASE/v1/chat/completions" \
++        --data-binary "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Count from one to twenty.\"}],\"max_tokens\":$MAX_TOKENS,\"stream\":true,\"seed\":$SEED}" \
++        >/dev/null 2>&1
++}
++
++state_of() { status_of "$BASE/debug/generation-state" "$1"; }
++
++# Assert one integer field of the batch ledger. Reads the endpoint's own JSON --
++# nothing here recomputes what the runtime should have counted.
++expect_batch() {
++    local file=$1 field=$2 want=$3 label=$4 got
++    got=$(python3 -c '
++import json, sys
++print(json.load(open(sys.argv[1]))["batch"][sys.argv[2]])
++' "$file" "$field" 2>/dev/null)
++    if [ "$got" = "$want" ]; then
++        pass "$label ($field=$got)"
++    else
++        fail "$label ($field=${got:-unreadable}, want $want)"
++    fi
++}
++
++# ------------------------------------------------------------------ config --
++# Supervision is attached wherever a phase has to prove that no restart
++# happened: a policy that is not configured cannot fire, so "no restart"
++# measured without one measures nothing.
++#
++# It is deliberately OFF for the condemnation window in 6a. With
++# `fatal_output_substrings` attached, model-harness kills the runtime within
++# milliseconds of the marker reaching its stdout -- correct behaviour, and it
++# destroys the very 503 the phase exists to observe. 6b attaches the policy and
++# measures the other half. Recorded in LOGBOOK.md at 2205 and rediscovered here
++# as six `000` connection-refused failures.
++write_config() {
++    local profile=$1 injection=$2 count=$3 after=$4 supervised=${5:-supervised}
++    local injection_argv=""
++    if [ -n "$injection" ]; then
++        injection_argv=$(printf '    "--fault-inject-generation-error", "%s",\n' "$injection")
++        if [ -n "$count" ]; then
++            injection_argv+=$(printf '    "--fault-inject-generation-error-count", "%s",\n' "$count")
++        fi
++        injection_argv+=$(printf '    "--fault-inject-generation-error-after-tokens", "%s",\n' "$after")
++    fi
++    cat > "$CONFIG" <<TOML
++# Task-scoped acceptance config for TASK-260827-2q77g8. NOT installed.
++[profiles.$profile]
++mode = "local"
++executable = "$BINARY"
++argv = [
++    "serve",
++    "--model", "$MODEL",
++    "--host", "{host}",
++    "--port", "{port}",
++    "--default-max-tokens", "64",
++$injection_argv]
++TOML
++    [ "$supervised" = "supervised" ] || return 0
++    cat >> "$CONFIG" <<TOML
++
++[profiles.$profile.supervision]
++fatal_output_substrings = ["$MARKER"]
++restart_on_failure = false
++max_restarts = 2
++restart_window_seconds = 120
++restart_delay_milliseconds = 250
++TOML
++}
++
++port_free() { ! lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; }
++
++wait_ready() {
++    local log=$1 limit=${2:-240} code
++    for _ in $(seq 1 "$limit"); do
++        code=$(status_of "$BASE/v1/models" /dev/null)
++        [ "$code" = "200" ] && return 0
++        sleep 0.5
++    done
++    info "runtime never became ready; last /v1/models code=${code:-none}"
++    tail -20 "$log" >&2
++    return 1
++}
++
++start_harness() {
++    local profile=$1 log=$2
++    # Refuse to start on an occupied port. Every check below reads the port, so
++    # a leftover listener from an earlier phase would answer for a runtime that
++    # was never launched and turn this suite into theatre.
++    if ! port_free; then
++        fail "port $PORT still has a listener; refusing to start $profile"
++        exit 1
++    fi
++    "$HARNESS" run "$profile" --config "$CONFIG" --host "$HOST" --port "$PORT" > "$log" 2>&1 &
++    HARNESS_PID=$!
++}
++
++stop_harness() {
++    [ -n "${HARNESS_PID:-}" ] || return 0
++    local children
++    children=$(pgrep -P "$HARNESS_PID" 2>/dev/null)
++    kill -TERM -- "-$HARNESS_PID" 2>/dev/null \
++        || kill -TERM "$HARNESS_PID" $children 2>/dev/null
++    for _ in $(seq 1 80); do
++        port_free && ! kill -0 "$HARNESS_PID" 2>/dev/null && break
++        sleep 0.25
++    done
++    kill -KILL -- "-$HARNESS_PID" 2>/dev/null \
++        || kill -KILL "$HARNESS_PID" $children 2>/dev/null
++    wait "$HARNESS_PID" 2>/dev/null
++    HARNESS_PID=""
++    for _ in $(seq 1 40); do port_free && break; sleep 0.25; done
++}
++
++trap 'stop_harness' EXIT
++
++if ! port_free; then
++    fail "port $PORT already has a listener"
++    exit 1
++fi
++
++# ===================================== 1. the acceptance criterion itself ====
++info "recovery: a mid-batch failure, then the next request on the same process"
++write_config batch-recovery "$BENIGN" 1 "$AFTER_TOKENS"
++start_harness batch-recovery "$OUT/recovery.log"
++if wait_ready "$OUT/recovery.log"; then
++    pass "recovery run reached ready"
++
++    CODE=$(status_of "$BASE/health" "$OUT/recovery-health-before.json")
++    [ "$CODE" = "200" ] && pass "recovery run /health is 200 before the fault" \
++        || fail "recovery run /health answered $CODE before the fault (want 200)"
++
++    state_of "$OUT/recovery-state-before.json" > /dev/null
++    expect_batch "$OUT/recovery-state-before.json" active 0 \
++        "nothing is in flight before any traffic"
++
++    # ---- the affected request terminates with an explicit error -------------
++    CODE=$(chat "$OUT/recovery-chat-1.json")
++    if [ "$CODE" = "500" ]; then
++        pass "RECOVERY GATE: the mid-batch failure answers the request with 500"
++    else
++        fail "RECOVERY GATE: the mid-batch failure answered $CODE (want 500)"
++    fi
++    # THE TRUNCATION NEGATIVE. By this point the client has already received
++    # real tokens. A runtime that returned what it had accumulated would answer
++    # 200 with a short but well-formed completion, and every other check in this
++    # phase would still pass -- the caller would simply believe a truncated
++    # answer was the whole answer.
++    python3 -c '
++import json, sys
++body = json.load(open(sys.argv[1]))
++assert "choices" not in body, "partial generation was returned as a completion"
++assert body["error"]["code"] == "generation_failed", body
++assert sys.argv[2] in body["error"]["message"], body
++' "$OUT/recovery-chat-1.json" "$BENIGN" 2>/dev/null \
++        && pass "the 500 names the failure and returns no partial completion" \
++        || fail "the failed request did not report an explicit error (or returned a partial completion)"
++
++    # ---- the worker is kept ------------------------------------------------
++    CODE=$(status_of "$BASE/health" "$OUT/recovery-health-after.json")
++    if [ "$CODE" = "200" ]; then
++        pass "RECOVERY GATE: /health stays 200 after a request-scoped batch failure"
++    else
++        fail "RECOVERY GATE: /health answered $CODE after a request-scoped batch failure (want 200)"
++    fi
++    CODE=$(status_of "$BASE/v1/models" "$OUT/recovery-models.json")
++    [ "$CODE" = "200" ] && pass "the model is still advertised on /v1/models" \
++        || fail "/v1/models answered $CODE after a batch failure (want 200)"
++
++    # ---- the invalid batch state is released -------------------------------
++    state_of "$OUT/recovery-state-after.json" > /dev/null
++    expect_batch "$OUT/recovery-state-after.json" active 0 \
++        "RECOVERY GATE: no batch slot is left in flight after the failure"
++    expect_batch "$OUT/recovery-state-after.json" failed 1 \
++        "the failure is recorded"
++    expect_batch "$OUT/recovery-state-after.json" batches_released 1 \
++        "RECOVERY GATE: the failed batch was released"
++    grep -q '"event":"generation_batch_released"' "$OUT/recovery.log" \
++        && pass "the runtime emitted a generation_batch_released event" \
++        || fail "no generation_batch_released event in the runtime output"
++
++    # ---- and the next request succeeds -------------------------------------
++    CODE=$(chat "$OUT/recovery-chat-2.json")
++    if [ "$CODE" = "200" ]; then
++        pass "RECOVERY GATE: the next request completes on the same process"
++    else
++        fail "RECOVERY GATE: the next request answered $CODE (want 200)"
++    fi
++    # Content or reasoning: the 0.5B chat model this runs on emits no
++    # `</think>`, so the splitter files its whole answer under `reasoning`.
++    # Requiring `content` specifically would fail a perfectly recovered
++    # generation for a property of the model, not of the recovery.
++    python3 -c '
++import json, sys
++body = json.load(open(sys.argv[1]))
++message = body["choices"][0]["message"]
++assert (message.get("content") or message.get("reasoning")), "recovered completion is empty"
++assert body["usage"]["completion_tokens"] > 0, body["usage"]
++assert body["choices"][0]["finish_reason"], body["choices"][0]
++' "$OUT/recovery-chat-2.json" 2>/dev/null \
++        && pass "the recovered completion carries real text and token counts" \
++        || fail "the recovered completion is empty or has no usage"
++
++    state_of "$OUT/recovery-state-final.json" > /dev/null
++    expect_batch "$OUT/recovery-state-final.json" completed 1 "the second generation completed"
++    expect_batch "$OUT/recovery-state-final.json" active 0 "nothing is left in flight"
++
++    # ---- without restarting a healthy process ------------------------------
++    grep -q "$MARKER" "$OUT/recovery.log" \
++        && fail "a request-scoped batch failure emitted the supervision marker" \
++        || pass "a request-scoped batch failure emitted no supervision marker"
++    grep -q 'restarting profile' "$OUT/recovery.log" \
++        && fail "RECOVERY GATE: model-harness restarted a runtime that recovered on its own" \
++        || pass "RECOVERY GATE: no restart -- the recovery happened in the original process"
++    if [ "$(grep -c '"event":"listening"' "$OUT/recovery.log")" -eq 1 ]; then
++        pass "exactly one listener was ever bound (no replacement process)"
++    else
++        fail "more than one listening event: the recovery was a restart in disguise"
++    fi
++else
++    fail "recovery run never became ready"
++fi
++stop_harness
++
++# ======================== 2. the streaming call site recovers as well =======
++# `Router.complete` and `RuntimeHTTPHandler.sendStream` are separate production
++# paths into the same engine. A runtime that recovered only the buffered one
++# would leak a batch per stream on exactly the path Pi uses.
++info "streaming: the same mid-batch failure, driven through SSE"
++start_harness batch-recovery "$OUT/stream.log"
++if wait_ready "$OUT/stream.log"; then
++    pass "streaming run reached ready"
++
++    # SSE opens with a 200 head before generation starts, so the failure can
++    # only be reported as a terminal frame; the status code says nothing here.
++    stream_chat "$OUT/stream-body-1.txt"
++    grep -q 'generation_failed' "$OUT/stream-body-1.txt" \
++        && pass "the stream reports the batch failure as a terminal frame" \
++        || fail "the stream did not report the batch failure"
++    # The partial chunks are real, and they are what the truncation negative in
++    # phase 1 is about: the stream delivered content and then failed, so a
++    # client that treated the frames as a complete answer would be wrong. The
++    # error frame is what tells it otherwise.
++    grep -q '"delta"' "$OUT/stream-body-1.txt" \
++        && pass "partial chunks reached the client before the failure" \
++        || fail "no chunks reached the client; the fault fired before generation"
++    python3 -c '
++import json, sys
++frames = [json.loads(line[6:]) for line in open(sys.argv[1])
++          if line.startswith("data: ") and not line.startswith("data: [DONE]")]
++finished = [f for f in frames
++            if f.get("choices") and f["choices"][0].get("finish_reason")]
++assert not finished, f"failed stream still sent a finish_reason: {finished}"
++' "$OUT/stream-body-1.txt" 2>/dev/null \
++        && pass "the failed stream sent no finish_reason frame" \
++        || fail "the failed stream sent a finish_reason, reading as a clean completion"
++
++    CODE=$(status_of "$BASE/health" "$OUT/stream-health.json")
++    [ "$CODE" = "200" ] && pass "/health stays 200 after a failed stream" \
++        || fail "/health answered $CODE after a failed stream (want 200)"
++    state_of "$OUT/stream-state.json" > /dev/null
++    expect_batch "$OUT/stream-state.json" active 0 \
++        "RECOVERY GATE (streaming): no batch slot is left in flight"
++    expect_batch "$OUT/stream-state.json" batches_released 1 \
++        "RECOVERY GATE (streaming): the failed batch was released"
++
++    stream_chat "$OUT/stream-body-2.txt"
++    python3 -c '
++import json, sys
++frames = [json.loads(line[6:]) for line in open(sys.argv[1])
++          if line.startswith("data: ") and not line.startswith("data: [DONE]")]
++assert frames, "no frames at all"
++assert not any("error" in f for f in frames), "recovered stream carried an error frame"
++assert any(f.get("choices") and f["choices"][0].get("finish_reason") for f in frames), \
++    "recovered stream never finished"
++' "$OUT/stream-body-2.txt" 2>/dev/null \
++        && pass "RECOVERY GATE (streaming): the next stream completes cleanly" \
++        || fail "RECOVERY GATE (streaming): the next stream did not complete cleanly"
++    grep -q 'restarting profile' "$OUT/stream.log" \
++        && fail "(streaming) model-harness restarted a runtime that recovered" \
++        || pass "(streaming) no restart"
++else
++    fail "streaming run never became ready"
++fi
++stop_harness
++
++# ================================ 3. the seam's own arithmetic is checked ====
++# Everything above rests on --fault-inject-generation-error-count actually
++# bounding the injection. A seam that always failed exactly one request would
++# pass phases 1 and 2 while making the count flag a lie, and any later phase
++# written against a different count would be measuring nothing.
++info "multi-fault: count=2 must fail exactly two requests and serve the third"
++write_config batch-multi "$BENIGN" 2 "$AFTER_TOKENS"
++start_harness batch-multi "$OUT/multi.log"
++if wait_ready "$OUT/multi.log"; then
++    pass "multi-fault run reached ready"
++    CODE1=$(chat "$OUT/multi-chat-1.json")
++    CODE2=$(chat "$OUT/multi-chat-2.json")
++    CODE3=$(chat "$OUT/multi-chat-3.json")
++    [ "$CODE1" = "500" ] && pass "request 1 of 3 failed as configured" \
++        || fail "request 1 answered $CODE1 (want 500)"
++    [ "$CODE2" = "500" ] && pass "request 2 of 3 failed as configured" \
++        || fail "request 2 answered $CODE2 (want 500)"
++    [ "$CODE3" = "200" ] && pass "SEAM GATE: request 3 succeeded -- the count bounds the seam" \
++        || fail "SEAM GATE: request 3 answered $CODE3 (want 200); the count does not bound the seam"
++    state_of "$OUT/multi-state.json" > /dev/null
++    expect_batch "$OUT/multi-state.json" failed 2 "exactly two generations failed"
++    expect_batch "$OUT/multi-state.json" completed 1 "exactly one generation completed"
++    expect_batch "$OUT/multi-state.json" batches_released 2 "both failed batches were released"
++    expect_batch "$OUT/multi-state.json" active 0 "nothing is left in flight"
++else
++    fail "multi-fault run never became ready"
++fi
++stop_harness
++
++# ============================ 4. cache state is rebuilt when implicated ======
++info "rebuild: an allocation-pressure failure drops the shared buffer pool"
++write_config batch-rebuild "$OVERSIZE" 1 "$AFTER_TOKENS"
++start_harness batch-rebuild "$OUT/rebuild.log"
++if wait_ready "$OUT/rebuild.log"; then
++    pass "rebuild run reached ready"
++    CODE=$(chat "$OUT/rebuild-chat-1.json")
++    [ "$CODE" = "500" ] && pass "the allocation failure answers the request with 500" \
++        || fail "the allocation failure answered $CODE (want 500)"
++
++    state_of "$OUT/rebuild-state.json" > /dev/null
++    expect_batch "$OUT/rebuild-state.json" batches_released 1 "the failed batch was released"
++    expect_batch "$OUT/rebuild-state.json" shared_cache_rebuilds 1 \
++        "REBUILD GATE: the shared buffer pool was dropped"
++    grep -q '"rebuilt_shared_cache":true' "$OUT/rebuild.log" \
++        && pass "the released-batch event records the rebuild" \
++        || fail "the released-batch event does not record a rebuild"
++
++    # NARROWING against the condemning gate. This message carries the Metal
++    # allocator tag and is still request-scoped: it rejects one oversized
++    # buffer and leaves the backend able to serve. A gate that condemned on the
++    # tag alone would take a healthy runtime out of rotation here.
++    CODE=$(status_of "$BASE/health" "$OUT/rebuild-health.json")
++    if [ "$CODE" = "200" ]; then
++        pass "NARROWING GATE: an allocator-tagged request failure does not condemn the worker"
++    else
++        fail "NARROWING GATE: an allocator-tagged request failure moved /health to $CODE (want 200)"
++    fi
++    grep -q "$MARKER" "$OUT/rebuild.log" \
++        && fail "an allocation failure emitted the supervision marker" \
++        || pass "an allocation failure emitted no supervision marker"
++
++    CODE=$(chat "$OUT/rebuild-chat-2.json")
++    [ "$CODE" = "200" ] && pass "REBUILD GATE: the next request completes after the pool was dropped" \
++        || fail "REBUILD GATE: the next request answered $CODE (want 200)"
++else
++    fail "rebuild run never became ready"
++fi
++stop_harness
++
++# ================= 5. NARROWING: the pool is NOT dropped for everything =====
++# Phase 4 is satisfied by a runtime that clears the shared pool on every
++# failure. That runtime would throw away the buffer pool -- and the latency it
++# buys -- for a failure that never touched it. Only this phase separates
++# "rebuilds when implicated" from "rebuilds always".
++info "no-rebuild (narrowing): an ordinary failure releases the batch and nothing else"
++write_config batch-no-rebuild "$BENIGN" 1 "$AFTER_TOKENS"
++start_harness batch-no-rebuild "$OUT/no-rebuild.log"
++if wait_ready "$OUT/no-rebuild.log"; then
++    pass "no-rebuild run reached ready"
++    CODE=$(chat "$OUT/no-rebuild-chat.json")
++    [ "$CODE" = "500" ] && pass "the request-scoped failure answers the request with 500" \
++        || fail "the request-scoped failure answered $CODE (want 500)"
++    state_of "$OUT/no-rebuild-state.json" > /dev/null
++    expect_batch "$OUT/no-rebuild-state.json" batches_released 1 \
++        "the batch is still released"
++    expect_batch "$OUT/no-rebuild-state.json" shared_cache_rebuilds 0 \
++        "NARROWING GATE: the shared buffer pool was left alone"
++    grep -q '"rebuilt_shared_cache":true' "$OUT/no-rebuild.log" \
++        && fail "NARROWING GATE: the runtime dropped the shared pool for an unrelated failure" \
++        || pass "NARROWING GATE: no rebuild was recorded for an unrelated failure"
++else
++    fail "no-rebuild run never became ready"
++fi
++stop_harness
++
++# ============ 6. NARROWING: an unrecoverable death is still unrecoverable ===
++# THE LOAD-BEARING PHASE. Everything above is satisfied by a runtime that
++# recovers from every failure, including the one that means the backend is
++# gone. That runtime hands the next caller a dead worker while answering
++# /health 200 -- the exact incident TASK-260827-2h39ya exists to end. This
++# phase requires the recovery path to have left that contract intact, and the
++# batch to be released even so.
++#
++# Split in two for the same reason `dead-generation-smoke.sh` is: the 503 window
++# belongs to the runtime and the restart belongs to the supervisor, and with a
++# policy attached the second destroys the first within milliseconds. Measuring
++# them in one process only measures which won the race.
++info "condemned 6a (narrowing, unsupervised): the recorded exhaustion still takes the runtime out of rotation"
++write_config batch-condemned "$INCIDENT" 1 "$AFTER_TOKENS" unsupervised
++start_harness batch-condemned "$OUT/condemned.log"
++if wait_ready "$OUT/condemned.log"; then
++    pass "condemned run reached ready"
++
++    CODE=$(status_of "$BASE/health" "$OUT/condemned-health-before.json")
++    [ "$CODE" = "200" ] && pass "condemned run /health is 200 before the fault" \
++        || fail "condemned run /health answered $CODE before the fault (want 200)"
++
++    CODE=$(chat "$OUT/condemned-chat-1.json")
++    [ "$CODE" = "500" ] && pass "the exhaustion answers the provoking request with 500" \
++        || fail "the exhaustion answered $CODE (want 500)"
++
++    CODE=$(status_of "$BASE/health" "$OUT/condemned-health-after.json")
++    if [ "$CODE" = "503" ]; then
++        pass "NARROWING GATE: an unrecoverable failure still moves /health to 503"
++    else
++        fail "NARROWING GATE: /health answered $CODE for a condemned worker (want 503); recovery swallowed the condemnation"
++    fi
++    python3 -c '
++import json, sys
++body = json.load(open(sys.argv[1]))
++assert body["status"] == "unavailable", body
++assert "metal::malloc" in body["detail"], body
++' "$OUT/condemned-health-after.json" 2>/dev/null \
++        && pass "condemned /health body is still {\"status\":\"unavailable\"}" \
++        || fail "condemned /health body is not {\"status\":\"unavailable\"}"
++
++    # The seam has budget for exactly one injection, so a runtime that merely
++    # rearmed its engine would serve this one. It must be refused instead: the
++    # condemnation is terminal regardless of whether the fault would repeat.
++    CODE=$(chat "$OUT/condemned-chat-2.json")
++    if [ "$CODE" = "503" ]; then
++        pass "NARROWING GATE: the next request is refused 503, not served by a condemned worker"
++    else
++        fail "NARROWING GATE: the next request answered $CODE (want 503); the condemned worker was reused"
++    fi
++
++    grep -q "$MARKER" "$OUT/condemned.log" \
++        && pass "the supervision marker is still emitted for an unrecoverable failure" \
++        || fail "no supervision marker for an unrecoverable failure"
++
++    # ...and the dead worker still gave its batch back. Condemnation is not an
++    # excuse to leak: the supervisor is about to start a replacement that needs
++    # the host's memory.
++    state_of "$OUT/condemned-state.json" > /dev/null
++    expect_batch "$OUT/condemned-state.json" active 0 \
++        "a condemned worker leaves no batch slot in flight"
++    expect_batch "$OUT/condemned-state.json" batches_released 1 \
++        "a condemned worker still releases its batch"
++    expect_batch "$OUT/condemned-state.json" shared_cache_rebuilds 1 \
++        "a condemned worker returns the shared buffer pool"
++    python3 -c '
++import json, sys
++body = json.load(open(sys.argv[1]))
++assert body["readiness"] == "generation_worker_failed", body
++' "$OUT/condemned-state.json" 2>/dev/null \
++        && pass "the state endpoint still answers after condemnation and names it" \
++        || fail "the state endpoint did not report the condemned readiness"
++
++else
++    fail "condemned run never became ready"
++fi
++stop_harness
++
++# ================= 6b. and the supervisor still gets the last word ==========
++# The other half of 6a, with the policy attached. Fresh process: the
++# condemnation above is terminal, so the restart has to be provoked again.
++info "condemned 6b (supervised): the marker still produces a replacement process"
++write_config batch-condemned-supervised "$INCIDENT" 1 "$AFTER_TOKENS" supervised
++start_harness batch-condemned-supervised "$OUT/condemned-supervised.log"
++if wait_ready "$OUT/condemned-supervised.log"; then
++    pass "supervised condemned run reached ready"
++    # The response is not asserted: the marker reaches the harness while the
++    # reply is still being written, so the kill may land first. That the client
++    # loses this request is the point of restarting.
++    chat "$OUT/condemned-supervised-chat.json" > "$OUT/condemned-supervised-chat.code"
++    info "provoking request returned HTTP $(cat "$OUT/condemned-supervised-chat.code")"
++    RESTARTED=0
++    for _ in $(seq 1 240); do
++        if grep -q 'restarting profile "batch-condemned-supervised"' \
++            "$OUT/condemned-supervised.log"; then
++            RESTARTED=1
++            break
++        fi
++        sleep 0.25
++    done
++    [ "$RESTARTED" -eq 1 ] \
++        && pass "NARROWING GATE: model-harness still restarts a condemned worker" \
++        || fail "NARROWING GATE: model-harness never restarted the condemned runtime"
++    grep -q 'fatal output "'"$MARKER"'"' "$OUT/condemned-supervised.log" \
++        && pass "the harness names the marker as the reason it restarted" \
++        || fail "the harness restart does not name the marker"
++    if wait_ready "$OUT/condemned-supervised.log"; then
++        CODE=$(status_of "$BASE/health" "$OUT/condemned-supervised-health.json")
++        [ "$CODE" = "200" ] && pass "the replacement runtime answers /health 200 again" \
++            || fail "the replacement runtime answered $CODE (want 200)"
++    else
++        fail "the restarted runtime never became ready"
++    fi
++else
++    fail "supervised condemned run never became ready"
++fi
++stop_harness
++
++printf '\n%s\n' "----------------------------------------"
++if [ "$FAILURES" -eq 0 ]; then
++    printf 'GENERATION-BATCH-RECOVERY SMOKE OK (0 failures)\n'
++    exit 0
++fi
++printf 'GENERATION-BATCH-RECOVERY SMOKE FAILED (%d failures)\n' "$FAILURES"
++exit 1

@@ -1,0 +1,14 @@
+TASK-260828-3fgca3 — gate results, all commands run as standalone processes
+
+swift build --build-tests        exit 0
+swift test                       exit 0  (302 tests / 25 suites)
+benchmark-gate-smoke.sh          exit 0  (46 checks, 0 failures)
+xcodebuild Release               exit 0  (BUILD SUCCEEDED)
+swift-format lint --strict       exit 0
+shellcheck -S warning            exit 0
+git diff --check                 exit 0
+mutants                          8 applied, 8 killed, 0 survivors
+
+G4 probes (production entry, both refused before any launch, no weights loaded):
+  benchmark-run --model <GGUF dir>            exit 5  config.json could not be read
+  benchmark-run --baseline-profile llamacpp   exit 5  does not pass <modelPath> to the runtime

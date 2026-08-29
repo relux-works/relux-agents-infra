@@ -1,0 +1,17 @@
+Reviewer RUN-260825-e2bfd4 logbook entry for TASK-260825-lsojra CR rev2.
+
+Insert under `## 2026-08-26`, above the `### 0000` block, in LOGBOOK.md at the project root.
+Attached as a resource rather than committed: a reviewer-archetype run is read-only on the
+repository, and a dirty worktree file would sit outside the accepted candidate tree.
+
+---
+
+### 0230 — Verify A Mutant By Narrowing It, Not By Reading Its Row
+
+- FINDING: The F1 closure was confirmed by re-introducing the defect, not by inspecting the fix. Reproducing the pre-repair wiring inside the delivered tree — run the specified gate on the delivered bytes, then evaluate the mutant against a constant harness-built plain frame — reddens all three new `TestSharedRuntimeShapeMutantsDriveProductionLauncherGate` subtests. Withdrawing `reject_all_probe` from the `TestMain` entry allowlist reddens its production-entry test with `unknown shape mutant`. The delivered regressions are discriminating.
+- FINDING: The sharpest measurement was a probe mutant, `probe_unsupplied_dimension`, deciding on `frame.dimension` — a quantity the production decode path never supplies, i.e. the `RUN-260825-86b7d5` F1 shape verbatim. Under the delivered calibration it fails as `coverage hole: corpus kills no frame`. Under the pre-repair routing restored, the same mutant is reported `KILLED … admits=340`. A predicate production never evaluates, credited with 340 kills.
+- FINDING: 340 is the second fabricated kill count this contract has produced, after the 48 that hid the reject-all mutant in revision 8. Both were large. The general lesson holds and is worth carrying: **a large witness count is not evidence of a mutant's health — it is the signature a broken mutant produces.** What discriminates is where the mutant's input comes from, not how many frames it disagrees on.
+- FINDING: The gate itself survived 22 raw forged frames driven byte-wise through the real `runtime-launch` entry, each refusal carrying a never-exec proof. The two rows that matter beyond the existing table: a duplicate whose second value is **wrong** still refuses `frame_duplicate_field`, and an unknown member alongside a **wrong** `protocol_version` still refuses `frame_unknown_field` — §6.2 B12 step 4 genuinely precedes step 5, so the shape gate is not reachable only through value-correct frames.
+- NOTE: `sharedAuthDecodeEvidence.DecisionCallSite` and `.ConstantFieldSet` are emitted as literals inside the decoder, so under any of the 18 mutants the record still names the compiled constant set while a different decision is installed. `DecodedKeys` and `ComparedFields` are measured; those two are not, and should not be cited as if they were. The §12.4 structural obligation rests on the measured pair plus the calibration.
+- NOTE: `tokenizeSharedAuthorizationFrame` now runs the five value decodes before the trailing-content check. A frame that is both value-unparseable and has trailing content reports `frame_unparseable` where it once reported `frame_not_single_object`. No admitted frame changed, but the 398-frame corpus contains no such combination, so the differential would not have caught a real inversion there.
+- STATUS: `CR-TASK-260825-lsojra-2` **accepted** by `RUN-260825-e2bfd4`. Measured at `8518d45`, four commits behind `main`; trunk moved inside the same package (`model_check.go`, `pi_config.go`, `pi_launch_posix.go`, `main.go`), so the green suites do **not** predict a trunk-green result and integration must re-run them on the merged tree.

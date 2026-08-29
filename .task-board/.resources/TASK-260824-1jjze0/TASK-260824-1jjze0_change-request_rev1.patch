@@ -1,0 +1,23 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 5118d62..a47e8bb 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,18 @@
+ 
+ ## 2026-08-24
+ 
++### 2109 — Absolute MLX Identity Unblocks Project Target Rollout
++- DECISION: Operator selected `/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit` as the exact Qwen target/profile identity because real `mlx_lm.server` uses that resolved path for load, requests, and `/v1/models` readiness.
++- MILESTONE: `TASK-260824-1jjze0` atomically rewrote all 121 in-scope project configs after a real-server exact-ID plus completion gate; 363 post-apply production alias composes and rollback-readiness verification exit 0.
++- FINDING: Per-file backup/current/candidate hashes and raw MCP comparisons pass for all 121 configs; unrelated status lines across 116 Git worktrees remain unchanged.
++- SCOPE: Task-only script and evidence under `.temp/TASK-260824-1jjze0`; no runtime migration path added.
++
++### 2051 — Canonical Qwen Selector Is Not An MLX Runtime Identity
++- ROOT CAUSE: Real `mlx_lm.server --model Qwen3.8-27B-MLX-8bit` treats the required canonical model ID as a Hugging Face repo, receives `RepositoryNotFound`, and keeps an empty HTTP shell alive; the local weights live at a differently named absolute path.
++- FINDING: MLX reports a local model at `/v1/models` by resolved absolute path; managed Pi correctly reaches that route as `base_url + readiness_path`, but `waitPiRuntimeReady` requires the inventory ID to equal the canonical profile model exactly.
++- EVIDENCE: `TASK-260824-1jjze0` full dry-run validates 121 candidates through 363 production alias compose calls; real apply gate exits 3 before writes, records zero writes, and post-refusal hashes match all 121 sources.
++- BLOCKED: Recursive rollout requires an architecture decision that separates public target model identity from the MLX load selector/readiness identity, or changes the canonical target/runtime; proxy/symlink hacks would violate the managed-Pi boundary.
++
+ ### 2013 — Hosted Identity Locks Cross The Wrapper Delimiter
+ - FIX: `lockCodexTargetArguments` and `lockClaudeTargetArguments` now scan identity selectors through the first wrapper `--` and stop only at the second provider operand boundary; Pi keeps its first-`--` message boundary.
+ - FIX: Ordinary hosted alias launches no longer dump the resolved launch plan to stderr; diagnostics remain explicit `--print-config` behavior.

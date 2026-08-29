@@ -461,6 +461,17 @@ func shouldSkip(rel string, isDir bool) bool {
 		return true
 	case hasPathComponent(rel, ".temp"):
 		return true
+	// SwiftPM writes build products into `.build`. They are machine-local
+	// artifacts, often hundreds of megabytes, and their bundle resources carry
+	// restrictive permissions that make a copy fail outright.
+	case hasPathComponent(rel, ".build"):
+		return true
+	// mlx-swift's Metal shaders cannot be built by SwiftPM, so that package is
+	// built with `xcodebuild -derivedDataPath ./DerivedData`. The result is the
+	// same class of machine-local artifact as `.build` — multiple gigabytes,
+	// with bundle resources whose permissions defeat a copy.
+	case hasPathComponent(rel, "DerivedData"):
+		return true
 	case rel == ".configs/"+projectConfigFileName:
 		return true
 	// A receipt is minted by a verified run, never inherited from a source tree.

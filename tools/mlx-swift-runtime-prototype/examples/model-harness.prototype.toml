@@ -1,0 +1,61 @@
+# Task-scoped model-harness profile for the MLX Swift LM prototype.
+#
+# This file is an example, not an installed config. The default local runtime
+# stays `profiles.qwen-local` in the operator's own model-harness config, which
+# still points at Python `mlx_lm.server`; nothing here changes it. Copy this
+# profile into a *separate* config file and pass it with `--config` to exercise
+# the prototype side by side.
+#
+# `{host}` and `{port}` are replaced literally by model-harness before exec.
+
+[profiles.qwen-mlx-swift-prototype]
+mode = "local"
+executable = "/absolute/path/to/mlx-swift-runtime-prototype"
+argv = [
+    "serve",
+    "--model", "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+    "--host", "{host}",
+    "--port", "{port}",
+    "--reasoning-effort", "medium",
+    "--default-max-tokens", "2048",
+]
+
+# Supervised recovery for a dead generation worker.
+#
+# The runtime condemns itself when it observes a generation failure that means
+# the MLX backend, not the request, is broken -- the `BUG-260827-1jhv2g` Metal
+# allocator exhaustion is the recorded case. It then answers `/health` with
+# `503 {"status": "unavailable"}`, stops advertising on `/v1/models`, and writes
+# one line carrying the literal marker below. This policy is what turns that
+# announcement into a replacement process.
+#
+# `generation_worker_unavailable` is a wire value shared with the runtime
+# (`GenerationWorkerHealth.supervisionMarker`). Changing it in one place and not
+# the other leaves the runtime dead-but-listening with no supervisor coming,
+# which is the exact incident this exists to end;
+# `scripts/dead-generation-smoke.sh` fails if the two stop matching.
+#
+# The same marker is re-announced if a condemned worker's deferred shared-pool
+# rebuild has to be abandoned -- the release barrier never observed the weights
+# go, so the pool was not returned. That is deliberately fatal here: a host still
+# holding a condemned model must not be left competing with its replacement for
+# that memory, and the replacement process is what actually frees it.
+#
+# `restart_on_failure = false` on purpose: only the marker restarts this
+# runtime. A plain non-zero exit -- a refused model directory, a missing shader
+# library, a rejected flag -- is a configuration error that a restart loop would
+# hide instead of report.
+#
+# There is deliberately no policy for a *recoverable* generation failure, and
+# there should not be one. A generation that fails mid-batch on a runtime that
+# can still serve releases its batch entry and KV cache, keeps the worker, and
+# lets the next request through on the same process -- see `GET
+# /debug/generation-state` and `scripts/generation-batch-recovery-smoke.sh`.
+# Restarting on that would throw away a resident multi-GiB model to recover
+# from a single failed request.
+[profiles.qwen-mlx-swift-prototype.supervision]
+fatal_output_substrings = ["generation_worker_unavailable"]
+restart_on_failure = false
+max_restarts = 3
+restart_window_seconds = 600
+restart_delay_milliseconds = 1000

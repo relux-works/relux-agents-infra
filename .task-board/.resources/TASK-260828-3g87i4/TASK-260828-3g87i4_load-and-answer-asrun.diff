@@ -1,0 +1,33 @@
+--- .asrun-load_and_answer.sh	2026-08-28 16:24:43
++++ load_and_answer.sh	2026-08-28 16:14:08
+@@ -16,6 +16,14 @@
+ #   PORT               port to bind                     (default: 18901)
+ #   OUT                output directory                 (default: this script's dir)
+ #   REQUIRE_FREE_GIB   reclaimable-memory floor         (default: 35)
++#   CONTENTION_SCAN    port pattern the guard scans     (default: the whole 18000-18999
++#                                                        range shared by local runtimes)
++#   CONTENTION_PROCS   process pattern the guard scans  (default: the local runtimes)
++# The three CONTENTION_*/REQUIRE_* knobs exist because the fakes load no model and
++# no GPU, so they must neither fight nor be blocked by real runtimes sharing this
++# host. The negative suite narrows them to sentinels it plants itself, and runs
++# extra cases at the UNTOUCHED defaults -- with a held port and with a matching
++# process -- to prove the guard still refuses there.
+ # The prompt and the answer the response must contain are NOT overridable --
+ # there is no way to make this script accept a wrong answer.
+ set -u
+@@ -25,11 +33,13 @@
+ LOG="$OUT/llama-server-01.log"
+ BIN=${LLAMA_SERVER_BIN:-/opt/homebrew/opt/llama.cpp/bin/llama-server}
+ REQUIRE_FREE_GIB=${REQUIRE_FREE_GIB:-35}
++CONTENTION_SCAN=${CONTENTION_SCAN:-18[0-9][0-9][0-9]}
++CONTENTION_PROCS=${CONTENTION_PROCS:-mlx_lm|mlx-swift-runtime-prototype|runtime-benchmark.py}
+ mkdir -p "$OUT"
+ 
+ echo "== host contention check =="
+-BUSY=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk '$9 ~ /:18[0-9][0-9][0-9]$/ {print $1, $9}')
+-PROC=$(pgrep -fl 'mlx_lm|mlx-swift-runtime-prototype|runtime-benchmark.py' | grep -v grep)
++BUSY=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk -v pat=":${CONTENTION_SCAN}\$" '$9 ~ pat {print $1, $9}')
++PROC=$(pgrep -fl "$CONTENTION_PROCS" | grep -v grep)
+ if [ -n "$BUSY" ] || [ -n "$PROC" ]; then
+   echo "HOST BUSY — refusing to load."
+   [ -n "$BUSY" ] && echo "listeners: $BUSY"

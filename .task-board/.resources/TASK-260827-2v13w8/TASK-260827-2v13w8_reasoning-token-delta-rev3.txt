@@ -1,0 +1,18 @@
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[transformers] Unrecognized keys in `rope_parameters` for 'rope_type'='default': {'mrope_section', 'mrope_interleaved'}
+Rendered prompt length under this model's chat template, tokenizer only.
+Left: no reasoning_effort argument, i.e. the template's own 'xhigh' default.
+Right: reasoning_effort='medium', the policy both benchmark profiles now pin.
+
+short_prompt: template-default=79 medium=41 delta=38
+long_prompt_8k: template-default=7822 medium=7784 delta=38
+context_75k: template-default=73054 medium=73016 delta=38
+
+The extra tokens are the template's own instruction, injected only at xhigh:
+--- 
++++ 
+@@ -1,2 +1,4 @@
+ <|im_start|>system
++Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.
++
+ You are a terse maintenance assistant. Answer in one short sentence.<|im_end|>

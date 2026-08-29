@@ -1,0 +1,9 @@
+{
+  "failure": null,
+  "footprint_at_ready_bytes": 29651342648,
+  "peak_footprint_bytes": 60467959360,
+  "prompt_tokens": 15589,
+  "repeats": 432,
+  "seconds": 226.151,
+  "succeeded": true
+}

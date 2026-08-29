@@ -1,0 +1,30 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 7fb7020..5118d62 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,25 @@
+ 
+ ## 2026-08-24
+ 
++### 2013 — Hosted Identity Locks Cross The Wrapper Delimiter
++- FIX: `lockCodexTargetArguments` and `lockClaudeTargetArguments` now scan identity selectors through the first wrapper `--` and stop only at the second provider operand boundary; Pi keeps its first-`--` message boundary.
++- FIX: Ordinary hosted alias launches no longer dump the resolved launch plan to stderr; diagnostics remain explicit `--print-config` behavior.
++- EVIDENCE: Production `runTarget` negatives reject eight post-delimiter model/reasoning/profile selector classes before provider execution or config mutation; narrowing both locks back to first-delimiter termination reddens every case with `-count=1`.
++- SCOPE: `TASK-260824-2o4zq8` reviewer rework in `tools/agents-infra/internal/infra/canonical_target.go`, `tools/agents-infra/main.go`, and focused tests.
++
++### 2002 — A Wrapper `--` Is Not An Operand Boundary
++- ROOT CAUSE: `lockCodexTargetArguments`/`lockClaudeTargetArguments` in `tools/agents-infra/internal/infra/canonical_target.go` return the remaining argv raw on a literal `--`, treating it as an operand boundary; `parseCodexWrapperArgs` (`internal/infra/codex_launch.go:563`) and `parseClaudeWrapperArgs` (`internal/infra/claude_launch.go:414`) instead consume that `--` as a wrapper delimiter and keep parsing every following token as a provider flag.
++- FINDING: The canonical identity lock is bypassable at the production `runTarget` entrypoint. With a recording fake provider and `err=nil`: `openai-infra -- exec -- --profile work` launches Codex with `--profile work`, which contract Section 3.6 says must always fail `target_identity_conflict`, while `--print-config` still reports `effective_profile_source: native`; `anthropic-infra -- -- --model other` launches Claude with `--model claude-opus-5 --effort high --model other`, and last-wins means `other` is what runs while the plan reports `claude-opus-5`. Same shape for Claude `--effort` and Codex `--model-reasoning-effort`.
++- FINDING: Pi is unaffected — its `--` is a real message-operand boundary and the Pi composer refuses flag-like operands (`unsafe Pi message operand "--model"`).
++- FINDING: No test passes `--` through any of the three lock functions, so that branch is entirely uncovered; the suite is green around a live bypass path.
++- SCOPE: `TASK-260824-2o4zq8` review verdict, routed to `to-dev`.
++
++### 1941 — Worktree Pi Fixtures Must Resolve The Common Checkout
++- ROOT CAUSE: `officialPiAsset` looked only under the active Story worktree `.temp`, while the reviewed Pi asset lived under the primary checkout; required Qwen acceptance tests reported package success by skipping.
++- FIX: `tools/agents-infra/main_test.go` and `internal/infra/pi_test.go` now derive a primary-checkout fallback from the worktree `.git` gitdir; production Qwen compose and all canonical Qwen tests report `PASS`, not `SKIP`.
++- FINDING: Package-level `go test` success is insufficient evidence for external-asset acceptance tests unless their named verbose result is checked.
++- SCOPE: `TASK-260824-2o4zq8` test infrastructure and Qwen target evidence.
++
+ ### 1842 — Hosted Alias Profile Provenance Stays Provider-Specific
+ - DECISION: Hosted alias model/reasoning provenance comes from the target, but `resolved.profile` retains provider semantics: Claude is `not_applicable`; a Codex alias is `native` because explicit `--profile` and `-c profile=` are identity conflicts.
+ - DECISION: Codex `-c model=` and `-c model_reasoning_effort=` are identity selectors alongside their dedicated flags; exact repeats pass and divergences fail.

@@ -1,0 +1,12 @@
+python-mlx-lm (as configured today)
+  derived : kv=unbounded;prefill-step=2048;reasoning=medium
+  admitted: yes
+mlx-swift (as configured today)
+  derived : kv=unbounded;prefill-step=2048;reasoning=medium
+  admitted: yes
+llama.cpp, flags llama-server accepts
+  derived : kv=unbounded;prefill-step=unpinned;reasoning=medium
+  admitted: NO -- refused on ["prefill-step=unpinned"]
+llama.cpp, -ub short spelling
+  derived : kv=unbounded;prefill-step=unpinned;reasoning=medium
+  admitted: NO -- refused on ["prefill-step=unpinned"]

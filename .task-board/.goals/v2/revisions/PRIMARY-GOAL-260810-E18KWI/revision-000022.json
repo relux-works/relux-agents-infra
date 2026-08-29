@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 22,
+  "expected_previous_revision": 21,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 21
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Complete the existing agents-infra work through tracked implementation, independent review, green checks, PR delivery, and merge: preserve fail-closed local setup and canonical vendor-target semantics; stabilize managed Pi/Qwen/MLX profiles, compaction, bounded memory, timeouts, restart recovery, shared runtime leases, observability, model-check tooling, and multi-week unattended operation; finish the unbiased Python MLX versus MLX Swift versus llama.cpp comparison and publish an evidence-backed backend migration decision; retain the pinned mlx-lm fork until an accepted replacement carries its fixes; preserve project-local instructions and remove duplicated global version-control authorization; and now export a versioned generic local-runtime status contract carrying restart_count, quarantined_until, last_readiness_match, bounded failure/backoff and lifecycle evidence so skill-agents-management can consume it and skill-project-management can register local-qwen as a first-class client-executed runtime. This supersedes the earlier temporary no-task-board-registration hold. Never inspect, attach to, stop, or mutate a user-owned live local-model process during static contract work, and never grant Pi unrestricted sudo/root authority.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 22
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "The accepted agents-management architecture identified an agents-infra lifecycle-status extension as the next dependency, and the active user goal now explicitly requires downstream task-board local-qwen integration.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "alexis"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-29T10:51:46.591864Z",
+  "created_by": "alexis",
+  "reason": "The accepted agents-management architecture identified an agents-infra lifecycle-status extension as the next dependency, and the active user goal now explicitly requires downstream task-board local-qwen integration."
+}

@@ -1,0 +1,79 @@
+INFO  control: one invocation spawns both runtimes, measures them and judges
+PASS  a measured pair inside its thresholds is accepted (exit 0)
+PASS  the accepted decision is reported with its deltas
+PASS  every measurement carries the completions it came from, sealed by the observer
+INFO  review's own reproduction: two live /v1/models placeholders, driven for real
+PASS  a pass whose runtimes only listed models is inadmissible (exit 4)
+PASS  the refusal names what was missing rather than scoring it
+PASS  the placeholder pass produced no decision at all
+INFO  a pass that really is missing a required scenario
+PASS  a pair missing a required parity scenario is refused (exit 4)
+PASS  the refusal names the scenario neither runtime ran
+INFO  the subcommand that attested review's placeholders is gone
+PASS  benchmark-attest is not a subcommand any more (exit 2)
+INFO  there is no argument through which a measurement can be supplied
+PASS  benchmark-run refuses --baseline-record as a usage error
+PASS  benchmark-run refuses --candidate-record as a usage error
+PASS  benchmark-run refuses --scenarios as a usage error
+PASS  benchmark-run refuses --ttft as a usage error
+INFO  replay of the real session re-derives the same verdict and grants nothing
+PASS  an admitted replay exits 3 even when it recomputes accepted=true
+PASS  the replay reports what it recomputed
+PASS  the replay says in words that it cannot grant an acceptance
+INFO  the same real pair, scored against bands it cannot meet
+PASS  the thresholds a caller names reach the production entry (exit 3)
+PASS  a pair outside its bands is reported as not accepted
+INFO  a measurement edited after the pass it was taken in
+PASS  one edited measurement no longer digests to what was sealed
+INFO  review's attack in its strongest form: real everything, typed numbers
+PASS  typed measurements beside a real observation are refused
+INFO  round 1's attack: two hand-minted records with no provenance at all
+PASS  hand-minted records with no provenance are inadmissible
+INFO  a scenario whose measurements carry no transcript
+PASS  a measurement with no transcript is refused
+INFO  an observation that seals no transcript
+PASS  an observation of a process is not an observation of a measurement
+INFO  a comparison with nothing that watched it
+PASS  a pair with no observation at all is refused
+INFO  a record whose pid is not the pid that was watched
+PASS  a record naming a process the gate never watched is refused
+INFO  an attestation opened and never closed
+PASS  an unclosed observation is not a watched pass
+INFO  an observation of a runtime serving some other model
+PASS  a runtime the gate saw serving another model is refused
+INFO  a pair observed end to end by some other build
+PASS  a pair nothing in this build observed is refused
+INFO  an attestation that exists and cannot be decoded
+PASS  a failed read is reported as a read failure, not as absence
+INFO  a replay asked for without naming an attestation directory
+PASS  omitting --attestations is a usage error, not a comparison (exit 2)
+INFO  a declared contextPolicy its launch does not carry
+PASS  a declared contextPolicy the launch does not derive is refused
+INFO  a launch that left the prefill chunk to the runtime default
+PASS  an unpinned prefill chunk is refused rather than defaulted
+INFO  a launch that left the reasoning effort to the chat template's default
+PASS  an unstated reasoning effort is refused rather than defaulted
+INFO  two runtimes rendering the template at different reasoning efforts
+PASS  two different reasoning policies are not a comparison
+INFO  a record that names no revisions
+PASS  a record with empty revisions is refused
+INFO  two runs configured by different launcher documents
+PASS  a config digest mismatch is refused
+INFO  a launch argv that never mentions the pinned model
+PASS  a launch that never received the pinned model is refused
+INFO  a digest that is not a digest
+PASS  a malformed driver digest is refused
+INFO  a required parity scenario missing from a record
+PASS  a record missing every scenario is refused
+INFO  THE ACCEPTANCE QUESTION: a bounded candidate against an unbounded baseline
+PASS  a 32k context window cannot match an unbounded baseline
+PASS  the refusal names both readings rather than one derived string
+INFO  a llama.cpp-shaped candidate that genuinely shares the bound is admitted
+PASS  a bound reported by the process and a bound pinned in argv compare equal
+PASS  the pin and the attestation both carry the bound the process reported
+INFO  a --ctx-size the process did not honour
+PASS  a launch that pinned a bound the process did not run is refused
+INFO  G1: a launch that left the prompt-evaluation chunk to the runtime default
+PASS  an unstated prompt-evaluation chunk is refused for llama.cpp too
+INFO  G1: -ub is the same condition as --prefill-step-size, not a third one
+PASS  the -ub spelling pins the chunk at the same value

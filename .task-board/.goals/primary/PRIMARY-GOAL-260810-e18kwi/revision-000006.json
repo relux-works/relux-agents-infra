@@ -1,0 +1,21 @@
+{
+  "contract": "primary-goal-v1",
+  "id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 6,
+  "previous_revision": 5,
+  "state": "active",
+  "scope": {
+    "kind": "board"
+  },
+  "objective": "Complete the existing agents-infra local-setup and instruction-materialization work, preserve global setup/provider rendering and exact Codex config semantics, curate and deliver the existing verified repository changes, keep Pi as a project-aware primary launcher with reusable local-model runtime profiles, and add a backward-compatible vendor/environment/model target contract with config-driven vendor entrypoints openai-infra, anthropic-infra, and qwen-infra so OpenAI resolves to Codex gpt-5.6-sol/high, Anthropic resolves to Claude Code claude-opus-5/high, and Qwen resolves to Pi plus the configured local MLX model endpoint; do not auto-migrate or rewrite project configs, and instead fail at startup with precise actionable diagnostics that direct an agent to edit invalid, legacy-only, or conflicting configuration.",
+  "mutation": {
+    "kind": "objective_realigned",
+    "reason": "Owner explicitly ruled out configuration migration and requires startup-time actionable errors for agent-driven edits.",
+    "actor": {
+      "kind": "primary_parent",
+      "actor_id": "alexis"
+    }
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-24T15:12:47.003993Z"
+}

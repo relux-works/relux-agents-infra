@@ -1,0 +1,36 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 76fda0d..7fb7020 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,31 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-24
++
++### 1842 — Hosted Alias Profile Provenance Stays Provider-Specific
++- DECISION: Hosted alias model/reasoning provenance comes from the target, but `resolved.profile` retains provider semantics: Claude is `not_applicable`; a Codex alias is `native` because explicit `--profile` and `-c profile=` are identity conflicts.
++- DECISION: Codex `-c model=` and `-c model_reasoning_effort=` are identity selectors alongside their dedicated flags; exact repeats pass and divergences fail.
++- FINDING: Contract evidence now creates clause-removal mutants and requires the actual validator to reject them; absent markers fail before mutation.
++- SCOPE: `TASK-260824-3rl3ws` revision-3 rework for reviewer findings G1-G2.
++
++### 1824 — Vendor Config Migration Is Operator-Only
++- DECISION: Parse, compose, setup, verify, target dispatch, and launch never rewrite project config; invalid canonical targets fail before side effects with source/field identity and corrective action.
++- DECISION: The recursive all-project rewrite is a separate task-scoped operator rollout, never installed product behavior or a startup fallback.
++- SCOPE: Contract Sections 5-7 and `TASK-260824-1jjze0`, per owner rollout clarification.
++
++### 1823 — Vendor Targets Separate Canonical And Pi Namespaces
++- DECISION: Codex target reasoning remains a non-empty provider-owned string; Claude targets admit only efforts the composer can prove effective; Pi targets retain the owned thinking enum.
++- DECISION: Pi profile `provider` is an operator namespace, not Qwen vendor evidence. Optional `profile_provider` asserts the existing label without forcing legacy profile mutation.
++- FINDING: Pi `resolved.model` remains provider-qualified; target model stays unqualified, with explicit profile-provider/model and endpoint invariants in alias plans.
++- SCOPE: `TASK-260824-3rl3ws` contract rework after reviewer findings F1-F5.
++
++### 1751 — Vendor Targets Stay Additive And Identity-Locked
++- DECISION: Canonical `[agents.targets]` plus `[agents.entrypoints]` is a strict alias-only launch path; declaring it does not alter direct `agents-infra codex|claude|pi` precedence.
++- DECISION: Hosted target identity overrides matching legacy model policy; Qwen/Pi reuses an atomic `[agents.pi.profiles]` definition and validates target model/reasoning/endpoint as exact assertions over that profile.
++- FINDING: This avoids both unsafe legacy fallback after target resolution fails and duplicated Pi runtime/endpoint policy while keeping existing project configs valid.
++- SCOPE: `STORY-260824-1yr6m0`, contract outcome `TASK-260824-3rl3ws_vendor-target-contract.md`.
++
+ ## 2026-08-18
+ 
+ ### 0504 — 503 Retry Accepted; Configured-Timeout Magnitude Still Unbound

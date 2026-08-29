@@ -1,0 +1,97 @@
+# Task-scoped model-harness config for the Python-vs-Swift runtime comparison.
+#
+# This file is an example, not an installed config. `profiles.qwen-local` in the
+# operator's own model-harness config still points at Python `mlx_lm.server` and
+# nothing here changes it. Copy this file, replace the placeholder Swift binary
+# path with the `xcodebuild` product, and pass it with `--config`.
+#
+# Both profiles are launched by the same `model-harness run`, on the same host,
+# against the same model directory, so the process ownership, readiness polling
+# and shutdown path are identical for the two runtimes. They are run one after
+# the other, never together: this host has ~35 GiB free and one copy of this
+# model is 28 GB, so two resident copies do not fit and two overlapping runs
+# would be measuring each other's memory pressure.
+# `benchmark-run` performs both passes itself, one after the other, records each
+# pass's wall-clock interval and refuses a pair whose intervals overlap.
+
+# The incumbent, in its deployed configuration.
+#
+# The prompt-cache flags are the ones the operator's installed
+# `profiles.qwen-local` carries. They are kept rather than removed: the decision
+# is whether to replace the Python runtime *as deployed*, so the incumbent is
+# measured as deployed and the resulting asymmetry -- the Swift prototype has no
+# prompt cache at all -- is declared in the run record instead of being tuned
+# away.
+[profiles.qwen-benchmark-python]
+mode = "local"
+executable = "/Users/alexis/.local/bin/mlx_lm-relux.server"
+argv = [
+    "--model", "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+    "--host", "{host}",
+    "--port", "{port}",
+    "--prompt-cache-size", "1",
+    "--prompt-cache-bytes", "8GB",
+    # Explicit at its own default value, and not optional. The two runtimes do
+    # not default this the same way -- `mlx_lm.server` to 2048, MLXLMCommon to
+    # 512 -- so leaving it unstated compares a 4x difference in prefill chunk
+    # size and calls it a difference between runtimes.
+    # `RuntimeBenchmark.contextPolicy(derivedFrom:)` reads this flag off the
+    # rendered launch and admission refuses a pair that left it out.
+    "--prefill-step-size", "2048",
+    # The same reasoning policy the Swift profile states, in this runtime's
+    # spelling of it.
+    #
+    # Not cosmetic and not optional. This model's chat template defaults
+    # `reasoning_effort` to `xhigh` and injects an extra system instruction at
+    # that setting, so a profile that says nothing here renders a DIFFERENT
+    # PROMPT from one that says `medium`: review measured 79 tokens against 41
+    # for the same short messages, a constant +38 on every prompt in the suite,
+    # which the previous revision reported as a 1.93x runtime skew on
+    # `short_prompt`. `contextPolicy` now reads this flag as well and the gate
+    # refuses a pair that left the policy to the template default.
+    "--chat-template-args", "{\"reasoning_effort\": \"medium\"}",
+]
+
+# The candidate.
+#
+# `executable` must be the `xcodebuild` Release product. A `swift build` binary
+# cannot compile mlx-swift's Metal shaders and refuses to serve by design, so
+# pointing this at `.build/release/` produces a runtime that never loads a model.
+#
+# `--reasoning-effort medium` and `--default-max-tokens 2048` match
+# `examples/model-harness.prototype.toml`; the benchmark sends an explicit
+# `max_tokens` on every request, so the default is never the bound in effect.
+[profiles.qwen-benchmark-swift]
+mode = "local"
+executable = "/absolute/path/to/DerivedData/Build/Products/Release/mlx-swift-runtime-prototype"
+argv = [
+    "serve",
+    "--model", "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+    "--host", "{host}",
+    "--port", "{port}",
+    "--reasoning-effort", "medium",
+    "--default-max-tokens", "2048",
+    # The text-only factory, explicitly.
+    #
+    # Both `MLXLLM.LLMModelFactory` and `MLXVLM.VLMModelFactory` accept this
+    # directory's `model_type` `qwen3_5`, and only the text one evaluates the
+    # prompt in chunks: `MLXVLM.Qwen35VLModel.prepare` declares
+    # `windowSize _: Int?` and discards it. On the 73k-token capacity probe that
+    # difference is a single 255,904,140,288-byte attention allocation against a
+    # 41,747,087,360-byte Metal buffer limit. This executable serves a text-only
+    # HTTP surface -- `ChatCompletionRequest` refuses image and audio parts --
+    # so the vision tower is weight it can never reach.
+    #
+    # `text-only` is also the runtime's default; it is spelled out here because
+    # the benchmark record has to show which path was measured.
+    "--model-factory", "text-only",
+    # The same pinned condition as the Python profile above.
+    "--prefill-step-size", "2048",
+]
+
+# Deliberately no supervision policy on either profile.
+#
+# The benchmark exists to observe what each runtime does under load, including
+# what it does when it runs out of allocator. A `fatal_output_substrings` policy
+# would replace the process at the first marker and the pass would measure the
+# replacement instead of the failure.

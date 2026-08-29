@@ -1,0 +1,450 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 099acbf..9b43cf7 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,13 @@
+ 
+ ## 2026-08-26
+ 
++### 0958 — Close Executable Identity Mirror Witnesses
++- ROOT CAUSE: Four production `Dev != … || Ino != …` gates had wrong-device witnesses but no same-device/wrong-inode witness; three inode-removal mutants survived and the force-stop gate was killed only incidentally by a foreign-binary test.
++- FIX: Named production-entry witnesses now cover broker admission, client attestation, broker-candidate scanning, and force-stop before signal; client, broker, and launcher exact-version gates also refuse the below-current direction.
++- FIX: Launcher positive controls consume a target-emitted stdout event instead of a 15s marker-poll deadline; ten repeated controls and the loaded full package passed.
++- EVIDENCE: Seven independent narrowing mutants exited 1 on their named witnesses while exact-version controls stayed green. Focused (`45.328s`), focused race (`67.989s`), full package split (`163.570s`, `2.285s`, `333.802s`), build, vet, gofmt, and diff checks exited 0.
++- SCOPE: `TASK-260826-12laby`; test harness and evidence only, no shared-runtime production behavior changed.
++
+ ### 0639 — Bind Force Stop To Kernel Identity Narrowings
+ - ROOT CAUSE: Accepted force-stop and status gates compared process start time, argv, UID, and executable device/inode at the production boundary, but their evidence only attacked forged owner records. Kernel-observed UID and same-inode/wrong-device witnesses could not be expressed through record inputs, so narrowing those comparisons left the suite green.
+ - FINDING: A literal test-only witness is impossible for those two classes: the record's UID is not a gate input, and one executable identity cannot naturally have the same inode on a different device. A per-call helper is the minimum honest seam; a mutable package global would add a race surface.
+diff --git a/tools/agents-infra/internal/infra/pi_shared_attestation_test.go b/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
+index 6d273ad..3e9bbee 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
+@@ -220,6 +220,17 @@ func TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness(t *
+ 				}
+ 			},
+ 		},
++		{
++			name: "broker executable same device wrong inode", code: "broker_executable_identity_mismatch",
++			mutateSystem: func(system *sharedRuntimeAttestationDependencies, _ sharedAttestationFixture) {
++				original := system.processExecIdentity
++				system.processExecIdentity = func(observation sharedProcessObservation) (FileIdentity, error) {
++					identity, err := original(observation)
++					identity.Ino++
++					return identity, err
++				}
++			},
++		},
+ 		{
+ 			name: "broker build same inode wrong device", code: "broker_build_identity_mismatch",
+ 			mutateResponse: func(response *sharedWireMessage) {
+@@ -238,6 +249,12 @@ func TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness(t *
+ 				response.ProtocolVersion = SharedRuntimeProtocolVersion + 1
+ 			},
+ 		},
++		{
++			name: "past protocol version range narrowing", code: "broker_protocol_version_mismatch",
++			mutateResponse: func(response *sharedWireMessage) {
++				response.ProtocolVersion = SharedRuntimeProtocolVersion - 1
++			},
++		},
+ 		{
+ 			name: "empty runtime key", code: "shared_runtime_identity_mismatch",
+ 			mutateResponse: func(response *sharedWireMessage) {
+@@ -376,7 +393,7 @@ func TestConnectAndAttestSharedRuntimeRejectsEveryGateDeleteAndNarrowWitness(t *
+ 	}
+ }
+ 
+-func TestConnectAndAttestSharedRuntimeReportsOnlyTheExactPassedGateSet(t *testing.T) {
++func TestConnectAndAttestSharedRuntimeExactProtocolVersionReportsOnlyThePassedGateSet(t *testing.T) {
+ 	fixture := newSharedAttestationFixture(t)
+ 	served := fixture.answerOnce(t, nil)
+ 	attested, err := connectAndAttestSharedRuntime(fixture.resolved, fixture.state, "RUN-attestation", nil, time.Second)
+diff --git a/tools/agents-infra/internal/infra/pi_shared_broker_admission_test.go b/tools/agents-infra/internal/infra/pi_shared_broker_admission_test.go
+index 453d31b..7aa33c1 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_broker_admission_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_broker_admission_test.go
+@@ -114,10 +114,25 @@ func TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness(t *testi
+ 				}
+ 			},
+ 		},
++		{
++			name: "client executable same device wrong inode", code: "broker_executable_identity_mismatch",
++			mutateSystem: func(system *sharedBrokerAdmissionDependencies) {
++				original := system.processExecIdentity
++				system.processExecIdentity = func(observation sharedProcessObservation) (FileIdentity, error) {
++					identity, err := original(observation)
++					identity.Ino++
++					return identity, err
++				}
++			},
++		},
+ 		{
+ 			name: "future protocol version range narrowing", code: "broker_protocol_version_mismatch",
+ 			mutateHello: func(hello *sharedWireMessage) { hello.ProtocolVersion = SharedRuntimeProtocolVersion + 1 },
+ 		},
++		{
++			name: "past protocol version range narrowing", code: "broker_protocol_version_mismatch",
++			mutateHello: func(hello *sharedWireMessage) { hello.ProtocolVersion = SharedRuntimeProtocolVersion - 1 },
++		},
+ 		{
+ 			name: "empty runtime key", code: "shared_runtime_identity_mismatch",
+ 			mutateHello: func(hello *sharedWireMessage) { hello.RuntimeKey = "" },
+@@ -128,7 +143,7 @@ func TestSharedBrokerAttestClientRejectsEveryGateDeleteAndNarrowWitness(t *testi
+ 		},
+ 	}
+ 
+-	t.Run("valid evidence", func(t *testing.T) {
++	t.Run("exact protocol version control", func(t *testing.T) {
+ 		fixture := newSharedBrokerAdmissionFixture(t)
+ 		observation, err := fixture.server.attestClient(nil, fixture.hello)
+ 		if err != nil || !reflect.DeepEqual(observation, fixture.observation) {
+diff --git a/tools/agents-infra/internal/infra/pi_shared_integration_test.go b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+index 7a4ad50..c7a037a 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_integration_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+@@ -23,6 +23,7 @@ import (
+ const (
+ 	sharedLeaseHelperEnv  = "AGENTS_INFRA_SHARED_LEASE_HELPER"
+ 	sharedLockHelperEnv   = "AGENTS_INFRA_SHARED_LOCK_HELPER"
++	sharedCandidateHelper = "AGENTS_INFRA_SHARED_CANDIDATE_HELPER"
+ 	sharedLockPathEnv     = "AGENTS_INFRA_SHARED_LOCK_PATH"
+ 	sharedTestProjectEnv  = "AGENTS_INFRA_SHARED_TEST_PROJECT"
+ 	sharedTestHomeEnv     = "AGENTS_INFRA_SHARED_TEST_HOME"
+@@ -39,6 +40,11 @@ const (
+ // still forks and execs these exact entry points; only argument routing belongs
+ // to the harness.
+ func TestMain(m *testing.M) {
++	if os.Getenv(sharedCandidateHelper) == "1" {
++		fmt.Fprintln(os.Stdout, "candidate-ready")
++		_, _ = io.Copy(io.Discard, os.Stdin)
++		os.Exit(0)
++	}
+ 	if len(os.Args) >= 3 && os.Args[1] == "runtime" && (os.Args[2] == "broker" || os.Args[2] == "runtime-launch") {
+ 		values, err := parseSharedTestInternalArgs(os.Args[3:])
+ 		if err == nil {
+@@ -996,6 +1002,20 @@ func TestSharedRuntimeForceStopRejectsRecordedBrokerIdentityNarrowingBeforeSigna
+ 				}
+ 			},
+ 		},
++		{
++			name:         "broker executable same device wrong inode",
++			mutateRecord: func(*SharedBrokerIdentity) {},
++			mutateSystem: func(system *sharedRuntimeOperatorDependencies, pid int) {
++				original := system.processExecIdentity
++				system.processExecIdentity = func(observation sharedProcessObservation) (FileIdentity, error) {
++					identity, err := original(observation)
++					if observation.PID == pid {
++						identity.Ino++
++					}
++					return identity, err
++				}
++			},
++		},
+ 	}
+ 
+ 	for _, testCase := range tests {
+@@ -1055,6 +1075,83 @@ func TestSharedRuntimeForceStopRejectsRecordedBrokerIdentityNarrowingBeforeSigna
+ 	}
+ }
+ 
++func TestSharedRuntimeBrokerCandidatesRejectSameDeviceWrongInodeAtProductionEntry(t *testing.T) {
++	_, _, _, resolved := newSharedIntegrationProfile(t)
++	executable, ownIdentity, err := ownResolvedExecutableIdentity()
++	if err != nil {
++		t.Fatal(err)
++	}
++	validCommand, _ := launchSharedBrokerCandidateProcess(t, executable, resolved.RuntimeKey)
++
++	copyPath := filepath.Join(t.TempDir(), "different-inode-candidate")
++	data, err := os.ReadFile(executable)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(copyPath, data, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	copyIdentity, err := fileIdentity(copyPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if copyIdentity.Dev != ownIdentity.Dev || copyIdentity.Ino == ownIdentity.Ino {
++		t.Fatalf("candidate fixture identity=%#v want device=%d inode!=%d", copyIdentity, ownIdentity.Dev, ownIdentity.Ino)
++	}
++	wrongInodeCommand, _ := launchSharedBrokerCandidateProcess(t, copyPath, resolved.RuntimeKey)
++
++	candidates, err := sharedRuntimeBrokerCandidates(resolved)
++	if err != nil {
++		t.Fatal(err)
++	}
++	foundValid := false
++	for _, candidate := range candidates {
++		if candidate.PID == validCommand.Process.Pid {
++			foundValid = true
++		}
++		if candidate.PID == wrongInodeCommand.Process.Pid {
++			t.Fatalf("sharedRuntimeBrokerCandidates admitted same-device/wrong-inode candidate=%#v", candidate)
++		}
++	}
++	if !foundValid {
++		t.Fatalf("sharedRuntimeBrokerCandidates did not return exact-executable control pid=%d candidates=%#v", validCommand.Process.Pid, candidates)
++	}
++}
++
++func launchSharedBrokerCandidateProcess(t *testing.T, executable, runtimeKey string) (*exec.Cmd, sharedProcessObservation) {
++	t.Helper()
++	command := exec.Command(executable, "runtime", "broker", "--runtime-key", runtimeKey)
++	command.Env = append(os.Environ(), sharedCandidateHelper+"=1")
++	stdin, err := command.StdinPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	stdout, err := command.StdoutPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	stderr := new(bytes.Buffer)
++	command.Stderr = stderr
++	if err := command.Start(); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		_ = stdin.Close()
++		if command.ProcessState == nil {
++			_ = command.Wait()
++		}
++	})
++	line, err := bufio.NewReader(stdout).ReadString('\n')
++	if err != nil || line != "candidate-ready\n" {
++		t.Fatalf("broker candidate not ready: line=%q err=%v stderr=%s", line, err, stderr.String())
++	}
++	observation, err := inspectSharedProcess(command.Process.Pid)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return command, observation
++}
++
+ func TestSharedRuntimeStatusMarksReusedRecordedBrokerPIDUnverifiedStale(t *testing.T) {
+ 	project, home, cache, resolved := newSharedIntegrationProfile(t)
+ 	command, observation := launchSharedRecordedBrokerCandidate(t, resolved.Paths.BrokerLock)
+diff --git a/tools/agents-infra/internal/infra/pi_shared_launcher_test.go b/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+index e370443..0209070 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+@@ -3,6 +3,7 @@
+ package infra
+ 
+ import (
++	"bufio"
+ 	"bytes"
+ 	"encoding/json"
+ 	"errors"
+@@ -13,14 +14,13 @@ import (
+ 	"path/filepath"
+ 	"reflect"
+ 	"strings"
+-	"sync"
+ 	"testing"
+ 	"time"
+ 
+ 	"golang.org/x/sys/unix"
+ )
+ 
+-const sharedLauncherPositiveControlTimeout = 15 * time.Second
++const sharedLauncherTargetEvent = "shared-launcher-target-entered"
+ 
+ type sharedLauncherFixture struct {
+ 	project      string
+@@ -84,9 +84,10 @@ func buildSharedLauncherTarget(t *testing.T, root string) string {
+ 	source := filepath.Join(root, "launcher-target.go")
+ 	target := filepath.Join(root, "launcher-target")
+ 	body := `package main
+-import ("os"; "time")
++import ("fmt"; "os"; "time")
+ func main() {
+   for i, arg := range os.Args { if arg == "--marker" && i+1 < len(os.Args) { _ = os.WriteFile(os.Args[i+1], []byte("exec"), 0600) } }
++  _, _ = fmt.Fprintln(os.Stdout, "shared-launcher-target-entered")
+   time.Sleep(10*time.Second)
+ }
+ `
+@@ -101,13 +102,14 @@ func main() {
+ }
+ 
+ type sharedLauncherRun struct {
+-	command   *exec.Cmd
+-	writeEnd  *os.File
+-	stderr    *bytes.Buffer
+-	target    string
+-	sawTarget bool
+-	mu        sync.Mutex
+-	donePoll  chan struct{}
++	command    *exec.Cmd
++	writeEnd   *os.File
++	stderr     *bytes.Buffer
++	target     string
++	sawTarget  bool
++	donePoll   chan struct{}
++	targetHit  chan struct{}
++	outputDone chan struct{}
+ }
+ 
+ func startSharedLauncherRun(t *testing.T, fixture sharedLauncherFixture, withAuthorizationDescriptor bool) *sharedLauncherRun {
+@@ -137,6 +139,10 @@ func startSharedLauncherRunWithFiles(t *testing.T, fixture sharedLauncherFixture
+ 	command.Env = append(command.Env, extraEnv...)
+ 	stderr := new(bytes.Buffer)
+ 	command.Stderr = stderr
++	stdout, err := command.StdoutPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
+ 	if readEnd != nil {
+ 		command.ExtraFiles = []*os.File{readEnd}
+ 	}
+@@ -152,18 +158,30 @@ func startSharedLauncherRunWithFiles(t *testing.T, fixture sharedLauncherFixture
+ 	if readEnd != nil {
+ 		_ = readEnd.Close()
+ 	}
+-	run := &sharedLauncherRun{command: command, writeEnd: writeEnd, stderr: stderr, target: fixture.target, donePoll: make(chan struct{})}
++	run := &sharedLauncherRun{
++		command: command, writeEnd: writeEnd, stderr: stderr, target: fixture.target,
++		donePoll: make(chan struct{}), targetHit: make(chan struct{}), outputDone: make(chan struct{}),
++	}
++	go func() {
++		defer close(run.outputDone)
++		scanner := bufio.NewScanner(stdout)
++		for scanner.Scan() {
++			if scanner.Text() == sharedLauncherTargetEvent {
++				close(run.targetHit)
++				return
++			}
++		}
++	}()
+ 	go func() {
+ 		defer close(run.donePoll)
+ 		for {
+ 			observation, err := inspectSharedProcess(command.Process.Pid)
+-			if err != nil {
++			if err != nil || !observation.live() {
+ 				return
+ 			}
+ 			if observation.ExecPath == fixture.target {
+-				run.mu.Lock()
+ 				run.sawTarget = true
+-				run.mu.Unlock()
++				return
+ 			}
+ 			time.Sleep(time.Millisecond)
+ 		}
+@@ -217,11 +235,25 @@ func (run *sharedLauncherRun) wait(t *testing.T, timeout time.Duration) error {
+ }
+ 
+ func (run *sharedLauncherRun) carriedTarget() bool {
+-	run.mu.Lock()
+-	defer run.mu.Unlock()
+ 	return run.sawTarget
+ }
+ 
++func (run *sharedLauncherRun) requireTargetEvent(t *testing.T, failure string) {
++	t.Helper()
++	select {
++	case <-run.targetHit:
++		return
++	case <-run.outputDone:
++		select {
++		case <-run.targetHit:
++			return
++		default:
++		}
++		waitErr := run.wait(t, 3*time.Second)
++		t.Fatalf("%s: target output closed before event: wait=%v stderr=%q", failure, waitErr, run.stderr.String())
++	}
++}
++
+ func validSharedLauncherFrame(fixture sharedLauncherFixture, pid int) sharedRuntimeAuthorizationFrame {
+ 	return sharedRuntimeAuthorizationFrame{
+ 		Schema: sharedRuntimeAuthSchema, ProtocolVersion: SharedRuntimeProtocolVersion,
+@@ -318,10 +350,11 @@ func TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry(t
+ 		field string
+ 		alter func(*sharedRuntimeAuthorizationFrame)
+ 	}{
+-		{name: "valid"},
++		{name: "exact protocol version control"},
+ 		{name: "schema", field: "schema", alter: func(frame *sharedRuntimeAuthorizationFrame) { frame.Schema = "future" }},
+ 		{name: "schema empty", field: "schema", alter: func(frame *sharedRuntimeAuthorizationFrame) { frame.Schema = "" }},
+-		{name: "protocol version", field: "protocol_version", alter: func(frame *sharedRuntimeAuthorizationFrame) { frame.ProtocolVersion = 999 }},
++		{name: "future protocol version", field: "protocol_version", alter: func(frame *sharedRuntimeAuthorizationFrame) { frame.ProtocolVersion = SharedRuntimeProtocolVersion + 1 }},
++		{name: "past protocol version", field: "protocol_version", alter: func(frame *sharedRuntimeAuthorizationFrame) { frame.ProtocolVersion = SharedRuntimeProtocolVersion - 1 }},
+ 		{name: "launcher pid", field: "launcher_pid", alter: func(frame *sharedRuntimeAuthorizationFrame) { frame.LauncherPID++ }},
+ 		{name: "launcher pid zero", field: "launcher_pid", alter: func(frame *sharedRuntimeAuthorizationFrame) { frame.LauncherPID = 0 }},
+ 		{name: "runtime key", field: "runtime_key", alter: func(frame *sharedRuntimeAuthorizationFrame) { frame.RuntimeKey = strings.Repeat("f", 64) }},
+@@ -340,10 +373,7 @@ func TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry(t
+ 			}
+ 			run.authorize(t, rawSharedLauncherFrame(t, frame))
+ 			if testCase.field == "" {
+-				waitForSharedTest(t, sharedLauncherPositiveControlTimeout, func() bool {
+-					_, markerErr := os.Stat(fixture.marker)
+-					return markerErr == nil && run.carriedTarget()
+-				}, "valid authorization never reached execve")
++				run.requireTargetEvent(t, "valid authorization never reached execve")
+ 				_ = run.command.Process.Kill()
+ 				_ = run.wait(t, 3*time.Second)
+ 				var evidence sharedAuthDecodeEvidence
+@@ -451,10 +481,7 @@ func requireSharedLauncherValidControl(t *testing.T, fixture sharedLauncherFixtu
+ 	_ = os.Remove(fixture.marker)
+ 	run := startSharedLauncherRun(t, fixture, true)
+ 	run.authorize(t, rawSharedLauncherFrame(t, validSharedLauncherFrame(fixture, run.command.Process.Pid)))
+-	waitForSharedTest(t, sharedLauncherPositiveControlTimeout, func() bool {
+-		_, markerErr := os.Stat(fixture.marker)
+-		return markerErr == nil && run.carriedTarget()
+-	}, "plain valid authorization did not reach the production launcher target")
++	run.requireTargetEvent(t, "plain valid authorization did not reach the production launcher target")
+ 	_ = run.command.Process.Kill()
+ 	_ = run.wait(t, 3*time.Second)
+ }
+@@ -518,20 +545,7 @@ func TestSharedRuntimeEveryShapeMutantAdmitsPlainValidFrameAtProductionEntry(t *
+ 			_ = os.Remove(fixture.marker)
+ 			run := startSharedLauncherRunWithEnv(t, fixture, true, sharedShapeMutantEnv+"="+mutant.name)
+ 			run.authorize(t, rawSharedLauncherFrame(t, validSharedLauncherFrame(fixture, run.command.Process.Pid)))
+-			reachedTarget := false
+-			deadline := time.Now().Add(sharedLauncherPositiveControlTimeout)
+-			for time.Now().Before(deadline) {
+-				_, markerErr := os.Stat(fixture.marker)
+-				if markerErr == nil {
+-					reachedTarget = true
+-					break
+-				}
+-				time.Sleep(25 * time.Millisecond)
+-			}
+-			if !reachedTarget {
+-				waitErr := run.wait(t, time.Second)
+-				t.Fatalf("shape mutant refused the plain valid frame at production entry: wait=%v stderr=%q", waitErr, run.stderr.String())
+-			}
++			run.requireTargetEvent(t, "shape mutant refused the plain valid frame at production entry")
+ 			_ = run.command.Process.Kill()
+ 			_ = run.wait(t, 3*time.Second)
+ 		})
+@@ -547,10 +561,7 @@ func TestSharedRuntimeShapeMutantsDriveProductionLauncherGate(t *testing.T) {
+ 		valid := rawSharedLauncherFrame(t, validSharedLauncherFrame(fixture, run.command.Process.Pid))
+ 		forged := bytes.Replace(valid, []byte{'{'}, []byte(`{"future_extension":true,`), 1)
+ 		run.authorize(t, forged)
+-		waitForSharedTest(t, sharedLauncherPositiveControlTimeout, func() bool {
+-			_, markerErr := os.Stat(fixture.marker)
+-			return markerErr == nil
+-		}, "unknown_ignored was not installed at the production launcher gate")
++		run.requireTargetEvent(t, "unknown_ignored was not installed at the production launcher gate")
+ 		_ = run.command.Process.Kill()
+ 		_ = run.wait(t, 3*time.Second)
+ 	})
+@@ -592,10 +603,7 @@ func TestSharedRuntimeShapeMutantsDriveProductionLauncherGate(t *testing.T) {
+ 			authMember("exec_plan_digest", authQuoted(frame.ExecPlanDigest)),
+ 		})
+ 		run.authorize(t, raw)
+-		waitForSharedTest(t, sharedLauncherPositiveControlTimeout, func() bool {
+-			_, markerErr := os.Stat(fixture.marker)
+-			return markerErr == nil
+-		}, "wire-keyed duplicate mutant was not installed at the production launcher gate")
++		run.requireTargetEvent(t, "wire-keyed duplicate mutant was not installed at the production launcher gate")
+ 		_ = run.command.Process.Kill()
+ 		_ = run.wait(t, 3*time.Second)
+ 	})

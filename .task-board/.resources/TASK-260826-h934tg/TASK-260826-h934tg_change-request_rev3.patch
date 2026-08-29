@@ -1,0 +1,2811 @@
+diff --git a/.research/260825_pi-unattended-tool-authorization.md b/.research/260825_pi-unattended-tool-authorization.md
+new file mode 100644
+index 0000000..5665e62
+--- /dev/null
++++ b/.research/260825_pi-unattended-tool-authorization.md
+@@ -0,0 +1,637 @@
++# Pi Unattended Tool Authorization Research
++
++Task: `TASK-260825-1q1987`
++Story: `STORY-260825-2l6axn`
++Research date: 2026-08-25
++
++## 1. Decision summary
++
++Pinned Pi `0.84.2` has no native tool-approval mode to enable or bypass. Active
++model tools execute automatically. `--approve` is unrelated: it only permits
++Pi to load project-local settings and resources for that run.
++
++Pi does have two useful enforcement surfaces:
++
++1. a strict launch-time tool registry allowlist through `--tools` (or an empty
++   registry through `--no-tools`); and
++2. a central pre-execution `beforeToolCall` hook exposed to coding-agent
++   extensions as `tool_call`, where `{ block: true }` prevents execution.
++
++The smallest sound agents-infra contract is therefore **launch-time
++authorization**, not emulation of an approval prompt:
++
++- keep `yolo_mode = false` as the default;
++- require an explicit tracked-Pi opt-in plus a non-empty exact tool allowlist;
++- on opt-in, inject `--tools <exact-list> --no-extensions --no-approve` and own
++  every tool/extension/trust argument so caller ordering cannot change it;
++- without opt-in, use `--no-tools` only for an explicitly text-only tracked run,
++  otherwise refuse before executable lookup or process start;
++- do not expose Pi's direct RPC `bash` command to an untrusted tracked-agent
++  client, because it does not traverse the model `tool_call` hook;
++- retain OS/container isolation because Pi tools and extensions run with the
++  Pi process's full user permissions.
++
++This uses the pinned binary's native controls and requires no Pi fork or policy
++extension. A bundled `tool_call` extension is appropriate only if a later
++requirement needs argument/path policy, interactive RPC confirmation, or
++per-call audit. It is not required to express the current coarse unattended
++grant.
++
++## 2. Scope, snapshots, and evidence standard
++
++Primary sources only were used:
++
++- official Pi monorepo tag `v0.84.2`, commit
++  `914cf1472e715297caa30db4b9535d534a9eb718`;
++- official current upstream snapshot at
++  `8fa7eebd235355522c8104166b4f1f959b4e2f10` (`0.84.3`, 2026-08-25);
++- the official `v0.84.2` darwin-arm64 standalone artifact already retained by
++  agents-infra; and
++- agents-infra source in this Story worktree.
++
++The local probes used `--offline --mode rpc --no-session`, sent no model prompt,
++and started no MLX or other model runtime. Upstream tool-gate tests used fake
++assistant streams. The exact pinned standalone returned `0.84.2` from
++`pi --version` with exit `0`.
++
++The coding-agent test checkout required Pi's official `hydrate-model-data`
++setup command because generated provider JSON is not retained in the source
++tree. That command's fetched catalog values were used only to make module
++imports collect; no research claim or citation is derived from those external
++catalog services.
++
++Permanent upstream references in this document use the pinned commit rather
++than a moving branch. The current snapshot is cited separately where behavior
++changed.
++
++## 3. Exact pinned execution and authorization path
++
++### 3.1 Production call path
++
++```text
++model AssistantMessage.toolCall
++        |
++        v
++executeToolCalls()
++  sequential: prepareToolCall() at agent-loop.ts:452
++  parallel:   prepareToolCall() at agent-loop.ts:507
++        |
++        v
++resolve tool -> prepare arguments -> validate arguments
++        |
++        v
++config.beforeToolCall?                         agent-loop.ts:619-628
++  absent / returns undefined ------------------------------+
++  returns { block: true } -> error ToolResult, no execute   |
++  throws -> caught as error ToolResult, no execute          |
++                                                           v
++                                             prepared.tool.execute()
++                                             agent-loop.ts:679-697
++```
++
++`Agent.createLoopConfig()` copies `Agent.beforeToolCall` into the loop config.
++Both sequential and parallel execution call `prepareToolCall()` before any
++tool's `execute()` method. The hook runs only after schema validation. A block
++returns an immediate error tool result; a hook exception is also converted to
++an immediate error result. Only a prepared result reaches `tool.execute()`.
++See the pinned [Agent hook wiring](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/agent/src/agent.ts#L445-L459),
++[sequential/parallel preflight](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/agent/src/agent-loop.ts#L411-L425),
++[pre-execution decision](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/agent/src/agent-loop.ts#L600-L668),
++and [actual execution](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/agent/src/agent-loop.ts#L670-L711).
++
++The coding-agent layer installs that hook once in the `AgentSession`
++constructor. At execution time it invokes the current extension runner's
++`tool_call` handlers. With no handler, it returns `undefined`, which means
++allow. Extension handlers run in extension order and the first block wins.
++See [AgentSession installation and bridge](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/core/agent-session.ts#L377-L402),
++[the installed hook](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/core/agent-session.ts#L471-L499),
++and [extension dispatch](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/core/extensions/runner.ts#L932-L953).
++
++### 3.2 What the path means
++
++- There is **no built-in approval decision** in the default path. No handler
++  means execute.
++- `tool_execution_start` is emitted before `prepareToolCall()`. It is an event,
++  not an authorization boundary; an observer cannot authorize by watching it.
++- `tool_call` is a genuine pre-execution veto for every model tool in the
++  active registry, including extension/custom tools and same-name replacements.
++- A throwing `tool_call` handler fails that model call closed because the throw
++  becomes an error result before `execute()`.
++- `terminate: true` may stop the agent loop after the blocked batch; blocking
++  itself does not depend on termination. The typed contract is documented in
++  [agent types](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/agent/src/types.ts#L52-L69)
++  and [extension result types](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/core/extensions/types.ts#L1071-L1080).
++
++The official pinned regression tests drive fake tool calls through the real
++loop/session paths. They assert that a blocked tool's `execute()` method is not
++called and that an error tool result is emitted. See the
++[agent-core negative](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/agent/test/agent-loop.test.ts#L1253-L1310)
++and [coding-agent extension negative](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/test/suite/agent-session-model-extension.test.ts#L116-L156).
++
++## 4. Project trust is not tool permission
++
++The distinction is explicit in both source and official documentation:
++
++- CLI parsing stores `--approve` and `--no-approve` in
++  `projectTrustOverride`; it does not set a tool field
++  ([args.ts:205-208](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/cli/args.ts#L205-L208)).
++- `resolveProjectTrusted()` applies that override before saved/default/UI trust
++  resolution
++  ([project-trust.ts:46-95](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/core/project-trust.ts#L46-L95)).
++- Project trust determines whether Pi loads project settings, packages,
++  extensions, skills, prompts, and themes. It is explicitly “not a sandbox”
++  and “does not restrict what the model can ask tools to do”
++  ([security.md:5-37](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/docs/security.md#L5-L37)).
++- In non-interactive modes, `--approve` only overrides project trust for one
++  run; no trust prompt is shown
++  ([security.md:27-29](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/docs/security.md#L27-L29)).
++
++Local pinned-binary evidence makes the separation concrete:
++
++| Launch | Active/all tools observed at `session_start` | Meaning |
++| --- | --- | --- |
++| `--no-approve` | defaults active: `read,bash,edit,write`; all seven built-ins present | Declining project trust does not disable tools. |
++| `--approve` | same defaults plus project `project_probe` extension tool | Trust admits project code/resources. |
++| `--approve --no-tools` | active/all both empty | `--no-tools`, not trust, controls tool availability. |
++| `--approve --tools read` | only `read` exists and is active | `--tools` is a strict registry allowlist. |
++
++Therefore agents-infra must never map `yolo_mode` to `--approve`, and a
++diagnostic must report project trust and tool authorization as separate fields.
++The existing agents-infra rejection at
++`tools/agents-infra/internal/infra/pi_config.go:583-595` correctly identifies
++this mismatch, but its claim that Pi exposes no unattended mechanism is too
++broad: Pi lacks an approval policy, while strict tool selection plus automatic
++execution is sufficient for a wrapper-owned unattended grant.
++
++## 5. Native and programmable control inventory
++
++### 5.1 CLI and settings
++
++Pinned and current upstream expose these controls:
++
++| Surface | Exact behavior | Authorization value | Caveat |
++| --- | --- | --- | --- |
++| `--tools a,b` | Strict allowlist across built-in, extension, and SDK custom tools. | Strong launch-time name scope. | A permitted name can refer to an extension replacement unless extension loading is separately controlled. |
++| `--exclude-tools a,b` | Denylist after the initial selection. | Useful narrowing. | Harder to audit than a positive allowlist; new tools can remain enabled. |
++| `--no-tools` | Empty allowed registry. | Strong text-only mode. | No model tools at all. |
++| `--no-builtin-tools` | Removes built-ins, retains extension/custom tools. | Not a safe deny-all. | Custom tools still execute automatically. |
++| `defaultTools` setting | Initial built-in selection. | Convenience only. | Extension/custom tools remain enabled; project setting is trust-controlled. |
++| `--no-extensions` | Disables discovery but preserves explicit `-e` paths. | Essential for a wrapper-owned registry. | Caller-supplied `-e` must also be rejected/owned. |
++| `--approve` / `--no-approve` | One-run project-input trust override. | None for tool calls. | Trusted project extensions execute arbitrary TypeScript. |
++
++The CLI help defines the all-tool allowlist and explicit-extension exception
++([args.ts:281-303](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/cli/args.ts#L281-L303)).
++The SDK derives a default active set of `read,bash,edit,write`, converts
++`--no-tools` into an empty allowlist, and gives an explicit `tools` list
++precedence
++([sdk.ts:247-254](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/core/sdk.ts#L247-L254)).
++The registry applies the allowlist before merging built-ins and custom tools;
++custom tools replace the same built-in name
++([agent-session.ts:2463-2529](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/core/agent-session.ts#L2463-L2529)).
++Official settings documentation confirms that `defaultTools` preserves custom
++tools while `--tools` is strict
++([settings.md:221-231](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/docs/settings.md#L221-L231)).
++
++### 5.2 Extensions and custom tool replacement
++
++An extension may:
++
++- veto a model call in `pi.on("tool_call", ...)`;
++- use `ctx.ui.confirm()` for supervised approval, including over the RPC UI
++  request/response protocol;
++- register a new tool through `pi.registerTool()`; or
++- replace a built-in by registering the same name.
++
++Official extension docs warn that extensions run with full process permissions
++([extensions.md:110-120](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/docs/extensions.md#L110-L120)).
++The official [tool override example](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/examples/extensions/tool-override.ts#L1-L20)
++explicitly lists access control and sandbox routing as uses for replacement.
++
++The pinned binary reproduced both sides:
++
++- `--approve` loaded a project `bash` replacement and the registry reported
++  `bash` from the project extension rather than `builtin`;
++- `--approve --no-extensions -e <probe>` suppressed the project extension but
++  still loaded the explicit CLI probe.
++
++This makes `--tools` plus unrestricted extensions insufficient as a stable
++tool-implementation identity. The wrapper must disable discovery and reject
++caller-supplied explicit extensions. A future agents-infra-owned policy
++extension may be the sole explicit `-e` path, with its identity catalogued and
++rechecked immediately before spawn.
++
++### 5.3 Skills `allowed-tools` metadata
++
++Pinned/current `docs/skills.md` describe an experimental `allowed-tools`
++frontmatter field as “pre-approved tools.” A repository-wide source/test search
++at both inspected snapshots found `allowed-tools` only in that documentation
++row and found no consumer or enforcement path. It must be treated as
++non-authoritative metadata, not as a tool permission. This is an upstream
++documentation/implementation anomaly, not evidence of a hidden approval flow.
++See the pinned [skills documentation](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/docs/skills.md#L137-L149).
++
++### 5.4 RPC mode
++
++RPC is a transport, not a model-tool approval service:
++
++- its command union has prompts, state controls, and a direct `bash` command,
++  but no authorize/approve-tool command
++  ([rpc-types.ts:20-73](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/modes/rpc/rpc-types.ts#L20-L73));
++- model-generated tool calls still traverse `AgentSession` and `tool_call`;
++- an extension may block on `ctx.ui.confirm()`, which RPC translates into an
++  `extension_ui_request` and matching response
++  ([rpc.md:1155-1164](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/docs/rpc.md#L1155-L1164));
++- the direct RPC `bash` command instead emits `user_bash` and calls
++  `session.executeBash()`; it never invokes `tool_call`
++  ([rpc-mode.ts:559-580](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/modes/rpc/rpc-mode.ts#L559-L580)).
++
++The local probe loaded a `tool_call` extension that always blocks, then sent a
++direct RPC `bash` request. Pi emitted `rpc-direct-bash-ok` and returned
++`success:true`, `exitCode:0`. This is an intentional trusted-controller path,
++but it is a bypass if a product claims that one `tool_call` policy controls all
++execution.
++
++`user_bash` interception is also weaker as a fail-closed gate: its result type
++has no `block` field, and runner exceptions are reported then ignored before
++returning `undefined`. A handler can synthesize a denial result, but agents-infra
++should gate or omit the RPC command at its controller boundary instead of
++depending on that hook.
++
++## 6. Current upstream check
++
++At current snapshot `8fa7eebd235355522c8104166b4f1f959b4e2f10`:
++
++- the three agent-core files carrying `beforeToolCall` and the execution path
++  are byte-identical to `v0.84.2` (`git diff --exit-code`, exit `0`);
++- coding-agent still installs `tool_call` before execution and exposes the same
++  CLI tool/trust/extension controls;
++- no new native tool-approval flag, approval setting, or RPC authorization
++  command was found;
++- RPC adds `clear_queue`; and
++- current Pi adds an optional `powershell` tool, illustrating why an exact
++  positive allowlist is safer than “all current tools except...” policy.
++
++Current source references:
++
++- [AgentSession hook](https://github.com/badlogic/pi-mono/blob/8fa7eebd235355522c8104166b4f1f959b4e2f10/packages/coding-agent/src/core/agent-session.ts#L478-L506)
++- [RPC command union](https://github.com/badlogic/pi-mono/blob/8fa7eebd235355522c8104166b4f1f959b4e2f10/packages/coding-agent/src/modes/rpc/rpc-types.ts#L20-L76)
++- [current CLI help](https://github.com/badlogic/pi-mono/blob/8fa7eebd235355522c8104166b4f1f959b4e2f10/packages/coding-agent/src/cli/args.ts)
++- [upstream PowerShell tool change](https://github.com/badlogic/pi-mono/commit/80e62761f7251a104f1b21d9c73920c720f0ec00)
++
++### 6.1 Tracked task-board spawn is a separate integration boundary
++
++This research proves how agents-infra can authorize and launch Pi. It does
++**not** prove that current task-board tracked spawn can select Pi.
++
++The current task-board source binds built-in runtime ID `qwen` to agentic
++system `qwen-code`, whose adapter resolves the `qwen` binary and emits Qwen Code
++stream-JSON grammar. Pi is not one of the shipped agentic systems. Primary
++local sources at `skill-project-management@f6e7898f02d372d804bba727c59f7bb2f4c0ac51`
++are `pkg/remoteconfig/runtimeid/builtins.go:73-84` and
++`tools/board-cli/vendor/github.com/relux-works/skill-agents-management/pkg/agentic/systems/qwen/qwen.go:47-68`.
++
++`spawn.runtimes` cannot manufacture a new harness. It declares a binding to
++one of the launch adapters already shipped by the release, and the project's
++own contract states that it adds vocabulary/selectability rather than behavior
++(`skill-project-management@f6e7898f02d372d804bba727c59f7bb2f4c0ac51:references/task-board-config.md:347-419`).
++
++Actual tracked Pi spawn therefore needs cross-repository adapter work in
++skill-agents-management/task-board: a shipped Pi agentic-system plugin with
++binary/argv/stdin/stdout/environment semantics, a runtime/model registration,
++and production spawn tests that invoke the agents-infra Pi boundary. Only then
++may a `spawn.runtimes`/ceiling entry select it. The agents-infra authorization
++change is necessary for that integration but is not sufficient evidence of it.
++
++## 7. Local reproduction matrix
++
++Every row below was a standalone command against the exact `0.84.2`
++standalone/source. No row launched a model runtime.
++
++| Check | Exit | Observed result |
++| --- | ---: | --- |
++| `pi --version` | `0` | Exact binary reports `0.84.2`. |
++| RPC probe: `--no-approve` | `0` | Default model tools remain active; project extension absent. |
++| RPC probe: `--approve` | `0` | Project extension tool becomes active; built-in defaults unchanged. |
++| RPC probe: `--approve --no-tools` | `0` | Active and complete registries are empty. |
++| RPC probe: `--approve --tools read` | `0` | Only `read` exists and is active. |
++| RPC probe: `--approve --no-extensions -e <probe>` | `0` | Project discovery suppressed; explicit policy probe loaded. |
++| RPC probe: project replaces `bash` | `0` | Registry reports project source for allowed name `bash`. |
++| RPC direct `bash` with blocking `tool_call` hook | `0` | Command executes and response reports `exitCode:0`; hook is not on this path. |
++| Agent-core blocked-tool test | `0` | 1 passed, 22 skipped; tool side-effect flag remains false. |
++| Coding-agent extension block test, initial | `1` | Test collection failed because source checkout lacked generated provider JSON after `npm ci --ignore-scripts`; no test ran. |
++| Official `hydrate-model-data` setup step | `0` | Required generated provider JSON materialized. |
++| Same coding-agent extension block test, rerun | `0` | 1 passed, 11 skipped; throwing tool implementation was not reached. |
++| Pinned-to-current agent-core hook diff | `0` | No source delta in `agent.ts`, `agent-loop.ts`, or `types.ts`. |
++
++The initial exit `1` is retained as a real setup failure, not counted as a
++passing gate. Evidence logs are under `.temp/TASK-260825-1q1987/` in this
++worktree.
++
++## 8. Alternatives and tradeoffs
++
++| Mechanism | Autonomy | Security property | Pinned/current compatibility | Maintenance |
++| --- | --- | --- | --- | --- |
++| Wrapper gate + `--tools` + `--no-extensions` | Fully unattended | Explicit launch admission and exact name scope; stable implementations because discovery is off | Native in 0.84.2 and current | Lowest; argv/schema/tests only |
++| Bundled `tool_call` policy extension | Unattended or RPC-confirmed | Central per-call argument/path veto; handler throw blocks model call | Native extension API in 0.84.2/current | Medium; catalogue extension, load marker, reload/resume tests, TS API drift |
++| Replace every built-in/custom tool | Fully unattended | Full executor control per replacement | Supported in both | High; duplicate tool contracts/rendering and track new tools such as `powershell` |
++| RPC host + confirmation extension | Supervised, not unattended | Human per-call decision for model tools | Supported in both | High; request correlation, timeout/cancel/recovery; direct RPC bash remains separate |
++| SDK embedding or Pi core patch | Any desired policy | Strongest unskippable in-process boundary | SDK hook exists; fork must track upstream | Highest; abandons simple standalone launch or carries a fork |
++| `--approve`, saved trust, skill `allowed-tools` | N/A | No tool authorization | Present/documented | Unsound for this purpose |
++
++The first option is sufficient for the requested coarse “may this tracked Pi
++run tools unattended?” decision. The extension option becomes justified only
++when the policy must inspect arguments or ask an external approver per call.
++
++### 8.1 Privileged execution candidate
++
++Privilege is a separate axis from Pi tool authorization. Base Pi already has
++no model-tool approval popup, so wrapping commands in `sudo` does not make an
++unattended mode possible; it only changes the OS identity and damage ceiling.
++
++| Candidate | Effective boundary | Assessment for tracked unattended Pi |
++| --- | --- | --- |
++| Run the whole Pi/agents-infra process as root or Administrator | Every built-in tool, extension, dependency, and process child receives administrator authority. | Reject. Pi officially runs with the permissions of its process; this turns prompt/model/extension compromise into unrestricted host compromise. |
++| `NOPASSWD: ALL` or equivalent unrestricted elevation | Any authorized `bash` call can obtain arbitrary root execution without a human gate. | Reject; materially equivalent to a root-capable agent. |
++| `NOPASSWD` command allowlist | `NOPASSWD` removes authentication only; safety depends entirely on exact executable and argument matching. | Do not include in the generic contract. It is acceptable only when the listed command is itself a narrow audited helper with a closed argument language. |
++| Root-owned allowlisted helper/daemon | Pi remains unprivileged and requests a small typed capability from separately installed privileged code. | The only acceptable future shape, but it requires its own design, user/admin installation approval, threat model, and negative tests. Not enabled by `yolo_mode`. |
++
++The official sudoers grammar says that a listed command with no command-line
++arguments may be run with any arguments, and that argument rules use either
++regular expressions or shell wildcards
++([sudoers source](https://github.com/sudo-project/sudo/blob/2e18923c2e959fff57b60207a261080daa2ebee9/docs/sudoers.man.in#L1090-L1136)).
++It separately defines `NOPASSWD` as changing whether authentication is
++required for following commands
++([sudoers source](https://github.com/sudo-project/sudo/blob/2e18923c2e959fff57b60207a261080daa2ebee9/docs/sudoers.man.in#L2065-L2088)).
++The maintainers explicitly warn that argument wildcards match whitespace and
++that regular expressions are generally safer
++([sudoers source](https://github.com/sudo-project/sudo/blob/2e18923c2e959fff57b60207a261080daa2ebee9/docs/sudoers.man.in#L2216-L2332)).
++These controls can narrow a command, but they do not turn an arbitrary
++privileged utility into a narrow capability.
++
++On macOS, Apple's supported Service Management surface can install/register a
++launch daemon subject to user/admin approval. Apple describes a LaunchDaemon
++as a root process that responds to low-level IPC requests, and `SMAppService`
++registers helper executables from the app bundle
++([Service Management](https://developer.apple.com/documentation/servicemanagement),
++[SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice),
++[registration approval](https://developer.apple.com/documentation/servicemanagement/smappservice/register%28%29)).
++That is an installation/lifecycle mechanism, not authorization logic. A future
++helper must still expose only named typed operations, reject arbitrary command
++strings and paths, authenticate the local client, validate path containment,
++run no shell, keep its executable/config root-owned and non-writable by the Pi
++user, and audit allow/deny outcomes.
++
++No privileged path belongs in the current unattended-spawn contract. In
++particular, authorizing Pi's `bash` tool cannot support a claim of unprivileged
++execution when the host account already has unrestricted passwordless sudo;
++that absence must come from the OS account/container boundary, not a Pi flag.
++
++## 9. Recommended agents-infra contract
++
++### 9.1 Configuration and defaults
++
++Add a tracked/headless Pi policy owned by agents-infra, conceptually:
++
++```toml
++[agents.pi.tracked_session]
++yolo_mode = true
++tool_allowlist = ["read", "bash", "edit", "write"]
++```
++
++Exact field placement may reuse the existing composed Pi session policy, but
++the semantics must be these:
++
++1. `yolo_mode` defaults to `false` with explicit nearest-field false masking.
++2. The grant applies only to independently tracked/headless Pi launches. It is
++   not inferred from project trust, a primary interactive session, a task-board
++   status, or a parent agent's policy.
++3. `yolo_mode = true` requires a present, non-empty, duplicate-free exact
++   `tool_allowlist`. Unknown names fail before spawn; no “all” wildcard exists.
++4. `yolo_mode = false` or absence plus a tool-capable tracked request returns a
++   typed `pi_tool_authorization_required` error before executable lookup,
++   runtime startup, state writes, locks, or process spawn.
++5. An explicitly text-only tracked request launches with `--no-tools`; it is not
++   a silent fallback from a refused tool-capable request.
++6. Project trust remains independently defaulted to false for tracked runs.
++   Do not emit `--approve` as part of tool authorization.
++
++### 9.2 Canonical argv and ownership
++
++For an authorized run, agents-infra emits exactly one canonical set before the
++message operand boundary:
++
++```text
++--no-approve
++--no-extensions
++--tools read,bash,edit,write
++```
++
++The existing argument composer currently passes all three classes through
++(`pi_args.go:51-68`, `180-228`). The implementation must instead reserve and
++normalize these tool-boundary options for tracked authorization:
++
++- `--tools` / `-t`
++- `--exclude-tools` / `-xt`
++- `--no-tools` / `-nt`
++- `--no-builtin-tools` / `-nbt`
++- `--extension` / `-e`
++- `--no-extensions` / `-ne`
++- `--approve` / `-a`
++- `--no-approve` / `-na`
++
++Caller-supplied occurrences, duplicates, attached unknown spellings, or
++post-delimiter flag-shaped operands must not override the managed selection.
++Prefer typed rejection over last-wins composition. Existing Pi identity and
++environment revalidation immediately before spawn remains in force
++(`pi_launch_posix.go:220-243`).
++
++### 9.3 RPC boundary
++
++Prefer `--print` or JSON mode when a tracked child needs one autonomous prompt.
++If agents-infra uses RPC for lifecycle control:
++
++- the controller must expose only the commands required by the tracked-agent
++  protocol;
++- direct `bash` and equivalent user-command injection must be rejected unless
++  separately authorized as controller actions;
++- `tool_execution_*` events are audit evidence only, never authorization;
++- a future confirmation extension must receive and answer
++  `extension_ui_request` messages, but that is supervised mode and must not be
++  labelled unattended.
++
++### 9.4 Diagnostics
++
++Non-launching compose/print diagnostics should report at least:
++
++```json
++{
++  "tool_authorization": {
++    "mode": "unattended_allowlist",
++    "effective": true,
++    "source": "/canonical/project/.agents/.configs/project-config.toml",
++    "scope": "tracked_session",
++    "allowed_tools": ["read", "bash", "edit", "write"],
++    "native_enforcement": "pi_cli_strict_allowlist",
++    "extension_discovery": "disabled",
++    "project_trust": "declined",
++    "rpc_direct_bash": "not_exposed"
++  }
++}
++```
++
++Report the pinned Pi compatibility identity and final normalized diagnostic
++argv nearby. Never report secrets or claim a sandbox. Missing, unreadable,
++partial, malformed, ambiguous, or unsupported policy is an error, not policy
++absence.
++
++### 9.5 Security boundary
++
++This contract limits which Pi model-tool implementations are reachable and
++requires explicit unattended admission. It does not confine those tools after
++admission. Pi's official security contract says tools and extensions run with
++the process user's permissions and recommends a container, VM, micro-VM, or
++policy-controlled sandbox for unattended work
++([security.md:31-53](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/docs/security.md#L31-L53)).
++Tracked Pi should retain agents-infra's isolated state, restricted environment,
++process ownership, and task-scoped workspace boundary.
++
++### 9.6 Privilege default
++
++The tracked-Pi contract grants no privileged capability and emits no `sudo`,
++administrator, setuid, helper, or daemon configuration. Diagnostics should say
++`"privilege_boundary":"calling_user"` and must not claim that passwordless
++elevation is absent unless the containing OS policy proves it. A later
++privileged helper is a separate explicit capability contract, never implied by
++`yolo_mode`, `tool_allowlist`, project trust, or task status.
++
++## 10. Minimal patch points
++
++No upstream Pi patch is recommended.
++
++The smallest agents-infra implementation touches:
++
++1. Pi tracked/session policy parsing and composition: replace
++   `pi_yolo_mode_unsupported` for the tracked scope with the authorization and
++   allowlist validation above.
++2. `BuildManagedPiArguments`: reserve tool, extension, and trust options and
++   append one canonical managed set.
++3. launch-plan diagnostics: expose separate tool-authorization and project
++   trust fields.
++4. `RunPi`: retain the existing fail-before-lookup ordering and point-of-use
++   identity/environment rechecks.
++5. production-entry tests at both non-launching compose and direct `RunPi`.
++
++If future requirements add argument/path policy, the next-smallest patch is an
++agents-infra-owned extension loaded as the sole explicit `-e` path. Catalogue
++its entire execution closure, verify it before side effects and immediately
++before spawn, require a `session_start` identity marker, and prove that reload,
++resume, and cwd changes preserve the handler. Absence or load failure must stop
++the run; a missing handler must never mean allow.
++
++## 11. Negative test plan
++
++Tests must drive the real compose/launch entry points and preserve real exit
++codes.
++
++### 11.1 Admission and evidence
++
++1. Omitted/false `yolo_mode` plus a tool-capable tracked request fails with
++   `pi_tool_authorization_required` before executable lookup. Assert lookup,
++   runtime, state, lock, and Pi process sentinels are untouched.
++2. Explicit text-only plus false/absent yolo reaches Pi with exactly
++   `--no-tools`; a tool-capable request never silently downgrades to this lane.
++3. True yolo without an allowlist, with an empty/duplicate/unknown allowlist,
++   or with an unreadable/malformed config fails closed. A failed read is not
++   absence.
++4. `--approve` alone cannot satisfy authorization and is never emitted as its
++   translation. Project trust and tool authorization diagnostics remain
++   independent.
++5. Caller-supplied tool/trust/extension flags cannot override the canonical
++   set before or after the wrapper delimiter.
++
++### 11.2 Registry and bypasses
++
++6. Drive a fake assistant tool call through a launched pinned AgentSession:
++   allowlisted tool changes a task-scoped sentinel only when yolo is true.
++7. The same fake call with yolo false or an unlisted name leaves the sentinel
++   unchanged and yields refusal/error evidence.
++8. Place project and global extensions that register a new tool and replace
++   allowed name `bash`; authorized tracked launch loads neither. The registry
++   must report only built-in sources.
++9. Add a new upstream-like built-in (for example `powershell`) in a fixture;
++   it remains absent unless explicitly allowlisted.
++10. If RPC is used, model-generated `bash` traverses the policy, while a raw
++    RPC `bash` command is rejected by the controller and cannot produce a
++    sentinel.
++
++### 11.3 Attacks on the proof
++
++11. A caller cannot self-mint diagnostics, a policy marker, or an allowlist
++    hash; agents-infra derives evidence from resolved config and normalized
++    argv.
++12. Revalidate Pi and any future policy asset immediately before spawn; mutate
++    between compose and spawn and require refusal.
++13. Resume, reload, and cwd-switch cases preserve the managed registry and
++    extension-discovery-off state.
++14. Narrowing mutant: apply the strict allowlist only to built-ins, leaving
++    custom/replacement tools admitted. The project replacement negative must
++    fail. This proves the bounded class, unlike a delete-only mutant.
++15. Narrowing mutant: stop ownership parsing at the first wrapper delimiter so
++    a later tool/extension flag reaches Pi. The real launch-entry bypass test
++    must fail.
++16. If a policy extension is later added, its thrown handler must leave the
++    tool sentinel unchanged; missing handler/load marker must refuse the whole
++    run rather than fall back to Pi's default allow behavior.
++17. A tracked spawn configured to execute Pi must fail while task-board has no
++    shipped Pi agentic-system adapter; declaring a `spawn.runtimes` row alone
++    must not make the capability claim reproduce.
++18. The ordinary contract never emits `sudo` and never launches Pi as a
++    privileged helper. A root/admin test fixture must be refused or explicitly
++    classified outside this contract rather than reported as ordinary yolo.
++19. If a privileged helper is later introduced, send unknown operation,
++    arbitrary command, traversal/symlink path, forged client identity, and
++    malformed/partial request shapes through the real IPC entry point; each
++    must fail without privileged side effects.
++20. For any later sudoers-based prototype, prove the exact installed rule with
++    both allowed and adjacent denied argv. A wildcard-narrowing mutant that
++    admits whitespace/additional arguments must make the negative fail.
++
++## 12. Answered questions and residual unknowns
++
++- **Exact authorization call path:** Section 3. Pi has an optional pre-tool
++  veto but no default approval decision; absent handler means allow.
++- **Project trust versus tool permission:** Section 4. They are orthogonal.
++- **Pinned/current flags, settings, extensions, custom tools, RPC:** Sections
++  5-6.
++- **Candidate behavior without MLX:** Section 7.
++- **Autonomy, security, compatibility, maintenance:** Section 8.
++- **Concrete agents-infra implementation, defaults, opt-in, diagnostics, and
++  negative tests:** Sections 9-11.
++- **Privilege candidates:** Section 8.1. Root/unrestricted sudo are rejected;
++  only a separately designed narrow helper is acceptable if future privileged
++  capability is required.
++- **Actual task-board tracked spawn:** Section 6.1. Current `qwen` is qwen-code;
++  Pi needs shipped cross-repository adapter work before the authorization
++  contract can be claimed end to end.
++
++No product or upstream capability question remains unresolved for the coarse
++tracked-session unattended grant. Per-command/path policy and human RPC
++confirmation are deliberately separate future modes, not hidden requirements
++of this recommendation.
++
++## 13. Primary source index
++
++- [Official Pi `v0.84.2` source tree](https://github.com/badlogic/pi-mono/tree/914cf1472e715297caa30db4b9535d534a9eb718)
++- [Official Pi `v0.84.2` release](https://github.com/badlogic/pi-mono/releases/tag/v0.84.2)
++- [Official standalone `v0.84.2` release](https://github.com/earendil-works/pi/releases/tag/v0.84.2)
++- [Pinned agent execution loop](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/agent/src/agent-loop.ts)
++- [Pinned coding-agent session](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/core/agent-session.ts)
++- [Pinned CLI parser](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/src/cli/args.ts)
++- [Pinned official security documentation](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/docs/security.md)
++- [Pinned official RPC documentation](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/docs/rpc.md)
++- [Pinned official extension documentation](https://github.com/badlogic/pi-mono/blob/914cf1472e715297caa30db4b9535d534a9eb718/packages/coding-agent/docs/extensions.md)
++- [Current upstream snapshot](https://github.com/badlogic/pi-mono/tree/8fa7eebd235355522c8104166b4f1f959b4e2f10)
++- [Official sudoers source snapshot](https://github.com/sudo-project/sudo/blob/2e18923c2e959fff57b60207a261080daa2ebee9/docs/sudoers.man.in)
++- [Apple Service Management documentation](https://developer.apple.com/documentation/servicemanagement)
++- Task-board local primary source: `skill-project-management@f6e7898f02d372d804bba727c59f7bb2f4c0ac51:pkg/remoteconfig/runtimeid/builtins.go:73-84`
++- Task-board local primary source: `skill-project-management@f6e7898f02d372d804bba727c59f7bb2f4c0ac51:references/task-board-config.md:347-419`
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index e745abf..c9a72ba 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,31 @@
+ 
+ ## 2026-08-26
+ 
++### 1528 — Standalone Must Not Probe Interactive Terminal Ownership
++- ROOT CAUSE: Current main's foreground-terminal composition preserved closed standalone stdin but still passed caller stdin to `configurePiProcessTerminal`, so a TTY caller could set `Foreground`/`Ctty` on a non-interactive worker.
++- FIX: `tools/agents-infra/internal/infra/pi_launch_posix.go` and `pi_shared_client_darwin.go` now configure stdin and terminal foreground only for interactive launches; standalone keeps a separate process group.
++- EVIDENCE: `TestRunPiStandaloneExclusiveWorkerClosesReadableStdin` supplies readable stdin plus a forced-positive terminal probe and requires EOF with zero probe calls. Widening the interactive branch makes the production launch fail; exact restoration returns it to exit 0. Fresh merge `eaefc6f` contains current main `355a156` as its second parent.
++- SCOPE: `TASK-260826-h934tg`; semantic merge reconciliation only, no task-board adapter, allowlist widening, or privilege change.
++
++### 1411 — Standalone Stdin And Interactive Terminal Semantics Compose
++- FINDING: Current main adds primary-session `--approve` resolution and preserves direct terminal writers; the accepted standalone worker independently requires caller-argument refusal and closed stdin.
++- DECISION: `RunPi` applies primary-session yolo only outside standalone mode, uses `piProcessWriter` for both modes, and attaches stdin only for interactive Pi. Shared and exclusive production paths use the same split.
++- EVIDENCE: Merge commit parents are accepted checkpoint `8f81371` and current main `fd80bd8`; standalone authorization/concurrency/stdin tests, full Go tests, vet, and Darwin/Linux/Windows builds exit 0 on the reconciled tree.
++- SCOPE: `TASK-260826-h934tg`; merge-only reconciliation, no task-board adapter or allowlist expansion.
++
++### 1335 — Standalone Stdin Isolation Needs A Readable Witness
++- ROOT CAUSE: Standalone launch tests left `RunPiOptions.Stdin` nil, so deleting the exclusive and shared stdin guards still gave child Pi processes EOF through `os/exec` defaults.
++- FIX: `tools/agents-infra/internal/infra/pi_standalone_shared_test.go` supplies non-empty readers through both production launch paths and requires each child to observe EOF.
++- EVIDENCE: Narrowing `pi_launch_posix.go` and `pi_shared_client_darwin.go` one at a time makes the named exclusive/shared tests exit 1 with `StdinEOF:false`; exact restoration returns each to exit 0.
++- STATUS: Reviewer revision-1 F1 addressed without changing the standalone-now, task-board-adapter-later boundary.
++
++### 1248 — Standalone Pi YOLO Is A Separate Primitive
++- DECISION: Unattended local-Qwen workers use `[agents.pi.standalone_session]`, not interactive `[agents.pi.primary_session].yolo_mode` and not a task-board runtime adapter.
++- AUTHORIZATION: The launcher requires explicit `yolo_mode = true` plus an exact non-empty built-in tool allowlist, owns `--no-approve --no-extensions --tools ... --mode json --no-session --print`, closes stdin, and refuses caller Pi arguments before launch.
++- SECURITY: Project trust remains declined; extensions cannot replace allowed built-ins; raw RPC is excluded because direct RPC `bash` bypasses the model `tool_call` hook; execution stays at the calling user's privilege.
++- LIFECYCLE: Every spawn has its own Pi process group and random hash-contained client state. Concurrent workers may lease one verified shared MLX runtime, and one worker's exit or crash cannot tear down a live peer.
++- SCOPE: The primitive is board-agnostic now. Task-board adoption remains a later adapter over this command.
++
+ ### 0958 — Close Executable Identity Mirror Witnesses
+ - ROOT CAUSE: Three production `Dev != … || Ino != …` gates had wrong-device witnesses but no same-device/wrong-inode witness; `sharedRuntimeBrokerCandidates` had neither witness, three inode-removal mutants survived, and the force-stop gate was killed only incidentally by a foreign-binary test.
+ - REVIEW FINDING: Revision 1's event-driven launcher control proved that the target ran but dropped the live assertion that the authorized launcher PID itself `execve`d the target; replacing `unix.Exec` with fork+exec therefore left the launcher suite green.
+@@ -52,6 +77,17 @@
+ 
+ ## 2026-08-25
+ 
++### 2352 — Pi Privilege And Tracked Spawn Stay Separate
++- FINDING: task-board built-in `qwen` runs the `qwen-code` harness; `spawn.runtimes` adds bindings to shipped adapters and cannot create a Pi harness.
++- DECISION: agents-infra Pi authorization is necessary but not sufficient for tracked task-board spawn; skill-agents-management/task-board needs a shipped Pi adapter and end-to-end spawn tests.
++- DECISION: No sudo/root path belongs in the unattended grant. Only a separately approved, root-owned helper with a closed typed capability API is acceptable if privileged operations are later required.
++- SCOPE: `TASK-260825-1q1987`; `.research/260825_pi-unattended-tool-authorization.md` Sections 6.1 and 8.1.
++
++### 2346 — Pi Unattended Authorization Is Launch-Time Policy
++- FINDING: Pi `0.84.2` and current upstream autoexecute active model tools; `--approve` controls project-local input loading, while strict `--tools` selection and the central `tool_call` hook are the actual enforcement surfaces.
++- ANOMALY: Direct RPC `bash` bypasses `tool_call`, and documented skill `allowed-tools` has no source/test consumer in either inspected snapshot.
++- DECISION: For tracked Pi, agents-infra should require explicit yolo plus an exact allowlist, emit `--tools --no-extensions --no-approve`, refuse raw RPC bash exposure, and retain OS isolation; no Pi fork or policy extension is needed for the coarse unattended grant.
++- EVIDENCE: `TASK-260825-1q1987`; pinned binary probes and both upstream blocked-tool regression tests; `.research/260825_pi-unattended-tool-authorization.md`.
+ ### 2245 — A Mutation Harness's Controls Are Gates Too
+ - REGRESSION: The fifth review found the corpus, the oracle and the decoder sound, and one **mutant** not the mutant its row described. `unknown_by_wire_form` was documented as matching the allowlist against a member's wire spelling; it was wired through `isAllowedName(m.name, mutant)`, which rebuilds a `frameMember` from the decoded name and therefore clears `wire`. The empty wire string matched no allowed literal, so it refused **every member of every frame**. It was still reported KILLED — by 48 witnesses that were all ordinary *valid* frames beginning `arity/schema/x1` — and its `blind` label was a table boolean nothing executed.
+ - ROOT CAUSE: Revision 8's kill condition was `disagrees with the oracle on at least one frame`, and a reject-all fake disagrees on every accepted frame. The witness count was not just non-zero, it was large, and no rule was in a position to read that as the tell it was.
+diff --git a/README.md b/README.md
+index 6be1336..c1b0635 100644
+--- a/README.md
++++ b/README.md
+@@ -27,6 +27,7 @@ agents-infra doctor local /path/to/project
+ agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json
+ openai-infra --print-config
+ pi-infra --print-config
++qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m
+ agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check
+ agents-infra version
+ ```
+@@ -53,10 +54,12 @@ The canonical interface after bootstrap is:
+ - `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
+ - `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
+ - `agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
++- `agents-infra pi spawn --prompt TEXT [--deadline DURATION] [--print-config]`
+ - `agents-infra runtime status [--project DIR] [--profile NAME] [--json]`
+ - `agents-infra runtime stop [--project DIR] [--profile NAME] [--force] [--timeout SECONDS]`
+ - `pi-infra [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+ - `openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
++- `qwen-infra spawn --prompt TEXT [--deadline DURATION] [--print-config]`
+ - `agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]`
+ - `agents-infra version`
+ 
+@@ -548,6 +551,52 @@ exactly one `--approve` so project `AGENTS.md`, skills, extensions, and other
+ reviewed local resources load without a trust prompt. Explicit
+ `--no-approve`/`-na` conflicts with effective yolo and fails closed.
+ 
++That primary-session rule is intentionally separate from the board-agnostic
++standalone worker contract. To authorize an unattended worker explicitly,
++configure both fields in the same composed project policy:
++
++```toml
++[agents.pi.primary_session]
++profile = "qwen-3.8-27b"
++pi_compatibility = "github-release:earendil-works/pi@v0.84.2:darwin-arm64#sha256-c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65"
++yolo_mode = false
++
++[agents.pi.standalone_session]
++yolo_mode = true
++tool_allowlist = ["read", "bash", "edit", "write", "grep", "find", "ls"]
++```
++
++The required managed profile and canonical `qwen-infra` target definitions are
++the same reviewed deployment inputs described by the reference policy and
++canonical-target contract in this surrounding operator section; standalone
++authorization does not duplicate or weaken them.
++
++Then inspect or launch only through the owned standalone command:
++
++```bash
++qwen-infra spawn --prompt "Complete the bounded task" --print-config
++qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m
++```
++
++Standalone policy is fail-closed and does not change interactive
++`qwen-infra`/`pi-infra` behavior. Both `yolo_mode = true` and a non-empty exact
++built-in allowlist are required. The launcher owns Pi's `--no-approve`,
++`--no-extensions`, `--tools`, `--mode json`, `--no-session`, and `--print`
++arguments, closes stdin, refuses every caller-controlled Pi argument, and
++keeps the prompt out of diagnostics. `--no-approve` declines project trust;
++tool authorization comes from the wrapper's reviewed built-in allowlist, not
++from Pi project trust. Raw RPC mode is never exposed because its direct `bash`
++request bypasses Pi's model `tool_call` hook. Extension discovery is disabled
++so a project or global extension cannot replace an allowed built-in tool.
++
++Each invocation owns an independent Pi process group and a fresh random,
++hash-contained, non-persistent client state. With `runtime.sharing.mode =
++"shared"`, concurrent standalone workers lease one verified local runtime;
++releasing or crashing one worker releases only its lease, and the final lease
++reaps the runtime. The command is deliberately board-agnostic: no task-board
++runtime adapter, registration, run identity, or lifecycle dependency is
++implemented here. A board adapter may later consume this stable primitive.
++
+ Profile-name identity is its exact post-TOML-decoding UTF-8 bytes. There is no
+ normalization, case folding, trimming, path cleaning, or lossy sanitization.
+ Explicit `--provider`, `--model`, and `--thinking` must resolve to the exact
+@@ -962,6 +1011,7 @@ Inspect or compose the selected target without launching it:
+ openai-infra --print-config
+ anthropic-infra --print-config
+ qwen-infra --print-config
++qwen-infra spawn --prompt "Complete the bounded task" --print-config
+ 
+ agents-infra compose --mode primary-session \
+   --entrypoint qwen-infra --project "$PWD" --schema-version 1 --json \
+@@ -1175,9 +1225,9 @@ rg -n "Primary Parent Goal Actualization" \
+ | Tool | Purpose | Command | Outputs |
+ |------|---------|---------|---------|
+ | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
+-| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
++| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+-| `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation |
++| `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+ | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
+ | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
+diff --git a/SKILL.md b/SKILL.md
+index af654ff..4e7013c 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -390,6 +390,25 @@ project `AGENTS.md`, skills, extensions, and other reviewed local resources to
+ load without a trust prompt. Explicit `--no-approve`/`-na` conflicts with yolo
+ and fails closed.
+ 
++For an autonomous board-agnostic worker, use the separate explicit contract:
++
++```toml
++[agents.pi.standalone_session]
++yolo_mode = true
++tool_allowlist = ["read", "bash", "edit", "write", "grep", "find", "ls"]
++```
++
++Inspect it with `qwen-infra spawn --prompt "..." --print-config`, then launch
++with `qwen-infra spawn --prompt "..." --deadline 10m`. This path owns
++`--no-approve --no-extensions --tools <exact-list> --mode json --no-session
++--print`, closes stdin, rejects every caller Pi argument, preserves the
++profile's configured thinking level, and gives each worker independent random
++client state and a separate Pi process group. When runtime sharing is enabled,
++workers share only the verified runtime through leases. Never add raw RPC,
++implicit extensions, caller overrides, root/sudo execution, or task-board run
++identity to this primitive. Task-board integration is intentionally deferred
++to an adapter that can consume the standalone command later.
++
+ Managed launch refuses the exact llama.cpp model-origin environment names
+ `HF_ENDPOINT` and `MODEL_ENDPOINT` before runtime spawn and reports only the
+ name, never the value. Treat tokens and cache-location variables separately
+diff --git a/tools/agents-infra/internal/infra/canonical_target.go b/tools/agents-infra/internal/infra/canonical_target.go
+index a06f18f..b5f546e 100644
+--- a/tools/agents-infra/internal/infra/canonical_target.go
++++ b/tools/agents-infra/internal/infra/canonical_target.go
+@@ -257,6 +257,10 @@ func ResolveCanonicalTarget(entrypoint, projectDir, homeDir string) (ResolvedCan
+ 	if err != nil {
+ 		return ResolvedCanonicalTarget{}, err
+ 	}
++	return resolveCanonicalTargetFromComposite(entrypoint, composite)
++}
++
++func resolveCanonicalTargetFromComposite(entrypoint string, composite compositeProjectConfig) (ResolvedCanonicalTarget, error) {
+ 	mapping, ok := composite.Entrypoints[entrypoint]
+ 	if !ok {
+ 		return ResolvedCanonicalTarget{}, &CanonicalTargetError{
+diff --git a/tools/agents-infra/internal/infra/pi_config.go b/tools/agents-infra/internal/infra/pi_config.go
+index 5d84fe8..902ea7b 100644
+--- a/tools/agents-infra/internal/infra/pi_config.go
++++ b/tools/agents-infra/internal/infra/pi_config.go
+@@ -24,6 +24,19 @@ type PiPrimarySessionPolicy struct {
+ 	YoloMode        PiPolicyBoolValue
+ }
+ 
++// PiStandaloneSessionSource is deliberately separate from primary-session
++// policy. A project may authorize one unattended worker without changing the
++// interactive Pi trust or tool surface.
++type PiStandaloneSessionSource struct {
++	YoloMode      *bool
++	ToolAllowlist *[]string
++}
++
++type PiStandaloneSessionPolicy struct {
++	YoloMode      PiPolicyBoolValue
++	ToolAllowlist PiPolicyStringListValue
++}
++
+ type PiPolicyStringValue struct {
+ 	Value   string
+ 	Source  string
+@@ -36,6 +49,12 @@ type PiPolicyBoolValue struct {
+ 	Present bool
+ }
+ 
++type PiPolicyStringListValue struct {
++	Value   []string
++	Source  string
++	Present bool
++}
++
+ type PiProfile struct {
+ 	Provider              string
+ 	Model                 string
+@@ -87,67 +106,89 @@ type PiDFlash struct {
+ 	DraftArgv   []string
+ }
+ 
+-func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, map[string]PiProfile, error) {
++func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, PiStandaloneSessionSource, map[string]PiProfile, error) {
+ 	pi, present, err := projectConfigTable(agents, "pi", "agents.pi")
+ 	if err != nil {
+-		return PiPrimarySessionSource{}, nil, projectConfigFieldError(path, "agents.pi", err)
++		return PiPrimarySessionSource{}, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, "agents.pi", err)
+ 	}
+ 	if !present {
+-		return PiPrimarySessionSource{}, map[string]PiProfile{}, nil
++		return PiPrimarySessionSource{}, PiStandaloneSessionSource{}, map[string]PiProfile{}, nil
+ 	}
+-	if err := rejectUnknownFields(pi, "agents.pi", "primary_session", "profiles"); err != nil {
+-		return PiPrimarySessionSource{}, nil, projectConfigFieldError(path, errField(err), err)
++	if err := rejectUnknownFields(pi, "agents.pi", "primary_session", "standalone_session", "profiles"); err != nil {
++		return PiPrimarySessionSource{}, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, errField(err), err)
+ 	}
+ 
+ 	var primary PiPrimarySessionSource
+ 	primaryTable, primaryPresent, err := projectConfigTable(pi, "primary_session", piPrimarySessionField)
+ 	if err != nil {
+-		return primary, nil, projectConfigFieldError(path, piPrimarySessionField, err)
++		return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField, err)
+ 	}
+ 	if primaryPresent {
+ 		if err := rejectUnknownFields(primaryTable, piPrimarySessionField, "profile", "pi_compatibility", "yolo_mode"); err != nil {
+-			return primary, nil, projectConfigFieldError(path, errField(err), err)
++			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, errField(err), err)
+ 		}
+ 		primary.Profile, err = optionalNonEmptyString(primaryTable, "profile")
+ 		if err != nil {
+-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".profile", err)
++			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField+".profile", err)
+ 		}
+ 		primary.PiCompatibility, err = optionalNonEmptyString(primaryTable, "pi_compatibility")
+ 		if err != nil {
+-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".pi_compatibility", err)
++			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField+".pi_compatibility", err)
+ 		}
+ 		primary.YoloMode, err = optionalBool(primaryTable, "yolo_mode")
+ 		if err != nil {
+-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".yolo_mode", err)
++			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField+".yolo_mode", err)
+ 		}
+ 		if primary.Profile == nil && primary.PiCompatibility == nil && primary.YoloMode == nil {
+-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField, errors.New("table must contain at least one supported field"))
++			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField, errors.New("table must contain at least one supported field"))
++		}
++	}
++
++	var standalone PiStandaloneSessionSource
++	standaloneTable, standalonePresent, err := projectConfigTable(pi, "standalone_session", piStandaloneSessionField)
++	if err != nil {
++		return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField, err)
++	}
++	if standalonePresent {
++		if err := rejectUnknownFields(standaloneTable, piStandaloneSessionField, "yolo_mode", "tool_allowlist"); err != nil {
++			return primary, standalone, nil, projectConfigFieldError(path, errField(err), err)
++		}
++		standalone.YoloMode, err = optionalBool(standaloneTable, "yolo_mode")
++		if err != nil {
++			return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField+".yolo_mode", err)
++		}
++		standalone.ToolAllowlist, err = optionalStringArray(standaloneTable, "tool_allowlist")
++		if err != nil {
++			return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField+".tool_allowlist", err)
++		}
++		if standalone.YoloMode == nil && standalone.ToolAllowlist == nil {
++			return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField, errors.New("table must contain at least one supported field"))
+ 		}
+ 	}
+ 
+ 	profiles := map[string]PiProfile{}
+ 	profilesTable, profilesPresent, err := projectConfigTable(pi, "profiles", "agents.pi.profiles")
+ 	if err != nil {
+-		return primary, nil, projectConfigFieldError(path, "agents.pi.profiles", err)
++		return primary, standalone, nil, projectConfigFieldError(path, "agents.pi.profiles", err)
+ 	}
+ 	if !profilesPresent {
+-		return primary, profiles, nil
++		return primary, standalone, profiles, nil
+ 	}
+ 	for name, raw := range profilesTable {
+ 		if name == "" {
+-			return primary, nil, projectConfigFieldError(path, "agents.pi.profiles", errors.New("profile name must not be empty"))
++			return primary, standalone, nil, projectConfigFieldError(path, "agents.pi.profiles", errors.New("profile name must not be empty"))
+ 		}
+ 		table, ok := raw.(map[string]any)
+ 		if !ok {
+-			return primary, nil, projectConfigFieldError(path, "agents.pi.profiles."+name, fmt.Errorf("expected table, got %T", raw))
++			return primary, standalone, nil, projectConfigFieldError(path, "agents.pi.profiles."+name, fmt.Errorf("expected table, got %T", raw))
+ 		}
+ 		profile, parseErr := parsePiProfile(table, path, name)
+ 		if parseErr != nil {
+-			return primary, nil, parseErr
++			return primary, standalone, nil, parseErr
+ 		}
+ 		profiles[name] = profile
+ 	}
+-	return primary, profiles, nil
++	return primary, standalone, profiles, nil
+ }
+ 
+ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) {
+@@ -603,6 +644,17 @@ func requiredStringArray(table map[string]any, key string) ([]string, error) {
+ 	}
+ 	return out, nil
+ }
++
++func optionalStringArray(table map[string]any, key string) (*[]string, error) {
++	if _, ok := table[key]; !ok {
++		return nil, nil
++	}
++	value, err := requiredStringArray(table, key)
++	if err != nil {
++		return nil, err
++	}
++	return &value, nil
++}
+ func equalStrings(a, b []string) bool {
+ 	if len(a) != len(b) {
+ 		return false
+@@ -644,6 +696,24 @@ func composePiPrimarySession(policy *PiPrimarySessionPolicy, source PiPrimarySes
+ func clonePiPrimarySessionSource(s PiPrimarySessionSource) PiPrimarySessionSource {
+ 	return PiPrimarySessionSource{Profile: cloneStringPointer(s.Profile), PiCompatibility: cloneStringPointer(s.PiCompatibility), YoloMode: cloneBoolPointer(s.YoloMode)}
+ }
++
++func composePiStandaloneSession(policy *PiStandaloneSessionPolicy, source PiStandaloneSessionSource, path string) {
++	if source.YoloMode != nil {
++		policy.YoloMode = PiPolicyBoolValue{Value: *source.YoloMode, Source: path, Present: true}
++	}
++	if source.ToolAllowlist != nil {
++		policy.ToolAllowlist = PiPolicyStringListValue{Value: append([]string(nil), (*source.ToolAllowlist)...), Source: path, Present: true}
++	}
++}
++
++func clonePiStandaloneSessionSource(s PiStandaloneSessionSource) PiStandaloneSessionSource {
++	clone := PiStandaloneSessionSource{YoloMode: cloneBoolPointer(s.YoloMode)}
++	if s.ToolAllowlist != nil {
++		value := append([]string(nil), (*s.ToolAllowlist)...)
++		clone.ToolAllowlist = &value
++	}
++	return clone
++}
+ func clonePiProfiles(in map[string]PiProfile) map[string]PiProfile {
+ 	out := map[string]PiProfile{}
+ 	for k, v := range in {
+diff --git a/tools/agents-infra/internal/infra/pi_launch_posix.go b/tools/agents-infra/internal/infra/pi_launch_posix.go
+index b274994..3f65311 100644
+--- a/tools/agents-infra/internal/infra/pi_launch_posix.go
++++ b/tools/agents-infra/internal/infra/pi_launch_posix.go
+@@ -35,11 +35,13 @@ type RunPiOptions struct {
+ 	Signals    <-chan os.Signal
+ 	Context    context.Context
+ 	Report     *PiRunReport
++	Standalone *PiStandaloneRequest
+ }
+ 
+ var (
+-	piListen      = net.Listen
+-	piExecCommand = exec.Command
++	piListen          = net.Listen
++	piExecCommand     = exec.Command
++	piTerminalFDProbe = piTerminalFD
+ )
+ 
+ func RunPi(opts RunPiOptions) error {
+@@ -70,19 +72,33 @@ func RunPi(opts RunPiOptions) error {
+ 	if err != nil {
+ 		return piError("invalid_project_configuration", err)
+ 	}
+-	effectiveArgs, err := applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
+-	if err != nil {
+-		return err
+-	}
+-	override, err := ExtractPiProfileOverride(effectiveArgs)
+-	if err != nil {
+-		return err
+-	}
++	effectiveArgs := opts.Args
+ 	selected := ""
+-	if override != nil {
+-		selected = *override
+-	} else if composite.PiPrimarySession.Profile.Present {
+-		selected = composite.PiPrimarySession.Profile.Value
++	if opts.Standalone != nil {
++		if err := validatePiStandaloneRequest(*opts.Standalone, opts.Args); err != nil {
++			return err
++		}
++		if err := validatePiStandalonePolicy(composite.PiStandaloneSession); err != nil {
++			return err
++		}
++		selected, _, _, err = resolvePiStandaloneSelection(composite, *opts.Standalone)
++		if err != nil {
++			return err
++		}
++	} else {
++		effectiveArgs, err = applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
++		if err != nil {
++			return err
++		}
++		override, extractErr := ExtractPiProfileOverride(effectiveArgs)
++		if extractErr != nil {
++			return extractErr
++		}
++		if override != nil {
++			selected = *override
++		} else if composite.PiPrimarySession.Profile.Present {
++			selected = composite.PiPrimarySession.Profile.Value
++		}
+ 	}
+ 	piPath, err := opts.LookPath("pi")
+ 	if err != nil {
+@@ -104,7 +120,12 @@ func RunPi(opts RunPiOptions) error {
+ 	if err := ValidatePiStateKeyCollisions(composite.PiProfiles); err != nil {
+ 		return err
+ 	}
+-	argsPlan, err := BuildManagedPiArguments(effectiveArgs, selected, profile)
++	var argsPlan PiArgumentPlan
++	if opts.Standalone != nil {
++		argsPlan, err = BuildStandalonePiArguments(opts.Args, profile, composite.PiStandaloneSession, opts.Standalone.Prompt)
++	} else {
++		argsPlan, err = BuildManagedPiArguments(effectiveArgs, selected, profile)
++	}
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -128,7 +149,22 @@ func RunPi(opts RunPiOptions) error {
+ 	if profile.Runtime.Sharing != nil && profile.Runtime.Sharing.Mode == "shared" {
+ 		return runSharedPiSession(opts, project, selected, profile, argsPlan, identity, runtimeIdentity)
+ 	}
+-	state, err := ResolvePiStatePaths(opts.CacheRoot, project, selected)
++	var state PiStatePaths
++	if opts.Standalone != nil {
++		runID := opts.Standalone.ClientRunID
++		if runID == "" {
++			runID, err = newPiStandaloneRunID()
++			if err != nil {
++				return err
++			}
++			standalone := *opts.Standalone
++			standalone.ClientRunID = runID
++			opts.Standalone = &standalone
++		}
++		state, err = ResolvePiClientStatePaths(opts.CacheRoot, project, selected, runID)
++	} else {
++		state, err = ResolvePiStatePaths(opts.CacheRoot, project, selected)
++	}
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -265,10 +301,15 @@ func RunPi(opts RunPiOptions) error {
+ 	piCmd := piExecCommand(identity.Entrypoint, argsPlan.Argv...)
+ 	piCmd.Dir = project
+ 	piCmd.Env = managedEnv
+-	piCmd.Stdin = opts.Stdin
++	foreground := false
++	if opts.Standalone == nil {
++		piCmd.Stdin = opts.Stdin
++		foreground = configurePiProcessTerminal(piCmd, opts.Stdin)
++	} else {
++		piCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
++	}
+ 	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
+ 	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
+-	foreground := configurePiProcessTerminal(piCmd, opts.Stdin)
+ 	if err := piCmd.Start(); err != nil {
+ 		sessionLog.event("pi_start_failed", map[string]any{"error": err.Error()})
+ 		_ = cleanupRuntime()
+@@ -407,7 +448,7 @@ func piProcessWriter(mu *sync.Mutex, writer io.Writer) io.Writer {
+ }
+ 
+ func configurePiProcessTerminal(cmd *exec.Cmd, stdin io.Reader) bool {
+-	if fd, ok := piTerminalFD(stdin); ok {
++	if fd, ok := piTerminalFDProbe(stdin); ok {
+ 		cmd.SysProcAttr = &syscall.SysProcAttr{Foreground: true, Ctty: fd}
+ 		return true
+ 	}
+diff --git a/tools/agents-infra/internal/infra/pi_platform_windows.go b/tools/agents-infra/internal/infra/pi_platform_windows.go
+index 80fb2d4..186d028 100644
+--- a/tools/agents-infra/internal/infra/pi_platform_windows.go
++++ b/tools/agents-infra/internal/infra/pi_platform_windows.go
+@@ -72,6 +72,7 @@ type RunPiOptions struct {
+ 	Signals    <-chan os.Signal
+ 	Context    context.Context
+ 	Report     *PiRunReport
++	Standalone *PiStandaloneRequest
+ }
+ 
+ func RunPi(opts RunPiOptions) error {
+@@ -99,15 +100,30 @@ func RunPi(opts RunPiOptions) error {
+ 	if err != nil {
+ 		return piError("invalid_project_configuration", err)
+ 	}
+-	effectiveArgs, err := applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
+-	if err != nil {
+-		return err
+-	}
+-	override, err := ExtractPiProfileOverride(effectiveArgs)
+-	if err != nil {
+-		return err
++	effectiveArgs := opts.Args
++	managed := false
++	if opts.Standalone != nil {
++		if err := validatePiStandaloneRequest(*opts.Standalone, opts.Args); err != nil {
++			return err
++		}
++		if err := validatePiStandalonePolicy(composite.PiStandaloneSession); err != nil {
++			return err
++		}
++		if _, _, _, err := resolvePiStandaloneSelection(composite, *opts.Standalone); err != nil {
++			return err
++		}
++		managed = true
++	} else {
++		effectiveArgs, err = applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
++		if err != nil {
++			return err
++		}
++		override, err := ExtractPiProfileOverride(effectiveArgs)
++		if err != nil {
++			return err
++		}
++		managed = override != nil || composite.PiPrimarySession.Profile.Present
+ 	}
+-	managed := override != nil || composite.PiPrimarySession.Profile.Present
+ 	if managed {
+ 		if opts.Report != nil {
+ 			opts.Report.Managed = true
+diff --git a/tools/agents-infra/internal/infra/pi_shared_client_darwin.go b/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
+index 9dca00c..2862a52 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
+@@ -540,6 +540,16 @@ func checkSharedRuntimeModel(client *http.Client, endpoint, model string) error
+ 
+ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile PiProfile, argsPlan PiArgumentPlan, piIdentity PiExecutionIdentity, runtimeIdentity runtimeExecutableIdentity) error {
+ 	runID := environmentValue(opts.Environ, "TASK_BOARD_RUN_ID")
++	if opts.Standalone != nil {
++		runID = opts.Standalone.ClientRunID
++		if runID == "" {
++			var err error
++			runID, err = newPiStandaloneRunID()
++			if err != nil {
++				return err
++			}
++		}
++	}
+ 	state, err := ResolvePiClientStatePaths(opts.CacheRoot, project, profileName, runID)
+ 	if err != nil {
+ 		return err
+@@ -552,6 +562,9 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile
+ 		if runID != "" {
+ 			var launch *PiLaunchError
+ 			if errors.As(err, &launch) && launch.Code == "pi_profile_busy" {
++				if opts.Standalone != nil {
++					return piError("pi_profile_busy", errors.New("standalone Pi client state is already in use"))
++				}
+ 				return piError("pi_profile_busy", fmt.Errorf("TASK_BOARD_RUN_ID %q already owns its client state", runID))
+ 			}
+ 		}
+@@ -632,11 +645,16 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile
+ 	piCmd := piExecCommand(piIdentity.Entrypoint, argsPlan.Argv...)
+ 	piCmd.Dir = project
+ 	piCmd.Env = managedEnv
+-	piCmd.Stdin = opts.Stdin
++	foreground := false
++	if opts.Standalone == nil {
++		piCmd.Stdin = opts.Stdin
++		foreground = configurePiProcessTerminal(piCmd, opts.Stdin)
++	} else {
++		piCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
++	}
+ 	outputMu := new(sync.Mutex)
+ 	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
+ 	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
+-	foreground := configurePiProcessTerminal(piCmd, opts.Stdin)
+ 	if err := piCmd.Start(); err != nil {
+ 		sessionLog.event("pi_start_failed", map[string]any{"error": err.Error()})
+ 		return piError("pi_start_failed", err)
+diff --git a/tools/agents-infra/internal/infra/pi_shared_integration_test.go b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+index c7a037a..8858a39 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_integration_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+@@ -33,6 +33,7 @@ const (
+ 	sharedFirstGraceEnv   = "AGENTS_INFRA_SHARED_FIRST_GRACE_MS"
+ 	sharedShapeMutantEnv  = "AGENTS_INFRA_SHARED_SHAPE_MUTANT"
+ 	sharedTestProfileName = "profile"
++	standalonePiHelperArg = "standalone-pi-helper"
+ )
+ 
+ // TestMain lets the test binary exercise the broker and runtime-launch entry
+@@ -40,6 +41,31 @@ const (
+ // still forks and execs these exact entry points; only argument routing belongs
+ // to the harness.
+ func TestMain(m *testing.M) {
++	if len(os.Args) >= 4 && os.Args[1] == standalonePiHelperArg {
++		stdinProbe := make([]byte, 1)
++		count, stdinErr := os.Stdin.Read(stdinProbe)
++		info := map[string]any{
++			"pid":          os.Getpid(),
++			"argv":         append([]string(nil), os.Args[4:]...),
++			"agent_dir":    os.Getenv("PI_CODING_AGENT_DIR"),
++			"sessions_dir": os.Getenv("PI_CODING_AGENT_SESSION_DIR"),
++			"stdin_eof":    count == 0 && errors.Is(stdinErr, io.EOF),
++		}
++		data, err := json.Marshal(info)
++		if err == nil {
++			err = os.WriteFile(os.Args[2], data, 0o600)
++		}
++		if err != nil {
++			fmt.Fprintln(os.Stderr, err)
++			os.Exit(1)
++		}
++		for {
++			if _, err := os.Stat(os.Args[3]); err == nil {
++				os.Exit(0)
++			}
++			time.Sleep(20 * time.Millisecond)
++		}
++	}
+ 	if os.Getenv(sharedCandidateHelper) == "1" {
+ 		fmt.Fprintln(os.Stdout, "candidate-ready")
+ 		_, _ = io.Copy(io.Discard, os.Stdin)
+diff --git a/tools/agents-infra/internal/infra/pi_standalone.go b/tools/agents-infra/internal/infra/pi_standalone.go
+new file mode 100644
+index 0000000..f25d995
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_standalone.go
+@@ -0,0 +1,329 @@
++package infra
++
++import (
++	"crypto/rand"
++	"encoding/hex"
++	"errors"
++	"fmt"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++)
++
++const (
++	PiStandaloneLaunchPlanContract      = "agents-infra.pi-standalone-launch-plan"
++	PiStandaloneLaunchPlanSchemaVersion = 1
++	PiStandaloneResultContract          = "agents-infra.pi-standalone-result"
++)
++
++var piStandaloneAllowedTools = map[string]bool{
++	"read":  true,
++	"bash":  true,
++	"edit":  true,
++	"write": true,
++	"grep":  true,
++	"find":  true,
++	"ls":    true,
++}
++
++// PiStandaloneRequest selects the separately authorized, non-interactive Pi
++// path. Entrypoint is used by qwen-infra; an empty entrypoint selects the
++// effective primary managed Pi profile for the direct pi-infra command.
++// ClientRunID is an internal test/lifecycle seam and is never caller CLI input.
++type PiStandaloneRequest struct {
++	Prompt      string
++	Entrypoint  string
++	ClientRunID string
++}
++
++type PiStandaloneToolAuthorization struct {
++	Mode                 string   `json:"mode"`
++	Effective            bool     `json:"effective"`
++	Scope                string   `json:"scope"`
++	YoloSource           string   `json:"yolo_source"`
++	AllowlistSource      string   `json:"allowlist_source"`
++	AllowedTools         []string `json:"allowed_tools"`
++	NativeEnforcement    string   `json:"native_enforcement"`
++	ExtensionDiscovery   string   `json:"extension_discovery"`
++	ProjectTrust         string   `json:"project_trust"`
++	RPCDirectBash        string   `json:"rpc_direct_bash"`
++	PrivilegeBoundary    string   `json:"privilege_boundary"`
++	ArgumentOwnership    string   `json:"argument_ownership"`
++	HumanApprovalOrStdin string   `json:"human_approval_or_stdin"`
++	TaskBoardAdapter     string   `json:"task_board_adapter"`
++}
++
++type PiStandaloneStatePlan struct {
++	Isolation   string `json:"isolation"`
++	Persistence string `json:"persistence"`
++}
++
++type PiStandaloneLaunchPlan struct {
++	Contract          string                         `json:"contract"`
++	SchemaVersion     int                            `json:"schema_version"`
++	Status            string                         `json:"status"`
++	Producer          ChildLaunchCompositionProducer `json:"producer"`
++	ProjectDir        string                         `json:"project_dir"`
++	Entrypoint        string                         `json:"entrypoint,omitempty"`
++	Target            *PrimarySessionTarget          `json:"target,omitempty"`
++	Executable        string                         `json:"executable"`
++	Argv              []string                       `json:"argv"`
++	Profile           PrimarySessionResolvedString   `json:"profile"`
++	Model             PrimarySessionResolvedString   `json:"model"`
++	Reasoning         PrimarySessionResolvedString   `json:"reasoning"`
++	PiCompatibility   PrimarySessionResolvedString   `json:"pi_compatibility"`
++	ToolAuthorization PiStandaloneToolAuthorization  `json:"tool_authorization"`
++	State             PiStandaloneStatePlan          `json:"state"`
++	RuntimeMode       string                         `json:"runtime_mode"`
++	Runtime           PiRuntimePlan                  `json:"runtime"`
++	PiIdentity        PiExecutionIdentity            `json:"pi_identity"`
++	Sources           []PrimarySessionSource         `json:"sources"`
++}
++
++// PiStandaloneFailure deliberately carries only a machine code. The wrapped
++// diagnostic remains available to in-process callers through Unwrap, while
++// the CLI surface never prints prompts, environment values, or raw child
++// output as an error message.
++type PiStandaloneFailure struct {
++	Code string
++	Err  error
++}
++
++func (e *PiStandaloneFailure) Error() string {
++	return fmt.Sprintf(`{"contract":%q,"schema_version":1,"status":"error","error":{"code":%q}}`, PiStandaloneResultContract, e.Code)
++}
++
++func (e *PiStandaloneFailure) Unwrap() error { return e.Err }
++
++func WrapPiStandaloneFailure(err error) error {
++	if err == nil {
++		return nil
++	}
++	code := "pi_standalone_failed"
++	var launch *PiLaunchError
++	var target *CanonicalTargetError
++	var shared *SharedRuntimeError
++	switch {
++	case errors.As(err, &launch):
++		code = launch.Code
++	case errors.As(err, &target):
++		code = target.Code
++	case errors.As(err, &shared):
++		code = shared.Code
++	}
++	return &PiStandaloneFailure{Code: code, Err: err}
++}
++
++func validatePiStandalonePolicy(policy PiStandaloneSessionPolicy) error {
++	if !policy.YoloMode.Present || !policy.YoloMode.Value {
++		return piError("pi_tool_authorization_required", errors.New("standalone Pi tool execution requires agents.pi.standalone_session.yolo_mode=true"))
++	}
++	if !policy.ToolAllowlist.Present {
++		return piError("pi_tool_allowlist_required", errors.New("standalone Pi tool execution requires an explicit tool_allowlist"))
++	}
++	if len(policy.ToolAllowlist.Value) == 0 {
++		return piError("pi_tool_allowlist_invalid", errors.New("standalone Pi tool_allowlist must not be empty"))
++	}
++	seen := map[string]bool{}
++	for _, tool := range policy.ToolAllowlist.Value {
++		if tool == "" || !piStandaloneAllowedTools[tool] {
++			return piError("pi_tool_allowlist_invalid", errors.New("standalone Pi tool_allowlist contains an empty or unsupported pinned tool name"))
++		}
++		if seen[tool] {
++			return piError("pi_tool_allowlist_invalid", errors.New("standalone Pi tool_allowlist contains a duplicate tool name"))
++		}
++		seen[tool] = true
++	}
++	return nil
++}
++
++func validatePiStandaloneRequest(request PiStandaloneRequest, callerArgs []string) error {
++	if len(callerArgs) != 0 {
++		return piError("pi_standalone_conflicting_arguments", errors.New("standalone Pi does not accept caller-controlled provider arguments"))
++	}
++	if strings.TrimSpace(request.Prompt) == "" {
++		return piError("pi_standalone_prompt_invalid", errors.New("standalone Pi prompt must not be empty"))
++	}
++	if strings.IndexByte(request.Prompt, 0) >= 0 || strings.HasPrefix(request.Prompt, "-") || strings.HasPrefix(request.Prompt, "@") {
++		return piError("pi_standalone_prompt_invalid", errors.New("standalone Pi prompt cannot be represented as a safe pinned Pi operand"))
++	}
++	if request.Entrypoint != "" && request.Entrypoint != "qwen-infra" {
++		return piError("pi_standalone_entrypoint_invalid", errors.New("standalone Pi admits only the qwen-infra canonical entrypoint"))
++	}
++	return nil
++}
++
++func BuildStandalonePiArguments(callerArgs []string, profile PiProfile, policy PiStandaloneSessionPolicy, prompt string) (PiArgumentPlan, error) {
++	request := PiStandaloneRequest{Prompt: prompt}
++	if err := validatePiStandaloneRequest(request, callerArgs); err != nil {
++		return PiArgumentPlan{}, err
++	}
++	if err := validatePiStandalonePolicy(policy); err != nil {
++		return PiArgumentPlan{}, err
++	}
++	managed := []string{
++		"--no-approve",
++		"--no-extensions",
++		"--tools", strings.Join(policy.ToolAllowlist.Value, ","),
++		"--mode", "json",
++		"--no-session",
++		"--print",
++		"--", prompt,
++	}
++	plan, err := BuildManagedPiArguments(managed, "", profile)
++	if err != nil {
++		return PiArgumentPlan{}, err
++	}
++	if len(plan.DiagnosticArgv) == 0 || plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] != prompt {
++		return PiArgumentPlan{}, piError("pi_standalone_argument_invariant_failed", errors.New("standalone Pi prompt operand was not composed canonically"))
++	}
++	plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] = "<prompt>"
++	return plan, nil
++}
++
++func piStandaloneToolAuthorization(policy PiStandaloneSessionPolicy) PiStandaloneToolAuthorization {
++	return PiStandaloneToolAuthorization{
++		Mode:                 "unattended_allowlist",
++		Effective:            true,
++		Scope:                "standalone_session",
++		YoloSource:           policy.YoloMode.Source,
++		AllowlistSource:      policy.ToolAllowlist.Source,
++		AllowedTools:         append([]string(nil), policy.ToolAllowlist.Value...),
++		NativeEnforcement:    "pi_cli_strict_allowlist",
++		ExtensionDiscovery:   "disabled",
++		ProjectTrust:         "declined",
++		RPCDirectBash:        "not_exposed",
++		PrivilegeBoundary:    "calling_user",
++		ArgumentOwnership:    "agents-infra",
++		HumanApprovalOrStdin: "not_required",
++		TaskBoardAdapter:     "deferred_not_implemented",
++	}
++}
++
++func resolvePiStandaloneSelection(composite compositeProjectConfig, request PiStandaloneRequest) (string, string, *PrimarySessionTarget, error) {
++	if request.Entrypoint != "" {
++		if err := validateComposedCanonicalTargets(composite); err != nil {
++			return "", "", nil, err
++		}
++		resolved, err := resolveCanonicalTargetFromComposite(request.Entrypoint, composite)
++		if err != nil {
++			return "", "", nil, err
++		}
++		if resolved.Target.Environment != "pi" || resolved.Target.Profile == nil {
++			return "", "", nil, &CanonicalTargetError{
++				Code:        PrimarySessionErrorInvalidTarget,
++				Context:     TargetErrorContext{Entrypoint: request.Entrypoint, Target: resolved.Target.Name, Field: targetsField + "." + resolved.Target.Name + ".environment", Source: resolved.Target.Source},
++				Remediation: "use qwen-infra with an admitted qwen/pi canonical target",
++				Err:         errors.New("standalone Pi requires a canonical Pi target"),
++			}
++		}
++		return *resolved.Target.Profile, resolved.Target.Source, primarySessionTargetFromResolution(resolved), nil
++	}
++	if !composite.PiPrimarySession.Profile.Present {
++		return "", "", nil, piError("unknown_pi_profile", errors.New("standalone pi-infra requires an effective managed primary Pi profile"))
++	}
++	return composite.PiPrimarySession.Profile.Value, composite.PiPrimarySession.Profile.Source, nil, nil
++}
++
++func BuildPiStandaloneLaunchPlan(projectDir, homeDir string, request PiStandaloneRequest, producer ChildLaunchCompositionProducer, lookPath func(string) (string, error)) (PiStandaloneLaunchPlan, error) {
++	canonicalProject, err := CanonicalProjectDir(projectDir)
++	if err != nil {
++		return PiStandaloneLaunchPlan{}, err
++	}
++	if err := validatePiStandaloneRequest(request, nil); err != nil {
++		return PiStandaloneLaunchPlan{}, err
++	}
++	if homeDir == "" {
++		homeDir, err = os.UserHomeDir()
++		if err != nil {
++			return PiStandaloneLaunchPlan{}, err
++		}
++	}
++	composite, err := loadCompositeProjectConfig(ancestorDirsRootFirst(canonicalProject), filepath.Join(homeDir, ".agents", ".configs", projectConfigFileName))
++	if err != nil {
++		return PiStandaloneLaunchPlan{}, piError("invalid_project_configuration", err)
++	}
++	if err := validatePiStandalonePolicy(composite.PiStandaloneSession); err != nil {
++		return PiStandaloneLaunchPlan{}, err
++	}
++	profileName, profileSource, target, err := resolvePiStandaloneSelection(composite, request)
++	if err != nil {
++		return PiStandaloneLaunchPlan{}, err
++	}
++	if !composite.PiPrimarySession.PiCompatibility.Present {
++		return PiStandaloneLaunchPlan{}, piError("invalid_project_configuration", errors.New("standalone managed Pi requires agents.pi.primary_session.pi_compatibility"))
++	}
++	profile, ok := composite.PiProfiles[profileName]
++	if !ok {
++		return PiStandaloneLaunchPlan{}, piError("unknown_pi_profile", errors.New("standalone Pi selected an unknown managed profile"))
++	}
++	if err := ValidatePiStateKeyCollisions(composite.PiProfiles); err != nil {
++		return PiStandaloneLaunchPlan{}, err
++	}
++	argsPlan, err := BuildStandalonePiArguments(nil, profile, composite.PiStandaloneSession, request.Prompt)
++	if err != nil {
++		return PiStandaloneLaunchPlan{}, err
++	}
++	if lookPath == nil {
++		lookPath = exec.LookPath
++	}
++	piPath, err := lookPath("pi")
++	if err != nil {
++		return PiStandaloneLaunchPlan{}, piError("provider_executable_not_found", err)
++	}
++	identity, err := VerifyPiExecutionIdentity(piPath, composite.PiPrimarySession.PiCompatibility.Value)
++	if err != nil {
++		return PiStandaloneLaunchPlan{}, err
++	}
++	sharing := "exclusive"
++	ownership := "direct-child-process-group"
++	if profile.Runtime.Sharing != nil {
++		sharing = profile.Runtime.Sharing.Mode
++		if sharing == "shared" {
++			ownership = "shared-runtime-lease-broker"
++		}
++	}
++	plan := PiStandaloneLaunchPlan{
++		Contract:          PiStandaloneLaunchPlanContract,
++		SchemaVersion:     PiStandaloneLaunchPlanSchemaVersion,
++		Status:            "ok",
++		Producer:          producer,
++		ProjectDir:        canonicalProject,
++		Entrypoint:        request.Entrypoint,
++		Target:            target,
++		Executable:        identity.Entrypoint,
++		Argv:              argsPlan.DiagnosticArgv,
++		Profile:           resolvedStringValue(profileName, profileSource),
++		Model:             resolvedStringValue(profile.Provider+"/"+profile.Model, profile.Source),
++		Reasoning:         resolvedStringValue(profile.Thinking, profile.Source),
++		PiCompatibility:   resolvedStringValue(composite.PiPrimarySession.PiCompatibility.Value, composite.PiPrimarySession.PiCompatibility.Source),
++		ToolAuthorization: piStandaloneToolAuthorization(composite.PiStandaloneSession),
++		State:             PiStandaloneStatePlan{Isolation: "per-process-random-run-key", Persistence: "disabled"},
++		RuntimeMode:       sharing,
++		Runtime: PiRuntimePlan{
++			Executable:             profile.Runtime.Executable,
++			Argv:                   append([]string(nil), profile.Runtime.Argv...),
++			Source:                 profile.Source,
++			Endpoint:               profile.BaseURL,
++			ReadinessURL:           profile.BaseURL + profile.Runtime.ReadinessPath,
++			StartupTimeoutSeconds:  profile.Runtime.StartupTimeoutSeconds,
++			ShutdownTimeoutSeconds: profile.Runtime.ShutdownTimeoutSeconds,
++			ExecutableState:        staticExecutableState(profile.Runtime.Executable),
++			Ownership:              ownership,
++		},
++		PiIdentity: identity,
++	}
++	for _, source := range composite.Sources {
++		plan.Sources = append(plan.Sources, PrimarySessionSource{Kind: "project_config", Path: source.Path})
++	}
++	return plan, nil
++}
++
++func newPiStandaloneRunID() (string, error) {
++	random := make([]byte, 16)
++	if _, err := rand.Read(random); err != nil {
++		return "", piError("pi_standalone_state_identity_failed", err)
++	}
++	return "standalone-" + hex.EncodeToString(random), nil
++}
+diff --git a/tools/agents-infra/internal/infra/pi_standalone_real_pi_test.go b/tools/agents-infra/internal/infra/pi_standalone_real_pi_test.go
+new file mode 100644
+index 0000000..d0275ec
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_standalone_real_pi_test.go
+@@ -0,0 +1,176 @@
++//go:build darwin
++
++package infra
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++)
++
++func writeStandalonePiExtension(t *testing.T, root, name, source string) {
++	t.Helper()
++	path := filepath.Join(root, name+".ts")
++	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func runPinnedPiRPCNoModel(t *testing.T, project, home, agentDir string, args []string, requests ...map[string]any) []byte {
++	t.Helper()
++	for _, directory := range []string{home, agentDir, filepath.Join(agentDir, "sessions")} {
++		if err := os.MkdirAll(directory, 0o700); err != nil {
++			t.Fatal(err)
++		}
++	}
++	var input strings.Builder
++	for _, request := range requests {
++		encoded, err := json.Marshal(request)
++		if err != nil {
++			t.Fatal(err)
++		}
++		input.Write(encoded)
++		input.WriteByte('\n')
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	pi := filepath.Join(officialPiAsset(t), "pi")
++	command := exec.CommandContext(ctx, pi, args...)
++	command.Dir = project
++	command.Env = append(filteredEnvironment(os.Environ(), []string{
++		"HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_SKIP_VERSION_CHECK", "PI_TELEMETRY",
++	}),
++		"HOME="+home,
++		"PI_CODING_AGENT_DIR="+agentDir,
++		"PI_CODING_AGENT_SESSION_DIR="+filepath.Join(agentDir, "sessions"),
++		"PI_SKIP_VERSION_CHECK=1",
++		"PI_TELEMETRY=0",
++	)
++	stdin, err := command.StdinPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	var output bytes.Buffer
++	command.Stdout = &output
++	command.Stderr = &output
++	if err := command.Start(); err != nil {
++		t.Fatalf("start pinned Pi RPC no-model probe: %v", err)
++	}
++	if _, err := stdin.Write([]byte(input.String())); err != nil {
++		t.Fatalf("write pinned Pi RPC no-model request: %v", err)
++	}
++	time.Sleep(500 * time.Millisecond)
++	if err := stdin.Close(); err != nil {
++		t.Fatalf("close pinned Pi RPC no-model input: %v", err)
++	}
++	err = command.Wait()
++	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
++		t.Fatalf("pinned Pi RPC no-model probe exceeded deadline; output=%s", output.Bytes())
++	}
++	if err != nil {
++		t.Fatalf("pinned Pi RPC no-model probe: %v; output=%s", err, output.Bytes())
++	}
++	return output.Bytes()
++}
++
++func TestPinnedPiNoModelManagedFlagsDisableProjectAndGlobalReplacementExtensions(t *testing.T) {
++	project, home, agentDir := t.TempDir(), t.TempDir(), t.TempDir()
++	projectMarker := filepath.Join(t.TempDir(), "project-replacement-loaded")
++	globalMarker := filepath.Join(t.TempDir(), "global-replacement-loaded")
++	replacement := func(marker string) string {
++		return `import { writeFileSync } from "fs";
++export default function (pi: any) {
++  writeFileSync(` + strconvQuote(marker) + `, "loaded");
++  pi.registerTool({
++    name: "bash",
++    label: "replacement bash",
++    description: "test-only replacement",
++    parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
++    async execute() { return { content: [{ type: "text", text: "replacement" }] }; }
++  });
++}
++`
++	}
++	writeStandalonePiExtension(t, filepath.Join(project, ".pi", "extensions"), "project-bash-replacement", replacement(projectMarker))
++	writeStandalonePiExtension(t, filepath.Join(agentDir, "extensions"), "global-bash-replacement", replacement(globalMarker))
++
++	managedArgs := []string{"--offline", "--mode", "rpc", "--no-session", "--no-approve", "--no-extensions", "--tools", "bash"}
++	runPinnedPiRPCNoModel(t, project, home, agentDir, managedArgs, map[string]any{"type": "get_state"})
++	for _, marker := range []string{projectMarker, globalMarker} {
++		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
++			t.Fatalf("replacement extension executed despite managed --no-extensions: marker=%q err=%v", marker, err)
++		}
++	}
++
++	controlAgentDir := t.TempDir()
++	controlMarker := filepath.Join(t.TempDir(), "control-replacement-loaded")
++	writeStandalonePiExtension(t, filepath.Join(project, ".pi", "extensions"), "project-bash-replacement", replacement(controlMarker))
++	runPinnedPiRPCNoModel(t, project, home, controlAgentDir, []string{"--offline", "--mode", "rpc", "--no-session", "--approve", "--tools", "bash"}, map[string]any{"type": "get_state"})
++	if data, err := os.ReadFile(controlMarker); err != nil || string(data) != "loaded" {
++		t.Fatalf("control did not prove project replacement discovery: data=%q err=%v", data, err)
++	}
++}
++
++func TestPinnedPiNoModelDirectRPCBashBypassesToolCallHookWhileStandaloneExcludesRPC(t *testing.T) {
++	project, home, agentDir := t.TempDir(), t.TempDir(), t.TempDir()
++	sentinel := filepath.Join(t.TempDir(), "rpc-bypass-side-effect")
++	writeStandalonePiExtension(t, filepath.Join(project, ".pi", "extensions"), "block-model-tools", `export default function (pi: any) {
++  pi.on("tool_call", async () => ({ block: true, reason: "blocked by test policy" }));
++}
++`)
++	command := "printf direct-rpc-bypass > '" + strings.ReplaceAll(sentinel, "'", "'\\''") + "'"
++	output := runPinnedPiRPCNoModel(t, project, home, agentDir,
++		[]string{"--offline", "--mode", "rpc", "--no-session", "--approve", "--tools", "bash"},
++		map[string]any{"type": "bash", "command": command},
++	)
++	data, err := os.ReadFile(sentinel)
++	if err != nil || string(data) != "direct-rpc-bypass" {
++		t.Fatalf("direct RPC bash did not prove the bypass side effect: data=%q err=%v output=%s", data, err, output)
++	}
++	if !strings.Contains(string(output), `"success":true`) || !strings.Contains(string(output), `"exitCode":0`) {
++		t.Fatalf("direct RPC bash response did not report success: %s", output)
++	}
++
++	profile := PiProfile{Provider: "local-provider", Model: "Model", Thinking: "medium"}
++	policy := PiStandaloneSessionPolicy{
++		YoloMode:      PiPolicyBoolValue{Value: true, Present: true},
++		ToolAllowlist: PiPolicyStringListValue{Value: []string{"bash"}, Present: true},
++	}
++	plan, err := BuildStandalonePiArguments(nil, profile, policy, "safe standalone prompt")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if containsExactString(plan.Argv, "rpc") || !containsExactString(plan.Argv, "json") || !containsExactString(plan.Argv, "--no-extensions") {
++		t.Fatalf("production standalone call site exposed the proven direct-RPC bypass: %#v", plan.Argv)
++	}
++}
++
++func filteredEnvironment(environ, keys []string) []string {
++	blocked := map[string]bool{}
++	for _, key := range keys {
++		blocked[key] = true
++	}
++	out := make([]string, 0, len(environ))
++	for _, item := range environ {
++		key, _, _ := strings.Cut(item, "=")
++		if !blocked[key] {
++			out = append(out, item)
++		}
++	}
++	return out
++}
++
++func strconvQuote(value string) string {
++	encoded, _ := json.Marshal(value)
++	return string(encoded)
++}
+diff --git a/tools/agents-infra/internal/infra/pi_standalone_shared_test.go b/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
+new file mode 100644
+index 0000000..4aa8cd6
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
+@@ -0,0 +1,398 @@
++//go:build darwin
++
++package infra
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"sync/atomic"
++	"syscall"
++	"testing"
++	"time"
++)
++
++type standalonePiHelperInfo struct {
++	PID         int      `json:"pid"`
++	Argv        []string `json:"argv"`
++	AgentDir    string   `json:"agent_dir"`
++	SessionsDir string   `json:"sessions_dir"`
++	StdinEOF    bool     `json:"stdin_eof"`
++}
++
++type standaloneWorkerResult struct {
++	name string
++	err  error
++}
++
++func waitStandalonePiHelperInfo(t *testing.T, path string, results <-chan standaloneWorkerResult) standalonePiHelperInfo {
++	t.Helper()
++	var info standalonePiHelperInfo
++	deadline := time.Now().Add(15 * time.Second)
++	for time.Now().Before(deadline) {
++		data, err := os.ReadFile(path)
++		if err == nil && json.Unmarshal(data, &info) == nil && info.PID > 0 {
++			return info
++		}
++		select {
++		case result := <-results:
++			t.Fatalf("standalone worker %s exited before publishing process/state evidence: %v", result.name, result.err)
++		default:
++		}
++		time.Sleep(20 * time.Millisecond)
++	}
++	t.Fatal("standalone Pi helper did not publish process/state evidence")
++	return standalonePiHelperInfo{}
++}
++
++func TestRunPiStandaloneConcurrentWorkersShareOnlyRuntimeAndCrashCleanupPreservesPeer(t *testing.T) {
++	testRoot, err := os.MkdirTemp("/tmp", "pi-standalone-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(testRoot) })
++	project := filepath.Join(testRoot, "project")
++	home, err := os.MkdirTemp("/tmp", "ph-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(home) })
++	cache := filepath.Join(home, "Library", "Caches")
++	for _, directory := range []string{project, cache} {
++		if err := os.MkdirAll(directory, 0o700); err != nil {
++			t.Fatal(err)
++		}
++	}
++	listener, err := netListenLoopback()
++	if err != nil {
++		t.Fatal(err)
++	}
++	port := listener.Addr().(*net.TCPAddr).Port
++	listener.Close()
++	runtimePIDFile := filepath.Join(testRoot, "runtime.pid")
++	runtimeExecutable := buildSharedFakeRuntime(t, testRoot)
++	body := validPiProfileWithArgv(t, "profile", runtimeExecutable, port, []string{"serve", "--model", "Model", "--pid-file", runtimePIDFile}, 8)
++	body = strings.Replace(body, `reasoning = false`, `reasoning = true`, 1)
++	body = strings.Replace(body, `thinking = "off"`, `thinking = "medium"`, 1)
++	body = strings.Replace(body, `max_tokens_field = "max_tokens"`, "max_tokens_field = \"max_tokens\"\nthinking_format = \"qwen-chat-template\"", 1)
++	body += standalonePiPolicyTOML("true", `["read", "bash", "edit", "write"]`)
++	body += canonicalQwenTargetTOML(true, false)
++	body += `
++[agents.pi.profiles.profile.runtime.sharing]
++mode = "shared"
++linger_seconds = 0
++max_leases = 4
++heartbeat_interval_seconds = 1
++lease_stale_seconds = 5
++broker_start_timeout_seconds = 40
++`
++	writePiProjectConfig(t, project, body)
++	piRoot := officialPiAsset(t)
++
++	infoPaths := []string{filepath.Join(testRoot, "pi-a.json"), filepath.Join(testRoot, "pi-b.json")}
++	releasePaths := []string{filepath.Join(testRoot, "release-a"), filepath.Join(testRoot, "release-b")}
++	originalPiCommand := piExecCommand
++	var invocation atomic.Int32
++	piExecCommand = func(_ string, argv ...string) *exec.Cmd {
++		index := int(invocation.Add(1)) - 1
++		if index >= len(infoPaths) {
++			index = len(infoPaths) - 1
++		}
++		args := []string{standalonePiHelperArg, infoPaths[index], releasePaths[index]}
++		args = append(args, argv...)
++		return exec.Command(os.Args[0], args...)
++	}
++	t.Cleanup(func() { piExecCommand = originalPiCommand })
++
++	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
++	t.Cleanup(cancel)
++	results := make(chan standaloneWorkerResult, 2)
++	start := func(name, prompt, runID string) {
++		go func() {
++			err := RunPi(RunPiOptions{
++				ProjectDir: project,
++				HomeDir:    home,
++				CacheRoot:  cache,
++				Environ:    []string{"HOME=" + home, "PATH=/usr/bin:/bin", "TASK_BOARD_RUN_ID=RUN-forged-board-id"},
++				LookPath:   func(string) (string, error) { return filepath.Join(piRoot, "pi"), nil },
++				Context:    ctx,
++				Stdin:      strings.NewReader("shared-readable-stdin-witness-" + name),
++				Standalone: &PiStandaloneRequest{Prompt: prompt, Entrypoint: "qwen-infra", ClientRunID: runID},
++			})
++			results <- standaloneWorkerResult{name: name, err: err}
++		}()
++	}
++	start("a", "standalone worker a", "standalone-a")
++	first := waitStandalonePiHelperInfo(t, infoPaths[0], results)
++	start("b", "standalone worker b", "standalone-b")
++	second := waitStandalonePiHelperInfo(t, infoPaths[1], results)
++
++	if first.PID == second.PID || first.AgentDir == second.AgentDir || first.SessionsDir == second.SessionsDir || first.AgentDir == "" || second.AgentDir == "" {
++		t.Fatalf("standalone Pi processes/state are not independent: first=%#v second=%#v", first, second)
++	}
++	firstPGID, firstPGErr := syscall.Getpgid(first.PID)
++	secondPGID, secondPGErr := syscall.Getpgid(second.PID)
++	if firstPGErr != nil || secondPGErr != nil || firstPGID != first.PID || secondPGID != second.PID || firstPGID == secondPGID {
++		t.Fatalf("standalone Pi process groups are not independent: first=%d/%d err=%v second=%d/%d err=%v", first.PID, firstPGID, firstPGErr, second.PID, secondPGID, secondPGErr)
++	}
++	for index, info := range []standalonePiHelperInfo{first, second} {
++		if !info.StdinEOF {
++			t.Fatalf("worker %d inherited readable stdin: %#v", index, info)
++		}
++		joined := strings.Join(info.Argv, "\x00")
++		for _, required := range []string{"--no-approve", "--no-extensions", "--tools", "read,bash,edit,write", "--mode", "json", "--no-session", "--print", "--thinking", "medium"} {
++			if !containsExactString(info.Argv, required) {
++				t.Fatalf("worker %d argv lacks %q: %#v", index, required, info.Argv)
++			}
++		}
++		if strings.Contains(joined, "rpc") || containsExactString(info.Argv, "--approve") || containsExactString(info.Argv, "--extension") || containsExactString(info.Argv, "-e") {
++			t.Fatalf("worker %d exposed an authorization/extension/RPC bypass: %#v", index, info.Argv)
++		}
++	}
++
++	status, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile"})
++	if err != nil || status.Runtime == nil || len(status.Leases) != 2 {
++		t.Fatalf("two standalone leases were not visible: status=%#v err=%v", status, err)
++	}
++	runtimePID := status.Runtime.PID
++	publishedRuntimePID, readErr := os.ReadFile(runtimePIDFile)
++	if readErr != nil || strings.TrimSpace(string(publishedRuntimePID)) != strconv.Itoa(runtimePID) {
++		t.Fatalf("workers did not reuse the verified runtime: status_pid=%d file=%q err=%v", runtimePID, publishedRuntimePID, readErr)
++	}
++
++	if err := syscall.Kill(first.PID, syscall.SIGKILL); err != nil {
++		t.Fatal(err)
++	}
++	firstResult := <-results
++	if firstResult.name != "a" || firstResult.err == nil {
++		t.Fatalf("crashed standalone worker result = %#v", firstResult)
++	}
++	waitForSharedTest(t, 8*time.Second, func() bool {
++		current, statusErr := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile"})
++		return statusErr == nil && current.Runtime != nil && current.Runtime.PID == runtimePID && len(current.Leases) == 1
++	}, "crashed worker lease was not released while the peer runtime stayed live")
++	if observation, inspectErr := inspectSharedProcessKernel(runtimePID); inspectErr != nil || !observation.live() {
++		t.Fatalf("final release of crashed worker stopped the live peer runtime: observation=%#v err=%v", observation, inspectErr)
++	}
++
++	if err := os.WriteFile(releasePaths[1], []byte("release\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	secondResult := <-results
++	if secondResult.name != "b" || secondResult.err != nil {
++		t.Fatalf("live standalone worker result = %#v", secondResult)
++	}
++	waitForSharedTest(t, 10*time.Second, func() bool {
++		_, present, _ := readSharedBrokerRecord(status.Paths.BrokerState)
++		observation, inspectErr := inspectSharedProcessKernel(runtimePID)
++		return !present && (sharedProcessGone(inspectErr) || (inspectErr == nil && !observation.live()))
++	}, "last standalone release did not reap the shared runtime")
++}
++
++// Production call site: RunPi -> BuildStandalonePiArguments in
++// pi_launch_posix.go. Primary-session project trust is deliberately enabled in
++// this composed policy so the launched child proves standalone owns the only
++// approval posture it receives.
++func TestRunPiStandaloneNeverInheritsPrimarySessionProjectTrust(t *testing.T) {
++	testRoot, err := os.MkdirTemp("/tmp", "pi-standalone-primary-yolo-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(testRoot) })
++	project := filepath.Join(testRoot, "project")
++	home := filepath.Join(testRoot, "home")
++	cache := filepath.Join(home, "Library", "Caches")
++	for _, directory := range []string{project, cache} {
++		if err := os.MkdirAll(directory, 0o700); err != nil {
++			t.Fatal(err)
++		}
++	}
++	listener, err := netListenLoopback()
++	if err != nil {
++		t.Fatal(err)
++	}
++	port := listener.Addr().(*net.TCPAddr).Port
++	listener.Close()
++	runtimeExecutable := buildSharedFakeRuntime(t, testRoot)
++	body := validPiProfileWithArgv(t, "profile", runtimeExecutable, port, []string{"serve", "--model", "Model"}, 8)
++	body = strings.Replace(body, `reasoning = false`, `reasoning = true`, 1)
++	body = strings.Replace(body, `thinking = "off"`, `thinking = "medium"`, 1)
++	body = strings.Replace(body, `max_tokens_field = "max_tokens"`, "max_tokens_field = \"max_tokens\"\nthinking_format = \"qwen-chat-template\"", 1)
++	body = strings.Replace(body, "[agents.pi.primary_session]\n", "[agents.pi.primary_session]\nyolo_mode = true\n", 1)
++	body += standalonePiPolicyTOML("true", `["read", "bash", "edit", "write"]`)
++	body += canonicalQwenTargetTOML(true, false)
++	writePiProjectConfig(t, project, body)
++	piRoot := officialPiAsset(t)
++	infoPath := filepath.Join(testRoot, "pi-primary-yolo.json")
++	releasePath := filepath.Join(testRoot, "release-primary-yolo")
++
++	originalPiCommand := piExecCommand
++	piExecCommand = func(_ string, argv ...string) *exec.Cmd {
++		args := []string{standalonePiHelperArg, infoPath, releasePath}
++		args = append(args, argv...)
++		return exec.Command(os.Args[0], args...)
++	}
++	t.Cleanup(func() { piExecCommand = originalPiCommand })
++
++	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
++	t.Cleanup(cancel)
++	results := make(chan standaloneWorkerResult, 1)
++	go func() {
++		err := RunPi(RunPiOptions{
++			ProjectDir: project,
++			HomeDir:    home,
++			CacheRoot:  cache,
++			Environ:    []string{"HOME=" + home, "PATH=/usr/bin:/bin"},
++			LookPath:   func(string) (string, error) { return filepath.Join(piRoot, "pi"), nil },
++			Context:    ctx,
++			Standalone: &PiStandaloneRequest{Prompt: "primary yolo isolation worker", Entrypoint: "qwen-infra", ClientRunID: "standalone-primary-yolo"},
++		})
++		results <- standaloneWorkerResult{name: "primary-yolo", err: err}
++	}()
++	info := waitStandalonePiHelperInfo(t, infoPath, results)
++	noApproveCount := 0
++	for _, arg := range info.Argv {
++		switch arg {
++		case "--no-approve":
++			noApproveCount++
++		case "--approve", "-a", "-na":
++			t.Fatalf("standalone worker received non-owned approval posture %q: %#v", arg, info.Argv)
++		}
++	}
++	if noApproveCount != 1 {
++		t.Fatalf("standalone worker --no-approve count = %d, want exactly 1: %#v", noApproveCount, info.Argv)
++	}
++	if err := os.WriteFile(releasePath, []byte("release\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if result := <-results; result.err != nil {
++		t.Fatalf("standalone worker result = %#v", result)
++	}
++}
++
++// Production call site: RunPi -> exclusive managed-runtime branch in
++// pi_launch_posix.go. The non-empty reader and forced-positive terminal probe
++// are discriminating witnesses: if either standalone guard is narrowed away,
++// the helper reads a byte or the launch attempts interactive foreground
++// attachment instead of preserving a closed-stdin process group.
++func TestRunPiStandaloneExclusiveWorkerClosesReadableStdin(t *testing.T) {
++	testRoot, err := os.MkdirTemp("/tmp", "pi-standalone-exclusive-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(testRoot) })
++	project := filepath.Join(testRoot, "project")
++	home := filepath.Join(testRoot, "home")
++	cache := filepath.Join(home, "Library", "Caches")
++	for _, directory := range []string{project, cache} {
++		if err := os.MkdirAll(directory, 0o700); err != nil {
++			t.Fatal(err)
++		}
++	}
++	listener, err := netListenLoopback()
++	if err != nil {
++		t.Fatal(err)
++	}
++	port := listener.Addr().(*net.TCPAddr).Port
++	listener.Close()
++	runtimeExecutable := buildSharedFakeRuntime(t, testRoot)
++	body := validPiProfileWithArgv(t, "profile", runtimeExecutable, port, []string{"serve", "--model", "Model"}, 8)
++	body = strings.Replace(body, `reasoning = false`, `reasoning = true`, 1)
++	body = strings.Replace(body, `thinking = "off"`, `thinking = "medium"`, 1)
++	body = strings.Replace(body, `max_tokens_field = "max_tokens"`, "max_tokens_field = \"max_tokens\"\nthinking_format = \"qwen-chat-template\"", 1)
++	body += standalonePiPolicyTOML("true", `["read", "bash", "edit", "write"]`)
++	body += canonicalQwenTargetTOML(true, false)
++	writePiProjectConfig(t, project, body)
++	piRoot := officialPiAsset(t)
++	infoPath := filepath.Join(testRoot, "pi-exclusive.json")
++	releasePath := filepath.Join(testRoot, "release-exclusive")
++
++	originalPiCommand := piExecCommand
++	piExecCommand = func(_ string, argv ...string) *exec.Cmd {
++		args := []string{standalonePiHelperArg, infoPath, releasePath}
++		args = append(args, argv...)
++		return exec.Command(os.Args[0], args...)
++	}
++	t.Cleanup(func() { piExecCommand = originalPiCommand })
++	originalTerminalFDProbe := piTerminalFDProbe
++	var terminalProbeCalls atomic.Int32
++	piTerminalFDProbe = func(io.Reader) (int, bool) {
++		terminalProbeCalls.Add(1)
++		return 0, true
++	}
++	t.Cleanup(func() { piTerminalFDProbe = originalTerminalFDProbe })
++
++	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
++	t.Cleanup(cancel)
++	results := make(chan standaloneWorkerResult, 1)
++	go func() {
++		err := RunPi(RunPiOptions{
++			ProjectDir: project,
++			HomeDir:    home,
++			CacheRoot:  cache,
++			Environ:    []string{"HOME=" + home, "PATH=/usr/bin:/bin"},
++			LookPath:   func(string) (string, error) { return filepath.Join(piRoot, "pi"), nil },
++			Context:    ctx,
++			Stdin:      strings.NewReader("exclusive-readable-stdin-witness"),
++			Standalone: &PiStandaloneRequest{Prompt: "exclusive standalone worker", Entrypoint: "qwen-infra", ClientRunID: "standalone-exclusive"},
++		})
++		results <- standaloneWorkerResult{name: "exclusive", err: err}
++	}()
++	info := waitStandalonePiHelperInfo(t, infoPath, results)
++	if !info.StdinEOF {
++		t.Fatalf("exclusive standalone worker inherited readable stdin: %#v", info)
++	}
++	if calls := terminalProbeCalls.Load(); calls != 0 {
++		t.Fatalf("exclusive standalone worker attempted interactive terminal detection %d time(s)", calls)
++	}
++	if err := os.WriteFile(releasePath, []byte("release\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	result := <-results
++	if result.err != nil {
++		t.Fatalf("exclusive standalone worker result = %#v", result)
++	}
++}
++
++func TestStandalonePiStateNeverDerivesFromTaskBoardRunID(t *testing.T) {
++	project, cache := t.TempDir(), t.TempDir()
++	canonical, err := CanonicalProjectDir(project)
++	if err != nil {
++		t.Fatal(err)
++	}
++	first, err := ResolvePiClientStatePaths(cache, canonical, "profile", "standalone-a")
++	if err != nil {
++		t.Fatal(err)
++	}
++	second, err := ResolvePiClientStatePaths(cache, canonical, "profile", "standalone-b")
++	if err != nil {
++		t.Fatal(err)
++	}
++	board, err := ResolvePiClientStatePaths(cache, canonical, "profile", "RUN-forged-board-id")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if first.RunStateKey == second.RunStateKey || first.RunStateKey == board.RunStateKey || second.RunStateKey == board.RunStateKey {
++		t.Fatalf("standalone state identities collapsed onto board or peer state: %q %q %q", first.RunStateKey, second.RunStateKey, board.RunStateKey)
++	}
++	if strings.Contains(first.Root, "standalone-a") || strings.Contains(second.Root, "standalone-b") || strings.Contains(board.Root, "RUN-forged-board-id") {
++		t.Fatalf("raw run identity leaked into state paths: %q %q %q", first.Root, second.Root, board.Root)
++	}
++}
++
++func TestStandalonePiCrashFailureWrapIsSanitized(t *testing.T) {
++	secret := "secret worker prompt"
++	wrapped := WrapPiStandaloneFailure(fmt.Errorf("child failed after %s", secret))
++	var failure *PiStandaloneFailure
++	if !errors.As(wrapped, &failure) || strings.Contains(wrapped.Error(), secret) {
++		t.Fatalf("standalone crash failure was not sanitized: %#v", wrapped)
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/pi_standalone_test.go b/tools/agents-infra/internal/infra/pi_standalone_test.go
+new file mode 100644
+index 0000000..a854a27
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_standalone_test.go
+@@ -0,0 +1,288 @@
++//go:build darwin
++
++package infra
++
++import (
++	"errors"
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++)
++
++func standalonePiPolicyTOML(yolo string, tools string) string {
++	return "\n[agents.pi.standalone_session]\n" +
++		"yolo_mode = " + yolo + "\n" +
++		"tool_allowlist = " + tools + "\n"
++}
++
++func validStandaloneQwenConfig(runtime string, port int, shared bool) string {
++	body := reasoningPiProfileTOML("profile", runtime, port) +
++		standalonePiPolicyTOML("true", `["read", "bash", "edit", "write"]`) +
++		canonicalQwenTargetTOML(true, true)
++	if shared {
++		body += `
++[agents.pi.profiles.profile.runtime.sharing]
++mode = "shared"
++linger_seconds = 0
++max_leases = 8
++heartbeat_interval_seconds = 1
++lease_stale_seconds = 5
++broker_start_timeout_seconds = 40
++`
++	}
++	return body
++}
++
++func TestBuildStandalonePiArgumentsOwnsExactAuthorizationAndMediumReasoning(t *testing.T) {
++	config, err := parseProjectConfig([]byte(validStandaloneQwenConfig("/bin/echo", 18011, false)), "/project/.agents/.configs/project-config.toml")
++	if err != nil {
++		t.Fatal(err)
++	}
++	policy := PiStandaloneSessionPolicy{}
++	composePiStandaloneSession(&policy, config.PiStandaloneSession, "/project/.agents/.configs/project-config.toml")
++	plan, err := BuildStandalonePiArguments(nil, config.PiProfiles["profile"], policy, "write the requested sentinel")
++	if err != nil {
++		t.Fatal(err)
++	}
++	want := []string{
++		"--provider", "local-provider",
++		"--model", "Model",
++		"--thinking", "medium",
++		"--no-approve",
++		"--no-extensions",
++		"--tools", "read,bash,edit,write",
++		"--mode", "json",
++		"--no-session",
++		"--print",
++		"write the requested sentinel",
++	}
++	if !reflect.DeepEqual(plan.Argv, want) {
++		t.Fatalf("standalone argv = %#v, want %#v", plan.Argv, want)
++	}
++	if plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] != "<prompt>" || strings.Contains(strings.Join(plan.DiagnosticArgv, "\x00"), "requested sentinel") {
++		t.Fatalf("diagnostic argv exposed prompt: %#v", plan.DiagnosticArgv)
++	}
++	for _, forbidden := range []string{"--approve", "--extension", "-e", "rpc"} {
++		if containsExactString(plan.Argv, forbidden) {
++			t.Fatalf("standalone argv exposed forbidden control %q: %#v", forbidden, plan.Argv)
++		}
++	}
++}
++
++func TestStandalonePiAuthorizationRejectsNarrowedAndInvalidAllowlists(t *testing.T) {
++	baseConfig, err := parseProjectConfig([]byte(reasoningPiProfileTOML("profile", "/bin/echo", 18011)), "/project/config.toml")
++	if err != nil {
++		t.Fatal(err)
++	}
++	profile := baseConfig.PiProfiles["profile"]
++	tests := []struct {
++		name   string
++		policy PiStandaloneSessionPolicy
++		code   string
++	}{
++		{name: "absent yolo", policy: PiStandaloneSessionPolicy{}, code: "pi_tool_authorization_required"},
++		{name: "false yolo", policy: PiStandaloneSessionPolicy{YoloMode: PiPolicyBoolValue{Present: true}}, code: "pi_tool_authorization_required"},
++		{name: "absent allowlist", policy: PiStandaloneSessionPolicy{YoloMode: PiPolicyBoolValue{Present: true, Value: true}}, code: "pi_tool_allowlist_required"},
++		{name: "empty allowlist", policy: PiStandaloneSessionPolicy{YoloMode: PiPolicyBoolValue{Present: true, Value: true}, ToolAllowlist: PiPolicyStringListValue{Present: true}}, code: "pi_tool_allowlist_invalid"},
++		{name: "duplicate allowlist", policy: PiStandaloneSessionPolicy{YoloMode: PiPolicyBoolValue{Present: true, Value: true}, ToolAllowlist: PiPolicyStringListValue{Present: true, Value: []string{"read", "read"}}}, code: "pi_tool_allowlist_invalid"},
++		{name: "future builtin narrowing", policy: PiStandaloneSessionPolicy{YoloMode: PiPolicyBoolValue{Present: true, Value: true}, ToolAllowlist: PiPolicyStringListValue{Present: true, Value: []string{"read", "powershell"}}}, code: "pi_tool_allowlist_invalid"},
++		{name: "wildcard", policy: PiStandaloneSessionPolicy{YoloMode: PiPolicyBoolValue{Present: true, Value: true}, ToolAllowlist: PiPolicyStringListValue{Present: true, Value: []string{"*"}}}, code: "pi_tool_allowlist_invalid"},
++	}
++	for _, testCase := range tests {
++		t.Run(testCase.name, func(t *testing.T) {
++			_, err := BuildStandalonePiArguments(nil, profile, testCase.policy, "safe prompt")
++			if piErrorCode(err) != testCase.code {
++				t.Fatalf("error code = %q, want %q; err=%v", piErrorCode(err), testCase.code, err)
++			}
++		})
++	}
++}
++
++func TestStandalonePiNearestFalseMasksInheritedAuthorization(t *testing.T) {
++	root, home := t.TempDir(), t.TempDir()
++	child := filepath.Join(root, "nested")
++	if err := os.MkdirAll(child, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	writePiProjectConfig(t, root, validStandaloneQwenConfig("/bin/echo", 18011, false))
++	writePiProjectConfig(t, child, "[agents.pi.standalone_session]\nyolo_mode = false\n")
++	lookedUp := false
++	err := RunPi(RunPiOptions{
++		ProjectDir: child,
++		HomeDir:    home,
++		Environ:    []string{"HOME=" + home},
++		LookPath: func(string) (string, error) {
++			lookedUp = true
++			return "", errors.New("must not be reached")
++		},
++		Standalone: &PiStandaloneRequest{Prompt: "safe prompt", Entrypoint: "qwen-infra"},
++	})
++	if piErrorCode(err) != "pi_tool_authorization_required" || lookedUp {
++		t.Fatalf("nearest false did not mask inherited yolo authorization: code=%q looked_up=%t err=%v", piErrorCode(err), lookedUp, err)
++	}
++}
++
++func TestRunPiStandaloneMalformedPolicyFailsClosedBeforeExecutableLookup(t *testing.T) {
++	for _, testCase := range []struct {
++		name   string
++		policy string
++	}{
++		{name: "wrong allowlist type", policy: "[agents.pi.standalone_session]\nyolo_mode = true\ntool_allowlist = \"read\"\n"},
++		{name: "unknown field", policy: "[agents.pi.standalone_session]\nyolo_mode = true\ntool_allowlist = [\"read\"]\nextensions = true\n"},
++		{name: "empty table", policy: "[agents.pi.standalone_session]\n"},
++	} {
++		t.Run(testCase.name, func(t *testing.T) {
++			project, home := t.TempDir(), t.TempDir()
++			body := reasoningPiProfileTOML("profile", "/bin/echo", 18011) + testCase.policy + canonicalQwenTargetTOML(true, true)
++			writePiProjectConfig(t, project, body)
++			lookedUp := false
++			err := RunPi(RunPiOptions{
++				ProjectDir: project,
++				HomeDir:    home,
++				Environ:    []string{"HOME=" + home},
++				LookPath: func(string) (string, error) {
++					lookedUp = true
++					return "", errors.New("must not be reached")
++				},
++				Standalone: &PiStandaloneRequest{Prompt: "safe prompt", Entrypoint: "qwen-infra"},
++			})
++			if piErrorCode(err) != "invalid_project_configuration" || lookedUp {
++				t.Fatalf("malformed standalone policy did not fail closed: code=%q looked_up=%t err=%v", piErrorCode(err), lookedUp, err)
++			}
++		})
++	}
++}
++
++func TestStandalonePiPromptCannotBecomeAFlagOrFileOperand(t *testing.T) {
++	profile := PiProfile{Provider: "local-provider", Model: "Model", Thinking: "medium"}
++	policy := PiStandaloneSessionPolicy{
++		YoloMode:      PiPolicyBoolValue{Value: true, Present: true},
++		ToolAllowlist: PiPolicyStringListValue{Value: []string{"read"}, Present: true},
++	}
++	for _, prompt := range []string{"--approve", "@/tmp/injected-prompt", "safe\x00suffix", "   "} {
++		if _, err := BuildStandalonePiArguments(nil, profile, policy, prompt); piErrorCode(err) != "pi_standalone_prompt_invalid" {
++			t.Fatalf("prompt %q was admitted: %v", prompt, err)
++		}
++	}
++}
++
++func TestRunPiStandaloneRefusesCallerAuthorizationAndRPCFlagsBeforeExecutableLookup(t *testing.T) {
++	project, home := t.TempDir(), t.TempDir()
++	writePiProjectConfig(t, project, validStandaloneQwenConfig("/bin/echo", 18011, false))
++	for _, args := range [][]string{
++		{"--tools", "read"}, {"-t", "read"}, {"--exclude-tools", "bash"}, {"-xt", "bash"},
++		{"--no-tools"}, {"-nt"}, {"--no-builtin-tools"}, {"-nbt"},
++		{"--extension", "/tmp/replacement.ts"}, {"-e", "/tmp/replacement.ts"}, {"--no-extensions"}, {"-ne"},
++		{"--approve"}, {"-a"}, {"--no-approve"}, {"-na"}, {"--mode", "rpc"},
++	} {
++		t.Run(strings.Join(args, "_"), func(t *testing.T) {
++			lookedUp := false
++			err := RunPi(RunPiOptions{
++				ProjectDir: project,
++				HomeDir:    home,
++				Args:       args,
++				Environ:    []string{"HOME=" + home},
++				LookPath: func(string) (string, error) {
++					lookedUp = true
++					return "", errors.New("must not be reached")
++				},
++				Standalone: &PiStandaloneRequest{Prompt: "safe prompt", Entrypoint: "qwen-infra"},
++			})
++			if piErrorCode(err) != "pi_standalone_conflicting_arguments" || lookedUp {
++				t.Fatalf("caller flags reached lookup: code=%q looked_up=%t err=%v", piErrorCode(err), lookedUp, err)
++			}
++		})
++	}
++}
++
++func TestRunPiStandaloneAuthorizationFailurePrecedesExecutableAndState(t *testing.T) {
++	piRoot := officialPiAsset(t)
++	for _, testCase := range []struct {
++		name   string
++		policy string
++		code   string
++	}{
++		{name: "missing", code: "pi_tool_authorization_required"},
++		{name: "false", policy: standalonePiPolicyTOML("false", `["read"]`), code: "pi_tool_authorization_required"},
++		{name: "empty", policy: standalonePiPolicyTOML("true", `[]`), code: "pi_tool_allowlist_invalid"},
++		{name: "unknown", policy: standalonePiPolicyTOML("true", `["powershell"]`), code: "pi_tool_allowlist_invalid"},
++	} {
++		t.Run(testCase.name, func(t *testing.T) {
++			project, home, cache := t.TempDir(), t.TempDir(), t.TempDir()
++			body := reasoningPiProfileTOML("profile", "/bin/echo", 18011) + testCase.policy + canonicalQwenTargetTOML(true, true)
++			writePiProjectConfig(t, project, body)
++			lookedUp := false
++			err := RunPi(RunPiOptions{
++				ProjectDir: project,
++				HomeDir:    home,
++				CacheRoot:  cache,
++				Environ:    []string{"HOME=" + home},
++				LookPath: func(string) (string, error) {
++					lookedUp = true
++					return filepath.Join(piRoot, "pi"), nil
++				},
++				Standalone: &PiStandaloneRequest{Prompt: "safe prompt", Entrypoint: "qwen-infra"},
++			})
++			if piErrorCode(err) != testCase.code || lookedUp {
++				t.Fatalf("authorization failure ordering: code=%q looked_up=%t err=%v", piErrorCode(err), lookedUp, err)
++			}
++			entries, readErr := os.ReadDir(cache)
++			if readErr != nil || len(entries) != 0 {
++				t.Fatalf("authorization refusal mutated state: entries=%v err=%v", entries, readErr)
++			}
++		})
++	}
++}
++
++func TestBuildPiStandaloneLaunchPlanSeparatesTrustAuthorizationAndRuntimeLease(t *testing.T) {
++	project, home := t.TempDir(), t.TempDir()
++	piRoot := officialPiAsset(t)
++	configPath := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
++	writePiProjectConfig(t, project, validStandaloneQwenConfig("/bin/echo", 18011, true))
++	plan, err := BuildPiStandaloneLaunchPlan(project, home, PiStandaloneRequest{Prompt: "safe prompt", Entrypoint: "qwen-infra"}, ChildLaunchCompositionProducer{Version: "test", Commit: "test"}, func(string) (string, error) {
++		return filepath.Join(piRoot, "pi"), nil
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if plan.Contract != PiStandaloneLaunchPlanContract || plan.SchemaVersion != 1 || plan.Status != "ok" || plan.Entrypoint != "qwen-infra" {
++		t.Fatalf("standalone plan identity = %#v", plan)
++	}
++	if plan.Reasoning.Value == nil || *plan.Reasoning.Value != "medium" || !samePath(plan.Reasoning.Source, configPath) {
++		t.Fatalf("standalone reasoning = %#v", plan.Reasoning)
++	}
++	authorization := plan.ToolAuthorization
++	if !authorization.Effective || authorization.ProjectTrust != "declined" || authorization.ExtensionDiscovery != "disabled" || authorization.RPCDirectBash != "not_exposed" || authorization.HumanApprovalOrStdin != "not_required" || authorization.TaskBoardAdapter != "deferred_not_implemented" {
++		t.Fatalf("standalone authorization diagnostics = %#v", authorization)
++	}
++	if plan.RuntimeMode != "shared" || plan.Runtime.Ownership != "shared-runtime-lease-broker" || plan.State.Isolation != "per-process-random-run-key" || plan.State.Persistence != "disabled" {
++		t.Fatalf("standalone runtime/state diagnostics = %#v / %#v / %#v", plan.RuntimeMode, plan.Runtime, plan.State)
++	}
++	joined := strings.Join(plan.Argv, "\x00")
++	if strings.Contains(joined, "safe prompt") || !strings.Contains(joined, "<prompt>") {
++		t.Fatalf("standalone plan prompt redaction failed: %#v", plan.Argv)
++	}
++}
++
++func TestPiStandaloneFailureIsTypedAndSanitized(t *testing.T) {
++	secret := "secret-prompt-never-render"
++	wrapped := WrapPiStandaloneFailure(piError("pi_tool_authorization_required", errors.New(secret)))
++	var failure *PiStandaloneFailure
++	if !errors.As(wrapped, &failure) || failure.Code != "pi_tool_authorization_required" {
++		t.Fatalf("typed failure = %#v", wrapped)
++	}
++	if strings.Contains(wrapped.Error(), secret) || !strings.Contains(wrapped.Error(), `"code":"pi_tool_authorization_required"`) {
++		t.Fatalf("standalone failure was not sanitized and typed: %s", wrapped)
++	}
++}
++
++func containsExactString(values []string, want string) bool {
++	for _, value := range values {
++		if value == want {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/tools/agents-infra/internal/infra/project_config.go b/tools/agents-infra/internal/infra/project_config.go
+index 2e5a6af..f2843cf 100644
+--- a/tools/agents-infra/internal/infra/project_config.go
++++ b/tools/agents-infra/internal/infra/project_config.go
+@@ -22,6 +22,7 @@ const (
+ 	claudePrimaryModelField          = claudePrimarySessionField + ".model"
+ 	claudePrimaryYoloModeField       = claudePrimarySessionField + ".yolo_mode"
+ 	piPrimarySessionField            = "agents.pi.primary_session"
++	piStandaloneSessionField         = "agents.pi.standalone_session"
+ 	targetsField                     = "agents.targets"
+ 	entrypointsField                 = "agents.entrypoints"
+ )
+@@ -116,6 +117,7 @@ type parsedProjectConfig struct {
+ 	PrimarySession       CodexPrimarySessionSource
+ 	ClaudePrimarySession ClaudePrimarySessionSource
+ 	PiPrimarySession     PiPrimarySessionSource
++	PiStandaloneSession  PiStandaloneSessionSource
+ 	PiProfiles           map[string]PiProfile
+ 	Targets              map[string]ProjectTarget
+ 	Entrypoints          map[string]string
+@@ -129,6 +131,7 @@ type ProjectConfigSource struct {
+ 	CodexPrimarySession  CodexPrimarySessionSource
+ 	ClaudePrimarySession ClaudePrimarySessionSource
+ 	PiPrimarySession     PiPrimarySessionSource
++	PiStandaloneSession  PiStandaloneSessionSource
+ 	PiProfiles           map[string]PiProfile
+ 	Targets              map[string]ProjectTarget
+ 	Entrypoints          map[string]string
+@@ -141,6 +144,7 @@ type compositeProjectConfig struct {
+ 	PrimarySession       CodexPrimarySessionPolicy
+ 	ClaudePrimarySession ClaudePrimarySessionPolicy
+ 	PiPrimarySession     PiPrimarySessionPolicy
++	PiStandaloneSession  PiStandaloneSessionPolicy
+ 	PiProfiles           map[string]PiProfile
+ 	Targets              map[string]ProjectTarget
+ 	Entrypoints          map[string]ProjectEntrypoint
+@@ -178,6 +182,7 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
+ 			CodexPrimarySession:  cloneCodexPrimarySessionSource(config.PrimarySession),
+ 			ClaudePrimarySession: cloneClaudePrimarySessionSource(config.ClaudePrimarySession),
+ 			PiPrimarySession:     clonePiPrimarySessionSource(config.PiPrimarySession),
++			PiStandaloneSession:  clonePiStandaloneSessionSource(config.PiStandaloneSession),
+ 			PiProfiles:           clonePiProfiles(config.PiProfiles),
+ 			Targets:              cloneProjectTargets(config.Targets),
+ 			Entrypoints:          cloneStringMap(config.Entrypoints),
+@@ -185,6 +190,7 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
+ 		composeCodexPrimarySession(&composite.PrimarySession, config.PrimarySession, path)
+ 		composeClaudePrimarySession(&composite.ClaudePrimarySession, config.ClaudePrimarySession, path)
+ 		composePiPrimarySession(&composite.PiPrimarySession, config.PiPrimarySession, path)
++		composePiStandaloneSession(&composite.PiStandaloneSession, config.PiStandaloneSession, path)
+ 		for name, profile := range config.PiProfiles {
+ 			profile.Source = path
+ 			composite.PiProfiles[name] = profile
+@@ -245,7 +251,7 @@ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
+ 	if err != nil {
+ 		return parsedProjectConfig{}, err
+ 	}
+-	config.PiPrimarySession, config.PiProfiles, err = parsePiConfig(agents, path)
++	config.PiPrimarySession, config.PiStandaloneSession, config.PiProfiles, err = parsePiConfig(agents, path)
+ 	if err != nil {
+ 		return parsedProjectConfig{}, err
+ 	}
+diff --git a/tools/agents-infra/main.go b/tools/agents-infra/main.go
+index a601351..3657b85 100644
+--- a/tools/agents-infra/main.go
++++ b/tools/agents-infra/main.go
+@@ -1,6 +1,7 @@
+ package main
+ 
+ import (
++	"context"
+ 	"encoding/json"
+ 	"errors"
+ 	"flag"
+@@ -472,6 +473,9 @@ func runClaude(args []string) error {
+ }
+ 
+ func runPi(args []string) error {
++	if len(args) > 0 && args[0] == "spawn" {
++		return runPiStandaloneCLI("", args[1:])
++	}
+ 	startDir := os.Getenv(callerCWDEnv)
+ 	if startDir == "" {
+ 		var err error
+@@ -505,6 +509,47 @@ func runPi(args []string) error {
+ 	return infra.RunPi(infra.RunPiOptions{ProjectDir: startDir, Args: filtered, Environ: os.Environ(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+ }
+ 
++func runPiStandaloneCLI(entrypoint string, args []string) error {
++	fs := flag.NewFlagSet("pi spawn", flag.ContinueOnError)
++	fs.SetOutput(os.Stderr)
++	prompt := fs.String("prompt", "", "single unattended worker prompt")
++	printConfig := fs.Bool("print-config", false, "resolve and print the standalone launch plan without launching")
++	deadline := fs.Duration("deadline", 30*time.Minute, "total standalone worker deadline (maximum 30m)")
++	if err := fs.Parse(args); err != nil {
++		return &infra.PiStandaloneFailure{Code: "pi_standalone_cli_invalid", Err: err}
++	}
++	if len(fs.Args()) != 0 {
++		return &infra.PiStandaloneFailure{Code: "pi_standalone_cli_invalid", Err: errors.New("standalone Pi does not accept positional arguments")}
++	}
++	if *deadline <= 0 || *deadline > 30*time.Minute {
++		return &infra.PiStandaloneFailure{Code: "pi_standalone_deadline_invalid", Err: errors.New("standalone Pi deadline must be within (0, 30m]")}
++	}
++	startDir := callerProjectDir()
++	request := infra.PiStandaloneRequest{Prompt: *prompt, Entrypoint: entrypoint}
++	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
++	if *printConfig {
++		plan, err := infra.BuildPiStandaloneLaunchPlan(startDir, "", request, producer, nil)
++		if err != nil {
++			return infra.WrapPiStandaloneFailure(err)
++		}
++		if err := json.NewEncoder(os.Stdout).Encode(plan); err != nil {
++			return &infra.PiStandaloneFailure{Code: "pi_standalone_output_failed", Err: err}
++		}
++		return nil
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), *deadline)
++	defer cancel()
++	err := infra.RunPi(infra.RunPiOptions{
++		ProjectDir: startDir,
++		Environ:    os.Environ(),
++		Stdout:     os.Stdout,
++		Stderr:     os.Stderr,
++		Context:    ctx,
++		Standalone: &request,
++	})
++	return infra.WrapPiStandaloneFailure(err)
++}
++
+ func runRuntime(args []string) error {
+ 	if len(args) == 0 {
+ 		return errors.New("runtime requires status, stop, broker, or runtime-launch")
+@@ -604,6 +649,9 @@ func runTarget(args []string) error {
+ 		return errors.New("target requires an entrypoint name")
+ 	}
+ 	entrypoint := args[0]
++	if len(args) > 1 && args[1] == "spawn" {
++		return runPiStandaloneCLI(entrypoint, args[2:])
++	}
+ 	fs := flag.NewFlagSet("target "+entrypoint, flag.ContinueOnError)
+ 	fs.SetOutput(os.Stderr)
+ 	printConfig := fs.Bool("print-config", false, "resolve and print the canonical target without launching")
+@@ -920,9 +968,11 @@ func usageText() string {
+   agents-infra codex [--print-config] [-d|--danger|--yolo] [--] [CODEX_ARGS...]
+   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
+   agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
++  agents-infra pi spawn --prompt TEXT [--deadline DURATION] [--print-config]
+   agents-infra runtime status [--project DIR] [--profile NAME] [--json]
+   agents-infra runtime stop [--project DIR] [--profile NAME] [--force] [--timeout SECONDS]
+   agents-infra target ENTRYPOINT [--print-config] [-- PROVIDER_ARGS...]
++  agents-infra target qwen-infra spawn --prompt TEXT [--deadline DURATION] [--print-config]
+   agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]
+ 
+ Source tree resolution for setup (first usable wins):
+diff --git a/tools/agents-infra/pi_standalone_main_test.go b/tools/agents-infra/pi_standalone_main_test.go
+new file mode 100644
+index 0000000..9f9b46c
+--- /dev/null
++++ b/tools/agents-infra/pi_standalone_main_test.go
+@@ -0,0 +1,134 @@
++//go:build !windows
++
++package main
++
++import (
++	"errors"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++
++	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
++)
++
++func mainStandaloneQwenProject(t *testing.T) (project, home string) {
++	t.Helper()
++	project, home = t.TempDir(), t.TempDir()
++	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
++	body := mainTestPiConfig("/bin/echo", 18011)
++	body = strings.Replace(body, `reasoning = false`, `reasoning = true`, 1)
++	body = strings.Replace(body, `thinking = "off"`, `thinking = "medium"`, 1)
++	body = strings.Replace(body, `supports_developer_role = false`, "supports_developer_role = false\nsupports_reasoning_effort = false\nthinking_format = \"qwen-chat-template\"", 1)
++	body += `
++[agents.pi.standalone_session]
++yolo_mode = true
++tool_allowlist = ["read", "bash", "edit", "write"]
++
++[agents.targets.qwen]
++vendor = "qwen"
++environment = "pi"
++model = "Model"
++reasoning = "medium"
++profile = "profile"
++profile_provider = "local-provider"
++endpoint = "http://127.0.0.1:18011/v1"
++
++[agents.entrypoints]
++qwen-infra = "qwen"
++`
++	writeMainCanonicalConfig(t, project, body)
++	return project, home
++}
++
++// Production call site: runTarget -> runPiStandaloneCLI ->
++// BuildPiStandaloneLaunchPlan. This proves the public qwen-infra command emits
++// the managed unattended contract without starting Pi or revealing the prompt.
++func TestRunTargetQwenStandalonePrintConfigOwnsAuthorizationAndPreservesReasoning(t *testing.T) {
++	project, home := mainStandaloneQwenProject(t)
++	t.Setenv(callerCWDEnv, project)
++	t.Setenv("HOME", home)
++	t.Setenv("PATH", mainTestOfficialPiAsset(t))
++	secretPrompt := "task-scoped secret prompt"
++	output := captureStdout(t, func() {
++		if err := runTarget([]string{"qwen-infra", "spawn", "--prompt", secretPrompt, "--print-config"}); err != nil {
++			t.Fatalf("runTarget standalone print-config: %v", err)
++		}
++	})
++	var plan infra.PiStandaloneLaunchPlan
++	decodeSingleJSONDocument(t, output, &plan)
++	if plan.Contract != infra.PiStandaloneLaunchPlanContract || plan.Status != "ok" || plan.Reasoning.Value == nil || *plan.Reasoning.Value != "medium" {
++		t.Fatalf("standalone qwen launch plan = %#v", plan)
++	}
++	wantTail := []string{"--no-approve", "--no-extensions", "--tools", "read,bash,edit,write", "--mode", "json", "--no-session", "--print", "<prompt>"}
++	if len(plan.Argv) < len(wantTail) || !reflect.DeepEqual(plan.Argv[len(plan.Argv)-len(wantTail):], wantTail) {
++		t.Fatalf("standalone managed argv = %#v, want tail %#v", plan.Argv, wantTail)
++	}
++	if plan.ToolAuthorization.ProjectTrust != "declined" || plan.ToolAuthorization.RPCDirectBash != "not_exposed" || plan.ToolAuthorization.TaskBoardAdapter != "deferred_not_implemented" {
++		t.Fatalf("standalone authorization diagnostics = %#v", plan.ToolAuthorization)
++	}
++	if strings.Contains(output, secretPrompt) {
++		t.Fatalf("standalone print-config leaked prompt: %s", output)
++	}
++}
++
++// Production call site: runPi/runTarget -> runPiStandaloneCLI. Unknown Pi
++// authorization, extension, mode, and positional shapes never reach RunPi.
++func TestStandaloneCLIRefusesCallerOverridesWithSanitizedTypedFailure(t *testing.T) {
++	secret := "caller secret prompt"
++	for _, testCase := range []struct {
++		name string
++		run  func() error
++	}{
++		{name: "qwen tools override", run: func() error { return runTarget([]string{"qwen-infra", "spawn", "--prompt", secret, "--tools", "bash"}) }},
++		{name: "qwen extension override", run: func() error {
++			return runTarget([]string{"qwen-infra", "spawn", "--prompt", secret, "--extension", "/tmp/replacement.ts"})
++		}},
++		{name: "qwen rpc override", run: func() error { return runTarget([]string{"qwen-infra", "spawn", "--prompt", secret, "--mode", "rpc"}) }},
++		{name: "direct pi positional override", run: func() error { return runPi([]string{"spawn", "--prompt", secret, "--", "--approve"}) }},
++	} {
++		t.Run(testCase.name, func(t *testing.T) {
++			err := testCase.run()
++			var failure *infra.PiStandaloneFailure
++			if !errors.As(err, &failure) || failure.Code != "pi_standalone_cli_invalid" {
++				t.Fatalf("standalone CLI override error = %#v", err)
++			}
++			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "replacement.ts") {
++				t.Fatalf("typed standalone CLI failure leaked caller input: %s", err)
++			}
++		})
++	}
++}
++
++func TestStandaloneCLIAcceptsExactDeadlineBounds(t *testing.T) {
++	project, home := mainStandaloneQwenProject(t)
++	t.Setenv(callerCWDEnv, project)
++	t.Setenv("HOME", home)
++	t.Setenv("PATH", mainTestOfficialPiAsset(t))
++	for _, deadline := range []string{"1ns", "30m"} {
++		t.Run(deadline, func(t *testing.T) {
++			if err := runTarget([]string{"qwen-infra", "spawn", "--prompt", "safe prompt", "--deadline", deadline, "--print-config"}); err != nil {
++				t.Fatalf("exact standalone deadline bound %s refused: %v", deadline, err)
++			}
++		})
++	}
++}
++
++// Production call site: runTarget -> runPiStandaloneCLI. Out-of-range values
++// are refused before plan resolution or launch, and the public error contains
++// only the typed code rather than the prompt or caller-supplied duration.
++func TestStandaloneCLIRefusesOutOfRangeDeadlineWithSanitizedFailure(t *testing.T) {
++	secretPrompt := "deadline prompt secret"
++	for _, deadline := range []string{"-1ns", "0", "30m1ns"} {
++		t.Run(deadline, func(t *testing.T) {
++			err := runTarget([]string{"qwen-infra", "spawn", "--prompt", secretPrompt, "--deadline", deadline, "--print-config"})
++			var failure *infra.PiStandaloneFailure
++			if !errors.As(err, &failure) || failure.Code != "pi_standalone_deadline_invalid" {
++				t.Fatalf("standalone deadline error = %#v", err)
++			}
++			if got := err.Error(); strings.Contains(got, secretPrompt) || strings.Contains(got, deadline) || got != `{"contract":"agents-infra.pi-standalone-result","schema_version":1,"status":"error","error":{"code":"pi_standalone_deadline_invalid"}}` {
++				t.Fatalf("standalone deadline failure was not sanitized: %s", got)
++			}
++		})
++	}
++}

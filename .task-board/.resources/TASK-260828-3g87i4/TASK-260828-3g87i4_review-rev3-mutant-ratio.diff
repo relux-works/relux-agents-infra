@@ -1,0 +1,11 @@
+--- .temp/TASK-260828-3g87i4/review-rev3-original/quant_equivalence.py	2026-08-28 17:26:58
++++ .temp/TASK-260828-3g87i4/review-rev3-mutant-ratio/quant_equivalence.py	2026-08-28 17:27:48
+@@ -60,7 +60,7 @@
+ 
+ NOISE_CEIL = 0.05          # rel_rms above this is not 8-bit rounding noise
+ FULL_READ_ELEMS = 64_000_000   # read the whole tensor below this element count
+-RATIO_CEIL = 3.0           # PRODUCTION comparability threshold - single source of truth.
++RATIO_CEIL = 4.0           # REVIEW MUTANT: admits the observed FP8 ratio 3.889.
+                            # A GGUF that inherited a coarser upstream grid (FP8 E4M3 has
+                            # 4 mantissa bits) lands far above this against the same MLX
+                            # baseline; true 8-bit-of-the-same-numbers lands below 1.

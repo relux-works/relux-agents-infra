@@ -1,0 +1,129 @@
+# session: session-c76800
+
+## baseline: python-mlx-lm
+  profile          : qwen-benchmark-python
+  argv             : --model /Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit --host 127.0.0.1 --port 18042 --prompt-cache-size 1 --prompt-cache-bytes 8GB --prefill-step-size 2048 --chat-template-args {"reasoning_effort": "medium"}
+  contextPolicy    : kv=unbounded;prefill-step=2048;reasoning=medium
+  speculation      : off
+  modelOfRecord    : source:hf:orcarouter/Qwen3.8-27B-Uncensored-BF16
+  quantization     : 8bit/group64/affine
+  pass peak footpr.: 45.20 GiB
+  window           : 1787963931.2 .. 1787965371.7 (1440.5s)
+  declaredAsymmetries:
+    - the MLX build drops the MTP head the GGUF carries as blk.64: 8 quantized tensors, 451319808 bytes on disk, skipped at load
+    - the vision tower is placed differently -- 333 bf16 tensors inside the MLX safetensors shards against a separate 931145984-byte GGUF mmproj -- and is resident in neither on the default text path
+    - GGUF upcasts norms and 1-D tensors to F32 where the MLX build keeps the source bf16: 10686464 bytes of extra resident memory, no fidelity difference
+    - deployed with --prompt-cache-size 1 --prompt-cache-bytes 8GB; llama-server holds no cross-request prompt cache
+
+## candidate: llamacpp
+  profile          : qwen-benchmark-llamacpp-c76800
+  argv             : --model /Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-GGUF-Q8_0/Qwen3.8-27B-Uncensored-OrcaRouter-Q8_0.gguf --host 127.0.0.1 --port 18042 --ctx-size 76800 --ubatch-size 2048 --reasoning-effort medium --no-webui --spec-type none
+  contextPolicy    : kv=76800;prefill-step=2048;reasoning=medium
+  speculation      : off
+  modelOfRecord    : source:hf:orcarouter/Qwen3.8-27B-Uncensored-BF16
+  quantization     : Q8_0
+  pass peak footpr.: 15.34 GiB
+  window           : 1787965392.7 .. 1787966524.7 (1132.0s)
+  declaredAsymmetries:
+    - the MLX build drops the MTP head the GGUF carries as blk.64: 8 quantized tensors, 451319808 bytes on disk, skipped at load
+    - the vision tower is placed differently -- 333 bf16 tensors inside the MLX safetensors shards against a separate 931145984-byte GGUF mmproj -- and is resident in neither on the default text path
+    - GGUF upcasts norms and 1-D tensors to F32 where the MLX build keeps the source bf16: 10686464 bytes of extra resident memory, no fidelity difference
+    - llama-server allocates its whole KV arena at load from --ctx-size; mlx_lm.server grows its cache per request and this build has no flag to bound it
+
+## prompt-token parity (checked before any latency number)
+scenario                       baseline    candidate     skew  verdict
+short_prompt                         41           41   1.0000  comparable
+long_prompt_8k                    7,784        7,784   1.0000  comparable
+tool_call                           313          313   1.0000  comparable
+multiturn_prefix_reuse            7,784        7,784   1.0000  comparable
+stability_soak                      910          910   1.0000  comparable
+context_75k                      73,016       73,016   1.0000  comparable
+
+## per-scenario measurements
+
+### short_prompt
+metric                        python-mlx-lm               llamacpp
+succeeded                              True                   True
+failureMode                               -                      -
+promptTokens                             41                     41
+completionTokens                         54                     57
+TTFT                                  0.96s                  3.48s
+prefill tok/s                         42.64                  11.79
+decode tok/s                          10.72                  24.80
+wallClock                             5.91s                  5.73s
+peak footprint                    27.38 GiB               6.05 GiB
+process peak                      27.38 GiB               6.05 GiB
+host load max                         11.15                   8.34
+
+### long_prompt_8k
+metric                        python-mlx-lm               llamacpp
+succeeded                              True                   True
+failureMode                               -                      -
+promptTokens                          7,784                  7,784
+completionTokens                        106                    106
+TTFT                                 83.92s                 74.84s
+prefill tok/s                         92.76                 104.01
+decode tok/s                          10.03                  81.31
+wallClock                            94.39s                 76.13s
+peak footprint                    31.36 GiB               6.78 GiB
+process peak                      31.36 GiB               6.78 GiB
+host load max                         11.89                  11.26
+
+### tool_call
+metric                        python-mlx-lm               llamacpp
+succeeded                              True                   True
+failureMode                               -                      -
+promptTokens                            313                    313
+completionTokens                         64                     51
+TTFT                             unmeasured             unmeasured
+prefill tok/s                    unmeasured             unmeasured
+decode tok/s                     unmeasured             unmeasured
+wallClock                            10.50s                  6.89s
+peak footprint                    28.40 GiB               7.85 GiB
+process peak                      31.36 GiB               7.85 GiB
+host load max                          7.77                  10.05
+
+### multiturn_prefix_reuse
+metric                        python-mlx-lm               llamacpp
+succeeded                              True                   True
+failureMode                               -                      -
+promptTokens                          7,784                  7,784
+completionTokens                        192                    192
+TTFT                                 85.24s             unmeasured
+prefill tok/s                         83.46             unmeasured
+decode tok/s                     unmeasured             unmeasured
+wallClock                           282.74s                 36.68s
+peak footprint                    31.93 GiB               8.17 GiB
+process peak                      31.93 GiB               8.17 GiB
+host load max                         17.91                   9.65
+
+### stability_soak
+metric                        python-mlx-lm               llamacpp
+succeeded                              True                   True
+failureMode                               -                      -
+promptTokens                            910                    910
+completionTokens                      1,280                  1,248
+TTFT                             unmeasured             unmeasured
+prefill tok/s                    unmeasured             unmeasured
+decode tok/s                     unmeasured             unmeasured
+wallClock                           138.50s                123.11s
+peak footprint                    28.35 GiB              15.34 GiB
+process peak                      31.93 GiB              15.34 GiB
+host load max                         13.08                  12.97
+
+### context_75k
+metric                        python-mlx-lm               llamacpp
+succeeded                              True                   True
+failureMode                               -                      -
+promptTokens                         73,016                 73,016
+completionTokens                         16                     16
+TTFT                                891.96s             unmeasured
+prefill tok/s                         81.86             unmeasured
+decode tok/s                           8.03             unmeasured
+wallClock                           893.83s                862.97s
+peak footprint                    45.20 GiB              14.45 GiB
+process peak                      45.20 GiB              15.34 GiB
+host load max                         11.00                  19.64
+
+## gate decision
+no decision.json — the gate refused the pair before it could score them

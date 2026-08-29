@@ -1,0 +1,14 @@
+{
+  "closedAtUnixSeconds" : 1787916559.496334,
+  "configDigest" : "dfa80a60e7b9fb28f69d0dd8edab61b731b428b5cbb9175c7b15851de489d073",
+  "configPath" : "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/TASK-260827-2v13w8-rev3\/model-harness.benchmark.toml",
+  "gateBinaryDigest" : "ba1c7451a7d035ecfd786cfd93510dc2b28da915a30aba02ea755ece21112695",
+  "observedExecutableDigest" : "e89d60f8ccee9db684801330198797723db2ac378cd53e5cfe523128feb76599",
+  "observedExecutablePath" : "\/opt\/homebrew\/Cellar\/python@3.14\/3.14.7\/Frameworks\/Python.framework\/Versions\/3.14\/Resources\/Python.app\/Contents\/MacOS\/Python",
+  "openedAtUnixSeconds" : 1787915073.638207,
+  "processID" : 66219,
+  "processStartUnixSeconds" : 1787915073.565124,
+  "profile" : "qwen-benchmark-python",
+  "runtime" : "python-mlx-lm",
+  "servedModelID" : "\/Users\/alexis\/src\/local-models\/Qwen3.8-27B-Uncensored-MLX-8bit"
+}

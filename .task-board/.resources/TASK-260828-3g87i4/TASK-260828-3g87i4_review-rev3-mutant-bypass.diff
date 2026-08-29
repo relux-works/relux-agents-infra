@@ -1,0 +1,18 @@
+--- .temp/TASK-260828-3g87i4/review-rev3-original/quant_equivalence.py	2026-08-28 17:26:58
++++ .temp/TASK-260828-3g87i4/review-rev3-mutant-bypass/quant_equivalence.py	2026-08-28 17:27:48
+@@ -329,7 +329,14 @@
+         ems = f"{em:.7f}" if em is not None else "n/a"
+         print(f"{n:<30} {ems:>13} {eg:>14.7f} {r:>8.3f}   {note}" if em is not None
+               else f"{n:<30} {ems:>13} {eg:>14.7f} {'n/a':>8}   {note}")
+-    comparable, bad, paired = comparability_verdict(rows)
++    # REVIEW MUTANT: retain a dead syntactic call while the CLI decides
++    # independently at a looser threshold that admits the FP8 ratio 3.889.
++    if False:
++        comparable, bad, paired = comparability_verdict(rows)
++    paired = [r for _, em, _, r, _ in rows if em is not None]
++    bad = [(n, r) for n, em, _, r, _ in rows
++           if em is not None and (math.isnan(r) or r > RATIO_CEIL + 1.0)]
++    comparable = not bad
+     print("=" * 96)
+     mean_ratio = (sum(paired) / len(paired)) if paired else float('nan')
+     print(f"tensors compared against MLX: {len(paired)}   mean ratio: {mean_ratio:.3f}")

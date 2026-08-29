@@ -1,0 +1,14 @@
+{
+  "closedAtUnixSeconds" : 1787920348.587112,
+  "configDigest" : "ca319a3f0d148dfe603c0c8497d72df491805524be788a7e5016b728dea47b35",
+  "configPath" : "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260827-m30k8z\/worktree\/tools\/mlx-swift-runtime-prototype\/.temp\/review-rev3-forged-observed\/cfg.toml",
+  "gateBinaryDigest" : "ba1c7451a7d035ecfd786cfd93510dc2b28da915a30aba02ea755ece21112695",
+  "observedExecutableDigest" : "e89d60f8ccee9db684801330198797723db2ac378cd53e5cfe523128feb76599",
+  "observedExecutablePath" : "\/opt\/homebrew\/Cellar\/python@3.14\/3.14.7\/Frameworks\/Python.framework\/Versions\/3.14\/Resources\/Python.app\/Contents\/MacOS\/Python",
+  "openedAtUnixSeconds" : 1787920347.483611,
+  "processID" : 17294,
+  "processStartUnixSeconds" : 1787920347.05074,
+  "profile" : "qwen-benchmark-swift",
+  "runtime" : "mlx-swift",
+  "servedModelID" : "\/Users\/alexis\/src\/local-models\/Qwen3.8-27B-Uncensored-MLX-8bit"
+}

@@ -1,0 +1,135 @@
+import Foundation
+
+/// What the benchmark invocation itself saw of one runtime's pass, written by
+/// the process that launched that runtime and drove every request against it.
+///
+/// This type has been rewritten by three consecutive review findings on one
+/// class of defect, and the shape of the fix changed each time.
+///
+/// * Revision 2 cross-checked ten provenance fields against the pins beside
+///   them. Review handed the production gate a pair in which all ten were
+///   consistent, all of them invented, and got `accepted=true`. A document was
+///   being verified against itself.
+/// * Revision 3 added this type, written by a separate `benchmark-attest
+///   open|close` pair of subcommands against a live pid. Review then started
+///   two placeholder HTTP servers that answered `GET /v1/models` and nothing
+///   else, asked those same production subcommands to attest them — which they
+///   did, correctly, because the processes were real — typed a set of
+///   measurements beside them, and got `accepted=true` again in 7.2 seconds.
+///   The gate had been made to certify its own blindness: it proved two
+///   processes stayed alive, not that anything was measured.
+/// * Revision 4 removes the construction rather than adding a clause to it.
+///   There is no longer any way to ask this binary to attest a process the
+///   caller supplies. An attestation exists only as a by-product of
+///   `benchmark-run`, the single invocation that spawns the runtime, drives
+///   every scenario against it, samples it, builds the record and judges the
+///   pair. The caller supplies configuration; it supplies no measurement, and
+///   there is no entry point through which one could be handed in.
+///
+/// What one invocation writes here, all of it read first-hand:
+///
+/// * the pid's executable path and its **start time**, from the kernel, of a
+///   process this invocation spawned itself. Re-read before close, so a
+///   recycled pid is refused.
+/// * the SHA-256 of the executable the kernel says that pid is running.
+/// * the SHA-256 of the launcher config file, read from disk.
+/// * the model ID the runtime answered `/v1/models` with, over the wire.
+/// * two readings of its own clock, bracketing the measured work.
+/// * its own binary's SHA-256, so the binary that judges is the binary that
+///   watched — the defect that separately invalidated revision 2's numbers,
+///   where `19c54c5…` served and `3e5fdcc…` judged.
+/// * ``transcriptDigest``: the seal over the record it built from the requests
+///   it drove.
+///
+/// ``RuntimeBenchmark/admit(baseline:baselineAttestation:candidate:candidateAttestation:requiredScenarios:gateBinaryDigest:)``
+/// requires the record to agree with all of it.
+///
+/// **The limit, stated rather than implied.** These are ordinary files owned by
+/// the same user, so hand-authoring both a record and its attestation is still
+/// physically possible. Two things changed, and only the second one matters.
+/// The first: `benchmark-compare`, which reads such files, can no longer return
+/// an acceptance at all — it replays an archived decision and its best outcome
+/// is a reproduced rejection. The second: acceptance is reachable only from
+/// `benchmark-run`, whose measurements come from exchanges it performed in the
+/// same process, so producing a false acceptance now requires modifying and
+/// rebuilding the gate rather than using it. That is a different class from
+/// what review demonstrated three times, which was ordinary use of shipped
+/// commands.
+public struct RuntimeAttestation: Sendable, Equatable, Codable {
+    /// Runtime identity this attestation is for. Must match the record's.
+    public let runtime: String
+    /// The pid the gate observed, as the driver resolved it for sampling.
+    public let processID: Int
+    /// Kernel-reported process start time. Re-read at ``close``: a pid that
+    /// starts again under the same number is a different process, and an
+    /// attestation that spanned two of them attests to neither.
+    public let processStartUnixSeconds: Double
+    /// Executable path the kernel says that pid is running.
+    public let observedExecutablePath: String
+    /// SHA-256 of the bytes at that path, computed by the gate.
+    public let observedExecutableDigest: String
+    /// Launcher config path and the digest the gate read off it.
+    public let configPath: String
+    public let configDigest: String
+    /// Profile the gate was told the pass is running.
+    public let profile: String
+    /// Gate clock at ``open``.
+    public let openedAtUnixSeconds: Double
+    /// Gate clock at ``close``. `nil` means the gate never saw the pass end,
+    /// which is not the same as a pass that ended and is never read as one.
+    public let closedAtUnixSeconds: Double?
+    /// Model ID the runtime listed when the gate asked it directly at close.
+    /// `nil` until then.
+    public let servedModelID: String?
+    /// SHA-256 of the gate binary that wrote this document.
+    public let gateBinaryDigest: String
+    /// ``RuntimeBenchmark/transcriptDigest(of:)`` over the record this same
+    /// invocation built from the requests it drove. `nil` until ``close``.
+    ///
+    /// This is the field that makes the document a witness to *work* rather
+    /// than to a process. Everything else here says a process existed, ran a
+    /// known executable and named a model; review's placeholder pair satisfied
+    /// all of it while serving nothing. The seal cannot be satisfied that way,
+    /// because the only code that computes it is the code that performed the
+    /// exchanges it covers.
+    public let transcriptDigest: String?
+
+    public init(
+        runtime: String,
+        processID: Int,
+        processStartUnixSeconds: Double,
+        observedExecutablePath: String,
+        observedExecutableDigest: String,
+        configPath: String,
+        configDigest: String,
+        profile: String,
+        openedAtUnixSeconds: Double,
+        closedAtUnixSeconds: Double?,
+        servedModelID: String?,
+        gateBinaryDigest: String,
+        transcriptDigest: String?
+    ) {
+        self.runtime = runtime
+        self.processID = processID
+        self.processStartUnixSeconds = processStartUnixSeconds
+        self.observedExecutablePath = observedExecutablePath
+        self.observedExecutableDigest = observedExecutableDigest
+        self.configPath = configPath
+        self.configDigest = configDigest
+        self.profile = profile
+        self.openedAtUnixSeconds = openedAtUnixSeconds
+        self.closedAtUnixSeconds = closedAtUnixSeconds
+        self.servedModelID = servedModelID
+        self.gateBinaryDigest = gateBinaryDigest
+        self.transcriptDigest = transcriptDigest
+    }
+
+    /// The file one runtime's attestation lives at inside the directory.
+    ///
+    /// Shared by the gate that writes it, the driver that names the directory
+    /// and the comparison that reads it, so none of the three can look in a
+    /// place the others do not write.
+    public static func fileName(runtime: String) -> String {
+        "\(runtime).attestation.json"
+    }
+}

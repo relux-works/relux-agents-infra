@@ -1,0 +1,1 @@
+model-harness: restarting profile "prototype-supervised" after supervised runtime failure (1/2): fatal output "generation_worker_unavailable": signal: killed

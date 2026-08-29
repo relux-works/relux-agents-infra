@@ -1,0 +1,32 @@
+{
+  "deferred_attempts": 2,
+  "footprint_after_teardown_bytes": 29889484184,
+  "footprint_at_ready_bytes": 29634630944,
+  "health_status": 503,
+  "load_seconds": 5.194,
+  "models_status": 503,
+  "outcome": "abandoned",
+  "teardown_seconds_from_condemning_request": 9.988,
+  "terminal_event": {
+    "active_bytes": 7984,
+    "attempts": 3,
+    "baseline_active_bytes": 29684993391,
+    "cache_bytes": 29744368205,
+    "container_deallocated": true,
+    "detail": "condemned worker's weight release was never observed; shared pool not rebuilt",
+    "event": "generation_shared_cache_rebuild_abandoned",
+    "generations_in_flight": 0,
+    "live_weight_owners": 0,
+    "observed_active_bytes": 7984,
+    "reason": "worker_teardown",
+    "release_observed": false,
+    "residual_non_weight_allowance_bytes": 0,
+    "returned_bytes": 29684985407,
+    "shared_cache_rebuild_pending": true,
+    "shared_cache_rebuilds": 0,
+    "shared_cache_rebuilds_abandoned": 1,
+    "stable_active_samples": 298,
+    "weight_footprint_bytes": 29501612496,
+    "weight_owner_count": 1229
+  }
+}

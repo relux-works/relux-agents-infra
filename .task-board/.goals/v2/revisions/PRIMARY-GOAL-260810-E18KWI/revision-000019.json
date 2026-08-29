@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 19,
+  "expected_previous_revision": 18,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 18
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Complete the existing agents-infra local setup, instruction materialization, provider rendering, canonical vendor targets, Qwen/Pi local-model profiles, bounded model-check tooling, shared local-Qwen runtime broker, and local/remote model-harness work; preserve precise fail-closed config semantics and no automatic migrations; keep canonical OpenAI Codex gpt-5.6-sol/high and Anthropic Claude Opus 5/high targets; keep Qwen native reasoning at medium with YOLO tool use and inherited skills; stabilize exact Pi session restore, 75000-token context with compaction beginning at 50000, bounded memory, request/compaction timeouts, and multi-week unattended operation; retain synthetic capacity stress and separately configurable local/remote runtime modes; maintain the relux-works mlx-lm fork pinned by the local Qwen runtime until an accepted replacement or upstream release carries the required fixes, monitor human-authored upstream mlx-lm PR #1791 and the generation-batch recovery branch; evaluate candidate replacements for the managed local Qwen inference backend against the pinned Python mlx-lm baseline on one host with one comparison harness that refuses non-comparable pairs, currently official MLX Swift LM and additionally llama.cpp with equivalent-quantization GGUF weights staged under src/local-models, scoring memory economy as a first-class acceptance criterion alongside prefill and decode throughput, time to first token, 75000-token capacity, tool-call parity, health, lifecycle, and long-running stability; consolidate the accumulated per-runtime findings into one comparison report; adopt any replacement only with compatibility, capacity, performance, memory, and reliability evidence, otherwise keep Python mlx-lm as default and rollback path; remove duplicated global version-control authorization and commit policy from generated agent instructions in favor of task-board version_control configuration while preserving operational dirty-checkout safety; track and execute this work through task-board with tracked producer and reviewer spawn runs; do not register local Qwen as a task-board execution backend yet; never grant Pi unrestricted sudo/root authority.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 19
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "User added a third runtime candidate (llama.cpp) to the local-Qwen backend evaluation, made memory economy a first-class acceptance criterion, and asked for the accumulated findings to be consolidated into a comparison report; execution has in fact been tracked spawn-based producer/reviewer runs throughout this story rather than inline.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "alexis"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-28T10:12:31.963906Z",
+  "created_by": "alexis",
+  "reason": "User added a third runtime candidate (llama.cpp) to the local-Qwen backend evaluation, made memory economy a first-class acceptance criterion, and asked for the accumulated findings to be consolidated into a comparison report; execution has in fact been tracked spawn-based producer/reviewer runs throughout this story rather than inline."
+}

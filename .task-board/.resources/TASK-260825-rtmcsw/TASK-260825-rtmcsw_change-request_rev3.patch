@@ -1,0 +1,2000 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index adf8a73..684d9b7 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,38 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-25
++
++### 1340 — Load Fixtures Must Own Their Process Cleanup
++- ANOMALY: Reviewer cycle 2 left eight busy-loop load-fixture processes in one process group after timing-flake diagnosis.
++- EVIDENCE: Orchestrator terminated the exact fixture PIDs and verified the process group empty before rework continued.
++- DECISION: Do not reproduce the unbounded load loop; cold-start stability uses an early PID marker, 2s deadline headroom, and six uncached production-entrypoint repetitions.
++- SCOPE: Review fixture only; no production process leak observed.
++
++### 1338 — Exit-Code Interfaces Need Nominal Ownership
++- REGRESSION: `main` matched any `ExitCode() int`, so provider `*exec.ExitError` values changed established Codex, Claude, and target CLI exits outside model-check scope.
++- FIX: `tools/agents-infra/main.go` recognizes only `*infra.ModelCheckFailure`; a production-binary Codex child exiting 42 must leave the wrapper at legacy exit 1.
++- EVIDENCE: Reintroducing the structural interface makes `TestMainKeepsProviderChildFailuresAtLegacyExitOne` fail with observed exit 42.
++- SCOPE: `TASK-260825-rtmcsw`; model-check retains its documented exits 1–5.
++
++### 1338 — Cleanup Attestation Must Observe Live OS State
++- ROOT CAUSE: Synthetic pending/failed report tests proved only the evaluator; a constant `processGroupCleanupState = confirmed` producer survived the suite.
++- FIX: `tools/agents-infra/internal/infra/pi_test.go` probes a live process group as failed and the same reaped group as confirmed; the cold-start fixture writes its PID before heavy imports.
++- EVIDENCE: The constant-confirmed mutant fails the named producer test; the readiness deadline case passes 6/6 uncached runs.
++- SCOPE: `TASK-260825-rtmcsw`; no external model or runtime download.
++
++### 1300 — Model Check Gates Need Boundary Proof
++- REGRESSION: A fixed prompt and universally true cleanup attestation both survived the original positive production suite.
++- FIX: `tools/agents-infra/model_check_main_test.go` captures the provider request body; `internal/infra/model_check_test.go` pins pending/failed cleanup to exit 1.
++- EVIDENCE: Narrowed prompt, cleanup, deadline, raw-overwrite, and non-managed-target mutants each fail a named production or lifecycle test.
++- SCOPE: `TASK-260825-rtmcsw`; no external model download.
++
++### 1210 — Bounded Checks Need Process-Group Evidence
++- ROOT CAUSE: Managed `RunPi` bounded only signal and runtime cleanup; normal Pi completion waited for the leader and exposed no machine-readable proof that either owned process group was gone.
++- FIX: `tools/agents-infra/internal/infra/pi_launch_posix.go:239` routes Pi and runtime through bounded TERM-to-SIGKILL group cleanup; `internal/infra/model_check.go:144` records sanitized cleanup state with every behavior-check outcome.
++- EVIDENCE: Production-binary timeout fixture leaves both an ignore-TERM `bash` descendant and runtime descendant; the command exits with the timeout code, reports cleanup confirmed, and direct PID probes return `ESRCH` for every recorded process.
++- SCOPE: `TASK-260825-rtmcsw`; no duplicate shell launcher or external model download.
++
+ ## 2026-08-24
+ 
+ ### 2152 — Local Setup Honors Provider-Owned Skill Links
+diff --git a/README.md b/README.md
+index fde596b..5a338ea 100644
+--- a/README.md
++++ b/README.md
+@@ -27,6 +27,7 @@ agents-infra doctor local /path/to/project
+ agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json
+ openai-infra --print-config
+ pi-infra --print-config
++agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check
+ agents-infra version
+ ```
+ 
+@@ -54,8 +55,17 @@ The canonical interface after bootstrap is:
+ - `agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+ - `pi-infra [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+ - `openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
++- `agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]`
+ - `agents-infra version`
+ 
++`model-check` exits `0` when the managed check and all expectations pass, `1`
++for launch, validation, or cleanup failure, `2` on deadline expiry, `3` for a
++malformed or incomplete JSONL stream, `4` for unmet tool/text expectations,
++and `5` when the model reports a failed tool execution. Raw provider output is
++kept only in the mode-`0600` evidence directory; terminal output is sanitized.
++The command passes Pi `--approve`, so tool calls run unattended in the caller's
++project directory; use only a reviewed target and a controlled prompt.
++
+ Setup syncs the repo into `.agents`, treats `.skills/` as the authoritative
+ source-managed skill tree, refreshes the managed links it owns inside `skills/`,
+ and then refreshes symlinks in `.claude/`, `.codex/`, and `.local/bin`. Scratch
+@@ -1014,7 +1024,7 @@ rg -n "Primary Parent Goal Actualization" \
+ | Tool | Purpose | Command | Outputs |
+ |------|---------|---------|---------|
+ | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
+-| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi state under the user cache directory, attachment manifests/staged images, or printed diagnostics on stdout |
++| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+ | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+diff --git a/tools/agents-infra/internal/infra/model_check.go b/tools/agents-infra/internal/infra/model_check.go
+new file mode 100644
+index 0000000..bfc97c5
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/model_check.go
+@@ -0,0 +1,723 @@
++package infra
++
++import (
++	"bufio"
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"regexp"
++	"sort"
++	"strings"
++	"time"
++	"unicode/utf8"
++)
++
++const (
++	ModelCheckSummarySchemaVersion = 1
++	DefaultModelCheckDeadline      = 5 * time.Minute
++	MaximumModelCheckDeadline      = 30 * time.Minute
++	ModelCheckFinalResponseBytes   = 4096
++
++	ModelCheckExitExecutionFailed   = 1
++	ModelCheckExitTimeout           = 2
++	ModelCheckExitMalformedStream   = 3
++	ModelCheckExitExpectationFailed = 4
++	ModelCheckExitToolFailure       = 5
++)
++
++const (
++	modelCheckEventsArtifact  = "events.jsonl"
++	modelCheckStderrArtifact  = "stderr.log"
++	modelCheckJSONSummary     = "summary.json"
++	modelCheckTextSummary     = "summary.txt"
++	modelCheckMaxEventLine    = 16 << 20
++	modelCheckMaxIdentityText = 256
++)
++
++// ModelCheckOptions describes one bounded production behavior check. Target is
++// the configured canonical entrypoint (for example qwen-infra), not a provider
++// executable or an unvalidated model name.
++type ModelCheckOptions struct {
++	ProjectDir    string
++	HomeDir       string
++	Target        string
++	Prompt        string
++	OutputDir     string
++	Deadline      time.Duration
++	ExpectedTools []string
++	ExpectedText  []string
++	Environ       []string
++	Producer      ChildLaunchCompositionProducer
++}
++
++type ModelCheckTargetSummary struct {
++	Entrypoint  string `json:"entrypoint"`
++	Name        string `json:"name"`
++	Environment string `json:"environment"`
++	Provider    string `json:"provider"`
++	Model       string `json:"model"`
++}
++
++type ModelCheckToolCall struct {
++	Name      string `json:"name"`
++	Completed bool   `json:"completed"`
++	Failed    bool   `json:"failed"`
++}
++
++type ModelCheckExpectation struct {
++	Kind  string `json:"kind"`
++	Value string `json:"value"`
++	Met   bool   `json:"met"`
++}
++
++type ModelCheckEventStreamSummary struct {
++	Valid    bool   `json:"valid"`
++	Complete bool   `json:"complete"`
++	Error    string `json:"error,omitempty"`
++}
++
++type ModelCheckArtifactSummary struct {
++	EventsJSONL string `json:"events_jsonl"`
++	Stderr      string `json:"stderr"`
++	JSONSummary string `json:"json_summary"`
++	TextSummary string `json:"text_summary"`
++}
++
++type ModelCheckSummary struct {
++	SchemaVersion          int                          `json:"schema_version"`
++	Status                 string                       `json:"status"`
++	ExitCode               int                          `json:"exit_code"`
++	ProcessExitCode        *int                         `json:"process_exit_code"`
++	TimedOut               bool                         `json:"timed_out"`
++	DeadlineMS             int64                        `json:"deadline_ms"`
++	DurationMS             int64                        `json:"duration_ms"`
++	Target                 ModelCheckTargetSummary      `json:"target"`
++	EventCounts            map[string]int               `json:"event_counts"`
++	ToolCalls              []ModelCheckToolCall         `json:"tool_calls"`
++	ToolFailures           int                          `json:"tool_failures"`
++	FinalResponse          string                       `json:"final_response"`
++	FinalResponseSHA256    string                       `json:"final_response_sha256"`
++	FinalResponseTruncated bool                         `json:"final_response_truncated"`
++	Expectations           []ModelCheckExpectation      `json:"expectations"`
++	EventStream            ModelCheckEventStreamSummary `json:"event_stream"`
++	ManagedRuntime         PiRunReport                  `json:"managed_runtime"`
++	Artifacts              ModelCheckArtifactSummary    `json:"artifacts"`
++	Errors                 []string                     `json:"errors"`
++}
++
++// ModelCheckFailure is deliberately safe to print. Detailed provider bytes
++// remain in mode-0600 raw artifacts; this error names only the stable outcome.
++type ModelCheckFailure struct {
++	Code   int
++	Reason string
++}
++
++func (e *ModelCheckFailure) Error() string {
++	return "model check " + e.Reason + "; inspect the sanitized summary"
++}
++func (e *ModelCheckFailure) ExitCode() int { return e.Code }
++
++type parsedModelCheckEvents struct {
++	counts           map[string]int
++	toolCalls        []ModelCheckToolCall
++	toolFailures     int
++	finalResponse    string
++	assistantFailure string
++	valid            bool
++	complete         bool
++	errText          string
++}
++
++type modelCheckToolState struct {
++	name      string
++	completed bool
++	failed    bool
++}
++
++// RunModelCheck resolves a canonical target, runs it through the existing
++// managed Pi lifecycle, and persists raw plus sanitized evidence. It never
++// mirrors provider stdout/stderr to the terminal.
++func RunModelCheck(opts ModelCheckOptions) (ModelCheckSummary, error) {
++	summary := ModelCheckSummary{
++		SchemaVersion: ModelCheckSummarySchemaVersion,
++		Status:        "failed",
++		EventCounts:   map[string]int{},
++		EventStream:   ModelCheckEventStreamSummary{Valid: true},
++		Artifacts: ModelCheckArtifactSummary{
++			EventsJSONL: modelCheckEventsArtifact,
++			Stderr:      modelCheckStderrArtifact,
++			JSONSummary: modelCheckJSONSummary,
++			TextSummary: modelCheckTextSummary,
++		},
++	}
++	if err := validateModelCheckOptions(&opts); err != nil {
++		return ModelCheckSummary{}, err
++	}
++	summary.DeadlineMS = opts.Deadline.Milliseconds()
++	summary.Target.Entrypoint = sanitizeModelCheckText(opts.Target, modelCheckMaxIdentityText)
++
++	outputDir, err := filepath.Abs(opts.OutputDir)
++	if err != nil {
++		return ModelCheckSummary{}, fmt.Errorf("resolve model-check output directory: %w", err)
++	}
++	if err := prepareModelCheckOutputDir(outputDir); err != nil {
++		return ModelCheckSummary{}, err
++	}
++	eventsFile, err := createModelCheckArtifact(filepath.Join(outputDir, modelCheckEventsArtifact))
++	if err != nil {
++		return ModelCheckSummary{}, err
++	}
++	stderrFile, err := createModelCheckArtifact(filepath.Join(outputDir, modelCheckStderrArtifact))
++	if err != nil {
++		eventsFile.Close()
++		return ModelCheckSummary{}, err
++	}
++
++	started := time.Now()
++	checkArgs := []string{"--mode", "json", "--print", "--no-session", "--approve", "--", opts.Prompt}
++	plan, planErr := BuildCanonicalTargetLaunchPlan(opts.Target, opts.ProjectDir, opts.HomeDir, checkArgs, opts.Producer, nil)
++	if planErr == nil {
++		planErr = validateModelCheckPlan(plan)
++	}
++	if plan.Target != nil {
++		summary.Target = modelCheckTargetFromPlan(plan)
++	}
++
++	var runErr error
++	if planErr == nil {
++		ctx, cancel := context.WithTimeout(context.Background(), opts.Deadline)
++		runErr = RunPi(RunPiOptions{
++			ProjectDir: plan.ProjectDir,
++			HomeDir:    opts.HomeDir,
++			Args:       plan.TargetProviderArgs(),
++			Environ:    opts.Environ,
++			Stdout:     eventsFile,
++			Stderr:     stderrFile,
++			Context:    ctx,
++			Report:     &summary.ManagedRuntime,
++		})
++		cancel()
++	} else {
++		runErr = planErr
++	}
++	closeErr := errors.Join(eventsFile.Close(), stderrFile.Close())
++	if closeErr != nil && runErr == nil {
++		runErr = closeErr
++	}
++	summary.DurationMS = time.Since(started).Milliseconds()
++	summary.TimedOut = summary.ManagedRuntime.DeadlineExceeded
++	summary.ProcessExitCode = modelCheckProcessExitCode(runErr)
++
++	parsed := parseModelCheckEvents(filepath.Join(outputDir, modelCheckEventsArtifact))
++	summary.EventCounts = parsed.counts
++	summary.ToolCalls = parsed.toolCalls
++	summary.ToolFailures = parsed.toolFailures
++	summary.EventStream = ModelCheckEventStreamSummary{Valid: parsed.valid, Complete: parsed.complete, Error: parsed.errText}
++	finalSum := sha256.Sum256([]byte(parsed.finalResponse))
++	summary.FinalResponseSHA256 = hex.EncodeToString(finalSum[:])
++	sanitizedFinal := sanitizeModelCheckText(parsed.finalResponse, 0)
++	summary.FinalResponse, summary.FinalResponseTruncated = truncateModelCheckText(sanitizedFinal, ModelCheckFinalResponseBytes)
++	summary.Expectations = evaluateModelCheckExpectations(opts.ExpectedTools, opts.ExpectedText, parsed)
++
++	status, exitCode, reasons := evaluateModelCheckOutcome(summary, parsed, runErr)
++	summary.Status = status
++	summary.ExitCode = exitCode
++	summary.Errors = reasons
++
++	if err := writeModelCheckSummaries(outputDir, summary); err != nil {
++		return summary, err
++	}
++	if exitCode != 0 {
++		return summary, &ModelCheckFailure{Code: exitCode, Reason: modelCheckFailureReason(status, exitCode)}
++	}
++	return summary, nil
++}
++
++func validateModelCheckOptions(opts *ModelCheckOptions) error {
++	if strings.TrimSpace(opts.Target) == "" {
++		return errors.New("model-check requires a configured --target entrypoint")
++	}
++	if opts.Prompt == "" {
++		return errors.New("model-check requires a non-empty --prompt")
++	}
++	if strings.TrimSpace(opts.OutputDir) == "" {
++		return errors.New("model-check requires --output-dir")
++	}
++	if opts.Deadline < time.Millisecond || opts.Deadline > MaximumModelCheckDeadline {
++		return fmt.Errorf("model-check deadline must be between 1ms and %s", MaximumModelCheckDeadline)
++	}
++	if opts.ProjectDir == "" {
++		var err error
++		opts.ProjectDir, err = os.Getwd()
++		if err != nil {
++			return fmt.Errorf("resolve model-check project directory: %w", err)
++		}
++	}
++	if opts.Environ == nil {
++		opts.Environ = os.Environ()
++	}
++	for _, value := range append(append([]string(nil), opts.ExpectedTools...), opts.ExpectedText...) {
++		if value == "" {
++			return errors.New("model-check expectations must be non-empty")
++		}
++	}
++	return nil
++}
++
++func validateModelCheckPlan(plan PrimarySessionLaunchPlan) error {
++	if plan.Provider != "pi" || plan.Target == nil || plan.Target.Environment != "pi" {
++		return errors.New("model-check target must resolve to the managed Pi environment")
++	}
++	if plan.Pi == nil || !plan.Pi.Managed || plan.Pi.Runtime == nil {
++		return errors.New("model-check target must resolve to a managed local Pi profile")
++	}
++	return nil
++}
++
++func modelCheckTargetFromPlan(plan PrimarySessionLaunchPlan) ModelCheckTargetSummary {
++	result := ModelCheckTargetSummary{
++		Entrypoint:  plan.Target.Entrypoint,
++		Name:        plan.Target.Name,
++		Environment: plan.Target.Environment,
++		Model:       plan.Target.Model,
++	}
++	if plan.Resolved.ProfileProvider != nil && plan.Resolved.ProfileProvider.Value != nil {
++		result.Provider = *plan.Resolved.ProfileProvider.Value
++	}
++	result.Entrypoint = sanitizeModelCheckText(result.Entrypoint, modelCheckMaxIdentityText)
++	result.Name = sanitizeModelCheckText(result.Name, modelCheckMaxIdentityText)
++	result.Environment = sanitizeModelCheckText(result.Environment, modelCheckMaxIdentityText)
++	result.Provider = sanitizeModelCheckText(result.Provider, modelCheckMaxIdentityText)
++	result.Model = sanitizeModelCheckText(result.Model, modelCheckMaxIdentityText)
++	return result
++}
++
++func prepareModelCheckOutputDir(outputDir string) error {
++	if err := os.MkdirAll(outputDir, 0o700); err != nil {
++		return fmt.Errorf("create model-check output directory: %w", err)
++	}
++	if err := os.Chmod(outputDir, 0o700); err != nil {
++		return fmt.Errorf("secure model-check output directory: %w", err)
++	}
++	for _, name := range []string{modelCheckEventsArtifact, modelCheckStderrArtifact, modelCheckJSONSummary, modelCheckTextSummary} {
++		path := filepath.Join(outputDir, name)
++		if _, err := os.Lstat(path); err == nil {
++			return fmt.Errorf("model-check refuses to overwrite existing artifact %s", name)
++		} else if !os.IsNotExist(err) {
++			return fmt.Errorf("inspect model-check artifact %s: %w", name, err)
++		}
++	}
++	return nil
++}
++
++func createModelCheckArtifact(path string) (*os.File, error) {
++	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o600)
++	if err != nil {
++		return nil, fmt.Errorf("create model-check artifact %s: %w", filepath.Base(path), err)
++	}
++	return file, nil
++}
++
++func parseModelCheckEvents(path string) parsedModelCheckEvents {
++	result := parsedModelCheckEvents{counts: map[string]int{}, valid: true}
++	file, err := os.Open(path)
++	if err != nil {
++		result.valid = false
++		result.errText = "event artifact could not be read"
++		return result
++	}
++	defer file.Close()
++
++	toolOrder := []string{}
++	tools := map[string]*modelCheckToolState{}
++	sawSession, sawAgentStart, sawAgentEnd := false, false, false
++	lineNumber, eventNumber := 0, 0
++	scanner := bufio.NewScanner(file)
++	scanner.Buffer(make([]byte, 64<<10), modelCheckMaxEventLine)
++	for scanner.Scan() {
++		lineNumber++
++		line := scanner.Bytes()
++		if len(strings.TrimSpace(string(line))) == 0 {
++			continue
++		}
++		eventNumber++
++		var event struct {
++			Type       string          `json:"type"`
++			ToolCallID string          `json:"toolCallId"`
++			ToolName   string          `json:"toolName"`
++			IsError    *bool           `json:"isError"`
++			Message    json.RawMessage `json:"message"`
++		}
++		if err := decodeOneModelCheckEvent(line, &event); err != nil {
++			markModelCheckStreamInvalid(&result, fmt.Sprintf("malformed JSONL event at line %d", lineNumber))
++			continue
++		}
++		if event.Type == "" {
++			markModelCheckStreamInvalid(&result, fmt.Sprintf("event type is missing at line %d", lineNumber))
++			continue
++		}
++		if eventNumber == 1 && event.Type != "session" {
++			markModelCheckStreamInvalid(&result, "first JSONL event is not a session header")
++		}
++		result.counts[event.Type]++
++		switch event.Type {
++		case "session":
++			if sawSession {
++				markModelCheckStreamInvalid(&result, "event stream contains multiple session headers")
++			}
++			sawSession = true
++		case "agent_start":
++			sawAgentStart = true
++		case "agent_end":
++			sawAgentEnd = true
++		case "tool_execution_start":
++			if event.ToolCallID == "" || event.ToolName == "" {
++				markModelCheckStreamInvalid(&result, fmt.Sprintf("tool start is incomplete at line %d", lineNumber))
++				continue
++			}
++			if _, exists := tools[event.ToolCallID]; exists {
++				markModelCheckStreamInvalid(&result, fmt.Sprintf("tool call is duplicated at line %d", lineNumber))
++				continue
++			}
++			tools[event.ToolCallID] = &modelCheckToolState{name: event.ToolName}
++			toolOrder = append(toolOrder, event.ToolCallID)
++		case "tool_execution_end":
++			if event.ToolCallID == "" || event.ToolName == "" || event.IsError == nil {
++				markModelCheckStreamInvalid(&result, fmt.Sprintf("tool end is incomplete at line %d", lineNumber))
++				continue
++			}
++			state, exists := tools[event.ToolCallID]
++			if !exists || state.completed || state.name != event.ToolName {
++				markModelCheckStreamInvalid(&result, fmt.Sprintf("tool end has no matching start at line %d", lineNumber))
++				continue
++			}
++			state.completed = true
++			state.failed = *event.IsError
++		case "message_end":
++			message, messageErr := parseModelCheckMessage(event.Message)
++			if messageErr != nil {
++				markModelCheckStreamInvalid(&result, fmt.Sprintf("message_end is malformed at line %d", lineNumber))
++				continue
++			}
++			if message.role == "assistant" {
++				result.finalResponse = message.text
++				if message.errorText != "" {
++					result.assistantFailure = message.errorText
++				}
++			}
++		}
++	}
++	if scanErr := scanner.Err(); scanErr != nil {
++		markModelCheckStreamInvalid(&result, "event stream contains an overlong or unreadable JSONL record")
++	}
++	for _, id := range toolOrder {
++		state := tools[id]
++		call := ModelCheckToolCall{
++			Name:      sanitizeModelCheckText(state.name, modelCheckMaxIdentityText),
++			Completed: state.completed,
++			Failed:    state.failed,
++		}
++		result.toolCalls = append(result.toolCalls, call)
++		if call.Failed {
++			result.toolFailures++
++		}
++		if !call.Completed {
++			markModelCheckStreamInvalid(&result, "event stream ended with an unfinished tool call")
++		}
++	}
++	result.complete = sawSession && sawAgentStart && sawAgentEnd && result.valid
++	if !result.complete && result.errText == "" && eventNumber > 0 {
++		result.errText = "event stream did not reach a complete agent lifecycle"
++	}
++	return result
++}
++
++func decodeOneModelCheckEvent(line []byte, target any) error {
++	decoder := json.NewDecoder(strings.NewReader(string(line)))
++	if err := decoder.Decode(target); err != nil {
++		return err
++	}
++	var extra any
++	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
++		return errors.New("multiple JSON values in one JSONL record")
++	}
++	return nil
++}
++
++type modelCheckMessage struct {
++	role      string
++	text      string
++	errorText string
++}
++
++func parseModelCheckMessage(raw json.RawMessage) (modelCheckMessage, error) {
++	if len(raw) == 0 || string(raw) == "null" {
++		return modelCheckMessage{}, errors.New("message is absent")
++	}
++	var message struct {
++		Role         string          `json:"role"`
++		Content      json.RawMessage `json:"content"`
++		StopReason   string          `json:"stopReason"`
++		ErrorMessage string          `json:"errorMessage"`
++	}
++	if err := json.Unmarshal(raw, &message); err != nil || message.Role == "" {
++		return modelCheckMessage{}, errors.New("message shape is invalid")
++	}
++	text, err := modelCheckMessageText(message.Content)
++	if err != nil {
++		return modelCheckMessage{}, err
++	}
++	errorText := ""
++	if message.ErrorMessage != "" || message.StopReason == "error" {
++		errorText = "assistant message reported an error"
++	}
++	return modelCheckMessage{role: message.Role, text: text, errorText: errorText}, nil
++}
++
++func modelCheckMessageText(raw json.RawMessage) (string, error) {
++	if len(raw) == 0 || string(raw) == "null" {
++		return "", nil
++	}
++	var direct string
++	if err := json.Unmarshal(raw, &direct); err == nil {
++		return direct, nil
++	}
++	var blocks []struct {
++		Type string `json:"type"`
++		Text string `json:"text"`
++	}
++	if err := json.Unmarshal(raw, &blocks); err != nil {
++		return "", errors.New("message content is invalid")
++	}
++	var text strings.Builder
++	for _, block := range blocks {
++		if block.Type == "text" {
++			text.WriteString(block.Text)
++		}
++	}
++	return text.String(), nil
++}
++
++func markModelCheckStreamInvalid(result *parsedModelCheckEvents, message string) {
++	result.valid = false
++	if result.errText == "" {
++		result.errText = message
++	}
++}
++
++func evaluateModelCheckExpectations(expectedTools, expectedText []string, parsed parsedModelCheckEvents) []ModelCheckExpectation {
++	result := make([]ModelCheckExpectation, 0, len(expectedTools)+len(expectedText))
++	for _, expected := range expectedTools {
++		met := false
++		for _, call := range parsed.toolCalls {
++			if call.Name == expected {
++				met = true
++				break
++			}
++		}
++		result = append(result, ModelCheckExpectation{Kind: "tool", Value: sanitizeModelCheckText(expected, modelCheckMaxIdentityText), Met: met})
++	}
++	for _, expected := range expectedText {
++		result = append(result, ModelCheckExpectation{Kind: "text", Value: sanitizeModelCheckText(expected, modelCheckMaxIdentityText), Met: strings.Contains(parsed.finalResponse, expected)})
++	}
++	return result
++}
++
++func evaluateModelCheckOutcome(summary ModelCheckSummary, parsed parsedModelCheckEvents, runErr error) (string, int, []string) {
++	var reasons []string
++	if summary.TimedOut {
++		reasons = append(reasons, "deadline exceeded")
++		if !summary.ManagedRuntime.CleanupConfirmed {
++			reasons = append(reasons, "managed runtime cleanup was not confirmed")
++		}
++		return "timed_out", ModelCheckExitTimeout, reasons
++	}
++	if !parsed.valid || (runErr == nil && !parsed.complete) {
++		reason := parsed.errText
++		if reason == "" {
++			reason = "event stream did not reach a complete agent lifecycle"
++		}
++		reasons = append(reasons, sanitizeModelCheckText(reason, modelCheckMaxIdentityText))
++		return "failed", ModelCheckExitMalformedStream, compactModelCheckReasons(reasons)
++	}
++	if runErr != nil {
++		reasons = append(reasons, sanitizeModelCheckText(runErr.Error(), modelCheckMaxIdentityText))
++		return "failed", ModelCheckExitExecutionFailed, compactModelCheckReasons(reasons)
++	}
++	if parsed.assistantFailure != "" {
++		reasons = append(reasons, parsed.assistantFailure)
++		return "failed", ModelCheckExitExecutionFailed, compactModelCheckReasons(reasons)
++	}
++	if !summary.ManagedRuntime.CleanupConfirmed {
++		reasons = append(reasons, "managed runtime cleanup was not confirmed")
++		return "failed", ModelCheckExitExecutionFailed, reasons
++	}
++	if parsed.toolFailures > 0 {
++		reasons = append(reasons, fmt.Sprintf("%d tool execution(s) failed", parsed.toolFailures))
++		return "failed", ModelCheckExitToolFailure, reasons
++	}
++	for _, expectation := range summary.Expectations {
++		if !expectation.Met {
++			reasons = append(reasons, "expected "+expectation.Kind+" was not observed: "+expectation.Value)
++		}
++	}
++	if len(reasons) > 0 {
++		return "failed", ModelCheckExitExpectationFailed, compactModelCheckReasons(reasons)
++	}
++	return "passed", 0, nil
++}
++
++func compactModelCheckReasons(reasons []string) []string {
++	result := reasons[:0]
++	for _, reason := range reasons {
++		if strings.TrimSpace(reason) != "" {
++			result = append(result, reason)
++		}
++	}
++	return result
++}
++
++func modelCheckFailureReason(status string, exitCode int) string {
++	if status == "timed_out" {
++		return "timed out"
++	}
++	switch exitCode {
++	case ModelCheckExitMalformedStream:
++		return "reported a malformed event stream"
++	case ModelCheckExitExpectationFailed:
++		return "failed an expectation"
++	case ModelCheckExitToolFailure:
++		return "observed a failed tool execution"
++	default:
++		return "failed"
++	}
++}
++
++func modelCheckProcessExitCode(err error) *int {
++	code := 0
++	if err == nil {
++		return &code
++	}
++	var exitErr *exec.ExitError
++	if errors.As(err, &exitErr) {
++		code = exitErr.ExitCode()
++		return &code
++	}
++	return nil
++}
++
++func writeModelCheckSummaries(outputDir string, summary ModelCheckSummary) error {
++	jsonFile, err := createModelCheckArtifact(filepath.Join(outputDir, modelCheckJSONSummary))
++	if err != nil {
++		return err
++	}
++	encoder := json.NewEncoder(jsonFile)
++	encoder.SetIndent("", "  ")
++	if err := encoder.Encode(summary); err != nil {
++		jsonFile.Close()
++		return fmt.Errorf("write model-check JSON summary: %w", err)
++	}
++	if err := jsonFile.Close(); err != nil {
++		return fmt.Errorf("close model-check JSON summary: %w", err)
++	}
++	textFile, err := createModelCheckArtifact(filepath.Join(outputDir, modelCheckTextSummary))
++	if err != nil {
++		return err
++	}
++	if _, err := io.WriteString(textFile, RenderModelCheckSummary(summary)); err != nil {
++		textFile.Close()
++		return fmt.Errorf("write model-check text summary: %w", err)
++	}
++	if err := textFile.Close(); err != nil {
++		return fmt.Errorf("close model-check text summary: %w", err)
++	}
++	return nil
++}
++
++// RenderModelCheckSummary is deterministic and contains sanitized, bounded
++// values only. Raw provider output stays in events.jsonl and stderr.log.
++func RenderModelCheckSummary(summary ModelCheckSummary) string {
++	var text strings.Builder
++	fmt.Fprintf(&text, "status: %s\n", summary.Status)
++	fmt.Fprintf(&text, "exit_code: %d\n", summary.ExitCode)
++	if summary.ProcessExitCode == nil {
++		text.WriteString("process_exit_code: unknown\n")
++	} else {
++		fmt.Fprintf(&text, "process_exit_code: %d\n", *summary.ProcessExitCode)
++	}
++	fmt.Fprintf(&text, "timed_out: %t\n", summary.TimedOut)
++	fmt.Fprintf(&text, "deadline_ms: %d\n", summary.DeadlineMS)
++	fmt.Fprintf(&text, "duration_ms: %d\n", summary.DurationMS)
++	fmt.Fprintf(&text, "target: %s (%s)\n", summary.Target.Name, summary.Target.Entrypoint)
++	fmt.Fprintf(&text, "provider: %s\n", summary.Target.Provider)
++	fmt.Fprintf(&text, "model: %s\n", summary.Target.Model)
++	text.WriteString("event_counts:\n")
++	keys := make([]string, 0, len(summary.EventCounts))
++	for key := range summary.EventCounts {
++		keys = append(keys, key)
++	}
++	sort.Strings(keys)
++	for _, key := range keys {
++		fmt.Fprintf(&text, "  %s: %d\n", key, summary.EventCounts[key])
++	}
++	text.WriteString("tool_calls:\n")
++	for _, call := range summary.ToolCalls {
++		fmt.Fprintf(&text, "  - name=%s completed=%t failed=%t\n", call.Name, call.Completed, call.Failed)
++	}
++	fmt.Fprintf(&text, "tool_failures: %d\n", summary.ToolFailures)
++	fmt.Fprintf(&text, "final_response: %q\n", summary.FinalResponse)
++	fmt.Fprintf(&text, "final_response_truncated: %t\n", summary.FinalResponseTruncated)
++	text.WriteString("expectations:\n")
++	for _, expectation := range summary.Expectations {
++		fmt.Fprintf(&text, "  - kind=%s value=%q met=%t\n", expectation.Kind, expectation.Value, expectation.Met)
++	}
++	fmt.Fprintf(&text, "event_stream_valid: %t\n", summary.EventStream.Valid)
++	fmt.Fprintf(&text, "event_stream_complete: %t\n", summary.EventStream.Complete)
++	if summary.EventStream.Error != "" {
++		fmt.Fprintf(&text, "event_stream_error: %s\n", summary.EventStream.Error)
++	}
++	fmt.Fprintf(&text, "managed_runtime_cleanup: %t\n", summary.ManagedRuntime.CleanupConfirmed)
++	fmt.Fprintf(&text, "pi_process_group_cleanup: %s\n", summary.ManagedRuntime.PiProcessGroupCleanup)
++	fmt.Fprintf(&text, "runtime_process_group_cleanup: %s\n", summary.ManagedRuntime.RuntimeProcessGroupCleanup)
++	for _, reason := range summary.Errors {
++		fmt.Fprintf(&text, "error: %s\n", reason)
++	}
++	return text.String()
++}
++
++var (
++	modelCheckAssignmentSecret = regexp.MustCompile(`(?i)\b([a-z0-9_.-]*(?:api[_-]?key|token|secret|password|passwd|pwd))\b\s*[:=]\s*([^\s,;]+)`)
++	modelCheckBearerSecret     = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]+`)
++	modelCheckHexSecret        = regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`)
++	modelCheckKeylikeSecret    = regexp.MustCompile(`\b[A-Za-z0-9_-]{48,}\b`)
++)
++
++func sanitizeModelCheckText(value string, limit int) string {
++	value = strings.ToValidUTF8(value, "�")
++	value = modelCheckBearerSecret.ReplaceAllString(value, "Bearer [REDACTED_SECRET]")
++	value = modelCheckAssignmentSecret.ReplaceAllString(value, "$1=[REDACTED_SECRET]")
++	value = modelCheckHexSecret.ReplaceAllString(value, "[REDACTED_HEX_SECRET]")
++	value = modelCheckKeylikeSecret.ReplaceAllString(value, "[REDACTED_KEYLIKE_SECRET]")
++	if limit > 0 {
++		value, _ = truncateModelCheckText(value, limit)
++	}
++	return value
++}
++
++func truncateModelCheckText(value string, maxBytes int) (string, bool) {
++	if maxBytes <= 0 || len(value) <= maxBytes {
++		return value, false
++	}
++	cut := maxBytes
++	for cut > 0 && !utf8.ValidString(value[:cut]) {
++		cut--
++	}
++	return value[:cut], true
++}
+diff --git a/tools/agents-infra/internal/infra/model_check_test.go b/tools/agents-infra/internal/infra/model_check_test.go
+new file mode 100644
+index 0000000..4fe1a8c
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/model_check_test.go
+@@ -0,0 +1,51 @@
++package infra
++
++import (
++	"errors"
++	"testing"
++)
++
++// Production call site: RunPi populates each lifecycle state and defers
++// finishPiRunReport; RunModelCheck then passes the report to
++// evaluateModelCheckOutcome before publishing its cleanup attestation.
++func TestModelCheckCleanupAttestationRefusesUnconfirmedStates(t *testing.T) {
++	tests := []struct {
++		name       string
++		piState    string
++		runtime    string
++		confirmed  bool
++		runErr     error
++		wantStatus string
++		wantExit   int
++	}{
++		{name: "both confirmed", piState: "confirmed", runtime: "confirmed", confirmed: true, wantStatus: "passed", wantExit: 0},
++		{name: "sigkill still proves absence", piState: "confirmed_after_sigkill", runtime: "confirmed_after_sigkill", confirmed: true, wantStatus: "passed", wantExit: 0},
++		{name: "nothing started needs no cleanup but execution fails", piState: "not_started", runtime: "not_started", confirmed: true, runErr: errors.New("runtime did not start"), wantStatus: "failed", wantExit: ModelCheckExitExecutionFailed},
++		{name: "pending pi cleanup refuses", piState: "pending", runtime: "confirmed", wantStatus: "failed", wantExit: ModelCheckExitExecutionFailed},
++		{name: "failed runtime cleanup refuses", piState: "confirmed", runtime: "failed", wantStatus: "failed", wantExit: ModelCheckExitExecutionFailed},
++	}
++
++	for _, testCase := range tests {
++		t.Run(testCase.name, func(t *testing.T) {
++			report := PiRunReport{
++				Managed:                    true,
++				PiProcessGroupCleanup:      testCase.piState,
++				RuntimeProcessGroupCleanup: testCase.runtime,
++			}
++			finishPiRunReport(&report)
++			if report.CleanupConfirmed != testCase.confirmed {
++				t.Fatalf("cleanup_confirmed=%t want=%t for pi=%q runtime=%q", report.CleanupConfirmed, testCase.confirmed, testCase.piState, testCase.runtime)
++			}
++
++			summary := ModelCheckSummary{ManagedRuntime: report}
++			parsed := parsedModelCheckEvents{valid: true, complete: true}
++			status, exitCode, reasons := evaluateModelCheckOutcome(summary, parsed, testCase.runErr)
++			if status != testCase.wantStatus || exitCode != testCase.wantExit {
++				t.Fatalf("outcome=%q/%d want=%q/%d reasons=%v", status, exitCode, testCase.wantStatus, testCase.wantExit, reasons)
++			}
++			if !testCase.confirmed && len(reasons) != 1 {
++				t.Fatalf("unconfirmed cleanup reasons = %v", reasons)
++			}
++		})
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/pi_launch_posix.go b/tools/agents-infra/internal/infra/pi_launch_posix.go
+index 95fe5be..2522813 100644
+--- a/tools/agents-infra/internal/infra/pi_launch_posix.go
++++ b/tools/agents-infra/internal/infra/pi_launch_posix.go
+@@ -3,6 +3,7 @@
+ package infra
+ 
+ import (
++	"context"
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
+@@ -32,6 +33,8 @@ type RunPiOptions struct {
+ 	LookPath   func(string) (string, error)
+ 	HTTPClient *http.Client
+ 	Signals    <-chan os.Signal
++	Context    context.Context
++	Report     *PiRunReport
+ }
+ 
+ var (
+@@ -40,6 +43,13 @@ var (
+ )
+ 
+ func RunPi(opts RunPiOptions) error {
++	if opts.Report != nil {
++		*opts.Report = newPiRunReport()
++		defer finishPiRunReport(opts.Report)
++	}
++	if opts.Context == nil {
++		opts.Context = context.Background()
++	}
+ 	project, err := CanonicalProjectDir(opts.ProjectDir)
+ 	if err != nil {
+ 		return err
+@@ -77,6 +87,9 @@ func RunPi(opts RunPiOptions) error {
+ 	if selected == "" {
+ 		return runPiProcess(piPath, opts.Args, project, opts.Environ, opts.Stdin, opts.Stdout, opts.Stderr, false)
+ 	}
++	if opts.Report != nil {
++		opts.Report.Managed = true
++	}
+ 	if !composite.PiPrimarySession.PiCompatibility.Present {
+ 		return piError("invalid_project_configuration", errors.New("managed Pi profile requires pi_compatibility"))
+ 	}
+@@ -136,6 +149,12 @@ func RunPi(opts RunPiOptions) error {
+ 		}
+ 		return piError("runtime_executable_invalid", err)
+ 	}
++	if err := opts.Context.Err(); err != nil {
++		if opts.Report != nil {
++			opts.Report.DeadlineExceeded = errors.Is(err, context.DeadlineExceeded)
++		}
++		return piError("pi_deadline_exceeded", err)
++	}
+ 
+ 	runtimeCmd := exec.Command(profile.Runtime.Executable, profile.Runtime.Argv...)
+ 	runtimeCmd.Dir = project
+@@ -148,9 +167,16 @@ func RunPi(opts RunPiOptions) error {
+ 	if err := runtimeCmd.Start(); err != nil {
+ 		return piError("runtime_start_failed", err)
+ 	}
++	if opts.Report != nil {
++		opts.Report.RuntimeProcessGroupCleanup = "pending"
++	}
+ 	runtimeWait := waitForPiProcess(runtimeCmd)
+ 	cleanupRuntime := func() error {
+-		return terminateProcessGroup(runtimeCmd.Process.Pid, runtimeWait, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
++		err := terminateProcessGroup(runtimeCmd.Process.Pid, runtimeWait, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
++		if opts.Report != nil {
++			opts.Report.RuntimeProcessGroupCleanup = processGroupCleanupState(runtimeCmd.Process.Pid, err)
++		}
++		return err
+ 	}
+ 	cleaned := false
+ 	defer func() {
+@@ -162,7 +188,10 @@ func RunPi(opts RunPiOptions) error {
+ 	if profile.Runtime.DFlash != nil {
+ 		wantModel = profile.Runtime.DFlash.TargetModel
+ 	}
+-	if err := waitPiRuntimeReady(opts.HTTPClient, profile.BaseURL+profile.Runtime.ReadinessPath, wantModel, runtimeCmd.Process, runtimeWait, time.Duration(profile.Runtime.StartupTimeoutSeconds)*time.Second); err != nil {
++	if err := waitPiRuntimeReady(opts.Context, opts.HTTPClient, profile.BaseURL+profile.Runtime.ReadinessPath, wantModel, runtimeCmd.Process, runtimeWait, time.Duration(profile.Runtime.StartupTimeoutSeconds)*time.Second); err != nil {
++		if opts.Report != nil {
++			opts.Report.DeadlineExceeded = errors.Is(err, context.DeadlineExceeded)
++		}
+ 		cleanupErr := cleanupRuntime()
+ 		cleaned = true
+ 		if cleanupErr != nil {
+@@ -213,8 +242,22 @@ func RunPi(opts RunPiOptions) error {
+ 		cleaned = true
+ 		return piError("pi_start_failed", err)
+ 	}
+-	piDone := make(chan error, 1)
+-	go func() { piDone <- piCmd.Wait() }()
++	if opts.Report != nil {
++		opts.Report.PiProcessGroupCleanup = "pending"
++	}
++	piWait := waitForPiProcess(piCmd)
++	piCleaned := false
++	cleanupPi := func(first syscall.Signal) error {
++		if piCleaned {
++			return nil
++		}
++		err := terminateProcessGroupWithSignal(piCmd.Process.Pid, piWait, first, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
++		piCleaned = true
++		if opts.Report != nil {
++			opts.Report.PiProcessGroupCleanup = processGroupCleanupState(piCmd.Process.Pid, err)
++		}
++		return err
++	}
+ 	signals := opts.Signals
+ 	var ownedSignals chan os.Signal
+ 	if signals == nil {
+@@ -223,9 +266,11 @@ func RunPi(opts RunPiOptions) error {
+ 		defer signal.Stop(ownedSignals)
+ 		signals = ownedSignals
+ 	}
++	contextDone := opts.Context.Done()
+ 	var result error
+ 	select {
+-	case result = <-piDone:
++	case <-piWait.done:
++		result = piWait.err
+ 		select {
+ 		case <-runtimeWait.done:
+ 			result = piError("runtime_exited_early", fmt.Errorf("runtime child exited before Pi session ended: %v", runtimeWait.err))
+@@ -235,7 +280,7 @@ func RunPi(opts RunPiOptions) error {
+ 			}
+ 		}
+ 	case <-runtimeWait.done:
+-		terminatePiGroup(piCmd.Process.Pid, piDone, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
++		_ = cleanupPi(syscall.SIGTERM)
+ 		cleanupErr := cleanupRuntime()
+ 		cleaned = true
+ 		if cleanupErr != nil {
+@@ -243,8 +288,22 @@ func RunPi(opts RunPiOptions) error {
+ 		}
+ 		result = piError("runtime_exited_early", fmt.Errorf("runtime child exited during Pi session: %v", runtimeWait.err))
+ 	case sig := <-signals:
+-		_ = syscall.Kill(-piCmd.Process.Pid, sig.(syscall.Signal))
+-		result = waitPiGroup(piCmd.Process.Pid, piDone, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
++		forward := syscall.SIGTERM
++		if received, ok := sig.(syscall.Signal); ok {
++			forward = received
++		}
++		result = cleanupPi(forward)
++	case <-contextDone:
++		if opts.Report != nil {
++			opts.Report.DeadlineExceeded = errors.Is(opts.Context.Err(), context.DeadlineExceeded)
++		}
++		_ = cleanupPi(syscall.SIGTERM)
++		result = piError("pi_deadline_exceeded", opts.Context.Err())
++	}
++	if !piCleaned {
++		if cleanupErr := cleanupPi(syscall.SIGTERM); cleanupErr != nil && result == nil {
++			result = cleanupErr
++		}
+ 	}
+ 	if !cleaned {
+ 		if cleanupErr := cleanupRuntime(); cleanupErr != nil {
+@@ -288,25 +347,6 @@ func (w *piSynchronizedWriter) Write(p []byte) (int, error) {
+ 	return w.writer.Write(p)
+ }
+ 
+-func terminatePiGroup(pid int, done <-chan error, timeout time.Duration) {
+-	_ = syscall.Kill(-pid, syscall.SIGTERM)
+-	_ = waitPiGroup(pid, done, timeout)
+-}
+-func waitPiGroup(pid int, done <-chan error, timeout time.Duration) error {
+-	select {
+-	case err := <-done:
+-		return err
+-	case <-time.After(timeout):
+-		_ = syscall.Kill(-pid, syscall.SIGKILL)
+-		select {
+-		case err := <-done:
+-			return err
+-		case <-time.After(time.Second):
+-			return errors.New("Pi process group could not be reaped")
+-		}
+-	}
+-}
+-
+ type runtimeExecutableIdentity struct {
+ 	Dev, Ino uint64
+ 	Size     int64
+@@ -349,7 +389,10 @@ func preflightPiListener(baseURL string) error {
+ 	return listener.Close()
+ }
+ 
+-func waitPiRuntimeReady(client *http.Client, endpoint, model string, child *os.Process, childWait *piProcessWait, timeout time.Duration) error {
++func waitPiRuntimeReady(ctx context.Context, client *http.Client, endpoint, model string, child *os.Process, childWait *piProcessWait, timeout time.Duration) error {
++	if ctx == nil {
++		ctx = context.Background()
++	}
+ 	if client == nil {
+ 		client = &http.Client{
+ 			Timeout:   time.Second,
+@@ -365,6 +408,8 @@ func waitPiRuntimeReady(client *http.Client, endpoint, model string, child *os.P
+ 	defer ticker.Stop()
+ 	for {
+ 		select {
++		case <-ctx.Done():
++			return piError("pi_deadline_exceeded", ctx.Err())
+ 		case <-childWait.done:
+ 			return piError("runtime_exited_early", fmt.Errorf("runtime exited before readiness: %v", childWait.err))
+ 		case <-deadline.C:
+@@ -373,8 +418,15 @@ func waitPiRuntimeReady(client *http.Client, endpoint, model string, child *os.P
+ 			if err := child.Signal(syscall.Signal(0)); err != nil {
+ 				return piError("runtime_exited_early", err)
+ 			}
+-			resp, err := client.Get(endpoint)
++			request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
++			if requestErr != nil {
++				return piError("runtime_readiness_invalid", requestErr)
++			}
++			resp, err := client.Do(request)
+ 			if err != nil {
++				if ctx.Err() != nil {
++					return piError("pi_deadline_exceeded", ctx.Err())
++				}
+ 				continue
+ 			}
+ 			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+@@ -408,10 +460,14 @@ func waitPiRuntimeReady(client *http.Client, endpoint, model string, child *os.P
+ }
+ 
+ func terminateProcessGroup(pid int, wait *piProcessWait, timeout time.Duration) error {
++	return terminateProcessGroupWithSignal(pid, wait, syscall.SIGTERM, timeout)
++}
++
++func terminateProcessGroupWithSignal(pid int, wait *piProcessWait, first syscall.Signal, timeout time.Duration) error {
+ 	if err := syscall.Kill(-pid, syscall.Signal(0)); errors.Is(err, syscall.ESRCH) {
+ 		return waitForPiProcessDrain(wait, time.Second)
+ 	}
+-	_ = syscall.Kill(-pid, syscall.SIGTERM)
++	_ = syscall.Kill(-pid, first)
+ 	deadline := time.Now().Add(timeout)
+ 	for time.Now().Before(deadline) {
+ 		if err := syscall.Kill(-pid, syscall.Signal(0)); errors.Is(err, syscall.ESRCH) {
+@@ -429,6 +485,17 @@ func terminateProcessGroup(pid int, wait *piProcessWait, timeout time.Duration)
+ 	return piError("runtime_shutdown_timeout", errors.New("runtime group required SIGKILL"))
+ }
+ 
++func processGroupCleanupState(pid int, cleanupErr error) string {
++	err := syscall.Kill(-pid, syscall.Signal(0))
++	if errors.Is(err, syscall.ESRCH) {
++		if cleanupErr == nil {
++			return "confirmed"
++		}
++		return "confirmed_after_sigkill"
++	}
++	return "failed"
++}
++
+ func waitForPiProcessDrain(wait *piProcessWait, timeout time.Duration) error {
+ 	select {
+ 	case <-wait.done:
+diff --git a/tools/agents-infra/internal/infra/pi_platform_windows.go b/tools/agents-infra/internal/infra/pi_platform_windows.go
+index 37deea8..fbf8895 100644
+--- a/tools/agents-infra/internal/infra/pi_platform_windows.go
++++ b/tools/agents-infra/internal/infra/pi_platform_windows.go
+@@ -3,6 +3,7 @@
+ package infra
+ 
+ import (
++	"context"
+ 	"errors"
+ 	"io"
+ 	"net/http"
+@@ -68,9 +69,15 @@ type RunPiOptions struct {
+ 	LookPath   func(string) (string, error)
+ 	HTTPClient *http.Client
+ 	Signals    <-chan os.Signal
++	Context    context.Context
++	Report     *PiRunReport
+ }
+ 
+ func RunPi(opts RunPiOptions) error {
++	if opts.Report != nil {
++		*opts.Report = newPiRunReport()
++		defer finishPiRunReport(opts.Report)
++	}
+ 	project, err := CanonicalProjectDir(opts.ProjectDir)
+ 	if err != nil {
+ 		return err
+@@ -97,6 +104,9 @@ func RunPi(opts RunPiOptions) error {
+ 	}
+ 	managed := override != nil || composite.PiPrimarySession.Profile.Present
+ 	if managed {
++		if opts.Report != nil {
++			opts.Report.Managed = true
++		}
+ 		return piError("pi_compatibility_unsupported", errors.New("managed Pi profiles are supported only on darwin/arm64"))
+ 	}
+ 	path, err := opts.LookPath("pi")
+diff --git a/tools/agents-infra/internal/infra/pi_run_report.go b/tools/agents-infra/internal/infra/pi_run_report.go
+new file mode 100644
+index 0000000..63791c7
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_run_report.go
+@@ -0,0 +1,37 @@
++package infra
++
++// PiRunReport is optional execution evidence produced by RunPi. It records
++// only lifecycle state; process identifiers and command arguments are omitted
++// so callers can safely carry the report into sanitized summaries.
++type PiRunReport struct {
++	Managed                    bool   `json:"managed"`
++	DeadlineExceeded           bool   `json:"deadline_exceeded"`
++	PiProcessGroupCleanup      string `json:"pi_process_group_cleanup"`
++	RuntimeProcessGroupCleanup string `json:"runtime_process_group_cleanup"`
++	CleanupConfirmed           bool   `json:"cleanup_confirmed"`
++}
++
++func newPiRunReport() PiRunReport {
++	return PiRunReport{
++		PiProcessGroupCleanup:      "not_started",
++		RuntimeProcessGroupCleanup: "not_started",
++	}
++}
++
++func finishPiRunReport(report *PiRunReport) {
++	if report == nil {
++		return
++	}
++	if !report.Managed {
++		report.PiProcessGroupCleanup = "not_managed"
++		report.RuntimeProcessGroupCleanup = "not_managed"
++		report.CleanupConfirmed = true
++		return
++	}
++	report.CleanupConfirmed = isConfirmedCleanupState(report.PiProcessGroupCleanup) &&
++		isConfirmedCleanupState(report.RuntimeProcessGroupCleanup)
++}
++
++func isConfirmedCleanupState(state string) bool {
++	return state == "confirmed" || state == "confirmed_after_sigkill" || state == "not_started"
++}
+diff --git a/tools/agents-infra/internal/infra/pi_test.go b/tools/agents-infra/internal/infra/pi_test.go
+index 42bc59c..93caa1e 100644
+--- a/tools/agents-infra/internal/infra/pi_test.go
++++ b/tools/agents-infra/internal/infra/pi_test.go
+@@ -4,6 +4,7 @@ package infra
+ 
+ import (
+ 	"bytes"
++	"context"
+ 	"crypto/sha256"
+ 	"encoding/hex"
+ 	"encoding/json"
+@@ -1285,7 +1286,7 @@ func TestPiRuntimeReadinessDoesNotFollowRedirect(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	childWait := &piProcessWait{done: make(chan struct{})}
+-	if err := waitPiRuntimeReady(nil, redirect.URL, "Model", child, childWait, time.Second); piErrorCode(err) != "runtime_readiness_invalid" {
++	if err := waitPiRuntimeReady(context.Background(), nil, redirect.URL, "Model", child, childWait, time.Second); piErrorCode(err) != "runtime_readiness_invalid" {
+ 		t.Fatalf("readiness followed redirect away from exact configured URL: %v", err)
+ 	}
+ }
+@@ -1719,6 +1720,41 @@ func assertPiLockReleased(t *testing.T, project, cache, profile string) {
+ 	}
+ }
+ 
++func TestProcessGroupCleanupStateReflectsLiveAndReapedGroups(t *testing.T) {
++	cmd := exec.Command("/bin/sh", "-c", "exec /bin/sleep 60")
++	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	pid := cmd.Process.Pid
++	reaped := false
++	t.Cleanup(func() {
++		if reaped {
++			return
++		}
++		_ = syscall.Kill(-pid, syscall.SIGKILL)
++		_ = cmd.Wait()
++	})
++
++	if got := processGroupCleanupState(pid, nil); got != "failed" {
++		t.Fatalf("live process group cleanup state = %q, want failed", got)
++	}
++	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
++		t.Fatalf("kill process group: %v", err)
++	}
++	if err := cmd.Wait(); err == nil {
++		t.Fatal("SIGKILLed process unexpectedly exited successfully")
++	}
++	reaped = true
++
++	if got := processGroupCleanupState(pid, nil); got != "confirmed" {
++		t.Fatalf("reaped process group cleanup state = %q, want confirmed", got)
++	}
++	if got := processGroupCleanupState(pid, errors.New("SIGKILL escalation")); got != "confirmed_after_sigkill" {
++		t.Fatalf("reaped escalated process group cleanup state = %q, want confirmed_after_sigkill", got)
++	}
++}
++
+ func waitForFile(t *testing.T, path string, timeout time.Duration) {
+ 	t.Helper()
+ 	deadline := time.Now().Add(timeout)
+diff --git a/tools/agents-infra/main.go b/tools/agents-infra/main.go
+index f26907b..1e1332a 100644
+--- a/tools/agents-infra/main.go
++++ b/tools/agents-infra/main.go
+@@ -24,11 +24,16 @@ const callerCWDEnv = "AGENTS_INFRA_CALLER_CWD"
+ 
+ func main() {
+ 	if err := run(os.Args[1:]); err != nil {
++		code := 1
+ 		if code, ok := attachments.ExitCode(err); ok {
+ 			os.Exit(code)
+ 		}
++		var modelCheckFailure *infra.ModelCheckFailure
++		if errors.As(err, &modelCheckFailure) {
++			code = modelCheckFailure.ExitCode()
++		}
+ 		fmt.Fprintln(os.Stderr, err)
+-		os.Exit(1)
++		os.Exit(code)
+ 	}
+ }
+ 
+@@ -59,6 +64,8 @@ func run(args []string) error {
+ 		return runPi(args[1:])
+ 	case "target":
+ 		return runTarget(args[1:])
++	case "model-check":
++		return runModelCheck(args[1:])
+ 	case "version", "--version":
+ 		return runVersion()
+ 	case "help", "-h", "--help":
+@@ -68,6 +75,56 @@ func run(args []string) error {
+ 	}
+ }
+ 
++type repeatedStringFlag []string
++
++func (f *repeatedStringFlag) String() string { return strings.Join(*f, ",") }
++func (f *repeatedStringFlag) Set(value string) error {
++	*f = append(*f, value)
++	return nil
++}
++
++func runModelCheck(args []string) error {
++	fs := flag.NewFlagSet("model-check", flag.ContinueOnError)
++	fs.SetOutput(os.Stderr)
++	target := fs.String("target", "", "configured canonical entrypoint, for example qwen-infra")
++	prompt := fs.String("prompt", "", "behavior-check prompt")
++	outputDir := fs.String("output-dir", "", "explicit evidence output directory")
++	deadline := fs.Duration("deadline", infra.DefaultModelCheckDeadline, "bounded execution deadline")
++	var expectedTools repeatedStringFlag
++	var expectedText repeatedStringFlag
++	fs.Var(&expectedTools, "expect-tool", "required tool name; repeat for multiple expectations")
++	fs.Var(&expectedText, "expect-text", "required final-response substring; repeat for multiple expectations")
++	if err := fs.Parse(args); err != nil {
++		return err
++	}
++	if len(fs.Args()) != 0 {
++		return fmt.Errorf("model-check does not accept positional arguments: %q", fs.Args())
++	}
++	startDir := os.Getenv(callerCWDEnv)
++	if startDir == "" {
++		var err error
++		startDir, err = os.Getwd()
++		if err != nil {
++			return fmt.Errorf("resolve model-check caller cwd: %w", err)
++		}
++	}
++	summary, err := infra.RunModelCheck(infra.ModelCheckOptions{
++		ProjectDir:    startDir,
++		Target:        *target,
++		Prompt:        *prompt,
++		OutputDir:     *outputDir,
++		Deadline:      *deadline,
++		ExpectedTools: append([]string(nil), expectedTools...),
++		ExpectedText:  append([]string(nil), expectedText...),
++		Environ:       os.Environ(),
++		Producer:      infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit},
++	})
++	if summary.SchemaVersion != 0 {
++		fmt.Fprint(os.Stdout, infra.RenderModelCheckSummary(summary))
++	}
++	return err
++}
++
+ func runAttachments(args []string) error {
+ 	if callerCWD := os.Getenv(callerCWDEnv); callerCWD != "" {
+ 		originalCWD, err := os.Getwd()
+@@ -763,6 +820,7 @@ func usageText() string {
+   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
+   agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
+   agents-infra target ENTRYPOINT [--print-config] [-- PROVIDER_ARGS...]
++  agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]
+ 
+ Source tree resolution for setup (first usable wins):
+   1. --source-dir DIR
+diff --git a/tools/agents-infra/model_check_main_test.go b/tools/agents-infra/model_check_main_test.go
+new file mode 100644
+index 0000000..7f935fa
+--- /dev/null
++++ b/tools/agents-infra/model_check_main_test.go
+@@ -0,0 +1,628 @@
++//go:build !windows
++
++package main
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"net"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"runtime"
++	"strconv"
++	"strings"
++	"syscall"
++	"testing"
++	"time"
++
++	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
++)
++
++type productionModelCheckSummary struct {
++	SchemaVersion   int    `json:"schema_version"`
++	Status          string `json:"status"`
++	ExitCode        int    `json:"exit_code"`
++	ProcessExitCode *int   `json:"process_exit_code"`
++	TimedOut        bool   `json:"timed_out"`
++	DeadlineMS      int64  `json:"deadline_ms"`
++	DurationMS      int64  `json:"duration_ms"`
++	Target          struct {
++		Entrypoint  string `json:"entrypoint"`
++		Name        string `json:"name"`
++		Environment string `json:"environment"`
++		Provider    string `json:"provider"`
++		Model       string `json:"model"`
++	} `json:"target"`
++	EventCounts map[string]int `json:"event_counts"`
++	ToolCalls   []struct {
++		Name      string `json:"name"`
++		Completed bool   `json:"completed"`
++		Failed    bool   `json:"failed"`
++	} `json:"tool_calls"`
++	ToolFailures           int    `json:"tool_failures"`
++	FinalResponse          string `json:"final_response"`
++	FinalResponseTruncated bool   `json:"final_response_truncated"`
++	Expectations           []struct {
++		Kind  string `json:"kind"`
++		Value string `json:"value"`
++		Met   bool   `json:"met"`
++	} `json:"expectations"`
++	EventStream struct {
++		Valid    bool   `json:"valid"`
++		Complete bool   `json:"complete"`
++		Error    string `json:"error,omitempty"`
++	} `json:"event_stream"`
++	ManagedRuntime struct {
++		Managed                    bool   `json:"managed"`
++		PiProcessGroupCleanup      string `json:"pi_process_group_cleanup"`
++		RuntimeProcessGroupCleanup string `json:"runtime_process_group_cleanup"`
++		CleanupConfirmed           bool   `json:"cleanup_confirmed"`
++	} `json:"managed_runtime"`
++	Errors []string `json:"errors"`
++}
++
++func TestMainKeepsProviderChildFailuresAtLegacyExitOne(t *testing.T) {
++	binary := buildInstalledBinary(t)
++	home := t.TempDir()
++	project := t.TempDir()
++	binDir := t.TempDir()
++	mustWrite(t, filepath.Join(binDir, "codex"), "#!/bin/sh\nexit 42\n")
++
++	command := exec.Command(binary, "codex")
++	command.Env = append(os.Environ(),
++		"HOME="+home,
++		"PATH="+binDir+":/usr/bin:/bin",
++		callerCWDEnv+"="+project,
++	)
++	err := command.Run()
++	var exitErr *exec.ExitError
++	if !errors.As(err, &exitErr) {
++		t.Fatalf("production codex launch error = %v, want *exec.ExitError", err)
++	}
++	if got := exitErr.ExitCode(); got != 1 {
++		t.Fatalf("production CLI exit = %d, want legacy exit 1 for provider child failure", got)
++	}
++}
++
++// Production call site: main -> run -> runModelCheck ->
++// infra.RunModelCheck -> infra.RunPi. Every case invokes a freshly built
++// agents-infra binary against a configured canonical qwen-infra target.
++func TestModelCheckProductionEntrypoint(t *testing.T) {
++	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
++		t.Skip("the pinned managed Pi production identity is darwin/arm64")
++	}
++	python := "/usr/bin/python3"
++	if _, err := os.Stat(python); err != nil {
++		t.Skipf("Python fixture runtime unavailable: %v", err)
++	}
++	binary := buildInstalledBinary(t)
++	piRoot := mainTestOfficialPiAsset(t)
++	runtimeScript := writeModelCheckRuntime(t)
++
++	t.Run("happy path persists raw and sanitized evidence", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "happy")
++		mustWrite(t, filepath.Join(fixture.project, "fixture.txt"), "fixture input\n")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture,
++			"--expect-tool", "read",
++			"--expect-text", "MODEL_CHECK_OK",
++		)
++		if exitCode != 0 {
++			t.Fatalf("model-check exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
++		}
++		summary := readProductionModelCheckSummary(t, fixture.outputDir)
++		if summary.SchemaVersion != 1 || summary.Status != "passed" || summary.ExitCode != 0 || summary.ProcessExitCode == nil || *summary.ProcessExitCode != 0 || summary.TimedOut {
++			t.Fatalf("outcome summary = %#v", summary)
++		}
++		if summary.DeadlineMS != int64((5*time.Minute)/time.Millisecond) || summary.DurationMS <= 0 {
++			t.Fatalf("deadline/duration = %d/%d", summary.DeadlineMS, summary.DurationMS)
++		}
++		if summary.Target.Entrypoint != "qwen-infra" || summary.Target.Name != "qwen" || summary.Target.Environment != "pi" || summary.Target.Provider != "local-provider" || summary.Target.Model != "Model" {
++			t.Fatalf("target summary = %#v", summary.Target)
++		}
++		if summary.EventCounts["session"] != 1 || summary.EventCounts["agent_end"] != 1 || summary.ToolFailures != 0 || len(summary.ToolCalls) != 1 || summary.ToolCalls[0].Name != "read" || !summary.ToolCalls[0].Completed || summary.ToolCalls[0].Failed {
++			t.Fatalf("event/tool summary = counts=%v calls=%#v failures=%d", summary.EventCounts, summary.ToolCalls, summary.ToolFailures)
++		}
++		if len(summary.Expectations) != 2 || !summary.Expectations[0].Met || !summary.Expectations[1].Met {
++			t.Fatalf("expectations = %#v", summary.Expectations)
++		}
++		if !summary.EventStream.Valid || !summary.EventStream.Complete || !summary.ManagedRuntime.Managed || !summary.ManagedRuntime.CleanupConfirmed {
++			t.Fatalf("stream/runtime summary = %#v %#v", summary.EventStream, summary.ManagedRuntime)
++		}
++		if strings.Contains(summary.FinalResponse, modelCheckFixtureSecret) || strings.Contains(stdout, modelCheckFixtureSecret) || strings.Contains(stderr, modelCheckFixtureSecret) {
++			t.Fatalf("sanitized surfaces leaked fixture secret: summary=%q stdout=%q stderr=%q", summary.FinalResponse, stdout, stderr)
++		}
++		events := mustReadFile(t, filepath.Join(fixture.outputDir, "events.jsonl"))
++		if !bytes.Contains(events, []byte(modelCheckFixtureSecret)) {
++			t.Fatalf("raw event artifact did not preserve provider bytes: %s", events)
++		}
++		requests := mustReadFile(t, fixture.requests)
++		if !bytes.Contains(requests, []byte(modelCheckFixturePrompt)) {
++			t.Fatalf("provider request did not receive caller prompt %q: %s", modelCheckFixturePrompt, requests)
++		}
++		for _, name := range []string{"events.jsonl", "stderr.log", "summary.json", "summary.txt"} {
++			info, err := os.Stat(filepath.Join(fixture.outputDir, name))
++			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
++				t.Fatalf("artifact %s: info=%v err=%v", name, info, err)
++			}
++		}
++		assertModelCheckPIDsGone(t, fixture.runtimePIDs)
++	})
++
++	t.Run("final response is bounded in sanitized evidence", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "long-text")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture)
++		if exitCode != 0 {
++			t.Fatalf("model-check exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
++		}
++		summary := readProductionModelCheckSummary(t, fixture.outputDir)
++		if !summary.FinalResponseTruncated || len(summary.FinalResponse) != infra.ModelCheckFinalResponseBytes {
++			t.Fatalf("bounded response = bytes=%d truncated=%t", len(summary.FinalResponse), summary.FinalResponseTruncated)
++		}
++		events := mustReadFile(t, filepath.Join(fixture.outputDir, "events.jsonl"))
++		if len(events) <= infra.ModelCheckFinalResponseBytes {
++			t.Fatalf("raw artifact unexpectedly bounded to %d bytes", len(events))
++		}
++		assertModelCheckPIDsGone(t, fixture.runtimePIDs)
++	})
++
++	t.Run("missing expected tool refuses", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "text")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture,
++			"--expect-tool", "read",
++		)
++		if exitCode != infra.ModelCheckExitExpectationFailed {
++			t.Fatalf("expectation exit=%d want=%d\nstdout:\n%s\nstderr:\n%s", exitCode, infra.ModelCheckExitExpectationFailed, stdout, stderr)
++		}
++		summary := readProductionModelCheckSummary(t, fixture.outputDir)
++		if summary.Status != "failed" || summary.ExitCode != infra.ModelCheckExitExpectationFailed || len(summary.Expectations) != 1 || summary.Expectations[0].Kind != "tool" || summary.Expectations[0].Met {
++			t.Fatalf("expectation summary = %#v", summary)
++		}
++	})
++
++	t.Run("missing expected text refuses", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "text")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture,
++			"--expect-text", "ABSENT_TEXT",
++		)
++		if exitCode != infra.ModelCheckExitExpectationFailed {
++			t.Fatalf("expectation exit=%d want=%d\nstdout:\n%s\nstderr:\n%s", exitCode, infra.ModelCheckExitExpectationFailed, stdout, stderr)
++		}
++		summary := readProductionModelCheckSummary(t, fixture.outputDir)
++		if summary.Status != "failed" || summary.ExitCode != infra.ModelCheckExitExpectationFailed || len(summary.Expectations) != 1 || summary.Expectations[0].Kind != "text" || summary.Expectations[0].Met {
++			t.Fatalf("expectation summary = %#v", summary)
++		}
++	})
++
++	t.Run("expected text is limited to the final assistant response", func(t *testing.T) {
++		const earlierText = "EARLIER_ASSISTANT_TEXT_MUST_NOT_SATISFY_FINAL_EXPECTATION"
++		fixture := newModelCheckFixture(t, runtimeScript, "earlier-text")
++		mustWrite(t, filepath.Join(fixture.project, "fixture.txt"), "fixture input\n")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture,
++			"--prompt", earlierText,
++			"--expect-text", earlierText,
++		)
++		if exitCode != infra.ModelCheckExitExpectationFailed {
++			t.Fatalf("final-response expectation exit=%d want=%d\nstdout:\n%s\nstderr:\n%s", exitCode, infra.ModelCheckExitExpectationFailed, stdout, stderr)
++		}
++		summary := readProductionModelCheckSummary(t, fixture.outputDir)
++		if len(summary.Expectations) != 1 || summary.Expectations[0].Kind != "text" || summary.Expectations[0].Met {
++			t.Fatalf("final-response expectation summary = %#v", summary.Expectations)
++		}
++		if strings.Contains(summary.FinalResponse, earlierText) {
++			t.Fatalf("earlier assistant text leaked into final response: %q", summary.FinalResponse)
++		}
++		if events := mustReadFile(t, filepath.Join(fixture.outputDir, "events.jsonl")); !bytes.Contains(events, []byte(earlierText)) {
++			t.Fatalf("fixture did not place earlier text in the event stream: %s", events)
++		}
++	})
++
++	t.Run("failed tool execution refuses", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "failed-tool")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture)
++		if exitCode != infra.ModelCheckExitToolFailure {
++			t.Fatalf("tool failure exit=%d want=%d\nstdout:\n%s\nstderr:\n%s", exitCode, infra.ModelCheckExitToolFailure, stdout, stderr)
++		}
++		summary := readProductionModelCheckSummary(t, fixture.outputDir)
++		if summary.ToolFailures != 1 || len(summary.ToolCalls) != 1 || !summary.ToolCalls[0].Completed || !summary.ToolCalls[0].Failed || !summary.EventStream.Valid || !summary.EventStream.Complete {
++			t.Fatalf("tool failure summary = %#v", summary)
++		}
++	})
++
++	t.Run("malformed JSONL refuses instead of treating it as absence", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "malformed")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture)
++		if exitCode != infra.ModelCheckExitMalformedStream {
++			t.Fatalf("malformed exit=%d want=%d\nstdout:\n%s\nstderr:\n%s", exitCode, infra.ModelCheckExitMalformedStream, stdout, stderr)
++		}
++		summary := readProductionModelCheckSummary(t, fixture.outputDir)
++		if summary.EventStream.Valid || summary.EventStream.Error == "" || summary.ExitCode != infra.ModelCheckExitMalformedStream {
++			t.Fatalf("malformed summary = %#v", summary)
++		}
++	})
++
++	t.Run("deadline override bounds runtime readiness", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "slow-ready")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture, "--deadline", "2s")
++		if exitCode != infra.ModelCheckExitTimeout {
++			t.Fatalf("readiness timeout exit=%d want=%d\nstdout:\n%s\nstderr:\n%s", exitCode, infra.ModelCheckExitTimeout, stdout, stderr)
++		}
++		summary := readProductionModelCheckSummary(t, fixture.outputDir)
++		if summary.Status != "timed_out" || !summary.TimedOut || summary.DeadlineMS != 2000 || !summary.ManagedRuntime.CleanupConfirmed || summary.ManagedRuntime.PiProcessGroupCleanup != "not_started" {
++			t.Fatalf("readiness timeout summary = %#v", summary)
++		}
++		assertModelCheckPIDsGone(t, fixture.runtimePIDs)
++	})
++
++	t.Run("deadline override terminates both owned process groups", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "timeout")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture, "--deadline", "2s")
++		if exitCode != infra.ModelCheckExitTimeout {
++			t.Fatalf("timeout exit=%d want=%d\nstdout:\n%s\nstderr:\n%s", exitCode, infra.ModelCheckExitTimeout, stdout, stderr)
++		}
++		summary := readProductionModelCheckSummary(t, fixture.outputDir)
++		if summary.Status != "timed_out" || !summary.TimedOut || summary.DeadlineMS != 2000 || !summary.ManagedRuntime.Managed || !summary.ManagedRuntime.CleanupConfirmed {
++			t.Fatalf("timeout summary = %#v", summary)
++		}
++		if summary.ManagedRuntime.PiProcessGroupCleanup == "failed" || summary.ManagedRuntime.RuntimeProcessGroupCleanup == "failed" {
++			t.Fatalf("timeout cleanup = %#v", summary.ManagedRuntime)
++		}
++		assertModelCheckPIDsGone(t, fixture.runtimePIDs)
++		assertModelCheckPIDsGone(t, fixture.toolPIDs)
++	})
++
++	t.Run("out of range deadline refuses before launch", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "text")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture, "--deadline", "2h")
++		if exitCode != infra.ModelCheckExitExecutionFailed || stdout != "" || !strings.Contains(stderr, "deadline must be between 1ms and 30m0s") {
++			t.Fatalf("deadline refusal exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
++		}
++		if _, err := os.Stat(fixture.runtimePIDs); !os.IsNotExist(err) {
++			t.Fatalf("deadline refusal launched managed runtime: %v", err)
++		}
++	})
++
++	t.Run("zero deadline refuses before launch", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "text")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture, "--deadline", "0")
++		if exitCode != infra.ModelCheckExitExecutionFailed || stdout != "" || !strings.Contains(stderr, "deadline must be between 1ms and 30m0s") {
++			t.Fatalf("zero deadline refusal exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
++		}
++		if _, err := os.Stat(fixture.runtimePIDs); !os.IsNotExist(err) {
++			t.Fatalf("zero deadline refusal launched managed runtime: %v", err)
++		}
++	})
++
++	t.Run("existing evidence refuses overwrite before launch", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "text")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture)
++		if exitCode != 0 {
++			t.Fatalf("first model-check exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode, stdout, stderr)
++		}
++		before := mustReadFile(t, filepath.Join(fixture.outputDir, "summary.json"))
++		stdout, stderr, exitCode = runModelCheckProduction(t, binary, piRoot, fixture)
++		if exitCode != infra.ModelCheckExitExecutionFailed || stdout != "" || !strings.Contains(stderr, "refuses to overwrite existing artifact events.jsonl") {
++			t.Fatalf("overwrite refusal exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
++		}
++		after := mustReadFile(t, filepath.Join(fixture.outputDir, "summary.json"))
++		if !bytes.Equal(before, after) {
++			t.Fatal("overwrite refusal modified prior summary evidence")
++		}
++		assertModelCheckPIDsGone(t, fixture.runtimePIDs)
++	})
++
++	t.Run("preexisting raw events alone refuse overwrite", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "text")
++		mustMkdir(t, fixture.outputDir)
++		eventsPath := filepath.Join(fixture.outputDir, "events.jsonl")
++		mustWrite(t, eventsPath, "prior-run-event\n")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture)
++		if exitCode != infra.ModelCheckExitExecutionFailed || stdout != "" || !strings.Contains(stderr, "refuses to overwrite existing artifact events.jsonl") {
++			t.Fatalf("raw-event refusal exit=%d stdout=%q stderr=%q", exitCode, stdout, stderr)
++		}
++		if got := string(mustReadFile(t, eventsPath)); got != "prior-run-event\n" {
++			t.Fatalf("raw-event refusal modified prior evidence: %q", got)
++		}
++		if _, err := os.Stat(fixture.runtimePIDs); !os.IsNotExist(err) {
++			t.Fatalf("raw-event refusal launched managed runtime: %v", err)
++		}
++	})
++
++	t.Run("non-managed canonical target refuses without inventing stream failure", func(t *testing.T) {
++		fixture := newModelCheckFixture(t, runtimeScript, "text")
++		stdout, stderr, exitCode := runModelCheckProduction(t, binary, piRoot, fixture, "--target", "openai-infra")
++		if exitCode != infra.ModelCheckExitExecutionFailed {
++			t.Fatalf("non-managed target exit=%d want=%d\nstdout:\n%s\nstderr:\n%s", exitCode, infra.ModelCheckExitExecutionFailed, stdout, stderr)
++		}
++		summary := readProductionModelCheckSummary(t, fixture.outputDir)
++		if summary.Status != "failed" || summary.ExitCode != infra.ModelCheckExitExecutionFailed || summary.EventStream.Complete || summary.EventStream.Error != "" {
++			t.Fatalf("non-managed target summary = %#v", summary)
++		}
++		if len(summary.Errors) != 1 || !strings.Contains(summary.Errors[0], "target must resolve to the managed Pi environment") {
++			t.Fatalf("non-managed target reasons = %#v", summary.Errors)
++		}
++		if _, err := os.Stat(fixture.runtimePIDs); !os.IsNotExist(err) {
++			t.Fatalf("non-managed target launched managed runtime: %v", err)
++		}
++	})
++}
++
++const (
++	modelCheckFixturePrompt = "Run the requested bounded behavior check."
++	modelCheckFixtureSecret = "fixture-api-token-super-secret-123456789"
++)
++
++type modelCheckFixture struct {
++	home        string
++	project     string
++	outputDir   string
++	runtimePIDs string
++	toolPIDs    string
++	requests    string
++	binDir      string
++}
++
++func newModelCheckFixture(t *testing.T, runtimeScript, scenario string) modelCheckFixture {
++	t.Helper()
++	home, project := t.TempDir(), t.TempDir()
++	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
++	listener, err := net.Listen("tcp4", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	port := listener.Addr().(*net.TCPAddr).Port
++	if err := listener.Close(); err != nil {
++		t.Fatal(err)
++	}
++	runtimePIDs := filepath.Join(t.TempDir(), "runtime-pids")
++	toolPIDs := filepath.Join(t.TempDir(), "tool-pids")
++	requests := filepath.Join(t.TempDir(), "provider-requests.jsonl")
++	outputDir := filepath.Join(t.TempDir(), "evidence")
++	binDir := t.TempDir()
++	mustWrite(t, filepath.Join(binDir, "codex"), "#!/bin/sh\nexit 0\n")
++	config := fmt.Sprintf(`
++[agents.pi.primary_session]
++profile = "profile"
++pi_compatibility = %q
++
++[agents.pi.profiles.profile]
++provider = "local-provider"
++model = "Model"
++base_url = "http://127.0.0.1:%d/v1"
++api = "openai-completions"
++reasoning = false
++input = ["text"]
++context_window = 8192
++max_tokens = 1024
++thinking = "off"
++requested_capabilities = ["text", "tools"]
++
++[agents.pi.profiles.profile.compat]
++supports_developer_role = false
++
++[agents.pi.profiles.profile.runtime]
++executable = "/usr/bin/python3"
++argv = [%q, "--host", "127.0.0.1", "--port", %q, "--scenario", %q, "--runtime-pids", %q, "--tool-pids", %q, "--events-path", %q, "--requests-path", %q]
++readiness_path = "/models"
++startup_timeout_seconds = 5
++shutdown_timeout_seconds = 1
++
++[agents.targets.qwen]
++vendor = "qwen"
++environment = "pi"
++model = "Model"
++reasoning = "off"
++profile = "profile"
++
++[agents.targets.openai]
++vendor = "openai"
++environment = "codex"
++model = "gpt-5.6-sol"
++reasoning = "high"
++
++[agents.entrypoints]
++qwen-infra = "qwen"
++openai-infra = "openai"
++`, infra.PiCompatibilityV0842DarwinARM64, port, runtimeScript, strconv.Itoa(port), scenario, runtimePIDs, toolPIDs, filepath.Join(outputDir, "events.jsonl"), requests)
++	writeMainCanonicalConfig(t, project, config)
++	return modelCheckFixture{
++		home:        home,
++		project:     project,
++		outputDir:   outputDir,
++		runtimePIDs: runtimePIDs,
++		toolPIDs:    toolPIDs,
++		requests:    requests,
++		binDir:      binDir,
++	}
++}
++
++func runModelCheckProduction(t *testing.T, binary, piRoot string, fixture modelCheckFixture, extra ...string) (string, string, int) {
++	t.Helper()
++	args := []string{
++		"model-check",
++		"--target", "qwen-infra",
++		"--prompt", modelCheckFixturePrompt,
++		"--output-dir", fixture.outputDir,
++	}
++	args = append(args, extra...)
++	command := exec.Command(binary, args...)
++	command.Env = append(os.Environ(),
++		"HOME="+fixture.home,
++		"PATH="+fixture.binDir+":"+piRoot+":/usr/bin:/bin",
++		callerCWDEnv+"="+fixture.project,
++	)
++	var stdout, stderr bytes.Buffer
++	command.Stdout = &stdout
++	command.Stderr = &stderr
++	err := command.Run()
++	exitCode := 0
++	if err != nil {
++		var exitErr *exec.ExitError
++		if !errors.As(err, &exitErr) {
++			t.Fatalf("start model-check production binary: %v", err)
++		}
++		exitCode = exitErr.ExitCode()
++	}
++	return stdout.String(), stderr.String(), exitCode
++}
++
++func readProductionModelCheckSummary(t *testing.T, outputDir string) productionModelCheckSummary {
++	t.Helper()
++	data := mustReadFile(t, filepath.Join(outputDir, "summary.json"))
++	var summary productionModelCheckSummary
++	if err := json.Unmarshal(data, &summary); err != nil {
++		t.Fatalf("decode summary.json: %v\n%s", err, data)
++	}
++	return summary
++}
++
++func assertModelCheckPIDsGone(t *testing.T, path string) {
++	t.Helper()
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("read pid evidence %s: %v", path, err)
++	}
++	for _, field := range strings.Fields(string(data)) {
++		pid, err := strconv.Atoi(field)
++		if err != nil {
++			t.Fatalf("invalid pid %q in %s", field, path)
++		}
++		deadline := time.Now().Add(2 * time.Second)
++		for {
++			err = syscall.Kill(pid, syscall.Signal(0))
++			if errors.Is(err, syscall.ESRCH) {
++				break
++			}
++			if time.Now().After(deadline) {
++				t.Fatalf("owned process survived cleanup: pid=%d err=%v", pid, err)
++			}
++			time.Sleep(20 * time.Millisecond)
++		}
++	}
++}
++
++func writeModelCheckRuntime(t *testing.T) string {
++	t.Helper()
++	path := filepath.Join(t.TempDir(), "model-check-runtime.py")
++	mustWrite(t, path, `import os, sys
++
++def value(name):
++    return sys.argv[sys.argv.index(name) + 1]
++
++runtime_pid_file = value("--runtime-pids")
++open(runtime_pid_file, "w").write(f"{os.getpid()}\n")
++
++import http.server, json, shlex, subprocess, time
++
++port = int(value("--port"))
++scenario = value("--scenario")
++tool_pid_file = value("--tool-pids")
++events_path = value("--events-path")
++requests_path = value("--requests-path")
++
++if scenario == "timeout":
++    child = subprocess.Popen(["/bin/sh", "-c", "trap '' TERM; sleep 60"])
++else:
++    child = subprocess.Popen(["/bin/sleep", "60"])
++with open(runtime_pid_file, "a") as runtime_pids:
++    runtime_pids.write(f"{child.pid}\n")
++
++if scenario == "malformed":
++    watcher = '''import os, sys, time
++path = sys.argv[1]
++for _ in range(10000):
++    try:
++        body = open(path, "rb").read()
++        if b'"type":"session"' in body:
++            with open(path, "ab") as stream:
++                stream.write(b"not-json\\n")
++            break
++    except FileNotFoundError:
++        pass
++    time.sleep(.001)
++'''
++    subprocess.Popen([sys.executable, "-c", watcher, events_path])
++
++requests = 0
++
++def chunk(delta, finish_reason=None):
++    return {
++        "id": "chatcmpl-fixture",
++        "object": "chat.completion.chunk",
++        "created": 1,
++        "model": "Model",
++        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
++    }
++
++class Handler(http.server.BaseHTTPRequestHandler):
++    def do_GET(self):
++        if scenario == "slow-ready":
++            time.sleep(60)
++            return
++        body = json.dumps({"object": "list", "data": [{"id": "Model"}]}).encode()
++        self.send_response(200)
++        self.send_header("Content-Type", "application/json")
++        self.send_header("Content-Length", str(len(body)))
++        self.end_headers()
++        self.wfile.write(body)
++
++    def do_POST(self):
++        global requests
++        requests += 1
++        length = int(self.headers.get("Content-Length", "0"))
++        request_body = self.rfile.read(length)
++        with open(requests_path, "ab") as request_log:
++            request_log.write(request_body + b"\n")
++        if scenario == "timeout" and requests > 1:
++            time.sleep(60)
++            return
++        if scenario in ("happy", "failed-tool", "timeout", "earlier-text") and requests == 1:
++            if scenario in ("happy", "earlier-text"):
++                name = "read"
++                args = {"path": "fixture.txt"}
++            elif scenario == "failed-tool":
++                name = "read"
++                args = {"path": "definitely-absent-model-check-fixture"}
++            else:
++                name = "bash"
++                quoted = shlex.quote(tool_pid_file)
++                command = f"echo $$ > {quoted}; (trap '' TERM; sleep 60) & echo $! >> {quoted}; wait"
++                args = {"command": command}
++            tool_delta = {
++                "role": "assistant",
++                "tool_calls": [{
++                    "index": 0,
++                    "id": "call_fixture",
++                    "type": "function",
++                    "function": {"name": name, "arguments": json.dumps(args)},
++                }],
++            }
++            if scenario == "earlier-text":
++                tool_delta["content"] = "EARLIER_ASSISTANT_TEXT_MUST_NOT_SATISFY_FINAL_EXPECTATION"
++            self.send_stream([chunk(tool_delta), chunk({}, "tool_calls")])
++            return
++        text = "MODEL_CHECK_OK token=`+modelCheckFixtureSecret+`"
++        if scenario == "long-text":
++            text = "word " * 1200
++        self.send_stream([chunk({"role": "assistant", "content": text}), chunk({}, "stop")])
++
++    def send_stream(self, chunks):
++        self.send_response(200)
++        self.send_header("Content-Type", "text/event-stream")
++        self.send_header("Cache-Control", "no-cache")
++        self.end_headers()
++        for item in chunks:
++            self.wfile.write(("data: " + json.dumps(item) + "\n\n").encode())
++            self.wfile.flush()
++        self.wfile.write(b"data: [DONE]\n\n")
++        self.wfile.flush()
++
++    def log_message(self, *args):
++        pass
++
++http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
++`)
++	return path
++}

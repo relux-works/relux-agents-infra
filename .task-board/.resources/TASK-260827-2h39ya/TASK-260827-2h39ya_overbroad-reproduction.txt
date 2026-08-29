@@ -1,0 +1,40 @@
+# Over-broad classifier: production-entry-point reproduction and fix
+
+## Injected message (identical in both runs)
+    RequestError: Resource limit for this request is 8 tokens
+
+## MUTANT: bare `Resource limit` restored as an independent signature
+Release rebuilt with the mutant; smoke exit 1, 7 failures, ALL inside phase 4b.
+
+### runtime + harness behaviour (dead-generation-out-overbroad-mutant/overbroad.log)
+{"detail":"RequestError: Resource limit for this request is 8 tokens","event":"generation_worker_failed","marker":"generation_worker_unavailable"}
+model-harness: restarting profile "prototype-overbroad" after supervised runtime failure (1/2): fatal output "generation_worker_unavailable": signal: killed
+{"detail":"RequestError: Resource limit for this request is 8 tokens","event":"generation_worker_failed","marker":"generation_worker_unavailable"}
+model-harness: restarting profile "prototype-overbroad" after supervised runtime failure (2/2): fatal output "generation_worker_unavailable": signal: killed
+
+### failing checks
+FAIL  (overbroad) the request-scoped failure answered 000 (want 500)
+FAIL  NARROWING GATE (overbroad): a request-scoped failure moved /health to 000 (want 200)
+FAIL  (overbroad) /health body is not {"status":"ok"}
+FAIL  (overbroad) /v1/models answered 000 after a request-scoped failure (want 200)
+FAIL  (overbroad) a request-scoped failure emitted the supervision marker
+FAIL  (overbroad) model-harness restarted a runtime that was still healthy
+FAIL  (overbroad) a later completion answered 000 (want 500, the same request-scoped failure)
+
+## FIXED: conjunctive signature (`[metal::malloc]` AND `Resource limit`)
+
+### runtime + harness behaviour (dead-generation-out-final/overbroad.log)
+(empty -- no condemnation, no marker, no restart)
+
+### captured responses
+GET /health   -> {"status":"ok"}GET /v1/models-> {"data":[{"created":1787859670,"id":"/Users/alexis/.cache/huggingface/hub/models--mlx-community--Qwen1.5-0.5B-Chat-4bit/snapshots/659d8dafc39202a6688bb46242d60440702489b1","object":"model","owned_by":
+POST /v1/chat/completions -> {"error":{"code":"generation_failed","message":"RequestError: Resource limit for this request is 8 tokens","type":"server_error"}}
+### passing checks
+PASS  negative run (overbroad) reached ready
+PASS  (overbroad) the request-scoped failure answers the request with 500
+PASS  NARROWING GATE (overbroad): a request-scoped failure leaves /health at 200
+PASS  (overbroad) /health body is still {"status":"ok"}
+PASS  (overbroad) a request-scoped failure keeps the model advertised
+PASS  (overbroad) a request-scoped failure emitted no supervision marker
+PASS  (overbroad) model-harness left the healthy runtime alone
+PASS  (overbroad) the runtime is still serving requests afterwards

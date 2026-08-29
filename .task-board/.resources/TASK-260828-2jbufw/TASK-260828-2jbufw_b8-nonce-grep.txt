@@ -1,0 +1,15 @@
+channel                            | nonce                                          | stdout | stderr
+--------------------------------------------------------------------------------------------------------
+POSITIVE CONTROL (listen line)     | listening on http://127.0.0.1:59810            |      0 |      1
+POSITIVE CONTROL (model path)      | qwen2.5-0.5b-instruct-q8_0.gguf                |      0 |      1
+user message body                  | PROMPTNONCE-2jbufw-ALPHA                       |      0 |      0
+X-Request-Id header                | REQIDNONCE-2jbufw-11223344                     |      0 |      0
+tool schema function name          | get_weather_TOOLNONCE2jbufw                    |      0 |      0
+tool description text              | TOOLNONCE2jbufw                                |      0 |      0
+streamed request body              | STREAMNONCE-2jbufw-abc123                      |      0 |      0
+URL path of a 404                  | REFUSEDNONCE-2jbufw                            |      0 |      0
+engine response id                 | chatcmpl-oEVOpx9DHZqw3GLfGSSW7SeLBP9PXyXn      |      0 |      0
+completion text                    |                                                |      0 |     52
+concurrent prompt bodies           | CONCURRENT-2jbufw                              |      0 |      0
+HTTP method or path anywhere       | POST /v1/chat/completions                      |      0 |      0
+any HTTP status line               | " 200 "                                        |      0 |      0

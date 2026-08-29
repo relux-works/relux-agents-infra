@@ -1,0 +1,17 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 7fb7020..1fbb2db 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,12 @@
+ 
+ ## 2026-08-24
+ 
++### 1941 — Worktree Pi Fixtures Must Resolve The Common Checkout
++- ROOT CAUSE: `officialPiAsset` looked only under the active Story worktree `.temp`, while the reviewed Pi asset lived under the primary checkout; required Qwen acceptance tests reported package success by skipping.
++- FIX: `tools/agents-infra/main_test.go` and `internal/infra/pi_test.go` now derive a primary-checkout fallback from the worktree `.git` gitdir; production Qwen compose and all canonical Qwen tests report `PASS`, not `SKIP`.
++- FINDING: Package-level `go test` success is insufficient evidence for external-asset acceptance tests unless their named verbose result is checked.
++- SCOPE: `TASK-260824-2o4zq8` test infrastructure and Qwen target evidence.
++
+ ### 1842 — Hosted Alias Profile Provenance Stays Provider-Specific
+ - DECISION: Hosted alias model/reasoning provenance comes from the target, but `resolved.profile` retains provider semantics: Claude is `not_applicable`; a Codex alias is `native` because explicit `--profile` and `-c profile=` are identity conflicts.
+ - DECISION: Codex `-c model=` and `-c model_reasoning_effort=` are identity selectors alongside their dedicated flags; exact repeats pass and divergences fail.

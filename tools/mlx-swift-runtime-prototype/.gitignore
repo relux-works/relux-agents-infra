@@ -1,0 +1,13 @@
+# SwiftPM build products and local smoke output
+.build/
+smoke-out/
+
+# Xcode build products (mlx-swift Metal shaders need xcodebuild)
+DerivedData/
+
+# LLVM raw profile output from instrumented local runs
+*.profraw
+*.profdata
+
+# Python bytecode from the benchmark driver
+__pycache__/
