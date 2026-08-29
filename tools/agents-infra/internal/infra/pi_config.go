@@ -110,6 +110,8 @@ type PiRuntimeSharing struct {
 	Mode                         string `json:"mode"`
 	LingerSeconds                int    `json:"linger_seconds"`
 	MaxLeases                    int    `json:"max_leases"`
+	MaxSegmentBytes              int    `json:"max_segment_bytes"`
+	MaxSegments                  int    `json:"max_segments"`
 	HeartbeatIntervalSeconds     int    `json:"heartbeat_interval_seconds"`
 	LeaseStaleSeconds            int    `json:"lease_stale_seconds"`
 	BrokerStartTimeoutSeconds    int    `json:"broker_start_timeout_seconds"`
@@ -453,7 +455,7 @@ func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
 }
 
 func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime) (PiRuntimeSharing, error) {
-	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds", "restart_limit", "restart_initial_backoff_seconds", "restart_max_backoff_seconds", "stable_run_seconds", "quarantine_seconds"); err != nil {
+	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "max_segment_bytes", "max_segments", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds", "restart_limit", "restart_initial_backoff_seconds", "restart_max_backoff_seconds", "stable_run_seconds", "quarantine_seconds"); err != nil {
 		return PiRuntimeSharing{}, err
 	}
 	var sharing PiRuntimeSharing
@@ -476,6 +478,12 @@ func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime
 	}
 	if sharing.MaxLeases, err = requiredPositiveInt(table, "max_leases"); err != nil {
 		return sharing, fieldError(field+".max_leases", err)
+	}
+	if sharing.MaxSegmentBytes, err = requiredPositiveInt(table, "max_segment_bytes"); err != nil {
+		return sharing, fieldError(field+".max_segment_bytes", err)
+	}
+	if sharing.MaxSegments, err = requiredPositiveInt(table, "max_segments"); err != nil {
+		return sharing, fieldError(field+".max_segments", err)
 	}
 	if sharing.HeartbeatIntervalSeconds, err = requiredPositiveDurationSeconds(table, "heartbeat_interval_seconds", maxTimeDurationSeconds); err != nil {
 		return sharing, fieldError(field+".heartbeat_interval_seconds", err)

@@ -29,11 +29,11 @@ func TestSharedRuntimeQuarantineHasNominalBrokerExitCode(t *testing.T) {
 
 func TestSharedRuntimeDigestsExcludeSharingAndCoverTheExecutionPlan(t *testing.T) {
 	profile := mustParsedPiProfile(t, false)
-	profile.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 1, HeartbeatIntervalSeconds: 1, LeaseStaleSeconds: 2, BrokerStartTimeoutSeconds: 40}
+	profile.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 1, MaxSegmentBytes: 1024, MaxSegments: 2, HeartbeatIntervalSeconds: 1, LeaseStaleSeconds: 2, BrokerStartTimeoutSeconds: 40}
 	key, digest := SharedRuntimeKey(profile)
 
 	peer := profile
-	peer.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 300, MaxLeases: 16, HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 240}
+	peer.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 300, MaxLeases: 16, MaxSegmentBytes: 2048, MaxSegments: 4, HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 240}
 	peer.Source = "/another/project/config.toml"
 	peerKey, peerDigest := SharedRuntimeKey(peer)
 	if key != peerKey || digest != peerDigest {

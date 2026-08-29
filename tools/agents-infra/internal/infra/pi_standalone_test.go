@@ -27,6 +27,8 @@ func validStandaloneQwenConfig(runtime string, port int, shared bool) string {
 mode = "shared"
 linger_seconds = 0
 max_leases = 8
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 3

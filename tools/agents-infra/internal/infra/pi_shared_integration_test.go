@@ -318,6 +318,8 @@ func TestSharedRuntimeProductionSingleFlightIndependentClientsCrashAndFinalRelea
 mode = "shared"
 linger_seconds = 0
 max_leases = 4
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 3
@@ -441,6 +443,8 @@ func TestSharedRuntimeAcquisitionRetriesListenerHandoff(t *testing.T) {
 mode = "shared"
 linger_seconds = 1
 max_leases = 4
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 3
@@ -548,6 +552,8 @@ func TestSharedRuntimeAcquisitionRetriesExecutableUpgradeHandoff(t *testing.T) {
 mode = "shared"
 linger_seconds = 1
 max_leases = 4
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 3
@@ -666,6 +672,8 @@ func TestSharedRuntimeOperatorStopRefusesActiveLeasesThenForceDrains(t *testing.
 mode = "shared"
 linger_seconds = 0
 max_leases = 4
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 3
@@ -745,6 +753,8 @@ func TestSharedRuntimeStarterPolicyGovernsLeaseLimitStatusAndCleanup(t *testing.
 mode = "shared"
 linger_seconds = 0
 max_leases = 1
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 3
@@ -827,6 +837,8 @@ func TestSharedRuntimeProductionStartupWindowElectsOneOfEight(t *testing.T) {
 mode = "shared"
 linger_seconds = 0
 max_leases = 8
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 3
@@ -928,6 +940,8 @@ func TestSharedRuntimeFirstLeaseGraceDrainsAbandonedBroker(t *testing.T) {
 mode = "shared"
 linger_seconds = 0
 max_leases = 4
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 3
@@ -1219,6 +1233,8 @@ func TestAcquireSharedRuntimeLeaseAutomaticallyRestartsAcrossBrokers(t *testing.
 mode = "shared"
 linger_seconds = 0
 max_leases = 4
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
 restart_limit = 4

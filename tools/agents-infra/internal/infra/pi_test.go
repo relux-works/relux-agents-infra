@@ -163,6 +163,8 @@ func sharedPiProfileTOML(name, runtime string, port int) string {
 mode = "shared"
 linger_seconds = 0
 max_leases = 8
+max_segment_bytes = 1048576
+max_segments = 7
 heartbeat_interval_seconds = 15
 lease_stale_seconds = 60
 restart_limit = 3
@@ -190,6 +192,7 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
 	}
 	want := &PiRuntimeSharing{
 		Mode: "shared", LingerSeconds: 0, MaxLeases: 8,
+		MaxSegmentBytes: 1048576, MaxSegments: 7,
 		HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 40,
 		RestartLimit: 3, RestartInitialBackoffSeconds: 1, RestartMaxBackoffSeconds: 4,
 		StableRunSeconds: 10, QuarantineSeconds: 30,
@@ -203,6 +206,8 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
 		"missing mode":                   strings.Replace(sharedBody, "mode = \"shared\"\n", "", 1),
 		"missing linger":                 strings.Replace(sharedBody, "linger_seconds = 0\n", "", 1),
 		"missing max leases":             strings.Replace(sharedBody, "max_leases = 8\n", "", 1),
+		"missing max segment bytes":      strings.Replace(sharedBody, "max_segment_bytes = 1048576\n", "", 1),
+		"missing max segments":           strings.Replace(sharedBody, "max_segments = 7\n", "", 1),
 		"missing heartbeat":              strings.Replace(sharedBody, "heartbeat_interval_seconds = 15\n", "", 1),
 		"missing stale":                  strings.Replace(sharedBody, "lease_stale_seconds = 60\n", "", 1),
 		"missing broker timeout":         strings.Replace(sharedBody, "broker_start_timeout_seconds = 40\n", "", 1),
@@ -214,6 +219,8 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
 		"unknown mode":                   strings.Replace(sharedBody, `mode = "shared"`, `mode = "automatic"`, 1),
 		"negative linger":                strings.Replace(sharedBody, "linger_seconds = 0", "linger_seconds = -1", 1),
 		"zero max leases":                strings.Replace(sharedBody, "max_leases = 8", "max_leases = 0", 1),
+		"zero max segment bytes":         strings.Replace(sharedBody, "max_segment_bytes = 1048576", "max_segment_bytes = 0", 1),
+		"zero max segments":              strings.Replace(sharedBody, "max_segments = 7", "max_segments = 0", 1),
 		"heartbeat equals stale":         strings.Replace(sharedBody, "heartbeat_interval_seconds = 15", "heartbeat_interval_seconds = 60", 1),
 		"broker timeout below bound":     strings.Replace(sharedBody, "broker_start_timeout_seconds = 40", "broker_start_timeout_seconds = 36", 1),
 		"zero restart limit":             strings.Replace(sharedBody, "restart_limit = 3", "restart_limit = 0", 1),
@@ -227,6 +234,90 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseProjectConfig([]byte(body), "/project/config.toml"); err == nil {
 				t.Fatal("strict runtime.sharing parser admitted invalid input")
+			}
+		})
+	}
+}
+
+// Production call site: RunPi -> loadCompositeProjectConfig -> parsePiRuntimeSharing.
+// Missing rotation caps must refuse before provider lookup or runtime-state mutation;
+// there is deliberately no numeric fallback in code.
+func TestRunPiRejectsMissingSharedRuntimeLogRotationPolicy(t *testing.T) {
+	for _, field := range []string{"max_segment_bytes = 1048576\n", "max_segments = 7\n"} {
+		t.Run(strings.Fields(field)[0], func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			cache := filepath.Join(t.TempDir(), "cache")
+			body := strings.Replace(sharedPiProfileTOML("profile", "/bin/echo", 18011), field, "", 1)
+			writePiProjectConfig(t, project, body)
+			providerLookup := false
+			err := RunPi(RunPiOptions{
+				ProjectDir: project,
+				HomeDir:    home,
+				CacheRoot:  cache,
+				Environ:    []string{},
+				LookPath: func(string) (string, error) {
+					providerLookup = true
+					return "/bin/false", nil
+				},
+			})
+			if piErrorCode(err) != "invalid_project_configuration" || !strings.Contains(err.Error(), strings.Fields(field)[0]) {
+				t.Fatalf("RunPi admitted missing %s: %v", strings.Fields(field)[0], err)
+			}
+			if providerLookup {
+				t.Fatal("missing rotation policy reached provider lookup")
+			}
+			if _, statErr := os.Stat(cache); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("missing rotation policy mutated runtime state: %v", statErr)
+			}
+		})
+	}
+}
+
+// Production call site: RunPi -> loadCompositeProjectConfig ->
+// parsePiRuntimeSharing. Zero and overflowing rotation caps must refuse before
+// provider lookup or shared-runtime state mutation, just like absent caps.
+func TestRunPiRejectsZeroAndOverflowingSharedRuntimeLogRotationPolicy(t *testing.T) {
+	const overflowingTOMLInteger = "9223372036854775808"
+	tests := []struct {
+		name             string
+		field            string
+		validLine        string
+		invalid          string
+		wantFieldInError bool
+	}{
+		{name: "zero max segment bytes", field: "max_segment_bytes", validLine: "max_segment_bytes = 1048576", invalid: "0", wantFieldInError: true},
+		{name: "zero max segments", field: "max_segments", validLine: "max_segments = 7", invalid: "0", wantFieldInError: true},
+		{name: "overflowing max segment bytes", field: "max_segment_bytes", validLine: "max_segment_bytes = 1048576", invalid: overflowingTOMLInteger},
+		{name: "overflowing max segments", field: "max_segments", validLine: "max_segments = 7", invalid: overflowingTOMLInteger},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			cache := filepath.Join(t.TempDir(), "cache")
+			body := strings.Replace(sharedPiProfileTOML("profile", "/bin/echo", 18011), test.validLine, test.field+" = "+test.invalid, 1)
+			writePiProjectConfig(t, project, body)
+			providerLookup := false
+			err := RunPi(RunPiOptions{
+				ProjectDir: project,
+				HomeDir:    home,
+				CacheRoot:  cache,
+				Environ:    []string{},
+				LookPath: func(string) (string, error) {
+					providerLookup = true
+					return "/bin/false", nil
+				},
+			})
+			if piErrorCode(err) != "invalid_project_configuration" {
+				t.Fatalf("RunPi admitted %s: %v", test.name, err)
+			}
+			if test.wantFieldInError && !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("%s error did not identify %s: %v", test.name, test.field, err)
+			}
+			if providerLookup {
+				t.Fatalf("%s reached provider lookup", test.name)
+			}
+			if _, statErr := os.Stat(cache); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("%s mutated runtime state: %v", test.name, statErr)
 			}
 		})
 	}
