@@ -27,6 +27,7 @@ agents-infra doctor local /path/to/project
 agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json
 openai-infra --print-config
 pi-infra --print-config
+qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m
 agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check
 agents-infra version
 ```
@@ -53,8 +54,12 @@ The canonical interface after bootstrap is:
 - `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
 - `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
 - `agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+- `agents-infra pi spawn --prompt TEXT [--deadline DURATION] [--print-config]`
+- `agents-infra runtime status [--project DIR] [--profile NAME] [--json]`
+- `agents-infra runtime stop [--project DIR] [--profile NAME] [--force] [--timeout SECONDS]`
 - `pi-infra [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
 - `openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
+- `qwen-infra spawn --prompt TEXT [--deadline DURATION] [--print-config]`
 - `agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]`
 - `agents-infra version`
 
@@ -435,6 +440,13 @@ max_tokens = 16384
 thinking = "medium"
 requested_capabilities = ["text", "tools"]
 
+# Optional. If present, every field is required. This profile-managed policy
+# is merged into the isolated Pi settings before every launch.
+[agents.pi.profiles."qwen-3.8-27b".compaction]
+enabled = true
+reserve_tokens = 24576
+keep_recent_tokens = 8192
+
 [agents.pi.profiles."qwen-3.8-27b".compat]
 supports_developer_role = false
 supports_reasoning_effort = false
@@ -449,6 +461,16 @@ argv = ["serve", "--model", "Qwen-3.8-27B", "--host", "127.0.0.1", "--port", "18
 readiness_path = "/models"
 startup_timeout_seconds = 120
 shutdown_timeout_seconds = 10
+
+# Optional. If this table is absent, the existing exclusive direct-child
+# runtime behavior is unchanged. If present, every field is required.
+[agents.pi.profiles."qwen-3.8-27b".runtime.sharing]
+mode = "shared"
+linger_seconds = 15
+max_leases = 8
+heartbeat_interval_seconds = 5
+lease_stale_seconds = 30
+broker_start_timeout_seconds = 160
 
 [agents.pi.profiles."muse-glimmer-30b-dflash"]
 provider = "local-muse"
@@ -488,6 +510,54 @@ operator-supplied deployment inputs. agents-infra does not acquire, convert,
 quantize, license, size, or securely distribute models or runtimes, and it does
 not automate benchmarks.
 
+`runtime.sharing` is an explicit, strict opt-in. Its table has no field
+defaults: unknown or missing members fail closed, `mode` is `exclusive` or
+`shared`, the heartbeat interval must be below the stale-reporting threshold,
+and the broker-start timeout must cover startup, shutdown, and 30 seconds of
+coordination overhead. `mode = "exclusive"` uses the established direct-child
+path. `mode = "shared"` gives each tracked RUN its own Pi state, session, lock,
+and process group while byte-identical profiles can lease one broker-owned MLX
+runtime across independent launcher sessions and project roots.
+
+`compaction` is also an explicit, strict opt-in. `reserve_tokens` must be at
+least `max_tokens`; its sum with `keep_recent_tokens` must be below
+`context_window`. Pi starts automatic compaction when current context exceeds
+`context_window - reserve_tokens`, then preserves approximately
+`keep_recent_tokens` of the newest conversation while summarizing older work.
+Smaller retained tails and a larger reserve are appropriate for local models
+that must keep one session alive across many days. agents-infra merges only
+the configured `compaction` object into the profile's isolated
+`agent/settings.json`, preserving unrelated Pi preferences, and fails without
+overwriting when the existing settings file is malformed or unsafe.
+
+The first broker fixes the effective sharing policy for its lifetime. Inspect
+both configured and effective values, the attested broker/runtime identities,
+and live leases without starting or connecting from `pi --print-config`:
+
+When a profile change produces a new runtime identity while the previous
+shared runtime is still releasing the same fixed listener, acquisition retries
+the broker's structured `runtime_listener_occupied` exit. The same bounded
+handoff applies when an installed agents-infra upgrade leaves an older broker
+inode alive long enough to refuse the new client with
+`broker_executable_identity_mismatch`. Both retries last at most the configured
+linger plus shutdown timeout and a two-second handoff grace. The client never
+adopts or signals the old or occupying runtime; a refusal that persists after
+that bounded window still fails closed.
+
+```bash
+agents-infra pi --print-config --profile qwen-3.8-27b
+agents-infra runtime status --profile qwen-3.8-27b
+agents-infra runtime status --profile qwen-3.8-27b --json
+agents-infra runtime stop --profile qwen-3.8-27b
+agents-infra runtime stop --profile qwen-3.8-27b --force --timeout 30
+```
+
+Ordinary stop refuses while leases are active. Forced stop first attests a
+reachable broker; if rendezvous is unavailable, it verifies the recorded
+broker against the kernel before signalling it and reuses the broker's strict
+orphan-reclamation checks. A held election lock without an attributable owner
+is reported as `starting-unverified` and is never guessed or signalled.
+
 #### Composition, identity, and CLI precedence
 
 Configs compose from filesystem root to cwd. The nearest explicit
@@ -501,19 +571,66 @@ complete ancestor profile. Unreadable, malformed, partial, or unknown-field
 policy is a failure, not policy absence; only genuine absence enables native Pi
 passthrough.
 
-Pinned Pi `0.84.2` exposes no native unattended tool-execution policy.
-Its `--approve`/`-a` flag controls only one-run trust for project-local files;
-it is not a permission bypass. Therefore omitted or explicit
-`yolo_mode = false` preserves Pi behavior, while `yolo_mode = true` fails
-before executable lookup or launch with `pi_yolo_mode_unsupported`. Never map
-Pi yolo to `--approve`.
+Pinned Pi `0.84.2` exposes no per-tool approval policy: enabled tools execute
+without a confirmation prompt. Its `--approve`/`-a` flag controls one-run trust
+for project-local files. Therefore omitted or explicit `yolo_mode = false`
+preserves native project-trust behavior, while `yolo_mode = true` injects
+exactly one `--approve` so project `AGENTS.md`, skills, extensions, and other
+reviewed local resources load without a trust prompt. Explicit
+`--no-approve`/`-na` conflicts with effective yolo and fails closed.
+
+That primary-session rule is intentionally separate from the board-agnostic
+standalone worker contract. To authorize an unattended worker explicitly,
+configure both fields in the same composed project policy:
+
+```toml
+[agents.pi.primary_session]
+profile = "qwen-3.8-27b"
+pi_compatibility = "github-release:earendil-works/pi@v0.84.2:darwin-arm64#sha256-c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65"
+yolo_mode = false
+
+[agents.pi.standalone_session]
+yolo_mode = true
+tool_allowlist = ["read", "bash", "edit", "write", "grep", "find", "ls"]
+```
+
+The required managed profile and canonical `qwen-infra` target definitions are
+the same reviewed deployment inputs described by the reference policy and
+canonical-target contract in this surrounding operator section; standalone
+authorization does not duplicate or weaken them.
+
+Then inspect or launch only through the owned standalone command:
+
+```bash
+qwen-infra spawn --prompt "Complete the bounded task" --print-config
+qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m
+```
+
+Standalone policy is fail-closed and does not change interactive
+`qwen-infra`/`pi-infra` behavior. Both `yolo_mode = true` and a non-empty exact
+built-in allowlist are required. The launcher owns Pi's `--no-approve`,
+`--no-extensions`, `--tools`, `--mode json`, `--no-session`, and `--print`
+arguments, closes stdin, refuses every caller-controlled Pi argument, and
+keeps the prompt out of diagnostics. `--no-approve` declines project trust;
+tool authorization comes from the wrapper's reviewed built-in allowlist, not
+from Pi project trust. Raw RPC mode is never exposed because its direct `bash`
+request bypasses Pi's model `tool_call` hook. Extension discovery is disabled
+so a project or global extension cannot replace an allowed built-in tool.
+
+Each invocation owns an independent Pi process group and a fresh random,
+hash-contained, non-persistent client state. With `runtime.sharing.mode =
+"shared"`, concurrent standalone workers lease one verified local runtime;
+releasing or crashing one worker releases only its lease, and the final lease
+reaps the runtime. The command is deliberately board-agnostic: no task-board
+runtime adapter, registration, run identity, or lifecycle dependency is
+implemented here. A board adapter may later consume this stable primitive.
 
 Profile-name identity is its exact post-TOML-decoding UTF-8 bytes. There is no
 normalization, case folding, trimming, path cleaning, or lossy sanitization.
 Explicit `--provider`, `--model`, and `--thinking` must resolve to the exact
-managed identity; equal repeats normalize and conflicts fail. `--api-key` and
-Pi's approval flags retain native precedence, but diagnostics redact the key
-and the wrapper injects no approval. Wrapper-recognized equal forms normalize
+managed identity; equal repeats normalize and conflicts fail. `--api-key` is
+redacted in diagnostics, and an explicit `--approve` remains idempotent with
+effective yolo. Wrapper-recognized equal forms normalize
 to Pi's pinned spaced syntax. Options cannot consume a value across the removed
 delimiter; ambiguous unknown flags and option-looking message suffixes fail.
 The resulting argv has one provider/model selection, no fake separator, no
@@ -543,8 +660,8 @@ or mutate Pi settings, auth, or trust. An uninspectable value is `unknown` or an
 error, never absence. The plan reports exact sources, normalized Pi argv,
 runtime executable/argv and static state, loopback readiness URL, timeouts,
 generated `models.json` digest/path, catalog identity, requested capabilities,
-and hash-only state/lock paths. Secret values and arbitrary environment values
-are omitted.
+and hash-only state/lock/log paths. Secret values and arbitrary environment
+values are omitted.
 
 The emitted contract is `agents-infra.primary-session-launch-plan` schema 1
 with provider `pi`. `launch_variants.interactive.argv` is the exact normalized
@@ -561,9 +678,41 @@ Let `profile_bytes` be the exact UTF-8 profile-name bytes. The profile key is
 ```text
 <canonical-cache-root>/agents-infra/pi/<64-hex-project-key>/<64-hex-profile-key>/
   agent/models.json
+  agent/settings.json  # present/managed when profile compaction is configured
   sessions/
+  logs/<UTC-start>-<random>.jsonl
   session.lock
 ```
+
+Each managed launch creates a distinct mode-`0600` lifecycle log. It records
+session/runtime/Pi start, PID and process-group identity, runtime readiness,
+foreground-terminal ownership, exit or received signal, and bounded cleanup.
+It never records environment values, API keys, or prompt/argument contents.
+Pi's own conversation and tool transcript remains in `sessions/`; the launcher
+log exists to diagnose orchestration failures such as a TUI child stopped by
+terminal job control. The launcher prints the exact log path before starting
+Pi, and `PiRunReport.session_log` carries it for managed callers.
+
+Resume from the same canonical project directory so the project/profile state
+keys resolve to the same isolated session directory:
+
+```bash
+cd /the/original/project
+
+# Continue the newest session directly.
+qwen-infra -- --continue
+
+# Open Pi's session selector.
+qwen-infra -- --resume
+
+# Resume one exact session ID from the JSONL filename.
+qwen-infra -- --session 01a03e8e-7c6d-7973-876a-a392202cdd57
+```
+
+The first `--` belongs to the canonical-target launcher and is not forwarded.
+Compaction is lossy only for active model context: Pi retains the complete
+conversation/tool JSONL, so resume does not require restating the task. A
+different cwd or profile intentionally resolves another isolated session tree.
 
 The canonical cache root is a successfully resolved absolute
 `os.UserCacheDir()`. Raw profile text is never a path component. `/`, `\\`,
@@ -619,10 +768,11 @@ Missing, partial, raced, or changed point-of-use reads fail.
 
 #### Runtime lifecycle, capabilities, and operator verification
 
-After all static gates, launch acquires the profile lock, atomically writes only
-the isolated `agent/models.json` as `0600`, and preserves profile-local
-settings, trust, auth, and sessions without reading or writing normal
-`~/.pi/agent`. It exclusively preflights the exact loopback port and refuses an
+After all static gates, launch acquires the profile lock, atomically writes the
+isolated `agent/models.json` as `0600`, and, when configured, safely merges the
+profile compaction policy into isolated `agent/settings.json`. It preserves
+unrelated profile-local settings, trust, auth, and sessions without reading or
+writing normal `~/.pi/agent`. It exclusively preflights the exact loopback port and refuses an
 occupied listener without connecting. It then closes the probe, rechecks the
 runtime path, and starts `[runtime.executable] + runtime.argv` directly as a
 direct child leading a new owned process group.
@@ -912,6 +1062,7 @@ Inspect or compose the selected target without launching it:
 openai-infra --print-config
 anthropic-infra --print-config
 qwen-infra --print-config
+qwen-infra spawn --prompt "Complete the bounded task" --print-config
 
 agents-infra compose --mode primary-session \
   --entrypoint qwen-infra --project "$PWD" --schema-version 1 --json \
@@ -1125,9 +1276,9 @@ rg -n "Primary Parent Goal Actualization" \
 | Tool | Purpose | Command | Outputs |
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
-| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
 | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
-| `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation |
+| `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
 | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
 | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |

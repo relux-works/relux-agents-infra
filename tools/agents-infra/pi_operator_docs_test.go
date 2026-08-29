@@ -39,8 +39,10 @@ func TestPiOperatorContractDocumentsCycle10Boundary(t *testing.T) {
 		"`HF_TOKEN`, cache-location variables, and unrelated environment names remain admitted",
 		"`LLAMA_API_KEY` values are never reported",
 		"pi-infra --print-config",
-		"`yolo_mode = true` fails before executable lookup or launch with `pi_yolo_mode_unsupported`",
-		"Never map Pi yolo to `--approve`",
+		"`yolo_mode = true` injects",
+		"Explicit `--no-approve`/`-na` conflicts with effective yolo",
+		"logs/<UTC-start>-<random>.jsonl",
+		"foreground-terminal ownership",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("README.md missing Pi operator contract fragment %q", want)
@@ -64,8 +66,10 @@ func TestReluxAgentsInfraSkillRoutesSafePiWorkflowToSource(t *testing.T) {
 		"Exact `LLAMA_API_KEY` is refused before managed state or runtime spawn",
 		"Keep `HF_TOKEN`, cache-location variables, `LLAMA_API_KEY` lookalikes",
 		"Non-`off` reasoning additionally requires profile `reasoning = true`",
-		"Explicit `yolo_mode = true` fails before executable lookup or launch with `pi_yolo_mode_unsupported`",
-		"`--approve`/`-a` controls only one-run trust for project-local files",
+		"Effective `yolo_mode = true` injects exactly one `--approve`",
+		"`--approve`/`-a` controls one-run trust for project-local files",
+		"mode-`0600` lifecycle JSONL",
+		"foreground-terminal ownership",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Fatalf("SKILL.md missing managed Pi guidance %q", want)

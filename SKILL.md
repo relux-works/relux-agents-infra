@@ -337,6 +337,16 @@ anchored no-follow containment contract. Do not add raw profile-name path
 components, shared locks for byte-distinct names, a fallback for read/path
 failure, or project-controlled catalog evidence.
 
+Long-lived local-model profiles may define a strict optional
+`[agents.pi.profiles.<name>.compaction]` table with required `enabled`,
+`reserve_tokens`, and `keep_recent_tokens` fields. Require
+`reserve_tokens >= max_tokens` and
+`reserve_tokens + keep_recent_tokens < context_window`. agents-infra merges
+only that object into the isolated profile `agent/settings.json` before launch,
+preserving unrelated Pi preferences and the existing `sessions/` history.
+Use an earlier threshold and a smaller retained tail for sessions expected to
+live for days; do not rely on overflow recovery as the normal compaction path.
+
 Use this order for every new or changed deployment:
 
 ```bash
@@ -374,12 +384,54 @@ standalone Pi tree check both initially and immediately before Pi spawn. It
 never attaches or silently falls back to another runtime, port, profile, model,
 listener, or Muse target-only decoding.
 
-Pinned Pi `0.84.2` has no native unattended tool-execution policy.
-`--approve`/`-a` controls only one-run trust for project-local files and must
-never be used as a yolo translation. In `[agents.pi.primary_session]`, omitted
-or explicit `yolo_mode = false` preserves Pi behavior; nearest false masks an
-inherited true. Explicit `yolo_mode = true` fails before executable lookup or
-launch with `pi_yolo_mode_unsupported`.
+Every managed Pi launch creates a distinct mode-`0600` lifecycle JSONL under
+the profile's hash-contained `logs/` directory and prints its path before Pi
+starts. Record only orchestration evidence: lifecycle events, PID/PGID,
+readiness, foreground-terminal ownership, exit/signal, and cleanup state. Never
+record environment values, API keys, or prompt/argument contents. Pi's own
+conversation and tool transcript remains separately under `sessions/`.
+
+Restore only from the same canonical project directory and logical profile so
+the hash-contained state keys match. Canonical `qwen-infra` provider arguments
+follow its target delimiter:
+
+```bash
+qwen-infra -- --continue
+qwen-infra -- --resume
+qwen-infra -- --session SESSION_ID
+```
+
+`--continue` selects the newest transcript, `--resume` opens Pi's selector, and
+`--session` accepts a plain ID inside the managed session directory. Managed Pi
+continues to reject filesystem-shaped session selectors.
+
+Pinned Pi `0.84.2` has no per-tool approval prompt: enabled tools execute
+directly. `--approve`/`-a` controls one-run trust for project-local files. In
+`[agents.pi.primary_session]`, omitted or explicit `yolo_mode = false`
+preserves native project-trust behavior; nearest false masks an inherited
+true. Effective `yolo_mode = true` injects exactly one `--approve`, allowing
+project `AGENTS.md`, skills, extensions, and other reviewed local resources to
+load without a trust prompt. Explicit `--no-approve`/`-na` conflicts with yolo
+and fails closed.
+
+For an autonomous board-agnostic worker, use the separate explicit contract:
+
+```toml
+[agents.pi.standalone_session]
+yolo_mode = true
+tool_allowlist = ["read", "bash", "edit", "write", "grep", "find", "ls"]
+```
+
+Inspect it with `qwen-infra spawn --prompt "..." --print-config`, then launch
+with `qwen-infra spawn --prompt "..." --deadline 10m`. This path owns
+`--no-approve --no-extensions --tools <exact-list> --mode json --no-session
+--print`, closes stdin, rejects every caller Pi argument, preserves the
+profile's configured thinking level, and gives each worker independent random
+client state and a separate Pi process group. When runtime sharing is enabled,
+workers share only the verified runtime through leases. Never add raw RPC,
+implicit extensions, caller overrides, root/sudo execution, or task-board run
+identity to this primitive. Task-board integration is intentionally deferred
+to an adapter that can consume the standalone command later.
 
 Managed launch refuses the exact llama.cpp model-origin environment names
 `HF_ENDPOINT` and `MODEL_ENDPOINT` before runtime spawn and reports only the

@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -81,6 +82,15 @@ func reasoningPiProfileTOML(name, runtime string, port int) string {
 	return body
 }
 
+func compactionPiProfileTOML(name, runtime string, port int) string {
+	return validPiProfileTOML(name, runtime, port, false) + fmt.Sprintf(`
+[agents.pi.profiles.%q.compaction]
+enabled = true
+reserve_tokens = 2048
+keep_recent_tokens = 2048
+`, name)
+}
+
 func TestParsePiPolicyExactSchemaAndMuseDFlash(t *testing.T) {
 	for _, dflash := range []bool{false, true} {
 		cfg, err := parseProjectConfig([]byte(validPiProfileTOML("profile", "/bin/echo", 18011, dflash)), "/project/config.toml")
@@ -98,6 +108,159 @@ func TestParsePiPolicyExactSchemaAndMuseDFlash(t *testing.T) {
 		if !reflect.DeepEqual(p.RequestedCapabilities, wantCaps) {
 			t.Fatalf("capabilities=%q want=%q", p.RequestedCapabilities, wantCaps)
 		}
+	}
+}
+
+func TestParsePiCompactionIsStrictAndProfileScoped(t *testing.T) {
+	without, err := parseProjectConfig([]byte(validPiProfileTOML("profile", "/bin/echo", 18011, false)), "/project/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without.PiProfiles["profile"].Compaction != nil {
+		t.Fatal("absent compaction table changed the Pi-native defaults")
+	}
+
+	body := compactionPiProfileTOML("profile", "/bin/echo", 18011)
+	with, err := parseProjectConfig([]byte(body), "/project/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &PiCompaction{Enabled: true, ReserveTokens: 2048, KeepRecentTokens: 2048}
+	if got := with.PiProfiles["profile"].Compaction; !reflect.DeepEqual(got, want) {
+		t.Fatalf("compaction=%#v want=%#v", got, want)
+	}
+
+	tests := map[string]string{
+		"unknown field":          strings.Replace(body, "enabled = true", "enabled = true\nsurprise = 1", 1),
+		"missing enabled":        strings.Replace(body, "enabled = true\n", "", 1),
+		"missing reserve":        strings.Replace(body, "reserve_tokens = 2048\n", "", 1),
+		"missing kept":           strings.Replace(body, "keep_recent_tokens = 2048\n", "", 1),
+		"reserve below output":   strings.Replace(body, "reserve_tokens = 2048", "reserve_tokens = 512", 1),
+		"reserve reaches window": strings.Replace(body, "reserve_tokens = 2048", "reserve_tokens = 8192", 1),
+		"sum reaches window":     strings.Replace(body, "keep_recent_tokens = 2048", "keep_recent_tokens = 6144", 1),
+	}
+	for name, invalid := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseProjectConfig([]byte(invalid), "/project/config.toml"); err == nil {
+				t.Fatal("strict compaction parser admitted invalid input")
+			}
+		})
+	}
+}
+
+func sharedPiProfileTOML(name, runtime string, port int) string {
+	return validPiProfileTOML(name, runtime, port, false) + fmt.Sprintf(`
+[agents.pi.profiles.%q.runtime.sharing]
+mode = "shared"
+linger_seconds = 0
+max_leases = 8
+heartbeat_interval_seconds = 15
+lease_stale_seconds = 60
+broker_start_timeout_seconds = 40
+`, name)
+}
+
+func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
+	exclusive, err := parseProjectConfig([]byte(validPiProfileTOML("profile", "/bin/echo", 18011, false)), "/project/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exclusive.PiProfiles["profile"].Runtime.Sharing != nil {
+		t.Fatal("absent runtime.sharing changed the exclusive profile")
+	}
+
+	sharedBody := sharedPiProfileTOML("profile", "/bin/echo", 18011)
+	shared, err := parseProjectConfig([]byte(sharedBody), "/project/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 8, HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 40}
+	if got := shared.PiProfiles["profile"].Runtime.Sharing; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sharing=%#v want=%#v", got, want)
+	}
+
+	tests := map[string]string{
+		"unknown field":              strings.Replace(sharedBody, `mode = "shared"`, "mode = \"shared\"\nsurprise = 1", 1),
+		"missing mode":               strings.Replace(sharedBody, "mode = \"shared\"\n", "", 1),
+		"missing linger":             strings.Replace(sharedBody, "linger_seconds = 0\n", "", 1),
+		"missing max leases":         strings.Replace(sharedBody, "max_leases = 8\n", "", 1),
+		"missing heartbeat":          strings.Replace(sharedBody, "heartbeat_interval_seconds = 15\n", "", 1),
+		"missing stale":              strings.Replace(sharedBody, "lease_stale_seconds = 60\n", "", 1),
+		"missing broker timeout":     strings.Replace(sharedBody, "broker_start_timeout_seconds = 40\n", "", 1),
+		"unknown mode":               strings.Replace(sharedBody, `mode = "shared"`, `mode = "automatic"`, 1),
+		"negative linger":            strings.Replace(sharedBody, "linger_seconds = 0", "linger_seconds = -1", 1),
+		"zero max leases":            strings.Replace(sharedBody, "max_leases = 8", "max_leases = 0", 1),
+		"heartbeat equals stale":     strings.Replace(sharedBody, "heartbeat_interval_seconds = 15", "heartbeat_interval_seconds = 60", 1),
+		"broker timeout below bound": strings.Replace(sharedBody, "broker_start_timeout_seconds = 40", "broker_start_timeout_seconds = 36", 1),
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseProjectConfig([]byte(body), "/project/config.toml"); err == nil {
+				t.Fatal("strict runtime.sharing parser admitted invalid input")
+			}
+		})
+	}
+}
+
+func TestPiPrintConfigReportsSharedRuntimeWithoutInspectingOrCreatingIt(t *testing.T) {
+	piRoot := officialPiAsset(t)
+	project := t.TempDir()
+	home, err := os.MkdirTemp("/tmp", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	cache := filepath.Join(home, "Library", "Caches")
+	mustMkdir(t, cache)
+	t.Setenv("HOME", home)
+	writePiProjectConfig(t, project, sharedPiProfileTOML("profile", "/bin/echo", 18011))
+
+	plan, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, func(string) (string, error) {
+		return filepath.Join(piRoot, "pi"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Pi == nil || plan.Pi.SharedRuntime == nil {
+		t.Fatalf("shared runtime diagnostics absent: %#v", plan.Pi)
+	}
+	shared := plan.Pi.SharedRuntime
+	if shared.Mode != "shared" || shared.RuntimeKey == "" || shared.ProfileDigest == "" || shared.Broker.Observed != "not-inspected" {
+		t.Fatalf("shared runtime diagnostics incomplete: %#v", shared)
+	}
+	if plan.Pi.Runtime == nil || plan.Pi.Runtime.Ownership != "broker-owned-process-group" {
+		t.Fatalf("runtime ownership=%#v", plan.Pi.Runtime)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "agents-infra", "pi-runtimes")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("print config created or inspected shared runtime state: %v", err)
+	}
+}
+
+func TestPiPrintConfigReportsManagedCompactionWithoutCreatingState(t *testing.T) {
+	piRoot := officialPiAsset(t)
+	project, home := t.TempDir(), t.TempDir()
+	cache := filepath.Join(home, "Library", "Caches")
+	mustMkdir(t, cache)
+	t.Setenv("HOME", home)
+	writePiProjectConfig(t, project, compactionPiProfileTOML("profile", "/bin/echo", 18011))
+
+	plan, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, func(string) (string, error) {
+		return filepath.Join(piRoot, "pi"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Pi == nil || plan.Pi.Settings == nil || plan.Pi.Settings.Compaction == nil {
+		t.Fatalf("managed compaction diagnostics absent: %#v", plan.Pi)
+	}
+	if got := plan.Pi.Settings.Compaction; !reflect.DeepEqual(got, &PiCompaction{Enabled: true, ReserveTokens: 2048, KeepRecentTokens: 2048}) {
+		t.Fatalf("compaction diagnostics=%#v", got)
+	}
+	if plan.Pi.Settings.Path != plan.Pi.State.SettingsJSON {
+		t.Fatalf("settings path=%q state=%q", plan.Pi.Settings.Path, plan.Pi.State.SettingsJSON)
+	}
+	if _, err := os.Stat(plan.Pi.State.Root); !os.IsNotExist(err) {
+		t.Fatalf("print-config created managed state: %v", err)
 	}
 }
 
@@ -177,43 +340,86 @@ func TestPiPrimaryYoloSafeDefaultAndNearestFalseMask(t *testing.T) {
 }
 
 // Production call sites: BuildPrimarySessionLaunchPlan (non-launching compose)
-// and RunPi (direct launch). Both must reject before executable lookup so the
-// unsupported policy cannot fall through to native Pi or be mis-mapped to
-// Pi's unrelated --approve project-trust flag.
-func TestPiYoloTrueFailsClosedBeforeComposeOrLaunchLookup(t *testing.T) {
+// and RunPi (direct launch). Pi has no per-tool approval policy, so primary
+// yolo means one-run project trust and must compose exactly one --approve.
+func TestPiYoloTrueComposesProjectTrust(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	config := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
 	mustMkdir(t, filepath.Dir(config))
 	mustWrite(t, config, "[agents.pi.primary_session]\nyolo_mode = true\n")
-	lookedUp := false
-	lookPath := func(string) (string, error) {
-		lookedUp = true
-		return "/must/not/run", nil
+	plan, err := BuildPrimarySessionLaunchPlan("pi", project, home, []string{"--approve"}, ChildLaunchCompositionProducer{}, func(string) (string, error) { return "/bin/echo", nil })
+	if err != nil {
+		t.Fatalf("compose yolo: %v", err)
 	}
+	if !plan.Resolved.Yolo.Value || !samePath(plan.Resolved.Yolo.Source, config) {
+		t.Fatalf("resolved yolo = %#v", plan.Resolved.Yolo)
+	}
+	if got := strings.Join(plan.LaunchVariants.Interactive.Argv, " "); got != "--approve" {
+		t.Fatalf("interactive argv = %q, want exactly one --approve", got)
+	}
+	if _, err := applyPiPrimarySessionYolo([]string{"--no-approve"}, PiPrimarySessionPolicy{YoloMode: PiPolicyBoolValue{Value: true, Present: true, Source: config}}); piErrorCode(err) != "invalid_provider_arguments" {
+		t.Fatalf("conflicting no-approve error = %v", err)
+	}
+}
 
-	assertUnsupported := func(t *testing.T, err error) {
-		t.Helper()
-		if piErrorCode(err) != "pi_yolo_mode_unsupported" {
-			t.Fatalf("error = %v, want pi_yolo_mode_unsupported", err)
+func TestPiProcessWriterPreservesFileDescriptors(t *testing.T) {
+	if got := piProcessWriter(new(sync.Mutex), os.Stdout); got != os.Stdout {
+		t.Fatalf("terminal file descriptor was wrapped as %T", got)
+	}
+	buffer := new(bytes.Buffer)
+	if _, ok := piProcessWriter(new(sync.Mutex), buffer).(*piSynchronizedWriter); !ok {
+		t.Fatal("non-file writer did not keep synchronized fan-in")
+	}
+}
+
+func TestPiSessionLogsAreDistinctContainedAndPrivate(t *testing.T) {
+	cache := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	mustMkdir(t, project)
+	state, err := ResolvePiStatePaths(cache, project, "profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreatePiStateTree(state); err != nil {
+		t.Fatal(err)
+	}
+	first, err := openPiSessionLog(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.event("pi_started", map[string]any{"pid": 42, "foreground": true})
+	firstPath := first.path
+	first.close()
+	second, err := openPiSessionLog(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath := second.path
+	second.close()
+	if firstPath == secondPath {
+		t.Fatalf("per-launch logs collided at %s", firstPath)
+	}
+	for _, path := range []string{firstPath, secondPath} {
+		if filepath.Dir(path) != state.LogsDir {
+			t.Fatalf("log escaped contained directory: %s", path)
 		}
-		for _, want := range []string{piPrimarySessionField + ".yolo_mode=true", config, "--approve", "project-local input trust"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("error = %q, want precise unsupported-capability detail %q", err, want)
-			}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if lookedUp {
-			t.Fatal("unsupported Pi yolo reached executable lookup")
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("log mode = %04o, want 0600", info.Mode().Perm())
 		}
 	}
-
-	t.Run("compose", func(t *testing.T) {
-		_, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, lookPath)
-		assertUnsupported(t, err)
-	})
-	t.Run("launch", func(t *testing.T) {
-		err := RunPi(RunPiOptions{ProjectDir: project, HomeDir: home, Environ: []string{"HOME=" + home}, LookPath: lookPath})
-		assertUnsupported(t, err)
-	})
+	data, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"event":"pi_started"`, `"foreground":true`, `"pid":42`} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Fatalf("session log %q missing %q", data, want)
+		}
+	}
 }
 
 func TestParsePiMuseRequiresExactUniqueNonOverlappingArgvSubsequences(t *testing.T) {
@@ -518,6 +724,55 @@ func TestGeneratedPiCatalogHasFixedNonSecretCredentialSurface(t *testing.T) {
 	}
 }
 
+func TestWritePiCompactionSettingsPreservesUnrelatedPreferences(t *testing.T) {
+	cache := t.TempDir()
+	paths, err := ResolvePiStatePaths(cache, "/project", "profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreatePiStateTree(paths); err != nil {
+		t.Fatal(err)
+	}
+	existing := []byte("{\n  \"lastChangelogVersion\": \"0.84.2\",\n  \"theme\": \"dark\",\n  \"compaction\": {\"enabled\": false}\n}\n")
+	if err := os.WriteFile(paths.SettingsJSON, existing, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := &PiCompaction{Enabled: true, ReserveTokens: 4096, KeepRecentTokens: 2048}
+	if err := WritePiCompactionSettings(paths, want); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(paths.SettingsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		LastChangelogVersion string       `json:"lastChangelogVersion"`
+		Theme                string       `json:"theme"`
+		Compaction           PiCompaction `json:"compaction"`
+	}
+	if err := json.Unmarshal(content, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.LastChangelogVersion != "0.84.2" || document.Theme != "dark" || !reflect.DeepEqual(document.Compaction, *want) {
+		t.Fatalf("merged settings=%#v", document)
+	}
+	if info, err := os.Stat(paths.SettingsJSON); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("settings mode=%v err=%v", info.Mode().Perm(), err)
+	}
+
+	malformed := []byte("not-json\n")
+	if err := os.WriteFile(paths.SettingsJSON, malformed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePiCompactionSettings(paths, want); piErrorCode(err) != "pi_settings_invalid" {
+		t.Fatalf("malformed settings error=%v", err)
+	}
+	unchanged, err := os.ReadFile(paths.SettingsJSON)
+	if err != nil || !bytes.Equal(unchanged, malformed) {
+		t.Fatalf("malformed settings changed: %q err=%v", unchanged, err)
+	}
+}
+
 func TestPiMuseDiagnosticsRemainConfiguredUnverified(t *testing.T) {
 	project, home := t.TempDir(), t.TempDir()
 	cache := filepath.Join(home, "Library", "Caches")
@@ -734,7 +989,7 @@ http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
 	if err := os.WriteFile(script, []byte(scriptBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config := validPiProfileTOML("profile", python, port, false)
+	config := compactionPiProfileTOML("profile", python, port)
 	config = strings.Replace(config, fmt.Sprintf(`["serve", "--model", "Model", "--host", "127.0.0.1", "--port", "%d"]`, port), fmt.Sprintf(`[%q, %q, "Model", %q, "--host", "127.0.0.1", "--port", %q]`, script, strconv.Itoa(port), pidFile, strconv.Itoa(port)), 1)
 	configPath := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
 	mustMkdir(t, filepath.Dir(configPath))
@@ -771,6 +1026,10 @@ http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
 	localModels, err := os.ReadFile(paths.ModelsJSON)
 	if err != nil || !bytes.Contains(localModels, []byte("agents-infra-local")) {
 		t.Fatalf("isolated models missing: %v %s", err, localModels)
+	}
+	settings, err := os.ReadFile(paths.SettingsJSON)
+	if err != nil || !bytes.Contains(settings, []byte(`"reserveTokens": 2048`)) || !bytes.Contains(settings, []byte(`"keepRecentTokens": 2048`)) {
+		t.Fatalf("isolated compaction settings missing: %v %s", err, settings)
 	}
 }
 

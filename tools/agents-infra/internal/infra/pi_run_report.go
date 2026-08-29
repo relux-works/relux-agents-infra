@@ -9,6 +9,7 @@ type PiRunReport struct {
 	PiProcessGroupCleanup      string `json:"pi_process_group_cleanup"`
 	RuntimeProcessGroupCleanup string `json:"runtime_process_group_cleanup"`
 	CleanupConfirmed           bool   `json:"cleanup_confirmed"`
+	SessionLog                 string `json:"session_log,omitempty"`
 }
 
 func newPiRunReport() PiRunReport {

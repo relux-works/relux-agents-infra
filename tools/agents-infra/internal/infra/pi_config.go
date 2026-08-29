@@ -24,6 +24,19 @@ type PiPrimarySessionPolicy struct {
 	YoloMode        PiPolicyBoolValue
 }
 
+// PiStandaloneSessionSource is deliberately separate from primary-session
+// policy. A project may authorize one unattended worker without changing the
+// interactive Pi trust or tool surface.
+type PiStandaloneSessionSource struct {
+	YoloMode      *bool
+	ToolAllowlist *[]string
+}
+
+type PiStandaloneSessionPolicy struct {
+	YoloMode      PiPolicyBoolValue
+	ToolAllowlist PiPolicyStringListValue
+}
+
 type PiPolicyStringValue struct {
 	Value   string
 	Source  string
@@ -32,6 +45,12 @@ type PiPolicyStringValue struct {
 
 type PiPolicyBoolValue struct {
 	Value   bool
+	Source  string
+	Present bool
+}
+
+type PiPolicyStringListValue struct {
+	Value   []string
 	Source  string
 	Present bool
 }
@@ -47,9 +66,16 @@ type PiProfile struct {
 	MaxTokens             int
 	Thinking              string
 	RequestedCapabilities []string
+	Compaction            *PiCompaction
 	Compat                PiCompat
 	Runtime               PiRuntime
 	Source                string
+}
+
+type PiCompaction struct {
+	Enabled          bool `json:"enabled"`
+	ReserveTokens    int  `json:"reserveTokens"`
+	KeepRecentTokens int  `json:"keepRecentTokens"`
 }
 
 type PiCompat struct {
@@ -68,6 +94,16 @@ type PiRuntime struct {
 	StartupTimeoutSeconds  int
 	ShutdownTimeoutSeconds int
 	DFlash                 *PiDFlash
+	Sharing                *PiRuntimeSharing
+}
+
+type PiRuntimeSharing struct {
+	Mode                      string `json:"mode"`
+	LingerSeconds             int    `json:"linger_seconds"`
+	MaxLeases                 int    `json:"max_leases"`
+	HeartbeatIntervalSeconds  int    `json:"heartbeat_interval_seconds"`
+	LeaseStaleSeconds         int    `json:"lease_stale_seconds"`
+	BrokerStartTimeoutSeconds int    `json:"broker_start_timeout_seconds"`
 }
 
 type PiDFlash struct {
@@ -77,73 +113,95 @@ type PiDFlash struct {
 	DraftArgv   []string
 }
 
-func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, map[string]PiProfile, error) {
+func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, PiStandaloneSessionSource, map[string]PiProfile, error) {
 	pi, present, err := projectConfigTable(agents, "pi", "agents.pi")
 	if err != nil {
-		return PiPrimarySessionSource{}, nil, projectConfigFieldError(path, "agents.pi", err)
+		return PiPrimarySessionSource{}, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, "agents.pi", err)
 	}
 	if !present {
-		return PiPrimarySessionSource{}, map[string]PiProfile{}, nil
+		return PiPrimarySessionSource{}, PiStandaloneSessionSource{}, map[string]PiProfile{}, nil
 	}
-	if err := rejectUnknownFields(pi, "agents.pi", "primary_session", "profiles"); err != nil {
-		return PiPrimarySessionSource{}, nil, projectConfigFieldError(path, errField(err), err)
+	if err := rejectUnknownFields(pi, "agents.pi", "primary_session", "standalone_session", "profiles"); err != nil {
+		return PiPrimarySessionSource{}, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, errField(err), err)
 	}
 
 	var primary PiPrimarySessionSource
 	primaryTable, primaryPresent, err := projectConfigTable(pi, "primary_session", piPrimarySessionField)
 	if err != nil {
-		return primary, nil, projectConfigFieldError(path, piPrimarySessionField, err)
+		return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField, err)
 	}
 	if primaryPresent {
 		if err := rejectUnknownFields(primaryTable, piPrimarySessionField, "profile", "pi_compatibility", "yolo_mode"); err != nil {
-			return primary, nil, projectConfigFieldError(path, errField(err), err)
+			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, errField(err), err)
 		}
 		primary.Profile, err = optionalNonEmptyString(primaryTable, "profile")
 		if err != nil {
-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".profile", err)
+			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField+".profile", err)
 		}
 		primary.PiCompatibility, err = optionalNonEmptyString(primaryTable, "pi_compatibility")
 		if err != nil {
-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".pi_compatibility", err)
+			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField+".pi_compatibility", err)
 		}
 		primary.YoloMode, err = optionalBool(primaryTable, "yolo_mode")
 		if err != nil {
-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".yolo_mode", err)
+			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField+".yolo_mode", err)
 		}
 		if primary.Profile == nil && primary.PiCompatibility == nil && primary.YoloMode == nil {
-			return primary, nil, projectConfigFieldError(path, piPrimarySessionField, errors.New("table must contain at least one supported field"))
+			return primary, PiStandaloneSessionSource{}, nil, projectConfigFieldError(path, piPrimarySessionField, errors.New("table must contain at least one supported field"))
+		}
+	}
+
+	var standalone PiStandaloneSessionSource
+	standaloneTable, standalonePresent, err := projectConfigTable(pi, "standalone_session", piStandaloneSessionField)
+	if err != nil {
+		return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField, err)
+	}
+	if standalonePresent {
+		if err := rejectUnknownFields(standaloneTable, piStandaloneSessionField, "yolo_mode", "tool_allowlist"); err != nil {
+			return primary, standalone, nil, projectConfigFieldError(path, errField(err), err)
+		}
+		standalone.YoloMode, err = optionalBool(standaloneTable, "yolo_mode")
+		if err != nil {
+			return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField+".yolo_mode", err)
+		}
+		standalone.ToolAllowlist, err = optionalStringArray(standaloneTable, "tool_allowlist")
+		if err != nil {
+			return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField+".tool_allowlist", err)
+		}
+		if standalone.YoloMode == nil && standalone.ToolAllowlist == nil {
+			return primary, standalone, nil, projectConfigFieldError(path, piStandaloneSessionField, errors.New("table must contain at least one supported field"))
 		}
 	}
 
 	profiles := map[string]PiProfile{}
 	profilesTable, profilesPresent, err := projectConfigTable(pi, "profiles", "agents.pi.profiles")
 	if err != nil {
-		return primary, nil, projectConfigFieldError(path, "agents.pi.profiles", err)
+		return primary, standalone, nil, projectConfigFieldError(path, "agents.pi.profiles", err)
 	}
 	if !profilesPresent {
-		return primary, profiles, nil
+		return primary, standalone, profiles, nil
 	}
 	for name, raw := range profilesTable {
 		if name == "" {
-			return primary, nil, projectConfigFieldError(path, "agents.pi.profiles", errors.New("profile name must not be empty"))
+			return primary, standalone, nil, projectConfigFieldError(path, "agents.pi.profiles", errors.New("profile name must not be empty"))
 		}
 		table, ok := raw.(map[string]any)
 		if !ok {
-			return primary, nil, projectConfigFieldError(path, "agents.pi.profiles."+name, fmt.Errorf("expected table, got %T", raw))
+			return primary, standalone, nil, projectConfigFieldError(path, "agents.pi.profiles."+name, fmt.Errorf("expected table, got %T", raw))
 		}
 		profile, parseErr := parsePiProfile(table, path, name)
 		if parseErr != nil {
-			return primary, nil, parseErr
+			return primary, standalone, nil, parseErr
 		}
 		profiles[name] = profile
 	}
-	return primary, profiles, nil
+	return primary, standalone, profiles, nil
 }
 
 func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) {
 	field := "agents.pi.profiles." + name
 	if err := rejectUnknownFields(table, field,
-		"provider", "model", "base_url", "api", "reasoning", "input", "context_window", "max_tokens", "thinking", "requested_capabilities", "compat", "runtime"); err != nil {
+		"provider", "model", "base_url", "api", "reasoning", "input", "context_window", "max_tokens", "thinking", "requested_capabilities", "compaction", "compat", "runtime"); err != nil {
 		return PiProfile{}, projectConfigFieldError(path, errField(err), err)
 	}
 	var p PiProfile
@@ -199,6 +257,17 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 	if p.RequestedCapabilities, err = requiredStringArray(table, "requested_capabilities"); err != nil {
 		return p, projectConfigFieldError(path, field+".requested_capabilities", err)
 	}
+	if raw, ok := table["compaction"]; ok {
+		compactionTable, ok := raw.(map[string]any)
+		if !ok {
+			return p, projectConfigFieldError(path, field+".compaction", fmt.Errorf("expected table, got %T", raw))
+		}
+		compaction, parseErr := parsePiCompaction(compactionTable, field+".compaction", p.ContextWindow, p.MaxTokens)
+		if parseErr != nil {
+			return p, projectConfigFieldError(path, errField(parseErr), parseErr)
+		}
+		p.Compaction = &compaction
+	}
 	compatTable, present, tableErr := projectConfigTable(table, "compat", field+".compat")
 	if tableErr != nil || !present {
 		if tableErr == nil {
@@ -235,6 +304,33 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 	return p, nil
 }
 
+func parsePiCompaction(table map[string]any, field string, contextWindow, maxTokens int) (PiCompaction, error) {
+	if err := rejectUnknownFields(table, field, "enabled", "reserve_tokens", "keep_recent_tokens"); err != nil {
+		return PiCompaction{}, err
+	}
+	var compaction PiCompaction
+	var err error
+	if compaction.Enabled, err = requiredBool(table, "enabled"); err != nil {
+		return compaction, fieldError(field+".enabled", err)
+	}
+	if compaction.ReserveTokens, err = requiredPositiveInt(table, "reserve_tokens"); err != nil {
+		return compaction, fieldError(field+".reserve_tokens", err)
+	}
+	if compaction.KeepRecentTokens, err = requiredPositiveInt(table, "keep_recent_tokens"); err != nil {
+		return compaction, fieldError(field+".keep_recent_tokens", err)
+	}
+	if compaction.ReserveTokens < maxTokens {
+		return compaction, fieldError(field+".reserve_tokens", errors.New("must be at least max_tokens"))
+	}
+	if compaction.ReserveTokens >= contextWindow {
+		return compaction, fieldError(field+".reserve_tokens", errors.New("must be less than context_window"))
+	}
+	if compaction.KeepRecentTokens+compaction.ReserveTokens >= contextWindow {
+		return compaction, fieldError(field+".keep_recent_tokens", errors.New("plus reserve_tokens must be less than context_window"))
+	}
+	return compaction, nil
+}
+
 func parsePiCompat(table map[string]any, field string) (PiCompat, error) {
 	if err := rejectUnknownFields(table, field, "supports_developer_role", "supports_reasoning_effort", "supports_usage_in_streaming", "supports_finish_reason", "max_tokens_field", "thinking_format"); err != nil {
 		return PiCompat{}, err
@@ -263,7 +359,7 @@ func parsePiCompat(table map[string]any, field string) (PiCompat, error) {
 }
 
 func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
-	if err := rejectUnknownFields(table, field, "executable", "argv", "readiness_path", "startup_timeout_seconds", "shutdown_timeout_seconds", "dflash"); err != nil {
+	if err := rejectUnknownFields(table, field, "executable", "argv", "readiness_path", "startup_timeout_seconds", "shutdown_timeout_seconds", "dflash", "sharing"); err != nil {
 		return PiRuntime{}, err
 	}
 	var r PiRuntime
@@ -308,7 +404,55 @@ func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
 		}
 		r.DFlash = &d
 	}
+	if raw, ok := table["sharing"]; ok {
+		sharingTable, ok := raw.(map[string]any)
+		if !ok {
+			return r, fieldError(field+".sharing", fmt.Errorf("expected table, got %T", raw))
+		}
+		sharing, parseErr := parsePiRuntimeSharing(sharingTable, field+".sharing", r)
+		if parseErr != nil {
+			return r, parseErr
+		}
+		r.Sharing = &sharing
+	}
 	return r, nil
+}
+
+func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime) (PiRuntimeSharing, error) {
+	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds"); err != nil {
+		return PiRuntimeSharing{}, err
+	}
+	var sharing PiRuntimeSharing
+	var err error
+	if sharing.Mode, err = requiredString(table, "mode"); err != nil {
+		return sharing, fieldError(field+".mode", err)
+	}
+	if sharing.Mode != "exclusive" && sharing.Mode != "shared" {
+		return sharing, fieldError(field+".mode", errors.New("must equal exclusive or shared"))
+	}
+	if sharing.LingerSeconds, err = requiredNonNegativeInt(table, "linger_seconds"); err != nil {
+		return sharing, fieldError(field+".linger_seconds", err)
+	}
+	if sharing.MaxLeases, err = requiredPositiveInt(table, "max_leases"); err != nil {
+		return sharing, fieldError(field+".max_leases", err)
+	}
+	if sharing.HeartbeatIntervalSeconds, err = requiredPositiveInt(table, "heartbeat_interval_seconds"); err != nil {
+		return sharing, fieldError(field+".heartbeat_interval_seconds", err)
+	}
+	if sharing.LeaseStaleSeconds, err = requiredPositiveInt(table, "lease_stale_seconds"); err != nil {
+		return sharing, fieldError(field+".lease_stale_seconds", err)
+	}
+	if sharing.HeartbeatIntervalSeconds >= sharing.LeaseStaleSeconds {
+		return sharing, fieldError(field+".heartbeat_interval_seconds", errors.New("must be less than lease_stale_seconds"))
+	}
+	if sharing.BrokerStartTimeoutSeconds, err = requiredPositiveInt(table, "broker_start_timeout_seconds"); err != nil {
+		return sharing, fieldError(field+".broker_start_timeout_seconds", err)
+	}
+	minimum := runtime.StartupTimeoutSeconds + runtime.ShutdownTimeoutSeconds + 30
+	if sharing.BrokerStartTimeoutSeconds < minimum {
+		return sharing, fieldError(field+".broker_start_timeout_seconds", fmt.Errorf("must be at least runtime startup + shutdown + 30 seconds (%d)", minimum))
+	}
+	return sharing, nil
 }
 
 func parsePiDFlash(table map[string]any, field string, runtimeArgv []string) (PiDFlash, error) {
@@ -512,6 +656,20 @@ func requiredPositiveInt(table map[string]any, key string) (int, error) {
 	}
 	return int(n), nil
 }
+func requiredNonNegativeInt(table map[string]any, key string) (int, error) {
+	v, ok := table[key]
+	if !ok {
+		return 0, errors.New("required field is absent")
+	}
+	n, ok := v.(int64)
+	if !ok {
+		return 0, fmt.Errorf("expected integer, got %T", v)
+	}
+	if n < 0 || int64(int(n)) != n {
+		return 0, errors.New("must be a non-negative platform integer")
+	}
+	return int(n), nil
+}
 func requiredStringArray(table map[string]any, key string) ([]string, error) {
 	v, ok := table[key]
 	if !ok {
@@ -530,6 +688,17 @@ func requiredStringArray(table map[string]any, key string) ([]string, error) {
 		out[i] = s
 	}
 	return out, nil
+}
+
+func optionalStringArray(table map[string]any, key string) (*[]string, error) {
+	if _, ok := table[key]; !ok {
+		return nil, nil
+	}
+	value, err := requiredStringArray(table, key)
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
 }
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
@@ -572,26 +741,37 @@ func composePiPrimarySession(policy *PiPrimarySessionPolicy, source PiPrimarySes
 func clonePiPrimarySessionSource(s PiPrimarySessionSource) PiPrimarySessionSource {
 	return PiPrimarySessionSource{Profile: cloneStringPointer(s.Profile), PiCompatibility: cloneStringPointer(s.PiCompatibility), YoloMode: cloneBoolPointer(s.YoloMode)}
 }
+
+func composePiStandaloneSession(policy *PiStandaloneSessionPolicy, source PiStandaloneSessionSource, path string) {
+	if source.YoloMode != nil {
+		policy.YoloMode = PiPolicyBoolValue{Value: *source.YoloMode, Source: path, Present: true}
+	}
+	if source.ToolAllowlist != nil {
+		policy.ToolAllowlist = PiPolicyStringListValue{Value: append([]string(nil), (*source.ToolAllowlist)...), Source: path, Present: true}
+	}
+}
+
+func clonePiStandaloneSessionSource(s PiStandaloneSessionSource) PiStandaloneSessionSource {
+	clone := PiStandaloneSessionSource{YoloMode: cloneBoolPointer(s.YoloMode)}
+	if s.ToolAllowlist != nil {
+		value := append([]string(nil), (*s.ToolAllowlist)...)
+		clone.ToolAllowlist = &value
+	}
+	return clone
+}
 func clonePiProfiles(in map[string]PiProfile) map[string]PiProfile {
 	out := map[string]PiProfile{}
 	for k, v := range in {
+		v.Input = append([]string(nil), v.Input...)
+		v.RequestedCapabilities = append([]string(nil), v.RequestedCapabilities...)
+		v.Runtime.Argv = append([]string(nil), v.Runtime.Argv...)
+		if v.Runtime.Sharing != nil {
+			sharing := *v.Runtime.Sharing
+			v.Runtime.Sharing = &sharing
+		}
 		out[k] = v
 	}
 	return out
-}
-
-func validatePiPrimarySessionYolo(policy PiPrimarySessionPolicy) error {
-	if !policy.YoloMode.Present || !policy.YoloMode.Value {
-		return nil
-	}
-	return piError(
-		"pi_yolo_mode_unsupported",
-		fmt.Errorf(
-			"%s.yolo_mode=true from %s is unsupported by pinned Pi v0.84.2: --approve controls project-local input trust, not unattended tool execution; omit yolo_mode or set it to false",
-			piPrimarySessionField,
-			policy.YoloMode.Source,
-		),
-	)
 }
 
 func resolvedPiYolo(policy PiPrimarySessionPolicy) PrimarySessionResolvedBool {

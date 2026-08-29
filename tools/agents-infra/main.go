@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/attachments"
 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
@@ -26,6 +28,10 @@ func main() {
 	if err := run(os.Args[1:]); err != nil {
 		code := 1
 		if code, ok := attachments.ExitCode(err); ok {
+			os.Exit(code)
+		}
+		if code, ok := infra.SharedRuntimeExitCode(err); ok {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(code)
 		}
 		var modelCheckFailure *infra.ModelCheckFailure
@@ -62,6 +68,8 @@ func run(args []string) error {
 		return runClaude(args[1:])
 	case "pi":
 		return runPi(args[1:])
+	case "runtime":
+		return runRuntime(args[1:])
 	case "target":
 		return runTarget(args[1:])
 	case "model-check":
@@ -465,6 +473,9 @@ func runClaude(args []string) error {
 }
 
 func runPi(args []string) error {
+	if len(args) > 0 && args[0] == "spawn" {
+		return runPiStandaloneCLI("", args[1:])
+	}
 	startDir := os.Getenv(callerCWDEnv)
 	if startDir == "" {
 		var err error
@@ -498,11 +509,149 @@ func runPi(args []string) error {
 	return infra.RunPi(infra.RunPiOptions{ProjectDir: startDir, Args: filtered, Environ: os.Environ(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
 }
 
+func runPiStandaloneCLI(entrypoint string, args []string) error {
+	fs := flag.NewFlagSet("pi spawn", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	prompt := fs.String("prompt", "", "single unattended worker prompt")
+	printConfig := fs.Bool("print-config", false, "resolve and print the standalone launch plan without launching")
+	deadline := fs.Duration("deadline", 30*time.Minute, "total standalone worker deadline (maximum 30m)")
+	if err := fs.Parse(args); err != nil {
+		return &infra.PiStandaloneFailure{Code: "pi_standalone_cli_invalid", Err: err}
+	}
+	if len(fs.Args()) != 0 {
+		return &infra.PiStandaloneFailure{Code: "pi_standalone_cli_invalid", Err: errors.New("standalone Pi does not accept positional arguments")}
+	}
+	if *deadline <= 0 || *deadline > 30*time.Minute {
+		return &infra.PiStandaloneFailure{Code: "pi_standalone_deadline_invalid", Err: errors.New("standalone Pi deadline must be within (0, 30m]")}
+	}
+	startDir := callerProjectDir()
+	request := infra.PiStandaloneRequest{Prompt: *prompt, Entrypoint: entrypoint}
+	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
+	if *printConfig {
+		plan, err := infra.BuildPiStandaloneLaunchPlan(startDir, "", request, producer, nil)
+		if err != nil {
+			return infra.WrapPiStandaloneFailure(err)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(plan); err != nil {
+			return &infra.PiStandaloneFailure{Code: "pi_standalone_output_failed", Err: err}
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *deadline)
+	defer cancel()
+	err := infra.RunPi(infra.RunPiOptions{
+		ProjectDir: startDir,
+		Environ:    os.Environ(),
+		Stdout:     os.Stdout,
+		Stderr:     os.Stderr,
+		Context:    ctx,
+		Standalone: &request,
+	})
+	return infra.WrapPiStandaloneFailure(err)
+}
+
+func runRuntime(args []string) error {
+	if len(args) == 0 {
+		return errors.New("runtime requires status, stop, broker, or runtime-launch")
+	}
+	switch args[0] {
+	case "status":
+		fs := flag.NewFlagSet("runtime status", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		project := fs.String("project", callerProjectDir(), "project directory")
+		profile := fs.String("profile", "", "managed Pi profile")
+		jsonOutput := fs.Bool("json", false, "emit JSON")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if len(fs.Args()) != 0 {
+			return fmt.Errorf("runtime status does not accept positional arguments: %q", fs.Args())
+		}
+		report, err := infra.SharedRuntimeStatusReport(infra.SharedRuntimeOperatorOptions{ProjectDir: *project, Profile: *profile})
+		if err != nil {
+			return err
+		}
+		if *jsonOutput {
+			return json.NewEncoder(os.Stdout).Encode(report)
+		}
+		printSharedRuntimeStatus(report)
+		return nil
+	case "stop":
+		fs := flag.NewFlagSet("runtime stop", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		project := fs.String("project", callerProjectDir(), "project directory")
+		profile := fs.String("profile", "", "managed Pi profile")
+		force := fs.Bool("force", false, "revoke live leases and use verified unreachable-broker recovery")
+		timeoutSeconds := fs.Int("timeout", 30, "bounded stop timeout in seconds")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if len(fs.Args()) != 0 {
+			return fmt.Errorf("runtime stop does not accept positional arguments: %q", fs.Args())
+		}
+		result, err := infra.StopSharedRuntime(infra.SharedRuntimeOperatorOptions{ProjectDir: *project, Profile: *profile}, *force, time.Duration(*timeoutSeconds)*time.Second)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(result)
+	case "broker", "runtime-launch":
+		fs := flag.NewFlagSet("runtime "+args[0], flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		runtimeKey := fs.String("runtime-key", "", "expected shared runtime key")
+		profileProject := fs.String("profile-project", "", "project directory used to recompose the profile")
+		profile := fs.String("profile", "", "managed Pi profile")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if len(fs.Args()) != 0 || *runtimeKey == "" || *profileProject == "" || *profile == "" {
+			return fmt.Errorf("runtime %s requires --runtime-key, --profile-project, and --profile, with no positional arguments", args[0])
+		}
+		if args[0] == "broker" {
+			return infra.RunSharedRuntimeBroker(infra.SharedRuntimeBrokerOptions{RuntimeKey: *runtimeKey, ProfileProject: *profileProject, ProfileName: *profile, Environ: os.Environ()})
+		}
+		return infra.RunSharedRuntimeLauncher(infra.SharedRuntimeLauncherOptions{RuntimeKey: *runtimeKey, ProfileProject: *profileProject, ProfileName: *profile, Environ: os.Environ()})
+	default:
+		return fmt.Errorf("unknown runtime command %q", args[0])
+	}
+}
+
+func callerProjectDir() string {
+	if directory := os.Getenv(callerCWDEnv); directory != "" {
+		return directory
+	}
+	directory, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return directory
+}
+
+func printSharedRuntimeStatus(report infra.SharedRuntimeStatus) {
+	fmt.Fprintf(os.Stdout, "runtime_key: %s\n", report.RuntimeKey)
+	fmt.Fprintf(os.Stdout, "profile_digest: %s\n", report.ProfileDigest)
+	fmt.Fprintf(os.Stdout, "broker.state: %s\n", report.Broker.State)
+	if report.Broker.PID != 0 {
+		fmt.Fprintf(os.Stdout, "broker.pid: %d\n", report.Broker.PID)
+	}
+	fmt.Fprintf(os.Stdout, "sharing.configured: %+v\n", report.Sharing.Configured)
+	if report.Sharing.Effective != nil {
+		fmt.Fprintf(os.Stdout, "sharing.effective: %+v\n", *report.Sharing.Effective)
+	}
+	if report.Runtime != nil {
+		fmt.Fprintf(os.Stdout, "runtime.pid: %d\n", report.Runtime.PID)
+		fmt.Fprintf(os.Stdout, "runtime.endpoint: %s\n", report.Runtime.Endpoint)
+	}
+	fmt.Fprintf(os.Stdout, "leases: %d\n", len(report.Leases))
+}
+
 func runTarget(args []string) error {
 	if len(args) == 0 {
 		return errors.New("target requires an entrypoint name")
 	}
 	entrypoint := args[0]
+	if len(args) > 1 && args[1] == "spawn" {
+		return runPiStandaloneCLI(entrypoint, args[2:])
+	}
 	fs := flag.NewFlagSet("target "+entrypoint, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	printConfig := fs.Bool("print-config", false, "resolve and print the canonical target without launching")
@@ -819,7 +968,11 @@ func usageText() string {
   agents-infra codex [--print-config] [-d|--danger|--yolo] [--] [CODEX_ARGS...]
   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
   agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
+  agents-infra pi spawn --prompt TEXT [--deadline DURATION] [--print-config]
+  agents-infra runtime status [--project DIR] [--profile NAME] [--json]
+  agents-infra runtime stop [--project DIR] [--profile NAME] [--force] [--timeout SECONDS]
   agents-infra target ENTRYPOINT [--print-config] [-- PROVIDER_ARGS...]
+  agents-infra target qwen-infra spawn --prompt TEXT [--deadline DURATION] [--print-config]
   agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]
 
 Source tree resolution for setup (first usable wins):

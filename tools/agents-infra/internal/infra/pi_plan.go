@@ -21,10 +21,26 @@ type PiLaunchPlanDetails struct {
 	PiCompatibilitySource string               `json:"pi_compatibility_source,omitempty"`
 	State                 *PiStatePaths        `json:"state,omitempty"`
 	ModelsJSON            PiGeneratedCatalog   `json:"models_json,omitempty"`
+	Settings              *PiSettingsPlan      `json:"settings,omitempty"`
 	PiIdentity            *PiExecutionIdentity `json:"pi_identity,omitempty"`
 	Runtime               *PiRuntimePlan       `json:"runtime,omitempty"`
+	SharedRuntime         *PiSharedRuntimePlan `json:"shared_runtime,omitempty"`
 	Capabilities          *PiCapabilityPlan    `json:"capabilities,omitempty"`
 	DFlash                *PiDFlashPlan        `json:"dflash,omitempty"`
+}
+type PiSettingsPlan struct {
+	Path       string        `json:"path"`
+	Compaction *PiCompaction `json:"compaction,omitempty"`
+}
+type PiSharedRuntimePlan struct {
+	Mode          string             `json:"mode"`
+	RuntimeKey    string             `json:"runtime_key"`
+	ProfileDigest string             `json:"profile_digest"`
+	Paths         SharedRuntimePaths `json:"paths"`
+	Configured    PiRuntimeSharing   `json:"configured"`
+	Broker        struct {
+		Observed string `json:"observed"`
+	} `json:"broker"`
 }
 
 type PiGeneratedCatalog struct {
@@ -115,10 +131,11 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	for _, source := range composite.Sources {
 		result.Sources = append(result.Sources, PrimarySessionSource{Kind: "project_config", Path: source.Path})
 	}
-	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
+	effectiveArgs, err := applyPiPrimarySessionYolo(userArgs, composite.PiPrimarySession)
+	if err != nil {
 		return err
 	}
-	override, err := ExtractPiProfileOverride(userArgs)
+	override, err := ExtractPiProfileOverride(effectiveArgs)
 	if err != nil {
 		return err
 	}
@@ -135,8 +152,8 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 			return piError("provider_executable_not_found", findErr)
 		}
 		result.Executable = piPath
-		result.LaunchVariants.Interactive.Argv = append([]string(nil), userArgs...)
-		result.LaunchVariants.ManagedHost = PrimarySessionManagedHostVariant{Kind: PrimarySessionManagedHostKindPiPTY, Argv: append([]string(nil), userArgs...)}
+		result.LaunchVariants.Interactive.Argv = append([]string(nil), effectiveArgs...)
+		result.LaunchVariants.ManagedHost = PrimarySessionManagedHostVariant{Kind: PrimarySessionManagedHostKindPiPTY, Argv: append([]string(nil), effectiveArgs...)}
 		result.LaunchVariants.ManagedClient.Argv = []string{}
 		result.Resolved.Model = PrimarySessionResolvedString{Source: "native"}
 		result.Resolved.Reasoning = PrimarySessionResolvedString{Source: "native"}
@@ -158,7 +175,7 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	if err := ValidatePiStateKeyCollisions(composite.PiProfiles); err != nil {
 		return err
 	}
-	argsPlan, err := BuildManagedPiArguments(userArgs, selected, profile)
+	argsPlan, err := BuildManagedPiArguments(effectiveArgs, selected, profile)
 	if err != nil {
 		return err
 	}
@@ -195,6 +212,21 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	details := &PiLaunchPlanDetails{Managed: true, LogicalProfile: selected, ProfileSource: selectedSource, PiCompatibilitySource: composite.PiPrimarySession.PiCompatibility.Source, State: &state, ModelsJSON: PiGeneratedCatalog{Path: state.ModelsJSON, SHA256: hex.EncodeToString(modelsSum[:])}, PiIdentity: &identity,
 		Runtime:      &PiRuntimePlan{Executable: profile.Runtime.Executable, Argv: append([]string(nil), profile.Runtime.Argv...), Source: profile.Source, Endpoint: profile.BaseURL, ReadinessURL: strings.TrimSuffix(profile.BaseURL, "/v1") + "/v1" + profile.Runtime.ReadinessPath, StartupTimeoutSeconds: profile.Runtime.StartupTimeoutSeconds, ShutdownTimeoutSeconds: profile.Runtime.ShutdownTimeoutSeconds, ExecutableState: execState, Ownership: "direct-child-process-group"},
 		Capabilities: &PiCapabilityPlan{Requested: append([]string(nil), profile.RequestedCapabilities...), Verified: []string{}, Verification: "not-claimed"}}
+	if profile.Compaction != nil {
+		compaction := *profile.Compaction
+		details.Settings = &PiSettingsPlan{Path: state.SettingsJSON, Compaction: &compaction}
+	}
+	if profile.Runtime.Sharing != nil && profile.Runtime.Sharing.Mode == "shared" {
+		runtimeKey, profileDigest := SharedRuntimeKey(profile)
+		paths, err := ResolveSharedRuntimePaths("", runtimeKey)
+		if err != nil {
+			return err
+		}
+		shared := &PiSharedRuntimePlan{Mode: "shared", RuntimeKey: runtimeKey, ProfileDigest: profileDigest, Paths: paths, Configured: *profile.Runtime.Sharing}
+		shared.Broker.Observed = "not-inspected"
+		details.SharedRuntime = shared
+		details.Runtime.Ownership = "broker-owned-process-group"
+	}
 	if profile.Runtime.DFlash != nil {
 		d := profile.Runtime.DFlash
 		details.DFlash = &PiDFlashPlan{Status: "configured-unverified", TargetModel: d.TargetModel, DraftModel: d.DraftModel, TargetArgv: append([]string(nil), d.TargetArgv...), DraftArgv: append([]string(nil), d.DraftArgv...)}

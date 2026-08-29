@@ -99,3 +99,49 @@ qwen-infra = "qwen"
 		}
 	}
 }
+
+func TestRunTargetCanonicalQwenRendersContainedRestoreModes(t *testing.T) {
+	for name, providerArgs := range map[string][]string{
+		"continue newest": {"--continue"},
+		"resume selector": {"--resume"},
+		"exact session":   {"--session", "01a03e8e-7c6d-7973-876a-a392202cdd57"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+			profileBody := mainTestPiConfig("/bin/echo", 18011)
+			profileBody = strings.Replace(profileBody, `reasoning = false`, `reasoning = true`, 1)
+			profileBody = strings.Replace(profileBody, `thinking = "off"`, `thinking = "medium"`, 1)
+			profileBody = strings.Replace(profileBody, `supports_developer_role = false`, "supports_developer_role = false\nsupports_reasoning_effort = false\nthinking_format = \"qwen-chat-template\"", 1)
+			body := profileBody + `[agents.targets."qwen-mlx-8bit"]
+vendor = "qwen"
+environment = "pi"
+model = "Model"
+reasoning = "medium"
+profile = "profile"
+profile_provider = "local-provider"
+endpoint = "http://127.0.0.1:18011/v1"
+
+[agents.entrypoints]
+qwen-infra = "qwen-mlx-8bit"
+`
+			writeMainCanonicalConfig(t, project, body)
+			piRoot := mainTestOfficialPiAsset(t)
+			t.Setenv("HOME", home)
+			t.Setenv("PATH", piRoot)
+			t.Setenv(callerCWDEnv, project)
+			args := []string{"qwen-infra", "--print-config", "--"}
+			args = append(args, providerArgs...)
+			output := captureStdout(t, func() {
+				if err := runTarget(args); err != nil {
+					t.Fatalf("runTarget(%q): %v", args, err)
+				}
+			})
+			for _, want := range providerArgs {
+				if !strings.Contains(output, `  - "`+want+`"`) {
+					t.Fatalf("restore token %q absent:\n%s", want, output)
+				}
+			}
+		})
+	}
+}

@@ -35,11 +35,13 @@ type RunPiOptions struct {
 	Signals    <-chan os.Signal
 	Context    context.Context
 	Report     *PiRunReport
+	Standalone *PiStandaloneRequest
 }
 
 var (
-	piListen      = net.Listen
-	piExecCommand = exec.Command
+	piListen          = net.Listen
+	piExecCommand     = exec.Command
+	piTerminalFDProbe = piTerminalFD
 )
 
 func RunPi(opts RunPiOptions) error {
@@ -70,25 +72,40 @@ func RunPi(opts RunPiOptions) error {
 	if err != nil {
 		return piError("invalid_project_configuration", err)
 	}
-	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
-		return err
-	}
-	override, err := ExtractPiProfileOverride(opts.Args)
-	if err != nil {
-		return err
-	}
+	effectiveArgs := opts.Args
 	selected := ""
-	if override != nil {
-		selected = *override
-	} else if composite.PiPrimarySession.Profile.Present {
-		selected = composite.PiPrimarySession.Profile.Value
+	if opts.Standalone != nil {
+		if err := validatePiStandaloneRequest(*opts.Standalone, opts.Args); err != nil {
+			return err
+		}
+		if err := validatePiStandalonePolicy(composite.PiStandaloneSession); err != nil {
+			return err
+		}
+		selected, _, _, err = resolvePiStandaloneSelection(composite, *opts.Standalone)
+		if err != nil {
+			return err
+		}
+	} else {
+		effectiveArgs, err = applyPiPrimarySessionYolo(opts.Args, composite.PiPrimarySession)
+		if err != nil {
+			return err
+		}
+		override, extractErr := ExtractPiProfileOverride(effectiveArgs)
+		if extractErr != nil {
+			return extractErr
+		}
+		if override != nil {
+			selected = *override
+		} else if composite.PiPrimarySession.Profile.Present {
+			selected = composite.PiPrimarySession.Profile.Value
+		}
 	}
 	piPath, err := opts.LookPath("pi")
 	if err != nil {
 		return piError("provider_executable_not_found", err)
 	}
 	if selected == "" {
-		return runPiProcess(piPath, opts.Args, project, opts.Environ, opts.Stdin, opts.Stdout, opts.Stderr, false)
+		return runPiProcess(piPath, effectiveArgs, project, opts.Environ, opts.Stdin, opts.Stdout, opts.Stderr, false)
 	}
 	if opts.Report != nil {
 		opts.Report.Managed = true
@@ -103,7 +120,12 @@ func RunPi(opts RunPiOptions) error {
 	if err := ValidatePiStateKeyCollisions(composite.PiProfiles); err != nil {
 		return err
 	}
-	argsPlan, err := BuildManagedPiArguments(opts.Args, selected, profile)
+	var argsPlan PiArgumentPlan
+	if opts.Standalone != nil {
+		argsPlan, err = BuildStandalonePiArguments(opts.Args, profile, composite.PiStandaloneSession, opts.Standalone.Prompt)
+	} else {
+		argsPlan, err = BuildManagedPiArguments(effectiveArgs, selected, profile)
+	}
 	if err != nil {
 		return err
 	}
@@ -124,7 +146,25 @@ func RunPi(opts RunPiOptions) error {
 	if err != nil {
 		return err
 	}
-	state, err := ResolvePiStatePaths(opts.CacheRoot, project, selected)
+	if profile.Runtime.Sharing != nil && profile.Runtime.Sharing.Mode == "shared" {
+		return runSharedPiSession(opts, project, selected, profile, argsPlan, identity, runtimeIdentity)
+	}
+	var state PiStatePaths
+	if opts.Standalone != nil {
+		runID := opts.Standalone.ClientRunID
+		if runID == "" {
+			runID, err = newPiStandaloneRunID()
+			if err != nil {
+				return err
+			}
+			standalone := *opts.Standalone
+			standalone.ClientRunID = runID
+			opts.Standalone = &standalone
+		}
+		state, err = ResolvePiClientStatePaths(opts.CacheRoot, project, selected, runID)
+	} else {
+		state, err = ResolvePiStatePaths(opts.CacheRoot, project, selected)
+	}
 	if err != nil {
 		return err
 	}
@@ -136,11 +176,30 @@ func RunPi(opts RunPiOptions) error {
 		return err
 	}
 	defer lock.Close()
+	sessionLog, err := openPiSessionLog(state)
+	if err != nil {
+		return err
+	}
+	defer sessionLog.close()
+	if opts.Report != nil {
+		opts.Report.SessionLog = sessionLog.path
+	}
+	sessionLog.event("session_start", map[string]any{
+		"project": project, "profile": selected, "provider": profile.Provider,
+		"model": profile.Model, "thinking": profile.Thinking,
+		"transcript_dir": state.SessionsDir,
+	})
+	if opts.Stderr != nil {
+		fmt.Fprintf(opts.Stderr, "agents-infra: Pi session log: %s\n", sessionLog.path)
+	}
 	models, err := GeneratePiModelsJSON(profile)
 	if err != nil {
 		return err
 	}
 	if err := WritePiModelsJSON(state, models); err != nil {
+		return err
+	}
+	if err := WritePiCompactionSettings(state, profile.Compaction); err != nil {
 		return err
 	}
 	if err := preflightPiListener(profile.BaseURL); err != nil {
@@ -168,16 +227,23 @@ func RunPi(opts RunPiOptions) error {
 	runtimeCmd.Stderr = runtimeOutput
 	runtimeCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := runtimeCmd.Start(); err != nil {
+		sessionLog.event("runtime_start_failed", map[string]any{"error": err.Error()})
 		return piError("runtime_start_failed", err)
 	}
+	sessionLog.event("runtime_started", piProcessIdentityFields(runtimeCmd.Process.Pid))
 	if opts.Report != nil {
 		opts.Report.RuntimeProcessGroupCleanup = "pending"
 	}
 	runtimeWait := waitForPiProcess(runtimeCmd)
 	cleanupRuntime := func() error {
 		err := terminateProcessGroup(runtimeCmd.Process.Pid, runtimeWait, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
+		fields := map[string]any{"state": processGroupCleanupState(runtimeCmd.Process.Pid, err)}
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		sessionLog.event("runtime_cleanup", fields)
 		if opts.Report != nil {
-			opts.Report.RuntimeProcessGroupCleanup = processGroupCleanupState(runtimeCmd.Process.Pid, err)
+			opts.Report.RuntimeProcessGroupCleanup = fields["state"].(string)
 		}
 		return err
 	}
@@ -192,6 +258,7 @@ func RunPi(opts RunPiOptions) error {
 		wantModel = profile.Runtime.DFlash.TargetModel
 	}
 	if err := waitPiRuntimeReady(opts.Context, opts.HTTPClient, profile.BaseURL+profile.Runtime.ReadinessPath, wantModel, runtimeCmd.Process, runtimeWait, time.Duration(profile.Runtime.StartupTimeoutSeconds)*time.Second); err != nil {
+		sessionLog.event("runtime_readiness_failed", map[string]any{"error": err.Error()})
 		if opts.Report != nil {
 			opts.Report.DeadlineExceeded = errors.Is(err, context.DeadlineExceeded)
 		}
@@ -202,6 +269,7 @@ func RunPi(opts RunPiOptions) error {
 		}
 		return err
 	}
+	sessionLog.event("runtime_ready", map[string]any{"endpoint": profile.BaseURL, "model": wantModel})
 	select {
 	case <-runtimeWait.done:
 		cleanupErr := cleanupRuntime()
@@ -236,15 +304,24 @@ func RunPi(opts RunPiOptions) error {
 	piCmd := piExecCommand(identity.Entrypoint, argsPlan.Argv...)
 	piCmd.Dir = project
 	piCmd.Env = managedEnv
-	piCmd.Stdin = opts.Stdin
-	piCmd.Stdout = newPiSynchronizedWriter(outputMu, opts.Stdout)
-	piCmd.Stderr = newPiSynchronizedWriter(outputMu, opts.Stderr)
-	piCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	foreground := false
+	if opts.Standalone == nil {
+		piCmd.Stdin = opts.Stdin
+		foreground = configurePiProcessTerminal(piCmd, opts.Stdin)
+	} else {
+		piCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
+	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
 	if err := piCmd.Start(); err != nil {
+		sessionLog.event("pi_start_failed", map[string]any{"error": err.Error()})
 		_ = cleanupRuntime()
 		cleaned = true
 		return piError("pi_start_failed", err)
 	}
+	piFields := piProcessIdentityFields(piCmd.Process.Pid)
+	piFields["foreground"] = foreground
+	sessionLog.event("pi_started", piFields)
 	if opts.Report != nil {
 		opts.Report.PiProcessGroupCleanup = "pending"
 	}
@@ -255,9 +332,14 @@ func RunPi(opts RunPiOptions) error {
 			return nil
 		}
 		err := terminateProcessGroupWithSignal(piCmd.Process.Pid, piWait, first, time.Duration(profile.Runtime.ShutdownTimeoutSeconds)*time.Second)
+		fields := map[string]any{"signal": first.String(), "state": processGroupCleanupState(piCmd.Process.Pid, err)}
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		sessionLog.event("pi_cleanup", fields)
 		piCleaned = true
 		if opts.Report != nil {
-			opts.Report.PiProcessGroupCleanup = processGroupCleanupState(piCmd.Process.Pid, err)
+			opts.Report.PiProcessGroupCleanup = fields["state"].(string)
 		}
 		return err
 	}
@@ -274,6 +356,11 @@ func RunPi(opts RunPiOptions) error {
 	select {
 	case <-piWait.done:
 		result = piWait.err
+		fields := map[string]any{}
+		if result != nil {
+			fields["error"] = result.Error()
+		}
+		sessionLog.event("pi_exited", fields)
 		select {
 		case <-runtimeWait.done:
 			result = piError("runtime_exited_early", fmt.Errorf("runtime child exited before Pi session ended: %v", runtimeWait.err))
@@ -283,6 +370,7 @@ func RunPi(opts RunPiOptions) error {
 			}
 		}
 	case <-runtimeWait.done:
+		sessionLog.event("runtime_exited_early", map[string]any{"error": fmt.Sprint(runtimeWait.err)})
 		_ = cleanupPi(syscall.SIGTERM)
 		cleanupErr := cleanupRuntime()
 		cleaned = true
@@ -291,12 +379,14 @@ func RunPi(opts RunPiOptions) error {
 		}
 		result = piError("runtime_exited_early", fmt.Errorf("runtime child exited during Pi session: %v", runtimeWait.err))
 	case sig := <-signals:
+		sessionLog.event("signal_received", map[string]any{"signal": sig.String()})
 		forward := syscall.SIGTERM
 		if received, ok := sig.(syscall.Signal); ok {
 			forward = received
 		}
 		result = cleanupPi(forward)
 	case <-contextDone:
+		sessionLog.event("context_done", map[string]any{"error": opts.Context.Err().Error()})
 		if opts.Report != nil {
 			opts.Report.DeadlineExceeded = errors.Is(opts.Context.Err(), context.DeadlineExceeded)
 		}
@@ -315,6 +405,12 @@ func RunPi(opts RunPiOptions) error {
 		}
 		cleaned = true
 	}
+	endFields := map[string]any{"status": "ok"}
+	if result != nil {
+		endFields["status"] = "error"
+		endFields["error"] = result.Error()
+	}
+	sessionLog.event("session_end", endFields)
 	return result
 }
 
@@ -342,6 +438,25 @@ func newPiSynchronizedWriter(mu *sync.Mutex, writer io.Writer) io.Writer {
 		return nil
 	}
 	return &piSynchronizedWriter{mu: mu, writer: writer}
+}
+
+// Preserve terminal file descriptors for the interactive Pi child. Wrapping
+// an *os.File in a generic io.Writer makes os/exec insert a pipe, which causes
+// Pi to see stdout/stderr as non-TTY and exit immediately with status 0.
+func piProcessWriter(mu *sync.Mutex, writer io.Writer) io.Writer {
+	if file, ok := writer.(*os.File); ok {
+		return file
+	}
+	return newPiSynchronizedWriter(mu, writer)
+}
+
+func configurePiProcessTerminal(cmd *exec.Cmd, stdin io.Reader) bool {
+	if fd, ok := piTerminalFDProbe(stdin); ok {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Foreground: true, Ctty: fd}
+		return true
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return false
 }
 
 func (w *piSynchronizedWriter) Write(p []byte) (int, error) {

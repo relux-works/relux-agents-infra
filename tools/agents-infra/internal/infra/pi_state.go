@@ -6,8 +6,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,11 +25,15 @@ type PiStatePaths struct {
 	CanonicalCacheRoot string `json:"canonical_cache_root"`
 	ProjectStateKey    string `json:"project_state_key"`
 	ProfileStateKey    string `json:"profile_state_key"`
+	RunStateKey        string `json:"run_state_key,omitempty"`
 	Root               string `json:"root"`
 	AgentDir           string `json:"agent_dir"`
 	SessionsDir        string `json:"sessions_dir"`
+	LogsDir            string `json:"logs_dir"`
 	ModelsJSON         string `json:"models_json"`
+	SettingsJSON       string `json:"settings_json"`
 	Lock               string `json:"lock"`
+	components         []string
 }
 
 func exactStateKey(value string) string {
@@ -38,6 +44,14 @@ func exactStateKey(value string) string {
 var piStateKey = exactStateKey
 
 func ResolvePiStatePaths(cacheRoot, canonicalProject, profileName string) (PiStatePaths, error) {
+	return resolvePiClientStatePaths(cacheRoot, canonicalProject, profileName, "")
+}
+
+func ResolvePiClientStatePaths(cacheRoot, canonicalProject, profileName, runID string) (PiStatePaths, error) {
+	return resolvePiClientStatePaths(cacheRoot, canonicalProject, profileName, runID)
+}
+
+func resolvePiClientStatePaths(cacheRoot, canonicalProject, profileName, runID string) (PiStatePaths, error) {
 	if cacheRoot == "" {
 		var err error
 		cacheRoot, err = os.UserCacheDir()
@@ -64,8 +78,19 @@ func ResolvePiStatePaths(cacheRoot, canonicalProject, profileName string) (PiSta
 	if !piStateKeyPattern.MatchString(projectKey) || !piStateKeyPattern.MatchString(profileKey) {
 		return PiStatePaths{}, piError("profile_state_path_invalid", errors.New("state key is not lowercase SHA-256 hex"))
 	}
-	suffix := filepath.Join("agents-infra", "pi", projectKey, profileKey)
-	if filepath.IsAbs(suffix) || len(splitCleanSuffix(suffix)) != 4 {
+	components := []string{"agents-infra", "pi", projectKey, profileKey}
+	runKey := ""
+	lockName := "session.lock"
+	if runID != "" {
+		runKey = exactStateKey("agents-infra.pi.run.v1\x00" + runID)
+		if !piStateKeyPattern.MatchString(runKey) {
+			return PiStatePaths{}, piError("profile_state_path_invalid", errors.New("run state key is not lowercase SHA-256 hex"))
+		}
+		components = append(components, "runs", runKey)
+		lockName = "client.lock"
+	}
+	suffix := filepath.Join(components...)
+	if filepath.IsAbs(suffix) || len(splitCleanSuffix(suffix)) != len(components) {
 		return PiStatePaths{}, piError("profile_state_path_invalid", errors.New("managed state suffix is invalid"))
 	}
 	root := filepath.Join(canonical, suffix)
@@ -73,7 +98,7 @@ func ResolvePiStatePaths(cacheRoot, canonicalProject, profileName string) (PiSta
 	if err != nil || rel != suffix {
 		return PiStatePaths{}, piError("profile_state_path_invalid", errors.New("managed state escaped canonical cache root"))
 	}
-	paths := PiStatePaths{CanonicalCacheRoot: canonical, ProjectStateKey: projectKey, ProfileStateKey: profileKey, Root: root, AgentDir: filepath.Join(root, "agent"), SessionsDir: filepath.Join(root, "sessions"), ModelsJSON: filepath.Join(root, "agent", "models.json"), Lock: filepath.Join(root, "session.lock")}
+	paths := PiStatePaths{CanonicalCacheRoot: canonical, ProjectStateKey: projectKey, ProfileStateKey: profileKey, RunStateKey: runKey, Root: root, AgentDir: filepath.Join(root, "agent"), SessionsDir: filepath.Join(root, "sessions"), LogsDir: filepath.Join(root, "logs"), ModelsJSON: filepath.Join(root, "agent", "models.json"), SettingsJSON: filepath.Join(root, "agent", "settings.json"), Lock: filepath.Join(root, lockName), components: components}
 	if err := validateExistingPiStateComponents(paths); err != nil {
 		return PiStatePaths{}, piError("profile_state_path_invalid", err)
 	}
@@ -87,7 +112,7 @@ func validateExistingPiStateComponents(paths PiStatePaths) error {
 	}
 	defer unix.Close(rootFD)
 	fd := rootFD
-	for _, name := range []string{"agents-infra", "pi", paths.ProjectStateKey, paths.ProfileStateKey} {
+	for _, name := range statePathComponents(paths) {
 		next, openErr := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if fd != rootFD {
 			unix.Close(fd)
@@ -105,7 +130,7 @@ func validateExistingPiStateComponents(paths PiStatePaths) error {
 			unix.Close(fd)
 		}
 	}()
-	for _, name := range []string{"agent", "sessions"} {
+	for _, name := range []string{"agent", "sessions", "logs"} {
 		child, openErr := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if errors.Is(openErr, syscall.ENOENT) {
 			continue
@@ -152,23 +177,9 @@ func CreatePiStateTree(paths PiStatePaths) error {
 		return piError("profile_state_path_invalid", err)
 	}
 	defer unix.Close(rootFD)
-	components := []string{"agents-infra", "pi", paths.ProjectStateKey, paths.ProfileStateKey, "agent", "sessions"}
+	components := statePathComponents(paths)
 	fd := rootFD
-	for i, component := range components {
-		if i == 5 {
-			unix.Close(fd)
-			fd = rootFD
-			for _, c := range components[:4] {
-				next, openErr := openOrCreateDirAt(fd, c)
-				if fd != rootFD {
-					unix.Close(fd)
-				}
-				if openErr != nil {
-					return piError("profile_state_path_invalid", openErr)
-				}
-				fd = next
-			}
-		}
+	for _, component := range components {
 		next, openErr := openOrCreateDirAt(fd, component)
 		if fd != rootFD {
 			unix.Close(fd)
@@ -178,10 +189,30 @@ func CreatePiStateTree(paths PiStatePaths) error {
 		}
 		fd = next
 	}
-	if fd != rootFD {
-		unix.Close(fd)
+	defer func() {
+		if fd != rootFD {
+			unix.Close(fd)
+		}
+	}()
+	for _, childName := range []string{"agent", "sessions", "logs"} {
+		child, openErr := openOrCreateDirAt(fd, childName)
+		if openErr != nil {
+			return piError("profile_state_path_invalid", openErr)
+		}
+		unix.Close(child)
 	}
 	return nil
+}
+
+func statePathComponents(paths PiStatePaths) []string {
+	if len(paths.components) > 0 {
+		return append([]string(nil), paths.components...)
+	}
+	components := []string{"agents-infra", "pi", paths.ProjectStateKey, paths.ProfileStateKey}
+	if paths.RunStateKey != "" {
+		components = append(components, "runs", paths.RunStateKey)
+	}
+	return components
 }
 
 func openOrCreateDirAt(parent int, name string) (int, error) {
@@ -221,7 +252,11 @@ func AcquirePiProfileLock(paths PiStatePaths) (*PiProfileLock, error) {
 		return nil, piError("profile_state_path_invalid", err)
 	}
 	defer unix.Close(rootFD)
-	fd, err := unix.Openat(rootFD, "session.lock", unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	lockName := filepath.Base(paths.Lock)
+	if lockName != "session.lock" && lockName != "client.lock" {
+		return nil, piError("profile_state_path_invalid", errors.New("unexpected client lock name"))
+	}
+	fd, err := unix.Openat(rootFD, lockName, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, piError("profile_state_path_invalid", err)
 	}
@@ -262,11 +297,86 @@ func WritePiModelsJSON(paths PiStatePaths, content []byte) error {
 		return piError("profile_state_path_invalid", err)
 	}
 	defer unix.Close(dirFD)
+	return writePiAgentFileAtomic(dirFD, "models.json", content)
+}
+
+func WritePiCompactionSettings(paths PiStatePaths, compaction *PiCompaction) error {
+	if compaction == nil {
+		return nil
+	}
+	rootFD, err := openPiProfileRoot(paths)
+	if err != nil {
+		return piError("profile_state_path_invalid", err)
+	}
+	defer unix.Close(rootFD)
+	dirFD, err := unix.Openat(rootFD, "agent", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return piError("profile_state_path_invalid", err)
+	}
+	defer unix.Close(dirFD)
+	document := map[string]json.RawMessage{}
+	existing, present, err := readPiAgentFile(dirFD, "settings.json")
+	if err != nil {
+		return piError("pi_settings_invalid", err)
+	}
+	if present {
+		if err := json.Unmarshal(existing, &document); err != nil {
+			return piError("pi_settings_invalid", fmt.Errorf("decode managed Pi settings: %w", err))
+		}
+		if document == nil {
+			return piError("pi_settings_invalid", errors.New("managed Pi settings must be a JSON object"))
+		}
+	}
+	encodedCompaction, err := json.Marshal(compaction)
+	if err != nil {
+		return piError("pi_settings_invalid", err)
+	}
+	document["compaction"] = encodedCompaction
+	content, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return piError("pi_settings_invalid", err)
+	}
+	content = append(content, '\n')
+	if err := writePiAgentFileAtomic(dirFD, "settings.json", content); err != nil {
+		return err
+	}
+	return nil
+}
+
+func readPiAgentFile(dirFD int, name string) ([]byte, bool, error) {
+	fd, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if errors.Is(err, syscall.ENOENT) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	f := os.NewFile(uintptr(fd), name)
+	defer f.Close()
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return nil, false, err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1 {
+		return nil, false, errors.New("managed Pi settings must be a single-link regular file")
+	}
+	const maxSettingsBytes = 1 << 20
+	content, err := io.ReadAll(io.LimitReader(f, maxSettingsBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(content) > maxSettingsBytes {
+		return nil, false, errors.New("managed Pi settings exceed 1 MiB")
+	}
+	return content, true, nil
+}
+
+func writePiAgentFileAtomic(dirFD int, name string, content []byte) error {
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return piError("profile_state_path_invalid", err)
 	}
-	temp := ".models.json.tmp-" + strconv.Itoa(os.Getpid()) + "-" + hex.EncodeToString(nonce[:])
+	temp := "." + name + ".tmp-" + strconv.Itoa(os.Getpid()) + "-" + hex.EncodeToString(nonce[:])
 	fd, err := unix.Openat(dirFD, temp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return piError("profile_state_path_invalid", err)
@@ -275,7 +385,7 @@ func WritePiModelsJSON(paths PiStatePaths, content []byte) error {
 	writeErr := error(nil)
 	if n, err := f.Write(content); err != nil || n != len(content) {
 		if err == nil {
-			err = errors.New("partial models.json write")
+			err = fmt.Errorf("partial %s write", name)
 		}
 		writeErr = err
 	}
@@ -290,7 +400,7 @@ func WritePiModelsJSON(paths PiStatePaths, content []byte) error {
 		_ = unix.Unlinkat(dirFD, temp, 0)
 		return piError("profile_state_path_invalid", writeErr)
 	}
-	if err := unix.Renameat(dirFD, temp, dirFD, "models.json"); err != nil {
+	if err := unix.Renameat(dirFD, temp, dirFD, name); err != nil {
 		_ = unix.Unlinkat(dirFD, temp, 0)
 		return piError("profile_state_path_invalid", err)
 	}
@@ -306,7 +416,7 @@ func openPiProfileRoot(paths PiStatePaths) (int, error) {
 		return -1, err
 	}
 	fd := rootFD
-	for _, name := range []string{"agents-infra", "pi", paths.ProjectStateKey, paths.ProfileStateKey} {
+	for _, name := range statePathComponents(paths) {
 		next, openErr := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if fd != rootFD {
 			unix.Close(fd)
