@@ -39,10 +39,10 @@
 
 ## Version Control
 
-* Committing is part of doing the work, not a separate permission to ask for. When a coherent scope is finished and validated, commit it. Do not stop and ask, and do not invent a review boundary that the repo's own workflow does not define — a task tracker or board that closes work by commits cannot close anything if every commit waits on a human.
-* Commit what you actually did. Inspect the exact diff first, and never sweep unrelated pre-existing changes into your commit — stage the paths your work touched, by name. See *Dirty Checkout Isolation* below.
-* **Pushing is not committing.** Publishing to a remote is outward-facing and stays an explicit ask unless the repo's workflow says otherwise.
-* **Never add Co-Authored-By lines** or any AI attribution to commits.
+For task-board-tracked work, commit acknowledgement and timing come from the
+project's `task-board.config.json -> version_control` policy and the board
+workflow. This global module adds no separate commit, push, message, or
+attribution policy. Repository-specific contribution rules still apply.
 
 ### Canonical pull-request delivery
 
@@ -52,17 +52,7 @@
 * A direct default-branch push is an exception only when the user or repository workflow explicitly requires it, or when the remote has no review workflow. A stricter repository-local PR/MR-only rule always wins. If the canonical flow is required but authentication, policy, or hosting constraints prevent it, report the exact blocker instead of silently falling back to a direct push.
 * This section governs the shape of remote publication. It does not grant commit, push, review, or merge authority, and it does not replace task-board commit confirmation or repository-specific acceptance gates.
 
-### Commit message style
-
-Follow the repository's existing convention — read `git log` before writing the first message, and match what is already there. Absent a clear local convention, use the widely accepted form below, which is also what the strongest history in these repos already does:
-
-* **Subject:** imperative mood, capitalized, no trailing period, kept near 50 characters and under 72. Say what the change does in the domain's own language — `Carry trunk's three new providers onto the v3 admission contract`, not `Update files` and not `Fixed a bug`.
-* **No type prefixes** (`feat:`, `chore(scope):`) unless the repository already uses them consistently. A convention applied to a quarter of the history is not a convention; matching the majority style is better than importing one.
-* **Body:** blank line, then prose wrapped near 72 characters. Explain *why* the change is right and what it reconciles, not a restatement of the diff — the diff already says what changed. Prefer paragraphs over bullet lists for reasoning.
-* **Close with evidence** when the work has any: what was built, which suites ran, what is still failing and why it is not yours.
-* Mention tracked identifiers (task, story, bug) when the repository's history does.
-
-### Worktrees
+## Worktrees
 
 * When you need to work on multiple revisions, parallel fixes, or isolated experiments in the same repo, prefer **`git worktree`** over juggling branches in one checkout.
 * Place temporary worktrees under the project's **`.temp/`** directory, not next to the main checkout.
@@ -72,7 +62,7 @@ Follow the repository's existing convention — read `git log` before writing th
 * This keeps the main checkout stable while making task-local scratch state easy to find and clean up.
 * **A worktree does not follow trunk.** One cut before a merge stays behind it forever, so a suite that is green there may simply lack the code that fails on trunk. Check `git rev-list --count HEAD..main` before trusting any measurement taken inside one, and say which commit your evidence was gathered at. Fast-forwarding is safe only when the worktree is strictly behind with no commits of its own.
 
-### Dirty Checkout Isolation
+## Dirty Checkout Isolation
 
 When the active checkout already contains changes that were not created for the
 current task:
