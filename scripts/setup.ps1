@@ -7,7 +7,9 @@ $ErrorActionPreference = "Stop"
 
 $SourceDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BinaryName = "agents-infra.exe"
+$ModelHarnessBinaryName = "model-harness.exe"
 $BuildOutput = Join-Path $SourceDir ".temp\bin\$BinaryName"
+$ModelHarnessBuildOutput = Join-Path $SourceDir ".temp\bin\$ModelHarnessBinaryName"
 $ConfigDir = Join-Path ([Environment]::GetFolderPath("ApplicationData")) "agents-infra"
 $InstallStatePath = Join-Path $ConfigDir "install.json"
 $BuildVersion = "dev"
@@ -74,12 +76,18 @@ function Build-Cli {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $BuildOutput) | Out-Null
     go -C (Join-Path $SourceDir "tools\agents-infra") build -trimpath -ldflags $BuildLdflags -o $BuildOutput .
     Write-Info "Built: $BuildOutput"
+
+    Write-Info "Building $ModelHarnessBinaryName ..."
+    go -C (Join-Path $SourceDir "tools\agents-infra") build -trimpath -ldflags $BuildLdflags -o $ModelHarnessBuildOutput .\cmd\model-harness
+    Write-Info "Built: $ModelHarnessBuildOutput"
 }
 
 function Install-Binary {
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     Copy-Item $BuildOutput (Join-Path $BinDir $BinaryName) -Force
     Write-Info "Installed binary: $(Join-Path $BinDir $BinaryName)"
+    Copy-Item $ModelHarnessBuildOutput (Join-Path $BinDir $ModelHarnessBinaryName) -Force
+    Write-Info "Installed binary: $(Join-Path $BinDir $ModelHarnessBinaryName)"
 }
 
 function Write-InstallState {
@@ -117,11 +125,16 @@ function Ensure-UserPath {
 
 function Verify-Install {
     $InstalledBinary = Join-Path $BinDir $BinaryName
+    $InstalledModelHarness = Join-Path $BinDir $ModelHarnessBinaryName
     if (-not (Test-Path $InstalledBinary)) {
         throw "Missing installed binary: $InstalledBinary"
     }
+    if (-not (Test-Path $InstalledModelHarness)) {
+        throw "Missing installed binary: $InstalledModelHarness"
+    }
 
     & $InstalledBinary version | Out-Null
+    & $InstalledModelHarness version | Out-Null
     & $InstalledBinary setup global --source-dir $SourceDir | Out-Null
     & $InstalledBinary doctor global | Out-Null
     Write-Info "Verified binary and global setup"

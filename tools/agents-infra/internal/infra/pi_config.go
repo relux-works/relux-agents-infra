@@ -74,6 +74,7 @@ type PiProfile struct {
 
 type PiCompaction struct {
 	Enabled          bool `json:"enabled"`
+	CompactAtTokens  int  `json:"compactAtTokens"`
 	ReserveTokens    int  `json:"reserveTokens"`
 	KeepRecentTokens int  `json:"keepRecentTokens"`
 }
@@ -305,7 +306,7 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 }
 
 func parsePiCompaction(table map[string]any, field string, contextWindow, maxTokens int) (PiCompaction, error) {
-	if err := rejectUnknownFields(table, field, "enabled", "reserve_tokens", "keep_recent_tokens"); err != nil {
+	if err := rejectUnknownFields(table, field, "enabled", "compact_at_tokens", "reserve_tokens", "keep_recent_tokens"); err != nil {
 		return PiCompaction{}, err
 	}
 	var compaction PiCompaction
@@ -313,20 +314,40 @@ func parsePiCompaction(table map[string]any, field string, contextWindow, maxTok
 	if compaction.Enabled, err = requiredBool(table, "enabled"); err != nil {
 		return compaction, fieldError(field+".enabled", err)
 	}
-	if compaction.ReserveTokens, err = requiredPositiveInt(table, "reserve_tokens"); err != nil {
-		return compaction, fieldError(field+".reserve_tokens", err)
+	_, hasCompactAt := table["compact_at_tokens"]
+	_, hasReserve := table["reserve_tokens"]
+	if hasCompactAt == hasReserve {
+		return compaction, fieldError(field, errors.New("exactly one of compact_at_tokens or reserve_tokens is required"))
+	}
+	if hasCompactAt {
+		if compaction.CompactAtTokens, err = requiredPositiveInt(table, "compact_at_tokens"); err != nil {
+			return compaction, fieldError(field+".compact_at_tokens", err)
+		}
+		if compaction.CompactAtTokens >= contextWindow {
+			return compaction, fieldError(field+".compact_at_tokens", errors.New("must be less than context_window"))
+		}
+		compaction.ReserveTokens = contextWindow - compaction.CompactAtTokens
+	} else {
+		if compaction.ReserveTokens, err = requiredPositiveInt(table, "reserve_tokens"); err != nil {
+			return compaction, fieldError(field+".reserve_tokens", err)
+		}
+		if compaction.ReserveTokens >= contextWindow {
+			return compaction, fieldError(field+".reserve_tokens", errors.New("must be less than context_window"))
+		}
+		compaction.CompactAtTokens = contextWindow - compaction.ReserveTokens
 	}
 	if compaction.KeepRecentTokens, err = requiredPositiveInt(table, "keep_recent_tokens"); err != nil {
 		return compaction, fieldError(field+".keep_recent_tokens", err)
 	}
 	if compaction.ReserveTokens < maxTokens {
-		return compaction, fieldError(field+".reserve_tokens", errors.New("must be at least max_tokens"))
+		thresholdField := field + ".reserve_tokens"
+		if hasCompactAt {
+			thresholdField = field + ".compact_at_tokens"
+		}
+		return compaction, fieldError(thresholdField, errors.New("must leave at least max_tokens before context_window"))
 	}
-	if compaction.ReserveTokens >= contextWindow {
-		return compaction, fieldError(field+".reserve_tokens", errors.New("must be less than context_window"))
-	}
-	if compaction.KeepRecentTokens+compaction.ReserveTokens >= contextWindow {
-		return compaction, fieldError(field+".keep_recent_tokens", errors.New("plus reserve_tokens must be less than context_window"))
+	if compaction.KeepRecentTokens >= compaction.CompactAtTokens {
+		return compaction, fieldError(field+".keep_recent_tokens", errors.New("must be less than compact_at_tokens"))
 	}
 	return compaction, nil
 }

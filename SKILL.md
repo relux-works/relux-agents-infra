@@ -338,14 +338,16 @@ components, shared locks for byte-distinct names, a fallback for read/path
 failure, or project-controlled catalog evidence.
 
 Long-lived local-model profiles may define a strict optional
-`[agents.pi.profiles.<name>.compaction]` table with required `enabled`,
-`reserve_tokens`, and `keep_recent_tokens` fields. Require
-`reserve_tokens >= max_tokens` and
-`reserve_tokens + keep_recent_tokens < context_window`. agents-infra merges
-only that object into the isolated profile `agent/settings.json` before launch,
-preserving unrelated Pi preferences and the existing `sessions/` history.
-Use an earlier threshold and a smaller retained tail for sessions expected to
-live for days; do not rely on overflow recovery as the normal compaction path.
+`[agents.pi.profiles.<name>.compaction]` table with required `enabled` and
+`keep_recent_tokens` fields plus exactly one threshold. Prefer explicit
+`compact_at_tokens`; accept Pi-native `reserve_tokens` as a compatibility form
+and derive the other as `context_window - threshold`. Require the derived
+reserve to be at least `max_tokens` and `keep_recent_tokens` to be below the
+compaction threshold. agents-infra merges only Pi's native compaction object
+into isolated profile `agent/settings.json` before launch, preserving unrelated
+Pi preferences and the existing `sessions/` history. Use an earlier threshold
+and a smaller retained tail for sessions expected to live for days; do not rely
+on overflow recovery as the normal compaction path.
 
 Use this order for every new or changed deployment:
 
@@ -383,6 +385,19 @@ owns/reaps its process group, isolates Pi state, and performs the deterministic
 standalone Pi tree check both initially and immediately before Pi spawn. It
 never attaches or silently falls back to another runtime, port, profile, model,
 listener, or Muse target-only decoding.
+
+Before raising a local profile's context window, configure every member of its
+`[profiles.<name>.stress]` table in the separate model-harness config and run:
+
+```bash
+model-harness stress PROFILE --host 127.0.0.1 --port PORT --json
+```
+
+The probe is local-mode-only, starts the reviewed backend on a free loopback
+port, calibrates and prefills the configured synthetic prompt, requests the
+configured bounded output, samples process RSS, emits one versioned JSON
+report, and reaps the runtime. Treat it as host-capacity evidence, not a model
+quality or production-throughput benchmark.
 
 Every managed Pi launch creates a distinct mode-`0600` lifecycle JSONL under
 the profile's hash-contained `logs/` directory and prints its path before Pi

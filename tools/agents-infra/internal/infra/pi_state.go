@@ -327,7 +327,16 @@ func WritePiCompactionSettings(paths PiStatePaths, compaction *PiCompaction) err
 			return piError("pi_settings_invalid", errors.New("managed Pi settings must be a JSON object"))
 		}
 	}
-	encodedCompaction, err := json.Marshal(compaction)
+	nativeCompaction := struct {
+		Enabled          bool `json:"enabled"`
+		ReserveTokens    int  `json:"reserveTokens"`
+		KeepRecentTokens int  `json:"keepRecentTokens"`
+	}{
+		Enabled:          compaction.Enabled,
+		ReserveTokens:    compaction.ReserveTokens,
+		KeepRecentTokens: compaction.KeepRecentTokens,
+	}
+	encodedCompaction, err := json.Marshal(nativeCompaction)
 	if err != nil {
 		return piError("pi_settings_invalid", err)
 	}
