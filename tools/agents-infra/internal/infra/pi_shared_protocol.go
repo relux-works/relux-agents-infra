@@ -30,6 +30,7 @@ const (
 	sharedRuntimeKeySchema        = "agents-infra.pi.shared-runtime.v1"
 	sharedRuntimeExitElectionLost = 75
 	sharedRuntimeExitListenerBusy = 76
+	sharedRuntimeExitQuarantined  = 77
 	sharedRuntimeMaxFrameBytes    = 65536
 )
 
@@ -91,6 +92,9 @@ func SharedRuntimeExitCode(err error) (int, bool) {
 	}
 	if shared.Code == "runtime_listener_occupied" {
 		return sharedRuntimeExitListenerBusy, true
+	}
+	if shared.Code == "shared_runtime_quarantined" {
+		return sharedRuntimeExitQuarantined, true
 	}
 	return 1, true
 }
@@ -201,6 +205,7 @@ type SharedRuntimePaths struct {
 	Root               string `json:"root"`
 	BrokerLock         string `json:"broker_lock"`
 	BrokerState        string `json:"broker_state"`
+	RestartLedger      string `json:"restart_ledger"`
 	BrokerLog          string `json:"broker_log"`
 	RuntimeLog         string `json:"runtime_log"`
 	LeasesDir          string `json:"leases_dir"`
@@ -243,6 +248,7 @@ func ResolveSharedRuntimePaths(cacheRoot, runtimeKey string) (SharedRuntimePaths
 		Root:               root,
 		BrokerLock:         filepath.Join(root, "broker.lock"),
 		BrokerState:        filepath.Join(root, "broker-state.json"),
+		RestartLedger:      filepath.Join(root, "restart-ledger.json"),
 		BrokerLog:          filepath.Join(root, "broker.log"),
 		RuntimeLog:         filepath.Join(root, "runtime.log"),
 		LeasesDir:          filepath.Join(root, "leases"),

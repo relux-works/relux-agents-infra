@@ -3,6 +3,29 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-08-29
+
+### 1646 — Supervision Seconds Duration Overflow Refused
+- REGRESSION: `tools/agents-infra/internal/infra/pi_config.go:424` admitted seconds above 9223372036; later `time.Duration(seconds) * time.Second` overflowed and could make backoff, stable-run, and quarantine timing negative or immediate.
+- FIX: Runtime and shared-supervision seconds now have explicit overflow-safe bounds; doubled lease-stale and handoff sums have effective-duration bounds, broker ordering uses `int64`, and exponential backoff clamps before doubling.
+- EVIDENCE: `TestRunPiRejectsSupervisionSecondsThatOverflowEffectiveDurations` drives `RunPi` and proves refusal before provider lookup or runtime-state creation; a narrowed `> max+1` gate makes it fail with exit 1. Uncached package tests, vet, and Darwin/Linux/Windows compilation exit 0.
+- STATUS: `TASK-260829-2t5xmi` revision 2 ready for review.
+
+### 1612 — Shared Runtime Restart Ledger Reaches Production
+- DECISION: `tools/agents-infra/internal/infra/pi_shared_supervision.go` owns one runtime-key-scoped persisted ledger; every shared profile supplies restart limit, initial/max backoff, stable-run, and quarantine durations explicitly.
+- FIX: `RunSharedRuntimeBroker` persists readiness/failure facts, `acquireSharedRuntimeLease` automatically retries only ledger-proven runtime failures, and status/manual quarantine use the same resolved path contract.
+- EVIDENCE: Real `handleConnection` and `runSharedPiSession` abrupt-death fixtures release leases; focused race, full infra/root packages, vet, Darwin/Linux/Windows builds, formatting, and diff checks exit 0. Narrowed backoff and active-lock bypass mutants each exit 1 on their named negative test.
+- STATUS: `TASK-260829-2t5xmi` implementation ready for review.
+
+### 1545 — Baseline Ran Outside Story Worktree
+- ANOMALY: The contended baseline commands used the primary checkout `tools/agents-infra` directory instead of the assigned Story worktree; their exit status does not describe candidate `ee8ae3c` and must not be cited as task validation.
+- DECISION: Every subsequent Go command uses the absolute Story worktree module path and records its real exit code.
+
+### 1540 — Shared-Runtime Baseline Was Contended
+- ANOMALY: Two uncached `go test ./internal/infra -count=1` processes overlapped after the first 30-second yield lost its session handle; the observed 262.406s exit 1 contained three readiness/fan-in fixture failures and is not valid single-run baseline evidence.
+- DECISION: Run one directly tracked test process at a time and use focused `-run` masks before the bounded package split.
+- STATUS: No overlapping `go test ./internal/infra` process remained after the failed run.
+
 ## 2026-08-28
 
 ### 2007 — One Binary Now Measures And Judges, And Two Of Three Blockers Did Not Reproduce

@@ -68,15 +68,19 @@ type SharedRuntimeSharingStatus struct {
 }
 
 type SharedRuntimeStatus struct {
-	RuntimeKey    string                      `json:"runtime_key"`
-	ProfileDigest string                      `json:"profile_digest"`
-	Endpoint      string                      `json:"endpoint"`
-	Sharing       SharedRuntimeSharingStatus  `json:"sharing"`
-	Broker        SharedRuntimeBrokerStatus   `json:"broker"`
-	Runtime       *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
-	Leases        []SharedLeaseStatus         `json:"leases"`
-	Attestation   []SharedRuntimeGateOutcome  `json:"attestation"`
-	Paths         SharedRuntimePaths          `json:"paths"`
+	RuntimeKey         string                      `json:"runtime_key"`
+	ProfileDigest      string                      `json:"profile_digest"`
+	Endpoint           string                      `json:"endpoint"`
+	RestartCount       int                         `json:"restart_count"`
+	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
+	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
+	ManualQuarantine   bool                        `json:"manual_quarantine"`
+	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
+	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
+	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+	Leases             []SharedLeaseStatus         `json:"leases"`
+	Attestation        []SharedRuntimeGateOutcome  `json:"attestation"`
+	Paths              SharedRuntimePaths          `json:"paths"`
 }
 
 type SharedRuntimeStopResult struct {
@@ -93,6 +97,11 @@ func SharedRuntimeStatusReport(options SharedRuntimeOperatorOptions) (SharedRunt
 		return SharedRuntimeStatus{}, err
 	}
 	report := newSharedRuntimeStatus(resolved)
+	ledger, err := readSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
+	if err != nil {
+		return SharedRuntimeStatus{}, err
+	}
+	applySharedRuntimeLedgerStatus(&report, ledger)
 	attested, err := connectAndAttestSharedRuntime(resolved, state, "", options.HTTPClient, time.Second)
 	if err == nil {
 		defer attested.close()
@@ -113,12 +122,44 @@ func SharedRuntimeStatusReport(options SharedRuntimeOperatorOptions) (SharedRunt
 		report.Sharing.Effective = message.EffectiveSharing
 		report.Sharing.FixedByPID = message.Broker.PID
 		report.Sharing.FixedAt = &message.Broker.StartTime
+		ledger, err := readSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
+		if err != nil {
+			return SharedRuntimeStatus{}, err
+		}
+		applySharedRuntimeLedgerStatus(&report, ledger)
 		return report, nil
 	}
 	if !isSharedBrokerUnreachable(err) {
 		return SharedRuntimeStatus{}, err
 	}
 	return sharedRuntimeRecordStatus(resolved, report)
+}
+
+func applySharedRuntimeLedgerStatus(report *SharedRuntimeStatus, ledger SharedRuntimeRestartLedger) {
+	report.RestartCount = ledger.RestartCount
+	report.QuarantinedUntil = ledger.QuarantinedUntil
+	report.LastReadinessMatch = ledger.LastReadinessMatch
+	report.ManualQuarantine = ledger.ManualQuarantine
+}
+
+func SetSharedRuntimeManualQuarantine(options SharedRuntimeOperatorOptions, enabled bool) (SharedRuntimeRestartLedger, error) {
+	resolved, _, err := resolveSharedRuntimeOperator(options)
+	if err != nil {
+		return SharedRuntimeRestartLedger{}, err
+	}
+	if err := CreateSharedRuntimeTree(resolved.Paths); err != nil {
+		return SharedRuntimeRestartLedger{}, err
+	}
+	lock, err := openSharedBrokerLock(resolved.Paths.BrokerLock)
+	if err != nil {
+		var shared *SharedRuntimeError
+		if errors.As(err, &shared) && shared.Code == "broker_election_lost" {
+			return SharedRuntimeRestartLedger{}, sharedRuntimeError("shared_runtime_active", errors.New("stop the active broker before changing manual quarantine"))
+		}
+		return SharedRuntimeRestartLedger{}, err
+	}
+	defer lock.Close()
+	return setSharedRuntimeManualQuarantine(resolved.Paths, resolved.RuntimeKey, resolved.ProfileDigest, enabled)
 }
 
 func StopSharedRuntime(options SharedRuntimeOperatorOptions, force bool, timeout time.Duration) (SharedRuntimeStopResult, error) {

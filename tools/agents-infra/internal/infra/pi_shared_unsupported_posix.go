@@ -43,12 +43,20 @@ type SharedRuntimeSharingStatus struct {
 }
 
 type SharedRuntimeStatus struct {
-	RuntimeKey    string                      `json:"runtime_key"`
-	ProfileDigest string                      `json:"profile_digest"`
-	Broker        SharedRuntimeBrokerStatus   `json:"broker"`
-	Sharing       SharedRuntimeSharingStatus  `json:"sharing"`
-	Runtime       *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
-	Leases        []any                       `json:"leases"`
+	RuntimeKey         string                      `json:"runtime_key"`
+	ProfileDigest      string                      `json:"profile_digest"`
+	RestartCount       int                         `json:"restart_count"`
+	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
+	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
+	ManualQuarantine   bool                        `json:"manual_quarantine"`
+	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
+	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
+	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+	Leases             []any                       `json:"leases"`
+}
+
+func SetSharedRuntimeManualQuarantine(SharedRuntimeOperatorOptions, bool) (SharedRuntimeRestartLedger, error) {
+	return SharedRuntimeRestartLedger{}, unsupportedSharedRuntimePlatform()
 }
 
 type SharedRuntimeStopResult struct {

@@ -29,6 +29,11 @@ linger_seconds = 0
 max_leases = 8
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
+restart_limit = 3
+restart_initial_backoff_seconds = 1
+restart_max_backoff_seconds = 4
+stable_run_seconds = 10
+quarantine_seconds = 30
 broker_start_timeout_seconds = 40
 `
 	}
