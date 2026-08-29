@@ -2,6 +2,7 @@ package infra
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,10 +15,21 @@ import (
 )
 
 const (
-	modelAvailabilityPolicyFixture = "retry the preferred model before choosing an autonomous fallback"
-	forcedFitPolicyFixture         = "do not fake an impossible platform model with flags, stubs, or mocks"
-	imageIntakeWorkflowFixture     = "agents-attachments stage-images"
-	dirtyCheckoutPolicyFixture     = "validate in a task-scoped worktree before integrating a reviewed patch"
+	modelAvailabilityPolicyFixture        = "retry the preferred model before choosing an autonomous fallback"
+	forcedFitPolicyFixture                = "do not fake an impossible platform model with flags, stubs, or mocks"
+	imageIntakeWorkflowFixture            = "agents-attachments stage-images"
+	dirtyCheckoutPolicyFixture            = "validate in a task-scoped worktree before integrating a reviewed patch"
+	externalCILocalMirrorExclusiveTrigger = "Use a local mirror only when hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair."
+	externalCIWorkflowClaudeInclude       = "@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md"
+	externalCIExpectedClaudeEntrypoint    = "# Claude Instructions\n\nLoad all instructions from the Claude runtime instructions directory:\n\n@instructions/INSTRUCTIONS.md\n"
+	externalCILocalMirrorPolicyHeading    = "### External-CI local mirror fallback"
+	externalCILocalMirrorPolicySection    = `### External-CI local mirror fallback
+
+* Use a local mirror only when hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair. Establish the cause from hosted provider evidence; an absent, failed, partial, malformed, or inconclusive status read is not proof of an external failure and does not authorize the fallback.
+* Reproduce every affected hosted job from an exact, clean checkout of the PR-head commit. Run the matching commands with the same toolchain versions, environment variables and non-secret configuration, dependent services, and target platform, architecture, device, or runtime. When an exact match is objectively unavailable, document the difference and why the chosen substitute is equivalent for the behavior under test; otherwise report the job as unverified.
+* Preserve auditable evidence for each mirrored job: PR-head SHA, hosted job name, external failure cause, local platform and target, tool versions, environment assumptions, services, exact commands, and every exit code. Redact secrets without omitting the fact that the corresponding configuration was present.
+* Repository-caused code, test, build, configuration, or integration failures remain blocking whether they appear in hosted CI or the local mirror. A passing mirror never overrides a repository failure and never converts an unknown hosted result into success.
+* Never forge, synthesize, edit, or otherwise misrepresent a hosted check or commit status. Local evidence supplements the unavailable hosted execution; it does not satisfy a required hosted status, authorize self-review, or bypass remote review, merge queues, or branch protection. The hosting platform's real review record and protection rules remain authoritative, and a required hosted check keeps the merge blocked until it reports legitimately or an authorized repository owner changes the rule.`
 )
 
 func TestLocalLayout(t *testing.T) {
@@ -679,6 +691,177 @@ func TestSetupGlobalDoesNotInstallCLIWrapper(t *testing.T) {
 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture)
 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), dirtyCheckoutPolicyFixture)
 	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), dirtyCheckoutPolicyFixture)
+}
+
+func TestSetupGlobalPublishesExternalCILocalMirrorPolicyToClaudeAndCodex(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve infra test source path")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", "..", "..", ".."))
+	home := t.TempDir()
+	layout, err := GlobalLayout(repoRoot, home)
+	if err != nil {
+		t.Fatalf("GlobalLayout: %v", err)
+	}
+	seedGlobalAgentsInfraTarget(t, layout)
+
+	sourcePath := filepath.Join(repoRoot, ".instructions", "INSTRUCTIONS_WORKFLOW.md")
+	sourceBody, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", sourcePath, err)
+	}
+	sourceClaudeInstructionIndexPath := filepath.Join(repoRoot, ".instructions", "INSTRUCTIONS.md")
+	sourceClaudeInstructionIndex, err := os.ReadFile(sourceClaudeInstructionIndexPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", sourceClaudeInstructionIndexPath, err)
+	}
+
+	if err := Setup(Options{Layout: layout}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	claudeEntrypointPath := filepath.Join(home, ".claude", "CLAUDE.md")
+	claudeEntrypoint, err := os.ReadFile(claudeEntrypointPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", claudeEntrypointPath, err)
+	}
+	if !bytes.Equal(claudeEntrypoint, []byte(externalCIExpectedClaudeEntrypoint)) {
+		t.Fatalf("generated Claude entrypoint %s does not load the managed instruction index", claudeEntrypointPath)
+	}
+
+	claudeInstructionsPath := filepath.Join(home, ".claude", "instructions")
+	assertSymlink(t, claudeInstructionsPath, filepath.Join(home, ".agents", ".instructions"))
+	claudeInstructionIndexPath := filepath.Join(claudeInstructionsPath, "INSTRUCTIONS.md")
+	claudeInstructionIndex, err := os.ReadFile(claudeInstructionIndexPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", claudeInstructionIndexPath, err)
+	}
+	if !bytes.Equal(claudeInstructionIndex, sourceClaudeInstructionIndex) {
+		t.Fatalf("installed Claude instruction index %s does not match versioned source", claudeInstructionIndexPath)
+	}
+	if !bytes.Contains(claudeInstructionIndex, []byte(externalCIWorkflowClaudeInclude)) {
+		t.Fatalf("installed Claude instruction index does not include the external-CI workflow source through %q", externalCIWorkflowClaudeInclude)
+	}
+
+	for _, installedPath := range []string{
+		filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"),
+		filepath.Join(home, ".claude", "instructions", "INSTRUCTIONS_WORKFLOW.md"),
+	} {
+		installedBody, err := os.ReadFile(installedPath)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", installedPath, err)
+		}
+		if !bytes.Equal(installedBody, sourceBody) {
+			t.Fatalf("installed Claude workflow %s does not match versioned source", installedPath)
+		}
+		assertExternalCILocalMirrorPolicyClauses(t, installedPath, installedBody)
+	}
+
+	codexPath := filepath.Join(home, ".codex", "AGENTS.md")
+	codexBody, err := os.ReadFile(codexPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", codexPath, err)
+	}
+	if !bytes.Contains(codexBody, sourceBody) {
+		t.Fatalf("rendered Codex instructions %s do not contain the versioned workflow source", codexPath)
+	}
+	assertExternalCILocalMirrorPolicyClauses(t, codexPath, codexBody)
+}
+
+func TestSetupGlobalRejectsBroadenedExternalCIMirrorTriggers(t *testing.T) {
+	broadenedReplacement := "Use a local mirror for any repairable or merely inconvenient CI disruption; this includes cases where hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair."
+	if !strings.Contains(broadenedReplacement, "hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair") {
+		t.Fatal("broadened replacement does not retain the formerly asserted interior phrase")
+	}
+	additiveBypass := "* A local mirror is also allowed for any repairable or merely inconvenient hosted-CI disruption."
+
+	for _, testCase := range []struct {
+		name    string
+		mutate  func([]byte) []byte
+		witness string
+	}{
+		{
+			name: "replacement",
+			mutate: func(body []byte) []byte {
+				return bytes.Replace(body, []byte(externalCILocalMirrorExclusiveTrigger), []byte(broadenedReplacement), 1)
+			},
+			witness: broadenedReplacement,
+		},
+		{
+			name: "additive_contradiction",
+			mutate: func(body []byte) []byte {
+				return bytes.Replace(body, []byte(externalCILocalMirrorExclusiveTrigger), []byte(externalCILocalMirrorExclusiveTrigger+"\n"+additiveBypass), 1)
+			},
+			witness: additiveBypass,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			source := seedSourceRepo(t)
+			workflowPath := filepath.Join(source, ".instructions", "INSTRUCTIONS_WORKFLOW.md")
+			workflowBody, err := os.ReadFile(workflowPath)
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", workflowPath, err)
+			}
+			mutatedWorkflow := testCase.mutate(workflowBody)
+			if bytes.Equal(mutatedWorkflow, workflowBody) {
+				t.Fatal("broadened trigger mutant did not alter the workflow fixture")
+			}
+			mustWrite(t, workflowPath, string(mutatedWorkflow))
+
+			home := t.TempDir()
+			layout, err := GlobalLayout(source, home)
+			if err != nil {
+				t.Fatalf("GlobalLayout: %v", err)
+			}
+			seedGlobalAgentsInfraTarget(t, layout)
+			if err := Setup(Options{Layout: layout}); err != nil {
+				t.Fatalf("Setup: %v", err)
+			}
+
+			for _, installedPath := range []string{
+				filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"),
+				filepath.Join(home, ".claude", "instructions", "INSTRUCTIONS_WORKFLOW.md"),
+				filepath.Join(home, ".codex", "AGENTS.md"),
+			} {
+				installedBody, err := os.ReadFile(installedPath)
+				if err != nil {
+					t.Fatalf("ReadFile(%s): %v", installedPath, err)
+				}
+				if !bytes.Contains(installedBody, []byte(testCase.witness)) {
+					t.Fatalf("production Setup did not publish the broadened trigger to %s", installedPath)
+				}
+				if err := validateExternalCILocalMirrorPolicyClauses(installedBody); err == nil {
+					t.Fatalf("broadened trigger passed external-CI policy validation at %s", installedPath)
+				}
+			}
+		})
+	}
+}
+
+func assertExternalCILocalMirrorPolicyClauses(t *testing.T, path string, body []byte) {
+	t.Helper()
+	if err := validateExternalCILocalMirrorPolicyClauses(body); err != nil {
+		t.Fatalf("external-CI policy at %s: %v", path, err)
+	}
+}
+
+func validateExternalCILocalMirrorPolicyClauses(body []byte) error {
+	heading := []byte(externalCILocalMirrorPolicyHeading)
+	if count := bytes.Count(body, heading); count != 1 {
+		return fmt.Errorf("expected exactly one %q heading, found %d", externalCILocalMirrorPolicyHeading, count)
+	}
+	start := bytes.Index(body, heading)
+	section := body[start:]
+	if next := bytes.Index(section[len(heading):], []byte("\n## ")); next >= 0 {
+		section = section[:len(heading)+next]
+	}
+	actual := strings.TrimSpace(string(section))
+	expected := strings.TrimSpace(externalCILocalMirrorPolicySection)
+	if actual != expected {
+		return fmt.Errorf("external-CI policy section mismatch\nexpected:\n%s\nactual:\n%s", expected, actual)
+	}
+	return nil
 }
 
 func TestSetupGlobalRemovesStaleProjectConfig(t *testing.T) {
@@ -1343,7 +1526,7 @@ func seedSourceRepo(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, ".instructions", "AGENTS.md"), "# Global Instructions\n\n@~/.agents/.instructions/INSTRUCTIONS_PLATFORM.md\n@~/.agents/.instructions/INSTRUCTIONS_ATTACHMENTS.md\n@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_PLATFORM.md"), "platform instructions\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
-	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n")
+	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n\n"+externalCILocalMirrorPolicySection+"\n")
 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.6-sol\"\nmodel_context_window = 272000\nmodel_auto_compact_token_limit = 245000\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]

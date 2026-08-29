@@ -1516,6 +1516,20 @@ Task-board child spawn ceilings belong to the separate
 Agents-infra neither reads nor validates that `task-board.config.json` policy;
 it owns only this primary-session TOML.
 
+### External-CI local mirror fallback
+
+The installed workflow permits a local CI mirror only after hosted CI is proven
+unable to execute repository steps for a verified external cause the agent cannot
+repair. Every affected job must run from an exact, clean PR-head checkout with
+matching commands, toolchain, environment variables, services, and target, or
+a documented equivalent. Evidence names the SHA, hosted job, platform, tools,
+commands, and exit codes.
+
+The mirror is evidence, not a replacement hosted status. Repository-caused
+failures remain blocking; agents must not forge checks or bypass remote review,
+merge queues, or branch protection. The hosting platform's review record and
+protection rules remain authoritative.
+
 ### Parent primary-goal alignment
 
 The installed workflow instructions also tell an eligible primary parent to
