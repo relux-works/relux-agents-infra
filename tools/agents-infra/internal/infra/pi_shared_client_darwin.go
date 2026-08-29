@@ -191,11 +191,27 @@ func acquireSharedRuntimeLease(resolved sharedResolvedProfile, state PiStatePath
 					brokerChild = nil
 					nextAttempt = time.Now().Add(handoffBackoff)
 					handoffBackoff = nextSharedRuntimeHandoffBackoff(handoffBackoff)
+				} else if exitCode == sharedRuntimeExitQuarantined {
+					ledger, ledgerErr := readSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
+					if ledgerErr != nil {
+						return nil, ledgerErr
+					}
+					return nil, &SharedRuntimeError{Code: "shared_runtime_quarantined", Details: map[string]any{
+						"restart_count": ledger.RestartCount, "quarantined_until": ledger.QuarantinedUntil, "manual": ledger.ManualQuarantine,
+					}, Err: errors.New("shared runtime broker is quarantined")}
 				} else if exitCode == 0 {
 					brokerChild = nil
 					nextAttempt = time.Now()
 				} else {
-					return nil, &SharedRuntimeError{Code: "broker_start_failed", Details: map[string]any{"exit_status": exitCode, "broker_log_tail": sharedBrokerLogTail(resolved.Paths.BrokerLog)}, Err: waitErr}
+					ledger, ledgerErr := readSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
+					if ledgerErr != nil {
+						return nil, ledgerErr
+					}
+					if ledger.RestartCount == 0 || ledger.ManualQuarantine || ledger.QuarantinedUntil != nil {
+						return nil, &SharedRuntimeError{Code: "broker_start_failed", Details: map[string]any{"exit_status": exitCode, "broker_log_tail": sharedBrokerLogTail(resolved.Paths.BrokerLog)}, Err: waitErr}
+					}
+					brokerChild = nil
+					nextAttempt = time.Now().Add(sharedRuntimeRestartDelay(ledger, time.Now().UTC()))
 				}
 			}
 		}
@@ -248,10 +264,9 @@ func acquireSharedRuntimeLease(resolved sharedResolvedProfile, state PiStatePath
 }
 
 func sharedRuntimeHandoffRetryWindow(resolved sharedResolvedProfile) time.Duration {
-	const handoffGrace = 2 * time.Second
 	linger := time.Duration(resolved.Sharing.LingerSeconds) * time.Second
 	shutdown := time.Duration(resolved.Profile.Runtime.ShutdownTimeoutSeconds) * time.Second
-	return linger + shutdown + handoffGrace
+	return linger + shutdown + time.Duration(sharedRuntimeHandoffGraceSeconds)*time.Second
 }
 
 func nextSharedRuntimeHandoffBackoff(current time.Duration) time.Duration {

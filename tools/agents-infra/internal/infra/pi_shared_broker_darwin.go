@@ -209,6 +209,20 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
 	if err := writeSharedJSONAtomic(paths.BrokerState, record); err != nil {
 		return err
 	}
+	ledger, err := readSharedRuntimeRestartLedger(paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
+	if err != nil {
+		return err
+	}
+	if err := sharedRuntimeBeginAttempt(&ledger, time.Now().UTC()); err != nil {
+		return err
+	}
+	if err := writeSharedRuntimeRestartLedger(paths.RestartLedger, ledger); err != nil {
+		return err
+	}
+	if delay := sharedRuntimeRestartDelay(ledger, time.Now().UTC()); delay > 0 {
+		timer := time.NewTimer(delay)
+		<-timer.C
+	}
 	if err := preflightPiListener(resolved.Profile.BaseURL); err != nil {
 		var launch *PiLaunchError
 		if errors.As(err, &launch) {
@@ -217,6 +231,20 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
 		return err
 	}
 
+	runtimeReady := false
+	defer func() {
+		if result == nil || runtimeReady {
+			return
+		}
+		decision := sharedRuntimeRecordFailure(&ledger, resolved.Sharing, time.Now().UTC())
+		if ledgerErr := writeSharedRuntimeRestartLedger(paths.RestartLedger, ledger); ledgerErr != nil {
+			result = ledgerErr
+			return
+		}
+		if decision.Quarantined {
+			result = &SharedRuntimeError{Code: "shared_runtime_quarantined", Details: map[string]any{"restart_count": ledger.RestartCount, "quarantined_until": ledger.QuarantinedUntil}, Err: result}
+		}
+	}()
 	runtimeCommand, runtimeWait, authorizationWriter, err := startUnauthorizedRuntime(resolved, options.Environ)
 	if err != nil {
 		return err
@@ -279,6 +307,11 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
 		return err
 	}
 	readyAt := time.Now().UTC()
+	runtimeReady = true
+	sharedRuntimeRecordReadiness(&ledger, readyAt)
+	if err := writeSharedRuntimeRestartLedger(paths.RestartLedger, ledger); err != nil {
+		return err
+	}
 	record.State = "serving"
 	record.Runtime.Stage = "running"
 	record.ReadyAt = &readyAt
@@ -294,7 +327,7 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
 		return sharedRuntimeError("shared_runtime_state_path_invalid", err)
 	}
 
-	server := newSharedBrokerServer(resolved, &record, listener)
+	server := newSharedBrokerServer(resolved, &record, &ledger, listener)
 	serveErr := server.serve(runtimeWait, options.Signals)
 	listener.Close()
 	if server.forcedStop() {
@@ -532,6 +565,7 @@ var sharedBrokerAdmissionSystem = sharedBrokerAdmissionDependencies{
 type sharedBrokerServer struct {
 	resolved    sharedResolvedProfile
 	record      *SharedBrokerRecord
+	ledger      *SharedRuntimeRestartLedger
 	listener    *net.UnixListener
 	mu          sync.Mutex
 	state       string
@@ -548,9 +582,9 @@ var sharedFirstLeaseGraceDuration = func(sharing PiRuntimeSharing) time.Duration
 	return time.Duration(sharing.BrokerStartTimeoutSeconds) * time.Second
 }
 
-func newSharedBrokerServer(resolved sharedResolvedProfile, record *SharedBrokerRecord, listener *net.UnixListener) *sharedBrokerServer {
+func newSharedBrokerServer(resolved sharedResolvedProfile, record *SharedBrokerRecord, ledger *SharedRuntimeRestartLedger, listener *net.UnixListener) *sharedBrokerServer {
 	return &sharedBrokerServer{
-		resolved: resolved, record: record, listener: listener, state: "serving",
+		resolved: resolved, record: record, ledger: ledger, listener: listener, state: "serving",
 		connections: map[*sharedBrokerConnection]bool{}, leases: map[string]*SharedLeaseRecord{},
 		events: make(chan sharedBrokerEvent, 32), readyAt: dereferenceReadyAt(record.ReadyAt),
 		admission: sharedBrokerAdmissionSystem,
@@ -590,6 +624,13 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
 	}
 	firstLeaseGrace := time.NewTimer(firstLeaseDelay)
 	defer firstLeaseGrace.Stop()
+	stableDelay := time.Until(server.readyAt.Add(time.Duration(server.resolved.Sharing.StableRunSeconds) * time.Second))
+	if stableDelay < 0 {
+		stableDelay = 0
+	}
+	stableRun := time.NewTimer(stableDelay)
+	defer stableRun.Stop()
+	stableRunChannel := stableRun.C
 	var linger *time.Timer
 	var lingerChannel <-chan time.Time
 	for {
@@ -606,7 +647,24 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
 			}
 			return sharedRuntimeError("broker_unreachable", err)
 		case <-runtimeWait.done:
-			return sharedRuntimeError("runtime_exited_early", fmt.Errorf("runtime exited while broker served: %v", runtimeWait.err))
+			if time.Since(server.readyAt) >= time.Duration(server.resolved.Sharing.StableRunSeconds)*time.Second {
+				sharedRuntimeResetStableRun(server.ledger)
+			}
+			decision := sharedRuntimeRecordFailure(server.ledger, server.resolved.Sharing, time.Now().UTC())
+			if err := writeSharedRuntimeRestartLedger(server.resolved.Paths.RestartLedger, *server.ledger); err != nil {
+				return err
+			}
+			runtimeErr := fmt.Errorf("runtime exited while broker served: %v", runtimeWait.err)
+			if decision.Quarantined {
+				return &SharedRuntimeError{Code: "shared_runtime_quarantined", Details: map[string]any{"restart_count": server.ledger.RestartCount, "quarantined_until": server.ledger.QuarantinedUntil}, Err: runtimeErr}
+			}
+			return sharedRuntimeError("runtime_exited_early", runtimeErr)
+		case <-stableRunChannel:
+			sharedRuntimeResetStableRun(server.ledger)
+			if err := writeSharedRuntimeRestartLedger(server.resolved.Paths.RestartLedger, *server.ledger); err != nil {
+				return err
+			}
+			stableRunChannel = nil
 		case <-signals:
 			server.setDraining()
 			return nil

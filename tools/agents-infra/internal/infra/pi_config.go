@@ -9,7 +9,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
+)
+
+const (
+	maxTimeDurationSeconds              = int64(^uint64(0)>>1) / int64(time.Second)
+	maxSharedRuntimeLeaseStaleSeconds   = maxTimeDurationSeconds / 2
+	sharedRuntimeHandoffGraceSeconds    = int64(2)
+	sharedRuntimeBrokerStartSlopSeconds = int64(30)
 )
 
 type PiPrimarySessionSource struct {
@@ -99,12 +107,17 @@ type PiRuntime struct {
 }
 
 type PiRuntimeSharing struct {
-	Mode                      string `json:"mode"`
-	LingerSeconds             int    `json:"linger_seconds"`
-	MaxLeases                 int    `json:"max_leases"`
-	HeartbeatIntervalSeconds  int    `json:"heartbeat_interval_seconds"`
-	LeaseStaleSeconds         int    `json:"lease_stale_seconds"`
-	BrokerStartTimeoutSeconds int    `json:"broker_start_timeout_seconds"`
+	Mode                         string `json:"mode"`
+	LingerSeconds                int    `json:"linger_seconds"`
+	MaxLeases                    int    `json:"max_leases"`
+	HeartbeatIntervalSeconds     int    `json:"heartbeat_interval_seconds"`
+	LeaseStaleSeconds            int    `json:"lease_stale_seconds"`
+	BrokerStartTimeoutSeconds    int    `json:"broker_start_timeout_seconds"`
+	RestartLimit                 int    `json:"restart_limit"`
+	RestartInitialBackoffSeconds int    `json:"restart_initial_backoff_seconds"`
+	RestartMaxBackoffSeconds     int    `json:"restart_max_backoff_seconds"`
+	StableRunSeconds             int    `json:"stable_run_seconds"`
+	QuarantineSeconds            int    `json:"quarantine_seconds"`
 }
 
 type PiDFlash struct {
@@ -408,10 +421,10 @@ func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
 		}
 		return r, fieldError(field+".readiness_path", err)
 	}
-	if r.StartupTimeoutSeconds, err = requiredPositiveInt(table, "startup_timeout_seconds"); err != nil {
+	if r.StartupTimeoutSeconds, err = requiredPositiveDurationSeconds(table, "startup_timeout_seconds", maxTimeDurationSeconds); err != nil {
 		return r, fieldError(field+".startup_timeout_seconds", err)
 	}
-	if r.ShutdownTimeoutSeconds, err = requiredPositiveInt(table, "shutdown_timeout_seconds"); err != nil {
+	if r.ShutdownTimeoutSeconds, err = requiredPositiveDurationSeconds(table, "shutdown_timeout_seconds", maxTimeDurationSeconds); err != nil {
 		return r, fieldError(field+".shutdown_timeout_seconds", err)
 	}
 	if raw, ok := table["dflash"]; ok {
@@ -440,7 +453,7 @@ func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
 }
 
 func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime) (PiRuntimeSharing, error) {
-	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds"); err != nil {
+	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds", "restart_limit", "restart_initial_backoff_seconds", "restart_max_backoff_seconds", "stable_run_seconds", "quarantine_seconds"); err != nil {
 		return PiRuntimeSharing{}, err
 	}
 	var sharing PiRuntimeSharing
@@ -451,27 +464,55 @@ func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime
 	if sharing.Mode != "exclusive" && sharing.Mode != "shared" {
 		return sharing, fieldError(field+".mode", errors.New("must equal exclusive or shared"))
 	}
-	if sharing.LingerSeconds, err = requiredNonNegativeInt(table, "linger_seconds"); err != nil {
+	if sharing.LingerSeconds, err = requiredNonNegativeDurationSeconds(table, "linger_seconds", maxTimeDurationSeconds); err != nil {
 		return sharing, fieldError(field+".linger_seconds", err)
+	}
+	maximumLingerSeconds := maxTimeDurationSeconds - int64(runtime.ShutdownTimeoutSeconds) - sharedRuntimeHandoffGraceSeconds
+	if maximumLingerSeconds < 0 {
+		return sharing, fieldError(field+".linger_seconds", fmt.Errorf("cannot fit because runtime shutdown + %d seconds exceeds time.Duration", sharedRuntimeHandoffGraceSeconds))
+	}
+	if int64(sharing.LingerSeconds) > maximumLingerSeconds {
+		return sharing, fieldError(field+".linger_seconds", fmt.Errorf("must be at most %d so linger + runtime shutdown + %d seconds fits time.Duration", maximumLingerSeconds, sharedRuntimeHandoffGraceSeconds))
 	}
 	if sharing.MaxLeases, err = requiredPositiveInt(table, "max_leases"); err != nil {
 		return sharing, fieldError(field+".max_leases", err)
 	}
-	if sharing.HeartbeatIntervalSeconds, err = requiredPositiveInt(table, "heartbeat_interval_seconds"); err != nil {
+	if sharing.HeartbeatIntervalSeconds, err = requiredPositiveDurationSeconds(table, "heartbeat_interval_seconds", maxTimeDurationSeconds); err != nil {
 		return sharing, fieldError(field+".heartbeat_interval_seconds", err)
 	}
-	if sharing.LeaseStaleSeconds, err = requiredPositiveInt(table, "lease_stale_seconds"); err != nil {
+	if sharing.LeaseStaleSeconds, err = requiredPositiveDurationSeconds(table, "lease_stale_seconds", maxSharedRuntimeLeaseStaleSeconds); err != nil {
 		return sharing, fieldError(field+".lease_stale_seconds", err)
 	}
 	if sharing.HeartbeatIntervalSeconds >= sharing.LeaseStaleSeconds {
 		return sharing, fieldError(field+".heartbeat_interval_seconds", errors.New("must be less than lease_stale_seconds"))
 	}
-	if sharing.BrokerStartTimeoutSeconds, err = requiredPositiveInt(table, "broker_start_timeout_seconds"); err != nil {
+	if sharing.BrokerStartTimeoutSeconds, err = requiredPositiveDurationSeconds(table, "broker_start_timeout_seconds", maxTimeDurationSeconds); err != nil {
 		return sharing, fieldError(field+".broker_start_timeout_seconds", err)
 	}
-	minimum := runtime.StartupTimeoutSeconds + runtime.ShutdownTimeoutSeconds + 30
-	if sharing.BrokerStartTimeoutSeconds < minimum {
+	minimum := int64(runtime.StartupTimeoutSeconds) + int64(runtime.ShutdownTimeoutSeconds) + sharedRuntimeBrokerStartSlopSeconds
+	if int64(sharing.BrokerStartTimeoutSeconds) < minimum {
 		return sharing, fieldError(field+".broker_start_timeout_seconds", fmt.Errorf("must be at least runtime startup + shutdown + 30 seconds (%d)", minimum))
+	}
+	if sharing.RestartLimit, err = requiredPositiveInt(table, "restart_limit"); err != nil {
+		return sharing, fieldError(field+".restart_limit", err)
+	}
+	if sharing.RestartInitialBackoffSeconds, err = requiredPositiveDurationSeconds(table, "restart_initial_backoff_seconds", maxTimeDurationSeconds); err != nil {
+		return sharing, fieldError(field+".restart_initial_backoff_seconds", err)
+	}
+	if sharing.RestartMaxBackoffSeconds, err = requiredPositiveDurationSeconds(table, "restart_max_backoff_seconds", maxTimeDurationSeconds); err != nil {
+		return sharing, fieldError(field+".restart_max_backoff_seconds", err)
+	}
+	if sharing.RestartMaxBackoffSeconds < sharing.RestartInitialBackoffSeconds {
+		return sharing, fieldError(field+".restart_max_backoff_seconds", errors.New("must be greater than or equal to restart_initial_backoff_seconds"))
+	}
+	if sharing.RestartMaxBackoffSeconds >= sharing.BrokerStartTimeoutSeconds {
+		return sharing, fieldError(field+".restart_max_backoff_seconds", errors.New("must be less than broker_start_timeout_seconds"))
+	}
+	if sharing.StableRunSeconds, err = requiredPositiveDurationSeconds(table, "stable_run_seconds", maxTimeDurationSeconds); err != nil {
+		return sharing, fieldError(field+".stable_run_seconds", err)
+	}
+	if sharing.QuarantineSeconds, err = requiredPositiveDurationSeconds(table, "quarantine_seconds", maxTimeDurationSeconds); err != nil {
+		return sharing, fieldError(field+".quarantine_seconds", err)
 	}
 	return sharing, nil
 }
@@ -677,6 +718,18 @@ func requiredPositiveInt(table map[string]any, key string) (int, error) {
 	}
 	return int(n), nil
 }
+
+func requiredPositiveDurationSeconds(table map[string]any, key string, maximum int64) (int, error) {
+	n, err := requiredPositiveInt(table, key)
+	if err != nil {
+		return 0, err
+	}
+	if int64(n) > maximum {
+		return 0, fmt.Errorf("must be at most %d seconds so its effective duration fits time.Duration", maximum)
+	}
+	return n, nil
+}
+
 func requiredNonNegativeInt(table map[string]any, key string) (int, error) {
 	v, ok := table[key]
 	if !ok {
@@ -690,6 +743,17 @@ func requiredNonNegativeInt(table map[string]any, key string) (int, error) {
 		return 0, errors.New("must be a non-negative platform integer")
 	}
 	return int(n), nil
+}
+
+func requiredNonNegativeDurationSeconds(table map[string]any, key string, maximum int64) (int, error) {
+	n, err := requiredNonNegativeInt(table, key)
+	if err != nil {
+		return 0, err
+	}
+	if int64(n) > maximum {
+		return 0, fmt.Errorf("must be at most %d seconds so its effective duration fits time.Duration", maximum)
+	}
+	return n, nil
 }
 func requiredStringArray(table map[string]any, key string) ([]string, error) {
 	v, ok := table[key]

@@ -165,6 +165,11 @@ linger_seconds = 0
 max_leases = 8
 heartbeat_interval_seconds = 15
 lease_stale_seconds = 60
+restart_limit = 3
+restart_initial_backoff_seconds = 1
+restart_max_backoff_seconds = 4
+stable_run_seconds = 10
+quarantine_seconds = 30
 broker_start_timeout_seconds = 40
 `, name)
 }
@@ -183,29 +188,124 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 8, HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 40}
+	want := &PiRuntimeSharing{
+		Mode: "shared", LingerSeconds: 0, MaxLeases: 8,
+		HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 40,
+		RestartLimit: 3, RestartInitialBackoffSeconds: 1, RestartMaxBackoffSeconds: 4,
+		StableRunSeconds: 10, QuarantineSeconds: 30,
+	}
 	if got := shared.PiProfiles["profile"].Runtime.Sharing; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sharing=%#v want=%#v", got, want)
 	}
 
 	tests := map[string]string{
-		"unknown field":              strings.Replace(sharedBody, `mode = "shared"`, "mode = \"shared\"\nsurprise = 1", 1),
-		"missing mode":               strings.Replace(sharedBody, "mode = \"shared\"\n", "", 1),
-		"missing linger":             strings.Replace(sharedBody, "linger_seconds = 0\n", "", 1),
-		"missing max leases":         strings.Replace(sharedBody, "max_leases = 8\n", "", 1),
-		"missing heartbeat":          strings.Replace(sharedBody, "heartbeat_interval_seconds = 15\n", "", 1),
-		"missing stale":              strings.Replace(sharedBody, "lease_stale_seconds = 60\n", "", 1),
-		"missing broker timeout":     strings.Replace(sharedBody, "broker_start_timeout_seconds = 40\n", "", 1),
-		"unknown mode":               strings.Replace(sharedBody, `mode = "shared"`, `mode = "automatic"`, 1),
-		"negative linger":            strings.Replace(sharedBody, "linger_seconds = 0", "linger_seconds = -1", 1),
-		"zero max leases":            strings.Replace(sharedBody, "max_leases = 8", "max_leases = 0", 1),
-		"heartbeat equals stale":     strings.Replace(sharedBody, "heartbeat_interval_seconds = 15", "heartbeat_interval_seconds = 60", 1),
-		"broker timeout below bound": strings.Replace(sharedBody, "broker_start_timeout_seconds = 40", "broker_start_timeout_seconds = 36", 1),
+		"unknown field":                  strings.Replace(sharedBody, `mode = "shared"`, "mode = \"shared\"\nsurprise = 1", 1),
+		"missing mode":                   strings.Replace(sharedBody, "mode = \"shared\"\n", "", 1),
+		"missing linger":                 strings.Replace(sharedBody, "linger_seconds = 0\n", "", 1),
+		"missing max leases":             strings.Replace(sharedBody, "max_leases = 8\n", "", 1),
+		"missing heartbeat":              strings.Replace(sharedBody, "heartbeat_interval_seconds = 15\n", "", 1),
+		"missing stale":                  strings.Replace(sharedBody, "lease_stale_seconds = 60\n", "", 1),
+		"missing broker timeout":         strings.Replace(sharedBody, "broker_start_timeout_seconds = 40\n", "", 1),
+		"missing restart limit":          strings.Replace(sharedBody, "restart_limit = 3\n", "", 1),
+		"missing initial backoff":        strings.Replace(sharedBody, "restart_initial_backoff_seconds = 1\n", "", 1),
+		"missing maximum backoff":        strings.Replace(sharedBody, "restart_max_backoff_seconds = 4\n", "", 1),
+		"missing stable run":             strings.Replace(sharedBody, "stable_run_seconds = 10\n", "", 1),
+		"missing quarantine":             strings.Replace(sharedBody, "quarantine_seconds = 30\n", "", 1),
+		"unknown mode":                   strings.Replace(sharedBody, `mode = "shared"`, `mode = "automatic"`, 1),
+		"negative linger":                strings.Replace(sharedBody, "linger_seconds = 0", "linger_seconds = -1", 1),
+		"zero max leases":                strings.Replace(sharedBody, "max_leases = 8", "max_leases = 0", 1),
+		"heartbeat equals stale":         strings.Replace(sharedBody, "heartbeat_interval_seconds = 15", "heartbeat_interval_seconds = 60", 1),
+		"broker timeout below bound":     strings.Replace(sharedBody, "broker_start_timeout_seconds = 40", "broker_start_timeout_seconds = 36", 1),
+		"zero restart limit":             strings.Replace(sharedBody, "restart_limit = 3", "restart_limit = 0", 1),
+		"zero initial backoff":           strings.Replace(sharedBody, "restart_initial_backoff_seconds = 1", "restart_initial_backoff_seconds = 0", 1),
+		"maximum below initial":          strings.Replace(sharedBody, "restart_initial_backoff_seconds = 1", "restart_initial_backoff_seconds = 5", 1),
+		"maximum reaches broker timeout": strings.Replace(sharedBody, "restart_max_backoff_seconds = 4", "restart_max_backoff_seconds = 40", 1),
+		"zero stable run":                strings.Replace(sharedBody, "stable_run_seconds = 10", "stable_run_seconds = 0", 1),
+		"zero quarantine":                strings.Replace(sharedBody, "quarantine_seconds = 30", "quarantine_seconds = 0", 1),
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseProjectConfig([]byte(body), "/project/config.toml"); err == nil {
 				t.Fatal("strict runtime.sharing parser admitted invalid input")
+			}
+		})
+	}
+}
+
+// Production call site: RunPi -> loadCompositeProjectConfig -> parsePiRuntime.
+// Every invalid policy must be refused before provider lookup, runtime launch,
+// or creation of the shared-runtime tree and restart ledger.
+func TestRunPiRejectsSupervisionSecondsThatOverflowEffectiveDurations(t *testing.T) {
+	tooLarge := strconv.FormatInt(maxTimeDurationSeconds+1, 10)
+	tooLargeLeaseStale := strconv.FormatInt(maxSharedRuntimeLeaseStaleSeconds+1, 10)
+	replace := func(old, replacement string) func(string) string {
+		return func(body string) string { return strings.Replace(body, old, replacement, 1) }
+	}
+	tests := []struct {
+		name      string
+		mutate    func(string) string
+		wantField string
+		wantBound string
+	}{
+		{name: "runtime startup", mutate: replace("startup_timeout_seconds = 5", "startup_timeout_seconds = "+tooLarge), wantField: "runtime.startup_timeout_seconds", wantBound: strconv.FormatInt(maxTimeDurationSeconds, 10)},
+		{name: "runtime shutdown", mutate: replace("shutdown_timeout_seconds = 2", "shutdown_timeout_seconds = "+tooLarge), wantField: "runtime.shutdown_timeout_seconds", wantBound: strconv.FormatInt(maxTimeDurationSeconds, 10)},
+		{name: "linger", mutate: replace("linger_seconds = 0", "linger_seconds = "+tooLarge), wantField: "sharing.linger_seconds", wantBound: strconv.FormatInt(maxTimeDurationSeconds, 10)},
+		{name: "heartbeat interval", mutate: replace("heartbeat_interval_seconds = 15", "heartbeat_interval_seconds = "+tooLarge), wantField: "sharing.heartbeat_interval_seconds", wantBound: strconv.FormatInt(maxTimeDurationSeconds, 10)},
+		{name: "doubled lease stale", mutate: replace("lease_stale_seconds = 60", "lease_stale_seconds = "+tooLargeLeaseStale), wantField: "sharing.lease_stale_seconds", wantBound: strconv.FormatInt(maxSharedRuntimeLeaseStaleSeconds, 10)},
+		{name: "broker start", mutate: replace("broker_start_timeout_seconds = 40", "broker_start_timeout_seconds = "+tooLarge), wantField: "sharing.broker_start_timeout_seconds", wantBound: strconv.FormatInt(maxTimeDurationSeconds, 10)},
+		{name: "restart initial backoff", mutate: replace("restart_initial_backoff_seconds = 1", "restart_initial_backoff_seconds = "+tooLarge), wantField: "sharing.restart_initial_backoff_seconds", wantBound: strconv.FormatInt(maxTimeDurationSeconds, 10)},
+		{name: "restart maximum backoff", mutate: replace("restart_max_backoff_seconds = 4", "restart_max_backoff_seconds = "+tooLarge), wantField: "sharing.restart_max_backoff_seconds", wantBound: strconv.FormatInt(maxTimeDurationSeconds, 10)},
+		{name: "stable run", mutate: replace("stable_run_seconds = 10", "stable_run_seconds = "+tooLarge), wantField: "sharing.stable_run_seconds", wantBound: strconv.FormatInt(maxTimeDurationSeconds, 10)},
+		{name: "quarantine", mutate: replace("quarantine_seconds = 30", "quarantine_seconds = "+tooLarge), wantField: "sharing.quarantine_seconds", wantBound: strconv.FormatInt(maxTimeDurationSeconds, 10)},
+		{
+			name: "handoff sum",
+			mutate: replace(
+				"shutdown_timeout_seconds = 2",
+				"shutdown_timeout_seconds = "+strconv.FormatInt(maxTimeDurationSeconds-1, 10),
+			),
+			wantField: "sharing.linger_seconds",
+			wantBound: "runtime shutdown + 2 seconds",
+		},
+		{
+			name: "broker ordering sum",
+			mutate: func(body string) string {
+				half := strconv.FormatInt(maxTimeDurationSeconds/2+1, 10)
+				body = strings.Replace(body, "startup_timeout_seconds = 5", "startup_timeout_seconds = "+half, 1)
+				body = strings.Replace(body, "shutdown_timeout_seconds = 2", "shutdown_timeout_seconds = "+half, 1)
+				return strings.Replace(body, "broker_start_timeout_seconds = 40", "broker_start_timeout_seconds = "+strconv.FormatInt(maxTimeDurationSeconds, 10), 1)
+			},
+			wantField: "sharing.broker_start_timeout_seconds",
+			wantBound: "runtime startup + shutdown + 30 seconds",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			cache := filepath.Join(t.TempDir(), "cache")
+			writePiProjectConfig(t, project, test.mutate(sharedPiProfileTOML("profile", "/bin/echo", 18011)))
+			providerLookup := false
+			err := RunPi(RunPiOptions{
+				ProjectDir: project,
+				HomeDir:    home,
+				CacheRoot:  cache,
+				Environ:    []string{},
+				LookPath: func(string) (string, error) {
+					providerLookup = true
+					return "/bin/false", nil
+				},
+			})
+			if piErrorCode(err) != "invalid_project_configuration" {
+				t.Fatalf("RunPi error=%v code=%q", err, piErrorCode(err))
+			}
+			if !strings.Contains(err.Error(), test.wantField) || !strings.Contains(err.Error(), test.wantBound) {
+				t.Fatalf("RunPi error lacks field/bound: %v", err)
+			}
+			if providerLookup {
+				t.Fatal("invalid supervision duration reached provider lookup")
+			}
+			if _, statErr := os.Stat(cache); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("invalid supervision duration mutated runtime state: %v", statErr)
 			}
 		})
 	}

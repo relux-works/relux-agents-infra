@@ -552,7 +552,7 @@ func runPiStandaloneCLI(entrypoint string, args []string) error {
 
 func runRuntime(args []string) error {
 	if len(args) == 0 {
-		return errors.New("runtime requires status, stop, broker, or runtime-launch")
+		return errors.New("runtime requires status, stop, quarantine, unquarantine, broker, or runtime-launch")
 	}
 	switch args[0] {
 	case "status":
@@ -594,6 +594,22 @@ func runRuntime(args []string) error {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(result)
+	case "quarantine", "unquarantine":
+		fs := flag.NewFlagSet("runtime "+args[0], flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		project := fs.String("project", callerProjectDir(), "project directory")
+		profile := fs.String("profile", "", "managed Pi profile")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if len(fs.Args()) != 0 {
+			return fmt.Errorf("runtime %s does not accept positional arguments: %q", args[0], fs.Args())
+		}
+		ledger, err := infra.SetSharedRuntimeManualQuarantine(infra.SharedRuntimeOperatorOptions{ProjectDir: *project, Profile: *profile}, args[0] == "quarantine")
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(ledger)
 	case "broker", "runtime-launch":
 		fs := flag.NewFlagSet("runtime "+args[0], flag.ContinueOnError)
 		fs.SetOutput(os.Stderr)
@@ -629,6 +645,10 @@ func callerProjectDir() string {
 func printSharedRuntimeStatus(report infra.SharedRuntimeStatus) {
 	fmt.Fprintf(os.Stdout, "runtime_key: %s\n", report.RuntimeKey)
 	fmt.Fprintf(os.Stdout, "profile_digest: %s\n", report.ProfileDigest)
+	fmt.Fprintf(os.Stdout, "restart_count: %d\n", report.RestartCount)
+	fmt.Fprintf(os.Stdout, "quarantined_until: %v\n", report.QuarantinedUntil)
+	fmt.Fprintf(os.Stdout, "last_readiness_match: %v\n", report.LastReadinessMatch)
+	fmt.Fprintf(os.Stdout, "manual_quarantine: %t\n", report.ManualQuarantine)
 	fmt.Fprintf(os.Stdout, "broker.state: %s\n", report.Broker.State)
 	if report.Broker.PID != 0 {
 		fmt.Fprintf(os.Stdout, "broker.pid: %d\n", report.Broker.PID)

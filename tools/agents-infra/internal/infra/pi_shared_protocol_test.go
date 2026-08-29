@@ -20,6 +20,13 @@ func TestSharedRuntimeListenerBusyHasNominalBrokerExitCode(t *testing.T) {
 	}
 }
 
+func TestSharedRuntimeQuarantineHasNominalBrokerExitCode(t *testing.T) {
+	code, ok := SharedRuntimeExitCode(sharedRuntimeError("shared_runtime_quarantined", errors.New("quarantined")))
+	if !ok || code != sharedRuntimeExitQuarantined {
+		t.Fatalf("quarantine exit=(%d,%t) want=(%d,true)", code, ok, sharedRuntimeExitQuarantined)
+	}
+}
+
 func TestSharedRuntimeDigestsExcludeSharingAndCoverTheExecutionPlan(t *testing.T) {
 	profile := mustParsedPiProfile(t, false)
 	profile.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 1, HeartbeatIntervalSeconds: 1, LeaseStaleSeconds: 2, BrokerStartTimeoutSeconds: 40}

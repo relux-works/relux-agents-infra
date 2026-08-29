@@ -320,6 +320,11 @@ linger_seconds = 0
 max_leases = 4
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
+restart_limit = 3
+restart_initial_backoff_seconds = 1
+restart_max_backoff_seconds = 4
+stable_run_seconds = 10
+quarantine_seconds = 30
 broker_start_timeout_seconds = 40
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
@@ -438,6 +443,11 @@ linger_seconds = 1
 max_leases = 4
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
+restart_limit = 3
+restart_initial_backoff_seconds = 1
+restart_max_backoff_seconds = 4
+stable_run_seconds = 10
+quarantine_seconds = 30
 broker_start_timeout_seconds = 40
 `, sharedTestProfileName)
 	}
@@ -540,6 +550,11 @@ linger_seconds = 1
 max_leases = 4
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
+restart_limit = 3
+restart_initial_backoff_seconds = 1
+restart_max_backoff_seconds = 4
+stable_run_seconds = 10
+quarantine_seconds = 30
 broker_start_timeout_seconds = 40
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
@@ -653,6 +668,11 @@ linger_seconds = 0
 max_leases = 4
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
+restart_limit = 3
+restart_initial_backoff_seconds = 1
+restart_max_backoff_seconds = 4
+stable_run_seconds = 10
+quarantine_seconds = 30
 broker_start_timeout_seconds = 40
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
@@ -727,6 +747,11 @@ linger_seconds = 0
 max_leases = 1
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
+restart_limit = 3
+restart_initial_backoff_seconds = 1
+restart_max_backoff_seconds = 4
+stable_run_seconds = 10
+quarantine_seconds = 30
 broker_start_timeout_seconds = 40
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
@@ -804,6 +829,11 @@ linger_seconds = 0
 max_leases = 8
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
+restart_limit = 3
+restart_initial_backoff_seconds = 1
+restart_max_backoff_seconds = 4
+stable_run_seconds = 10
+quarantine_seconds = 30
 broker_start_timeout_seconds = 47
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
@@ -900,6 +930,11 @@ linger_seconds = 0
 max_leases = 4
 heartbeat_interval_seconds = 1
 lease_stale_seconds = 5
+restart_limit = 3
+restart_initial_backoff_seconds = 1
+restart_max_backoff_seconds = 4
+stable_run_seconds = 10
+quarantine_seconds = 30
 broker_start_timeout_seconds = 40
 `, sharedTestProfileName)
 	writePiProjectConfig(t, project, body)
@@ -963,7 +998,17 @@ func main() {
   pidFile := flags.String("pid-file", "", "")
   readyFile := flags.String("ready-file", "", "")
   spawnLog := flags.String("spawn-log", "", "")
+  attemptFile := flags.String("attempt-file", "", "")
+  failFirst := flags.Int("fail-first", 0, "")
   _ = flags.Parse(args)
+	if *attemptFile != "" {
+		attempt := 1
+		if data, err := os.ReadFile(*attemptFile); err == nil {
+			if previous, parseErr := strconv.Atoi(string(data)); parseErr == nil { attempt = previous + 1 }
+		}
+		_ = os.WriteFile(*attemptFile, []byte(strconv.Itoa(attempt)), 0600)
+		if attempt <= *failFirst { os.Exit(42) }
+	}
   if *pidFile != "" { _ = os.WriteFile(*pidFile, []byte(strconv.Itoa(os.Getpid())), 0600) }
   if *spawnLog != "" {
     file, err := os.OpenFile(*spawnLog, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
@@ -1075,6 +1120,146 @@ func TestSharedRuntimeAcquisitionHonorsCancelledContextWithoutElection(t *testin
 		if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
 			t.Fatalf("cancelled acquisition started a broker side effect at %s: %v", path, statErr)
 		}
+	}
+}
+
+// Production call site: SetSharedRuntimeManualQuarantine. A live broker lock
+// is a negative witness: the operator mutation must not race an active owner.
+func TestSetSharedRuntimeManualQuarantineRefusesActiveBrokerBeforeLedgerMutation(t *testing.T) {
+	project, home, cache, resolved := newSharedIntegrationProfile(t)
+	lock, err := openSharedBrokerLock(resolved.Paths.BrokerLock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	_, err = SetSharedRuntimeManualQuarantine(SharedRuntimeOperatorOptions{
+		ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile",
+	}, true)
+	if sharedRuntimeErrorCode(err) != "shared_runtime_active" {
+		t.Fatalf("active broker admitted manual quarantine mutation: %v", err)
+	}
+	if _, err := os.Stat(resolved.Paths.RestartLedger); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused manual quarantine wrote ledger: %v", err)
+	}
+}
+
+// Production call site: RunSharedRuntimeBroker. The broker must read the
+// resolved cross-broker ledger before launching any runtime process.
+func TestRunSharedRuntimeBrokerRefusesPersistedManualQuarantineBeforeRuntimeLaunch(t *testing.T) {
+	project, home, _, resolved := newSharedIntegrationProfile(t)
+	if _, err := setSharedRuntimeManualQuarantine(resolved.Paths, resolved.RuntimeKey, resolved.ProfileDigest, true); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "runtime", "broker", "--runtime-key", resolved.RuntimeKey, "--profile-project", project, "--profile", "profile")
+	command.Env = append(os.Environ(), "HOME="+home)
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	output, err := command.CombinedOutput()
+	if err == nil || !bytes.Contains(output, []byte(`"code":"shared_runtime_quarantined"`)) {
+		t.Fatalf("manual quarantine broker gate err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(resolved.Paths.BrokerState); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("quarantined broker left owner state: %v", err)
+	}
+}
+
+// Production call site: acquireSharedRuntimeLease. The client must preserve
+// the broker's quarantine refusal instead of laundering exit 77 into a generic
+// broker_start_failed result.
+func TestAcquireSharedRuntimeLeaseSurfacesPersistedManualQuarantine(t *testing.T) {
+	_, _, cache, resolved := newSharedIntegrationProfile(t)
+	if _, err := setSharedRuntimeManualQuarantine(resolved.Paths, resolved.RuntimeKey, resolved.ProfileDigest, true); err != nil {
+		t.Fatal(err)
+	}
+	state, err := ResolvePiClientStatePaths(cache, resolved.Project, resolved.ProfileName, "RUN-quarantined")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreatePiStateTree(state); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err = acquireSharedRuntimeLease(resolved, state, "RUN-quarantined", append(os.Environ(), "HOME="+resolved.HomeDir), nil, ctx)
+	if sharedRuntimeErrorCode(err) != "shared_runtime_quarantined" {
+		t.Fatalf("acquisition lost quarantine reason: %v", err)
+	}
+}
+
+// Production call site: acquireSharedRuntimeLease -> startSharedRuntimeBroker
+// -> RunSharedRuntimeBroker. The static runtime fixture fails twice before it
+// serves readiness, forcing two distinct elected brokers to share one ledger.
+func TestAcquireSharedRuntimeLeaseAutomaticallyRestartsAcrossBrokers(t *testing.T) {
+	testRoot, err := os.MkdirTemp("/tmp", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(testRoot) })
+	project := filepath.Join(testRoot, "project")
+	home := filepath.Join(testRoot, "home")
+	cache := filepath.Join(home, "Library", "Caches")
+	for _, directory := range []string{project, cache} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	attemptFile := filepath.Join(testRoot, "attempts")
+	runtimeExecutable := buildSharedFakeRuntime(t, testRoot)
+	body := validPiProfileWithArgv(t, "profile", runtimeExecutable, port, []string{
+		"serve", "--model", "Model", "--host", "127.0.0.1", "--port", fmt.Sprint(port),
+		"--attempt-file", attemptFile, "--fail-first", "2",
+	}, 8)
+	body += `
+[agents.pi.profiles.profile.runtime.sharing]
+mode = "shared"
+linger_seconds = 0
+max_leases = 4
+heartbeat_interval_seconds = 1
+lease_stale_seconds = 5
+restart_limit = 4
+restart_initial_backoff_seconds = 1
+restart_max_backoff_seconds = 2
+stable_run_seconds = 10
+quarantine_seconds = 30
+broker_start_timeout_seconds = 40
+`
+	writePiProjectConfig(t, project, body)
+	resolved, err := resolveSharedProfile(project, home, cache, "profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateSharedRuntimeTree(resolved.Paths); err != nil {
+		t.Fatal(err)
+	}
+	state, err := ResolvePiClientStatePaths(cache, resolved.Project, resolved.ProfileName, "RUN-auto-restart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CreatePiStateTree(state); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	lease, err := acquireSharedRuntimeLease(resolved, state, "RUN-auto-restart", append(os.Environ(), "HOME="+home), nil, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.close()
+	data, err := os.ReadFile(attemptFile)
+	if err != nil || strings.TrimSpace(string(data)) != "3" {
+		t.Fatalf("runtime attempts=%q err=%v want=3", data, err)
+	}
+	ledger, err := readSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.RestartCount != 2 || ledger.LastReadinessMatch == nil || ledger.QuarantinedUntil != nil {
+		t.Fatalf("cross-broker restart ledger=%#v", ledger)
 	}
 }
 

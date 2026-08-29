@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"syscall"
 	"testing"
@@ -47,7 +48,8 @@ func newSharedBrokerAdmissionFixture(t *testing.T) sharedBrokerAdmissionFixture 
 		RuntimeKey: resolved.RuntimeKey, ProfileDigest: resolved.ProfileDigest,
 		Runtime: &SharedRuntimeProcessRecord{PID: 5252, Endpoint: resolved.Profile.BaseURL},
 	}
-	server := newSharedBrokerServer(resolved, record, nil)
+	ledger := newSharedRuntimeRestartLedger(resolved.RuntimeKey, resolved.ProfileDigest)
+	server := newSharedBrokerServer(resolved, record, &ledger, nil)
 	server.admission = sharedBrokerAdmissionDependencies{
 		peerIdentity: func(*net.UnixConn) (uint32, int, error) {
 			return observation.UID, observation.PID, nil
@@ -226,6 +228,56 @@ func TestSharedBrokerProductionConnectionRejectsWireFrameBoundWidening(t *testin
 	}
 	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 0 {
 		t.Fatalf("oversize hello was granted %d leases", leaseCount)
+	}
+}
+
+// Production call site: sharedBrokerServer.handleConnection. Closing the real
+// AF_UNIX peer without a release frame must run the handler defer and remove
+// both the in-memory lease and its persisted mirror.
+func TestSharedBrokerHandleConnectionReleasesLeaseAfterAbruptClientDeath(t *testing.T) {
+	fixture := newSharedBrokerAdmissionFixture(t)
+	serverConnection, clientConnection := sharedBrokerUnixConnectionPair(t)
+	wrapped := &sharedBrokerConnection{
+		connection: serverConnection,
+		reader:     bufio.NewReaderSize(serverConnection, sharedRuntimeMaxFrameBytes+1),
+	}
+	fixture.server.connections[wrapped] = true
+	done := make(chan struct{})
+	go func() {
+		fixture.server.handleConnection(wrapped)
+		close(done)
+	}()
+	clientReader := bufio.NewReaderSize(clientConnection, sharedRuntimeMaxFrameBytes+1)
+	if err := writeSharedWireMessage(clientConnection, fixture.hello); err != nil {
+		t.Fatal(err)
+	}
+	if message, err := readSharedWireMessage(clientReader); err != nil || message.Type != "hello_ok" {
+		t.Fatalf("hello response=%#v err=%v", message, err)
+	}
+	if err := writeSharedWireMessage(clientConnection, sharedWireMessage{Type: "acquire", ClientKey: "abrupt-client"}); err != nil {
+		t.Fatal(err)
+	}
+	leaseMessage, err := readSharedWireMessage(clientReader)
+	if err != nil || leaseMessage.Type != "lease" || leaseMessage.LeaseID == "" {
+		t.Fatalf("lease response=%#v err=%v", leaseMessage, err)
+	}
+	mirror := filepath.Join(fixture.server.resolved.Paths.LeasesDir, leaseMessage.LeaseID+".json")
+	if _, err := os.Stat(mirror); err != nil {
+		t.Fatalf("lease mirror was not published: %v", err)
+	}
+	if err := clientConnection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("handleConnection did not observe abrupt client death")
+	}
+	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 0 {
+		t.Fatalf("handleConnection retained %d lease(s) after client death", leaseCount)
+	}
+	if _, err := os.Stat(mirror); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lease mirror survived abrupt client death: %v", err)
 	}
 }
 
