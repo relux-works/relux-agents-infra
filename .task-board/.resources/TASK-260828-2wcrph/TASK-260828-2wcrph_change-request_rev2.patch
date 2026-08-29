@@ -1,0 +1,1091 @@
+diff --git a/.research/260829_llamacpp-against-the-python-baseline.md b/.research/260829_llamacpp-against-the-python-baseline.md
+new file mode 100644
+index 0000000..b15af8b
+--- /dev/null
++++ b/.research/260829_llamacpp-against-the-python-baseline.md
+@@ -0,0 +1,617 @@
++# llama.cpp measured against the Python mlx-lm baseline
++
++Task: TASK-260828-2wcrph (story STORY-260828-2faxgm)
++Date: 2026-08-29
++Author role: developer
++Gate: the single-invocation `benchmark-run` from STORY-260827-m30k8z as extended
++by TASK-260828-3fgca3, plus one reader fix this task made and proved (§4).
++
++## The result in six sentences
++
++The pinned six-scenario suite ran three times end to end against `llama-server`
++and `mlx_lm-relux.server` on the same host, sequentially, with no other model
++resident. **Every scenario succeeded on both runtimes, including the capacity
++probe at 73,016 prompt tokens, and prompt-token parity was exact — ratio
++1.0000 — on all six.** The gate **refused to score any of the three pairs**,
++exit 4, on `contextPolicy`: `mlx_lm-relux.server` has no flag that bounds its KV
++cache and reports no bound, `llama-server` has no unbounded mode, so the two
++pins are `kv=unbounded` against `kv=<n>` and no argv on either side can make
++them agree (§2). That refusal is correct rather than a misconfiguration, because
++`llama-server` allocates its whole KV arena at load while `mlx_lm.server` grows
++its cache per request — measured, 65,536 bytes per token, and the two arenas
++this task ran differ by exactly the 4.19 GiB that arithmetic predicts (§5.2).
++**All three first-token-derived gate metrics are excluded from this decision**:
++llama.cpp spells streamed reasoning `reasoning_content`, which the gate does not
++read. The omission has mixed direction — it inflates llama.cpp TTFT, understates
++its prefill, and overstates its decode. A replacement probe explicitly requested
++streamed usage and received exact parity, 7,784 prompt and 106 completion tokens
++from each runtime; it measured Python/llama.cpp decode at 8.449/8.772 tok/s, a
++1.038x single-probe observation that is too small and too narrow to establish a
++general decode direction (§4.2). **On the owner's two questions the honest
++answers are: llama.cpp is modestly faster overall — 0.81x to 0.97x wall clock on
++like-for-like scenarios, without attributing that delta to decode — and modestly
++more frugal, provably below the baseline at the 73k
++capacity probe by about 9%, indeterminate at small working sets, and nowhere
++near the order of magnitude the recorded `peakPhysicalFootprintBytes` implies,
++because that counter cannot see llama.cpp's weights at all (§5).**
++
++## 0. What is not comparable, stated before any number
++
++Three things travel with this record and are not conclusions of it. They are
++TASK-260828-3g87i4's declared non-equivalences, carried into all six run records
++by the gate and reproduced here because no report of this decision may omit
++them:
++
++1. the MLX build **drops the MTP head** the GGUF carries as `blk.64` — 8
++   quantized tensors, 451,319,808 bytes on disk, skipped at load;
++2. the **vision tower is placed differently** — 333 bf16 tensors inside the MLX
++   safetensors shards against a separate 931,145,984-byte GGUF `mmproj` — and is
++   resident in neither on the default text path;
++3. GGUF **upcasts norms and 1-D tensors to F32** where the MLX build keeps the
++   source bf16: 10,686,464 bytes of extra resident memory, no fidelity
++   difference.
++
++Item 1 was observed directly this time rather than taken on trust. `llama-server`
++logs `model has unused tensor blk.64.*  -- ignoring` for all thirteen `blk.64`
++entries at load, and the runtime consequence is measurable in §5.1: the resident
++mapped-file set is the whole GGUF **minus** the MTP head, to within 0.01 GiB.
++
++**MTP was off for every scored pass**, established by the gate from the process
++rather than from the launch flag: `speculation=off` in both llama.cpp records of
++the two runs taken after §4's fix. No with-MTP number was taken; the flag
++`--spec-type draft-mtp` exists on this build and a deployment number for it is
++left to whoever wants one, clearly outside this comparison.
++
++Vision residency is not added to or subtracted from any memory figure here. On
++the llama.cpp side the `mmproj` is a separate file that was never opened.
++
++## 1. Host, and what else was on it
++
++MacBookPro18,2, Apple M1 Max, 68,719,476,736 bytes of RAM, `sysctl`-read and
++pinned into every record as `hostIdentity`.
++
++`llama.cpp 0.3.0`, build **10621**, commit `c1d0e7a00`, Homebrew, reporting
++itself as `b10621-c1d0e7a00` in its own `system_fingerprint`.
++`mlx_lm-relux.server` from the pinned pipx venv.
++
++**Every one of the three `benchmark-run` invocations was preceded and followed
++by a `ps` sweep for `llama-server`, `mlx_lm`, `mlx-swift` and `model-harness run`
++processes, and all six sweeps printed `(none)`.** They are in
++`.temp/TASK-260828-2wcrph/run-*.log` at the top and bottom of each file. The two
++passes inside each invocation are sequential by construction, with a 20 s settle
++between them, and the gate refuses a pair whose wall-clock intervals overlap.
++
++One honest note about the host: this workstation was **not** idle. Load average
++sat between 4.8 and 8.8 before each run and `hostLoadAverageMax` reached 19.64
++inside the llama.cpp capacity scenario. Nothing was killed to make room —
++`ollama` was resident throughout at 14 MB with no model loaded, which is its
++idle footprint and not a model this comparison had to wait for.
++
++**A process-hygiene failure of my own, recorded because it bears on the
++evidence.** Six side probes I launched between runs outlived the shells that
++started them — job control does not survive a tool-call boundary here — and two
++of them were 29 GB `llama-server` instances. They were found by `ps`, killed,
++and the host verified clean **before** the two runs whose numbers appear below.
++The affected artifacts are the *probes* taken during that window: three
++completions in `probe-slots/` came back `{"code":500,"message":"Compute error."}`
++because the host was out of memory, and those responses are not evidence of
++anything about llama.cpp. No benchmark record was taken in that window; the
++`(none)` sweeps bracketing each run are what establishes that.
++
++## 2. The refusal: llama.cpp and this Python baseline cannot share a KV pin
++
++### 2.1 What was measured
++
++| runtime | reports a bound on `/v1/models`? | flag that states one | `contextPolicy` KV term |
++| --- | --- | --- | --- |
++| `mlx_lm-relux.server` | **no** — no `meta` block at all | **none exists** | `kv=unbounded`, always |
++| `llama-server` b10621 | **yes** — `meta.n_ctx`, measured 8192 / 76800 / 32768 | `--ctx-size` | `kv=<n>`, always |
++
++`mlx_lm-relux.server --help` lists `--chat-template-args`,
++`--prefill-step-size`, `--prompt-cache-size`, `--prompt-cache-bytes`,
++`--decode-concurrency`, `--prompt-concurrency`, `--draft-model`,
++`--num-draft-tokens` and no KV bound option of any spelling. This is not a new
++discovery: TASK-260828-2jbufw's own table already read **"KV bound: no flag;
++unbounded"** for this runtime. What was new is following it to its conclusion.
++
++### 2.2 What the shipped config said, and why it was wrong
++
++`examples/model-harness.benchmark.toml` told the operator, beside the llama.cpp
++profile, to *"match it to the baseline's `--max-kv-size`"*. That instruction is
++unfulfillable against the Python incumbent and was written when
++`--max-kv-size` was assumed to be an MLX-family flag. It is a **Swift-prototype**
++flag: `mlx-swift-runtime-prototype serve --max-kv-size` exists, `mlx_lm.server`
++has nothing like it. The comment is corrected in place, and the fiction had also
++reached the test fixtures — see §4.3.
++
++### 2.3 The refusal, at the production entry, three times
++
++All three invocations exited **4** with:
++
++```
++pinned condition "contextPolicy" differs:
++  baseline  "kv=unbounded;prefill-step=2048;reasoning=medium"
++  candidate "kv=8192;prefill-step=2048;reasoning=medium"      (session-c8192)
++  candidate "kv=76800;prefill-step=2048;reasoning=medium"     (session-c76800)
++; these runs are not a comparison
++```
++
++No `decision.json` was written by any of them. **Both records and both
++attestations were, because admission runs after the passes**, which is why this
++report has measurements at all.
++
++### 2.4 Why this is the right refusal and not a configuration mistake
++
++The two runtimes do not merely spell the condition differently; they do not have
++the same condition. `llama-server` reserves `n_ctx` tokens of KV at load and
++pays for them on a 41-token prompt; `mlx_lm.server` grows its cache with the
++request. §5.2 measures the difference and it is 65,536 bytes per token — 4.19
++GiB between the two arenas this task ran, before a single token is generated.
++Scoring a fixed 76,800-token arena against an unbounded growing cache and
++calling the difference "the runtime" is precisely the mistake this pin exists
++to prevent.
++
++**The only admissible pair for a llama.cpp candidate is against a baseline that
++can state the same bound**, which on this host means the Swift prototype. That
++is not this task's comparison, and the brief was explicit that it is not.
++
++## 3. What was measured anyway
++
++Three invocations, all exit 4, all with complete records:
++
++| session | llama.cpp arena | scenarios | note |
++| --- | --- | --- | --- |
++| `session-c8192-prefix-speculation-fix` | `--ctx-size 8192` | five, `context_75k` skipped | taken with the pre-fix gate; kept as the evidence of §4 |
++| `session-c76800` | `--ctx-size 76800` | **all six** | the capacity run |
++| `session-c8192` | `--ctx-size 8192` | five, `context_75k` skipped | re-taken with the fixed gate; the 8k-arena numbers below |
++
++### 3.1 Prompt-token parity, checked before any latency number
++
++The brief's first instruction, and the trap that has been sprung three times in
++this story. Both runtimes rendered **identical** token counts on every scenario
++of every run:
++
++| scenario | python-mlx-lm | llamacpp | skew |
++| --- | ---: | ---: | ---: |
++| `short_prompt` | 41 | 41 | 1.0000 |
++| `long_prompt_8k` | 7,784 | 7,784 | 1.0000 |
++| `tool_call` | 313 | 313 | 1.0000 |
++| `multiturn_prefix_reuse` | 7,784 | 7,784 | 1.0000 |
++| `stability_soak` | 910 | 910 | 1.0000 |
++| `context_75k` | **73,016** | **73,016** | 1.0000 |
++
++`--chat-template-args '{"reasoning_effort": "medium"}'` and
++`--reasoning-effort medium` render the same prompt. The 41-token
++`short_prompt` is the same 41 tokens review measured when it caught the
++`xhigh`-versus-`medium` skew, so the reasoning policy is pinned on both sides
++and the fourth configuration difference was **not** in the prompt.
++
++### 3.2 What the gate recorded, and which columns of it mean anything
++
++Read §4.2 before this table. **`TTFT`, `prefill tok/s` and `decode tok/s` are
++not comparable between these two runtimes**, because the instant the gate calls
++"the first token" is a different instant on each: the first *reasoning* token
++for `mlx_lm.server`, which publishes `delta.reasoning`, and the first *content*
++token — after the entire think block — for `llama-server`, which publishes
++`delta.reasoning_content`. The three columns are reproduced as recorded, marked,
++because they are what the files contain and someone will read them.
++
++**Wall clock is the one recorded latency number that survives**, since it needs
++no first-token detection at all.
++
++`--ctx-size 8192` (`session-c8192`):
++
++| scenario | metric | python-mlx-lm | llamacpp | note |
++| --- | --- | ---: | ---: | --- |
++| `short_prompt` | wall clock | 5.89s | **5.80s** | 0.98x |
++| | TTFT | 0.97s | 3.57s | *not comparable* |
++| | prefill tok/s | 42.41 | 11.50 | *not comparable* |
++| | decode tok/s | 10.78 | 25.08 | *not comparable* |
++| `long_prompt_8k` | wall clock | 86.37s | **75.27s** | **0.87x** |
++| | TTFT | 76.29s | 73.97s | *not comparable* |
++| | prefill tok/s | 102.04 | 105.23 | *not comparable* |
++| | decode tok/s | 10.41 | 80.79 | *not comparable; excluded by §4.2* |
++| `tool_call` | wall clock | 9.15s | **6.86s** | 0.75x |
++| `multiturn_prefix_reuse` | wall clock | 235.52s | **84.47s** | **0.36x**, see §3.6 |
++| `stability_soak` | wall clock | 136.70s | **119.53s** | 0.87x |
++
++`--ctx-size 76800` (`session-c76800`), including the capacity probe:
++
++| scenario | metric | python-mlx-lm | llamacpp | note |
++| --- | --- | ---: | ---: | --- |
++| `short_prompt` | wall clock | 5.91s | **5.73s** | 0.97x |
++| `long_prompt_8k` | wall clock | 94.39s | **76.13s** | **0.81x** |
++| | decode tok/s | 10.03 | 81.31 | *not comparable* |
++| `tool_call` | wall clock | 10.50s | **6.89s** | 0.66x |
++| `multiturn_prefix_reuse` | wall clock | 282.74s | **36.68s** | **0.13x**, see §3.6 |
++| `stability_soak` | wall clock | 138.50s | **123.11s** | 0.89x |
++| **`context_75k`** | **succeeded** | **yes** | **yes** | both |
++| | prompt tokens | 73,016 | 73,016 | 1.0000 |
++| | wall clock | 893.83s | **862.97s** | 0.97x |
++| | TTFT | 891.96s | *unmeasured* | §4.2 |
++| | prefill tok/s | 81.86 | *unmeasured* | §4.2 |
++
++**The 75,000-token capacity criterion is met by both runtimes.** Neither
++aborted, neither degraded, and both answered from the same 73,016-token prompt.
++The suite's `context_75k` scenario builds 2,027 filler repeats, which is 73,016
++tokens under this tokenizer, not 75,000; that is the shipped suite's pinned
++value and it matches the accepted MLX-Swift comparison exactly.
++
++### 3.3 The authoritative streamed-usage probe
++
++Measured outside the gate, because the gate cannot measure them on this pair:
++one `long_prompt_8k` completion per runtime, back to back on the same host with
++no other model runtime resident, same prompt, and `max_tokens` 256. The request
++explicitly carried `stream_options: {"include_usage": true}`; the raw stream
++from **both** runtimes carried `prompt_tokens: 7784`, `completion_tokens: 106`
++and `total_tokens: 7890`. The probe refuses to derive decode when those counts
++are absent, malformed or conflicting. SSE frame counts are retained only as
++transport diagnostics and are never substituted for token counts.
++
++| metric | python-mlx-lm | llamacpp | candidate / baseline |
++| --- | ---: | ---: | ---: |
++| prompt tokens from streamed usage | 7,784 | 7,784 | 1.0000 |
++| completion tokens from streamed usage | 106 | 106 | 1.0000 |
++| first generated token / TTFT | 103.310s | **76.784s** | 0.743x |
++| prefill tok/s (7,784 ÷ TTFT) | 75.346 | **101.375** | 1.345x |
++| decode tok/s (`(106 - 1) ÷ first-to-last text interval`) | 8.449 | **8.772** | 1.038x |
++| SSE frames, diagnostic only | 106 | 106 | not a token count |
++| reasoning/content frames, diagnostic only | 89 / 15 | 89 / 14 | not a token count |
++
++The frame split confirms that the two transports have nearly identical shape;
++it does **not** establish how many tokens each frame carries. The completion
++count comes only from streamed usage.
++
++**Two cautions on these numbers.** They are one completion per runtime. The
++1.038x decode delta is not a general performance claim: the three retained
++llama.cpp runtime logs report 10.51, 10.79 and 10.74 tok/s for their own
++106-token generations, while this rerun's server log reports 8.69 tok/s and the
++client interval reports 8.772. This probe establishes the count and this one
++rate; it does not establish a stable decode advantage in either direction.
++
++**What this means for the recorded numbers.** `decodeTokensPerSecond` for
++llama.cpp is `(completion − 1) ÷ (wall − TTFT)`, and with the clock starting
++after the think block the denominator is only the content tail. The recorded
++80.79 tok/s is therefore an artifact and is excluded. The replacement 8.772
++tok/s comes from the authoritative 106-token usage count and the first-to-last
++generated-text interval; it is not reconstructed from 106 SSE frames.
++
++### 3.4 Tool-call parity
++
++`tool_call` **succeeded on both runtimes in all three runs**. The gate's parity
++check is not a status code: it requires `finish_reason == "tool_calls"`, a call
++naming `read_coolant_pressure` exactly, arguments that parse as JSON, and every
++key in the declaration's `required` list — here `vehicle_id` — present in them.
++Both runtimes satisfied all four, at an identical 313-token prompt.
++
++### 3.5 Long-running stability
++
++`stability_soak`, 20 sequential completions, **succeeded on both runtimes in all
++three runs** with no failed iteration. Completion tokens: 1,280 for Python
++against 1,248 for llama.cpp, both against a 64-token-per-iteration budget, so
++neither runtime was truncating differently. llama.cpp finished the soak in
++119.53s against 136.70s at the 8k arena and 123.11s against 138.50s at the
++76,800 arena — consistent across both runs. The gate defect and the small,
++single-probe decode delta do not support attributing that wall-clock result to
++faster decode; prefill and cross-request prefix reuse are separate contributors.
++
++There is one stability observation that is **not** a pass/fail: llama.cpp's
++anonymous footprint climbed monotonically across the pass, 1.86 → 2.59 → 3.66 →
++4.27 → 11.43 GiB at the 8k arena, and 6.05 → 15.34 GiB at the 76,800 arena. The
++soak's own `footprint_drift_bytes` is recorded per iteration in the record's
++soak detail. I am not calling this a leak: the sampler reports a per-scenario
++window peak and Metal compute buffers are plausibly the whole of it. It is
++flagged because a 9.6 GiB climb over five scenarios is the kind of thing that
++should be looked at before a deployment decision, and this task did not
++establish what it is.
++
++### 3.6 The prompt-cache asymmetry runs the other way
++
++The declaration this run carried on the baseline — *"deployed with
++`--prompt-cache-size 1 --prompt-cache-bytes 8GB`; `llama-server` holds no
++cross-request prompt cache"* — is the framing
++`examples/model-harness.benchmark.toml` uses, and **the measurement contradicts
++its second half.**
++
++`multiturn_prefix_reuse` sends three turns over one 7,784-token prefix. A single
++prefill of that prefix costs about 75-85s on either runtime.
++
++| run | python-mlx-lm | llamacpp |
++| --- | ---: | ---: |
++| `--ctx-size 8192` | 235.52s ≈ **three** prefills | 84.47s ≈ **one** prefill |
++| `--ctx-size 76800` | 282.74s ≈ **three** prefills | **36.68s — less than one** |
++
++So the incumbent's configured prompt cache **did not deliver prefix reuse on
++this scenario**, and `llama-server`'s per-slot KV reuse did. The 36.68s is
++below the cost of a single prefill, which means llama.cpp entered
++`multiturn_prefix_reuse` with the prefix already warm from `long_prompt_8k`,
++the scenario immediately before it — its cache is not merely per-conversation
++but **survives across requests and therefore across scenarios**.
++
++Two consequences, neither of which this task can settle:
++
++* the `multiturn_prefix_reuse` figures above are **contaminated by scenario
++  order** on the llama.cpp side and should not be read as a clean 0.13x;
++* the asymmetry the records declare is stated backwards, and a future run should
++  declare it as measured rather than as assumed.
++
++## 4. Three readings the gate could not make on this runtime
++
++All three are the same shape as `-ub`: a reading this gate makes, spelled by
++llama.cpp in a way the reader did not know. None was found by reasoning about
++the code; all three were found by running it. One is fixed here (§4.1), one is
++measured and reported with its corrected numbers (§4.2), and one was a test
++fixture describing a launch that cannot exist (§4.3).
++
++### 4.1 FIXED — `/slots` names `speculative` where the reader was not looking
++
++**The finding.** The first run's llama.cpp record pinned
++`speculation=unread`. `speculation=unread` is in
++`RuntimeBenchmark.unpinnableConditions` and is refused, so a second, independent
++refusal was sitting behind the KV one: **on this build the gate could never
++establish that MTP was off, which is a precondition of every scored comparison
++in this story.**
++
++**Why.** `RuntimeSpeculation.read` did
++`let parameters = (slot["params"] as? [String: Any]) ?? slot` — consult `params`,
++and fall back to the slot only when `params` is **absent**. Measured on this
++build:
++
++* `speculative` is a **top-level** field of a slot;
++* `params` appears on a slot **once it has served a request** and carries
++  sampling settings — `seed`, `temperature`, `top_k`, `top_p`, `n_predict` — and
++  never names `speculative`.
++
++So every slot the soak had touched went to the `continue`, and once traffic had
++touched all four the whole array was invisible: `named == false`, `unread`. A
++runtime that had answered the question in plain text was refused for a reading
++the gate had in its hands. Reproduced directly on the 27B model: an unused slot
++is readable, and the same slot after one completion is not
++(`.temp/TASK-260828-2wcrph/probe-slots/`).
++
++**The dangerous half.** This was not only a false refusal. With the pre-fix
++reader, a slot carrying `{"speculative": true, "params": {"speculative": false}}`
++read as `reported(false)` — a **drafting runtime scored as MTP-off**. The
++mutant in §4.4 kills on exactly that case.
++
++**The fix, additive.** Both placements are read per slot and neither shadows the
++other; any `true` in either still returns `reported(true)` immediately; a slot
++naming the field in **neither** place is still `unread`. Nothing that used to be
++refused is now admitted.
++
++**The reader was not added on faith.** The `/props`-shaped mistake — a field
++that looks right and does not move with the launch — was checked for first. On
++build `b10621-c1d0e7a00`, after eight completions had touched every slot:
++
++| launch | top-level `speculative` | `params.speculative` | shipped reader | fixed reader |
++| --- | --- | --- | --- | --- |
++| `--spec-type none` | `false` on all 4 slots | never present | `reported(false)`¹ | `reported(false)` |
++| `--spec-type ngram-mod` | **`true`** on all 4 slots | never present | `reported(true)`¹ | `reported(true)` |
++
++¹ in that probe only one of four slots had acquired a `params` block, so the
++shipped reader still found a readable slot. In the benchmark pass, where the
++20-iteration soak had touched all four, it did not.
++
++The field tracks the launch, on used and unused slots alike. `/props` reported
++`speculative.types: "none"` under **both** launches and is still not read.
++
++**Proved at the production entry.** The two runs taken after the fix both
++record `speculation=off` in the llama.cpp record, written by the gate from its
++own `/slots` exchange inside its own observation window. The pre-fix session is
++kept as `session-c8192-prefix-speculation-fix` with `{"state":"unread"}` in its
++attestation.
++
++### 4.2 REPORTED, NOT FIXED — the first-token clock starts in a different place on each runtime
++
++**This is the most consequential finding in the report**, because unlike §4.1 it
++does not fail closed: it produces numbers, and the numbers are wrong.
++
++`BenchmarkHTTPDriver.streamed` starts its clock on the first frame carrying
++`delta.content` or `delta.reasoning`, reasoning included on purpose because this
++model's template opens a `<think>` block and waiting for content would report
++the length of the model's thinking as runtime latency. That is the correct
++definition. **`mlx_lm.server` publishes `delta.reasoning`; `llama-server`
++publishes `delta.reasoning_content`.** So the gate applies the intended
++definition to the incumbent and the rejected one to the candidate.
++
++Rerun with authoritative streamed usage, one `long_prompt_8k` completion per
++runtime and every frame timestamped:
++
++| | python-mlx-lm | llamacpp |
++| --- | ---: | ---: |
++| first frame with generated text | 103.310s | 76.784s |
++| first frame the **gate** counts | 103.310s (`reasoning`) | **87.259s** (`content`, 10.475s later) |
++| last generated-text frame | 115.737s | 88.754s |
++| streamed completion tokens | 106 | 106 |
++
++Three metrics are derived from that instant, and each is wrong in a different
++direction for llama.cpp:
++
++| recorded metric | derivation | effect on llama.cpp |
++| --- | --- | --- |
++| `timeToFirstTokenSeconds` | the instant itself | **inflated** by the whole think block |
++| `prefillTokensPerSecond` | `promptTokens ÷ ttft` | **understated** |
++| `decodeTokensPerSecond` | `(completion − 1) ÷ (wall − ttft)` | **overstated** — the denominator is only the content tail while the numerator still counts every reasoning token; the historical 80.79 is excluded |
++
++And where the whole budget is spent thinking, no `content` frame arrives at all
++and the clock never starts: a 16-token completion produced 91 characters of
++generated text, **all** under `reasoning_content`, and zero the gate can see.
++That is exactly the pattern in the records:
++
++| scenario | max_tokens | llamacpp TTFT |
++| --- | ---: | --- |
++| `short_prompt` | 256 | 3.57s (inflated) |
++| `long_prompt_8k` | 256 | 73.97s (inflated) |
++| `multiturn_prefix_reuse` | 64 | **unmeasured** |
++| `context_75k` | 16 | **unmeasured** |
++
++This defect has **mixed direction**. It makes llama.cpp look worse on TTFT and
++prefill, and better on decode. It is therefore incorrect to say that every
++measurement defect in this comparison flattered llama.cpp.
++
++**Why it is reported and not fixed here.** The unmeasured half fails closed —
++`appendDelta` reports `verdict: "unmeasured"` with a blocker, never a number.
++The measured half does **not** fail closed, and that is the argument for fixing
++it. **TASK-260829-3cwcb6 owns the production fix and full rerun.** This interim
++artifact does not change the driver, does not replace the known-wrong gate value
++with a transport proxy, and excludes all gate-recorded TTFT/prefill/decode
++figures from the decision. §3.3 records only the separately verified probe.
++
++Consequence for this report: **llama.cpp's TTFT on the capacity probe is
++unknown, not fast**, and its recorded 80.79 tok/s decode is an artifact and not
++a result.
++
++### 4.3 A fixture that described a launch that cannot exist
++
++`RuntimeBenchmarkContextBoundTests.boundedMLXArgv` was
++`unboundedMLXArgv + ["--max-kv-size", "8192"]`, and the records built from it
++were labelled `python-mlx-lm`. That is an `mlx_lm.server` command line carrying
++a flag `mlx_lm.server` does not have. It mattered because the suite's one
++positive llama.cpp case, `admitsALlamaCPPCandidateWithNoClauseRelaxed`, then
++read as though llama.cpp-against-the-Python-incumbent were admissible.
++
++Renamed to `boundedSwiftArgv`, rebuilt as the Swift profile actually spells it,
++and the records relabelled. The admissible pair is llama.cpp against
++**mlx-swift**, and the suite now says so.
++
++### 4.4 Mutants
++
++Three, each applied to the shipped source, built, run, reverted. All killed.
++
++| mutant | what it does | result |
++| --- | --- | --- |
++| **M-2wcrph-1** | restores the pre-fix `params ?? slot` reader | `swift test` **exit 1**, 3 tests red / 4 issues — including `{"speculative": true, "params": {"speculative": false}}` reading as `reported(false)`, the drafting-runtime-scored-as-quiet case |
++| **M-2wcrph-2** | *narrowing*: a slot naming the field nowhere is read as "not speculating" | `swift test` **exit 1**, 6 issues across 3 tests, including the pre-existing `slotsWithoutTheFieldAreUnread` |
++| **M-2wcrph-3** | *widening*: `contextPolicy` is dropped from `Pins.firstMismatch` — the change that would let this task's pair be scored | `swift test` **exit 1**; `refusesTheLlamaCPPCandidateAgainstThePythonIncumbent` reddens, so the refusal this whole report rests on is pinned |
++
++## 5. Memory — the other difference that is in the metric, not the runtime
++
++The brief predicted a fourth configuration difference. There were two, and
++neither is in the prompt, the prefill chunk, the reasoning effort or the model
++factory — §4.2 is one and this is the other. **Both are in the measurement
++itself.**
++
++### 5.1 `ri_phys_footprint` does not see llama.cpp's weights
++
++Every `peakPhysicalFootprintBytes` in every record is
++`proc_pid_rusage(...).ri_phys_footprint`. Sampled on the **same process at the
++same moment** as `ps` RSS and `vmmap -summary`, each runtime holding the 27B
++model after one completion:
++
++| reading | `llama-server` | `mlx_lm-relux.server` |
++| --- | ---: | ---: |
++| `ri_phys_footprint` — **what the records carry** | **1.41 GiB** | **27.62 GiB** |
++| `ps` RSS | **28.09 GiB** | 24.26 GiB |
++| `vmmap` "mapped file", resident | **26.6 GiB**, of which **dirty 0** | — |
++
++`llama-server` `mmap`s the GGUF. Those pages are resident and **clean**, so
++`phys_footprint` — which counts dirty anonymous memory — excludes all 26.6 GiB
++of them. MLX reads its weights into anonymous memory, so its footprint counts
++them, and in fact exceeds its RSS because footprint also counts what the
++compressor has taken.
++
++**Had the pair been admitted, `maxPeakFootprintRatio: 1.1` would have scored
++llama.cpp at roughly 0.08x the baseline and called it twelve times more
++frugal.** That number is an artifact of the metric. This is the same class as
++the brief's own warning about `resident_bytes`, arriving from the other
++direction: on this pair `phys_footprint` is the reading that lies.
++
++The 26.6 GiB is checkable. The GGUF is 29,036,089,344 bytes = 27.04 GiB, and
++llama.cpp declines to load the 451,319,808-byte `blk.64` MTP head = 0.42 GiB.
++27.04 − 0.42 = **26.62 GiB**. The mapped-file residency is the whole file minus
++exactly the tensors the load log said it was ignoring — which is also the first
++runtime confirmation that declared non-equivalence #1 is real in memory and not
++only on disk.
++
++### 5.2 The KV arena, derived and then measured
++
++64 layers with `full_attention_interval` 4 gives 16 full-attention layers; 4 KV
++heads; `head_dim` 256; K and V; f16:
++
++```
++16 x 4 x 256 x 2 x 2 = 65,536 bytes per token
++  --ctx-size  8,192 -> 0.50 GiB
++  --ctx-size 76,800 -> 4.69 GiB
++  predicted difference: 4.19 GiB
++```
++
++Observed difference in llama.cpp's `short_prompt` footprint between the two
++runs: **4.19 GiB** (1.86 → 6.05 GiB). The arena is paid in full on a 41-token
++prompt, it is anonymous so `phys_footprint` *does* see it, and it is why the
++`--ctx-size` you choose is a resident cost and not a limit.
++
++### 5.3 What can actually be claimed about frugality
++
++Since llama.cpp's true resident cost is its recorded footprint plus its
++mapped-file residency, and I did not sample mapped-file residency *during* the
++passes, the honest form is a bound: at most `footprint + 26.6 GiB`, taking the
++weights as fully resident. Against the baseline's measured peak:
++
++| run | scenario | python-mlx-lm, measured | llama.cpp upper bound | verdict |
++| --- | --- | ---: | ---: | --- |
++| c8192 | `short_prompt` | 27.35 GiB | 28.46 GiB | indeterminate |
++| c8192 | `long_prompt_8k` | 31.39 GiB | **29.19 GiB** | **llama.cpp lower** |
++| c8192 | `multiturn_prefix_reuse` | 31.91 GiB | **30.87 GiB** | **llama.cpp lower** |
++| c8192 | `stability_soak` | 28.34 GiB | 38.03 GiB | indeterminate |
++| c76800 | `long_prompt_8k` | 31.36 GiB | 33.38 GiB | indeterminate |
++| c76800 | **`context_75k`** | **45.20 GiB** | **41.05 GiB** | **llama.cpp lower** |
++| c76800 | pass peak | 45.20 GiB | 41.94 GiB | **llama.cpp lower** |
++
++**The answer to the owner's question.** llama.cpp is **modestly** more frugal,
++and only where the working set is large: provably below the baseline on the 8k
++prompt with a matched 8k arena, and provably below it on the 73,016-token
++capacity probe — 41.05 GiB against 45.20 GiB, about 9%. At small working sets it
++is indeterminate, and with the 76,800-token arena it is indeterminate almost
++everywhere because the arena costs 4.69 GiB whether or not you use it. **It is
++not the order-of-magnitude win the raw records imply, and anyone reading
++`peakPhysicalFootprintBytes` out of these files without §5.1 will conclude
++something false.**
++
++Where the bound is loose the row says *indeterminate*, not *equal*. Closing
++those rows means sampling mapped-file residency beside the footprint for the
++duration of a pass, which is a change to `BenchmarkFootprintSampler` and is not
++in this task.
++
++## 6. Recommendations, in the order I would take them
++
++1. **Complete TASK-260829-3cwcb6: read `reasoning_content` as a second spelling
++   of a streamed reasoning delta, then rerun** (§4.2). This is the only finding
++   here that puts wrong latency numbers into a record rather than refusing. The
++   correction has mixed direction — TTFT and prefill move in llama.cpp's favour,
++   decode moves against it — and invalidates prior llama.cpp latency records,
++   which must be retaken rather than compared against.
++2. **Sample resident mapped-file bytes beside `ri_phys_footprint`** (§5.1).
++   Until then no memory number in this gate is comparable across an
++   `mmap`-loading runtime and an anonymous-loading one, and
++   `maxPeakFootprintRatio` would have scored llama.cpp at about 0.08x the
++   baseline. This turns every *indeterminate* in §5.3 into a measurement.
++3. **Decide what a llama.cpp-versus-Python comparison is supposed to mean**
++   (§2). The gate is right that the two do not share a KV condition. The options
++   are (a) accept that this incumbent can only be compared to the Swift
++   prototype, (b) score llama.cpp against a Swift baseline pinned to the same
++   `--max-kv-size` and treat the Python numbers here as context, or (c) declare
++   "bounded arena versus growing cache" an asymmetry rather than a pin — which I
++   do not recommend, because it is a first-order memory difference and declaring
++   it away is how §5.1's 12x artifact would have reached a report.
++4. **Re-declare the prompt-cache asymmetry as measured** (§3.6): `llama-server`
++   does hold a cross-request prefix cache, the incumbent's configured one did
++   not fire on `multiturn_prefix_reuse`, and llama.cpp's figure for that
++   scenario is contaminated by scenario order.
++5. **Look at llama.cpp's 9.6 GiB anonymous climb across a pass** (§3.5) before
++   any deployment decision.
++
++## 7. Artifacts
++
++Under `.temp/TASK-260828-2wcrph/`:
++
++| path | what |
++| --- | --- |
++| `TASK-260828-2wcrph.benchmark.toml` | the config all three runs used; two llama.cpp profiles differing only in `--ctx-size` |
++| `run-c8192-v2.log`, `run-c76800.log`, `run-c8192.log` | the three invocations, host sweeps included |
++| `session-c8192/`, `session-c76800/`, `session-c8192-prefix-speculation-fix/` | records, attestations, runtime logs, session manifests |
++| `report.py` | renders a session into the tables above |
++| `probe-slots/`, `probe-slots-used.sh`, `SlotsRepro.swift` | §4.1's measurements |
++| `probe-memory/`, `probe-memory.sh`, `Footprint.swift` | §5.1's measurements and the SSE shape of §4.2 |
++| `probe-ttft.py`, `probe-ttft.sh`, `probe-ttft-*.json` | superseded probe; raw outputs have empty `usage` and cannot establish decode |
++| `TASK-260828-2wcrph-rework/probe_decode_usage.py`, `*-authoritative-raw.json`, `*-authoritative-summary.json` | §3.3 rerun; explicit streamed usage, raw timestamped frames, and verified token-count-derived rates |
++| `smoke-01.log`, `build-02.log` | `benchmark-gate-smoke.sh` 0 failures; Release build |
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index ef4e10c..adc2a21 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,29 @@
+ 
+ ## 2026-08-29
+ 
++### 1402 — Decode Claim Withdrawn; Authoritative Streamed Usage Reverses The Single-Probe Delta
++
++- REGRESSION: TASK-260828-2wcrph's first `probe-ttft.py` outputs carried `"usage": {}`. Its published paired decode values could only be reconstructed by substituting non-empty SSE frame counts for completion tokens; the claimed slower direction had no token-count evidence and is withdrawn from the report and README.
++- EVIDENCE: rerun requested `stream_options.include_usage=true` and retained every timestamped SSE packet. Both runtimes returned exactly 7,784 prompt / 106 completion / 7,890 total tokens. Python: TTFT 103.310s, prefill 75.346 tok/s, decode 8.449 tok/s. llama.cpp: TTFT 76.784s, prefill 101.375 tok/s, decode 8.772 tok/s. The 1.038x decode delta is one bounded observation, not a general direction; frame counts are diagnostics only.
++- DECISION: all gate-recorded llama.cpp TTFT/prefill/decode remains excluded from the migration decision. `reasoning_content` omission has mixed direction: llama.cpp TTFT inflated, prefill understated, decode overstated. TASK-260829-3cwcb6 owns the production fix and full rerun.
++- SCOPE: `.research/260829_llamacpp-against-the-python-baseline.md`, `tools/mlx-swift-runtime-prototype/README.md`, `.temp/TASK-260828-2wcrph-rework/` raw evidence and negative probe tests.
++
++### 0200 — llama.cpp Measured: Refused On The KV Pin, And Two Of The Three Speed Metrics Were Not Measuring The Same Thing
++
++- RESULT: the pinned six-scenario suite ran **three times end to end**, `llama-server` b10621-c1d0e7a00 against `mlx_lm-relux.server`, same host, sequential, `(none)` resident before and after all three. **Every scenario succeeded on both runtimes, including `context_75k` at 73,016 prompt tokens, and prompt-token parity was exact (1.0000) on all six.** Tool-call parity and the 20-iteration soak passed on both. All three invocations exited **4**, unscored.
++- REFUSAL, and it is correct: `contextPolicy` differs, `kv=unbounded` against `kv=8192`/`kv=76800`. **`mlx_lm-relux.server` has no flag that bounds its KV cache and reports no bound; `llama-server` has no unbounded mode.** No argv on either side can make them agree, so **llama.cpp can never be scored against this Python incumbent** — the only admissible baseline is the Swift prototype, which has `--max-kv-size`. TASK-260828-2jbufw had already measured "KV bound: no flag; unbounded" for `mlx_lm.server`; nobody had followed it to the conclusion, and `examples/model-harness.benchmark.toml` still told the operator to "match it to the baseline's `--max-kv-size`". Corrected in place.
++- FINDING 1, the dangerous one, **reported not fixed**: `timeToFirstTokenSeconds`, `prefillTokensPerSecond` and `decodeTokensPerSecond` are **not comparable across this pair**. All three derive from the first frame carrying `delta.content` or `delta.reasoning`; `mlx_lm.server` publishes `reasoning`, **`llama-server` publishes `reasoning_content`**. llama.cpp's clock therefore starts after its think block, inflating TTFT, understating prefill and overstating decode. The original corrected decode figures and direction were unsupported; the 1402 correction withdraws them and records the authoritative streamed-usage rerun. The production gate remains unchanged here because TASK-260829-3cwcb6 owns its fix and full rerun.
++- FINDING 2, **fixed and mutant-proved**: `RuntimeSpeculation.read` did `(slot["params"] as? [String: Any]) ?? slot` — consult `params`, fall back to the slot only when `params` is *absent*. On this build `speculative` is a **top-level** slot field and `params` appears only *after* a slot has served a request, carrying sampling settings that never name it. So the reader went blind as soon as traffic touched every slot: the 20-iteration soak did exactly that, and a llama.cpp pass provably not speculating recorded `speculation=unread` and was refused. Worse, `{"speculative": true, "params": {"speculative": false}}` read as `reported(false)` — **a drafting runtime scored as MTP-off.** Fix reads both placements, neither shadowing the other, any `true` still refusing. Proved at the production entry: the two post-fix runs both record `speculation=off`.
++- FINDING 3, memory, and it is the owner's first-class question: **`ri_phys_footprint` cannot see `mmap`-loaded weights.** One process, one moment, holding the 27B model: footprint **1.41 GiB**, `ps` RSS **28.09 GiB**, `vmmap` mapped-file resident **26.6 GiB with 0 dirty**. `maxPeakFootprintRatio` would have scored llama.cpp at ~0.08x and called it twelve times more frugal. The 26.6 GiB checks out to 0.01 GiB as the whole GGUF **minus** the 451 MB `blk.64` MTP head llama.cpp logs as ignored — the first runtime confirmation that declared non-equivalence #1 is real in memory. Bounded honestly (`footprint + 26.6 GiB`), llama.cpp is **provably lower at `context_75k` — 41.05 GiB vs 45.20 GiB, ~9% — and at 8k with a matched arena, indeterminate at small working sets.** Modestly frugal, not an order of magnitude.
++- MEASURED, and it makes `--ctx-size` a resident cost rather than a limit: the KV arena is **65,536 B/token** (16 full-attention layers of 64, 4 KV heads, head_dim 256, K+V, f16). Predicted 8192→76800 delta 4.19 GiB; **observed 4.19 GiB** on `short_prompt`. Paid in full on a 41-token prompt.
++- ANOMALY: the baseline declaration "`llama-server` holds no cross-request prompt cache" is **backwards**. `multiturn_prefix_reuse` cost Python ~three full prefills (235.52s / 282.74s) and llama.cpp one or fewer (84.47s / **36.68s**, below a single prefill) — so the incumbent's configured `--prompt-cache-size 1 --prompt-cache-bytes 8GB` did **not** fire, llama.cpp's slot KV reuse did, and it survives across scenarios. That figure is contaminated by scenario order and should not be read as a clean 0.13x. Separately, llama.cpp's anonymous footprint climbed 1.86→11.43 GiB across one pass; not diagnosed.
++- PROCESS FAILURE, mine, recorded because it bears on evidence: six side probes outlived the shells that launched them — job control does not survive a tool-call boundary — including two 29 GB `llama-server` instances, which pushed the host out of memory and produced three `{"code":500,"message":"Compute error."}` probe responses that are evidence of nothing. Found by `ps`, killed, host verified clean **before** the runs whose numbers are reported. Kill background probes by PID in the same call that starts them.
++- REGRESSION: 3 mutants, all killed. **M-2wcrph-1** restores the pre-fix `params ?? slot` reader — exit 1, 3 tests red including the drafting-scored-as-quiet case. **M-2wcrph-2** (*narrowing*: a slot naming the field nowhere reads as "not speculating") — exit 1, 6 issues. **M-2wcrph-3** (*widening*: `contextPolicy` dropped from `Pins.firstMismatch`, the change that would let this pair be scored) — exit 1, the new refusal test reddens.
++- SCOPE: `RuntimeAttestation.swift` (`RuntimeSpeculation.read`), `RuntimeObservationReadingTests.swift` (+5 tests), `RuntimeBenchmarkContextBoundTests.swift` (`boundedMLXArgv` → `boundedSwiftArgv`, which described an `mlx_lm.server` launch carrying a flag it does not have, +2 tests), `examples/model-harness.benchmark.toml`, `README.md`. Report `.research/260829_llamacpp-against-the-python-baseline.md`. `unpinnableConditions` untouched.
++- EVIDENCE: `swift build` exit 0; `swift test` **392 tests / 30 suites** exit 0; `xcodebuild -configuration Release` exit 0; `benchmark-gate-smoke.sh` **0 failures** exit 0; `swift format lint --strict --recursive Sources Tests` exit 0; `shellcheck scripts/benchmark-gate-smoke.sh` exit 0. Three real `benchmark-run` invocations against the 28 GB MLX directory and the 29 GB GGUF, all exit 4. Sessions, logs and probes under `.temp/TASK-260828-2wcrph/`.
++- STATUS: `TASK-260828-2wcrph` handed to review.
++
++
+ ### 0310 — F6: The Same Rule One Level Deeper, And The Real Failure Was Three Rounds Of Overclaiming
+ 
+ - ROOT CAUSE, the sixth time: **a value this program could not understand was defaulted instead of refused** — now inside the tool declaration. Review misspelled `parameters.required` as `parameters.require`. The gate read that as the *supported absence* of `required`, `requiredArguments` came out `[]`, the parity check in `BenchmarkScenarios.tool` had no argument key to demand back, a runtime that called the tool with `{}` satisfied it, and the shipped `benchmark-run` exited **0** with `accepted: true`.
+diff --git a/tools/mlx-swift-runtime-prototype/README.md b/tools/mlx-swift-runtime-prototype/README.md
+index 5c3a2c2..83f09d2 100644
+--- a/tools/mlx-swift-runtime-prototype/README.md
++++ b/tools/mlx-swift-runtime-prototype/README.md
+@@ -604,6 +604,43 @@ and one copy of this model is 28 GB, so overlapping runs would be measuring each
+ other's memory pressure. Both are launched through `model-harness run`, so
+ ownership, readiness polling and shutdown are the production ones.
+ 
++### Two metric families this gate cannot yet compare across these runtimes
++
++Read this before taking a number out of a `records/*.json` for a llama.cpp pass.
++Both were found by TASK-260828-2wcrph running the suite, and both are recorded
++in full in `.research/260829_llamacpp-against-the-python-baseline.md`.
++
++- **`decodeTokensPerSecond`, `prefillTokensPerSecond` and
++  `timeToFirstTokenSeconds` are not comparable between `mlx_lm.server` and
++  `llama-server`.** All three derive from the first frame carrying
++  `delta.content` or `delta.reasoning`. `mlx_lm.server` publishes
++  `delta.reasoning`; `llama-server` publishes `delta.reasoning_content`, which
++  this driver does not read. So llama.cpp's clock starts *after* its whole
++  think block: its TTFT is inflated, its prefill rate understated, and its
++  decode rate divided by only the content tail. The direction is mixed, not a
++  uniform bias in llama.cpp's favour. The historical 80.79 tok/s decode is
++  excluded. A replacement paired probe requested streamed usage explicitly,
++  verified 7,784 prompt and 106 completion tokens from each runtime, and
++  measured Python/llama.cpp at 8.449/8.772 tok/s; SSE frame counts were retained
++  only as diagnostics. That one 1.038x observation does not establish a general
++  decode direction. On a scenario whose whole token budget is spent thinking
++  no `content` frame arrives at all and TTFT is simply `nil`, which fails closed.
++  The production fix and full rerun belong to TASK-260829-3cwcb6; until then all
++  gate-recorded llama.cpp TTFT, prefill and decode values are excluded from
++  decisions.
++- **`peakPhysicalFootprintBytes` does not see `mmap`-loaded weights.** It is
++  `proc_pid_rusage(...).ri_phys_footprint`, which counts dirty anonymous pages.
++  `llama-server` maps the GGUF, so those pages are resident and **clean**.
++  Sampled on one process at one moment while holding the 27B model:
++  footprint **1.41 GiB**, `ps` RSS **28.09 GiB**, `vmmap` mapped-file resident
++  **26.6 GiB with 0 dirty**. `maxPeakFootprintRatio` would have scored that
++  runtime at about 0.08x the MLX baseline and called it twelve times more
++  frugal. MLX reads its weights into anonymous memory and is measured correctly.
++
++Neither is a defect in what the gate *refuses*; both are defects in what it
++*reports*, and a llama.cpp pair has so far always been refused before scoring
++(see the KV note in `examples/model-harness.benchmark.toml`).
++
+ ### Why it is one invocation
+ 
+ Three review rounds found the same defect in three different constructions, and
+@@ -929,9 +966,17 @@ completed it, and the gate scored that 1.094x ratio as "within".
+   algorithm rather than a faster runtime. Requiring the two sides only to
+   *match* would admit two speculating runtimes, so anything but `off` is
+   refused. The reading comes from `GET /slots` on the live process — measured:
+-  `--spec-type ngram-mod` flips `params.speculative` to `true` there while
+-  `/props` keeps reporting `"none"`, so `/props` is a proxy that does not move
+-  with the launch and is not read. A runtime that serves no `/slots` answers
++  `--spec-type ngram-mod` flips `speculative` to `true` there while `/props`
++  keeps reporting `"none"`, so `/props` is a proxy that does not move with the
++  launch and is not read. **Both placements of that field are read and neither
++  shadows the other** — `slot.speculative` and `slot.params.speculative`.
++  TASK-260828-2wcrph measured the reason: on build `b10621-c1d0e7a00` the field
++  is top-level, and `params` appears on a slot only *after* it has served a
++  request and carries sampling settings that never name it. Consulting `params`
++  first and the slot only when `params` was absent therefore went blind as soon
++  as traffic had touched every slot, and a 20-iteration soak did exactly that:
++  a llama.cpp pass that was provably not speculating recorded
++  `speculation=unread` and was refused for a reading the gate had in its hands. A runtime that serves no `/slots` answers
+   nothing, and there the launch argv decides: `--spec-type` other than `none`,
+   or any of `--spec-draft-model` / `--model-draft` / `-md`, refuses the pass by
+   name. `LLAMA_ARG_SPEC_*` and `LLAMA_ARG_DRAFT_*` in the gate's own environment
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeAttestation.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeAttestation.swift
+index 8214b9d..c05dad4 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeAttestation.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeAttestation.swift
+@@ -258,6 +258,22 @@ public enum RuntimeSpeculation: Sendable, Equatable, Codable {
+     ///   speculating on at least one of them, and a rate measured across all of
+     ///   them is then not a rate this comparison can score.
+     ///
++    /// **Where the field is looked for, corrected by TASK-260828-2wcrph.** Two
++    /// placements are read per slot, `slot["speculative"]` and
++    /// `slot["params"]["speculative"]`, and neither shadows the other. The
++    /// earlier `(slot["params"] as? [String: Any]) ?? slot` consulted the slot
++    /// only when `params` was absent, and on the build this comparison runs
++    /// that is exactly backwards: `speculative` is a top-level slot field, and
++    /// `params` appears once a slot has served a request and carries sampling
++    /// settings that never name it. A pass therefore read `unread` as soon as
++    /// traffic had touched every slot -- measured after a 20-iteration soak --
++    /// and a llama.cpp runtime that was provably not speculating was refused
++    /// for a reading the gate already had. Both placements were then measured
++    /// against the launch on build `b10621-c1d0e7a00`: the top-level field is
++    /// `false` under `--spec-type none` and `true` under `--spec-type
++    /// ngram-mod`, on used and unused slots alike, so it tracks the launch and
++    /// is a reading rather than a proxy.
++    ///
+     /// Called from `BenchmarkRunCommand.speculationAnswer`, inside the gate's
+     /// own observation window and against the process it spawned.
+     public static func read(slotsStatus status: Int, body: Data) -> RuntimeSpeculation {
+@@ -269,10 +285,35 @@ public enum RuntimeSpeculation: Sendable, Equatable, Codable {
+         guard !slots.isEmpty else { return .notReported }
+         var named = false
+         for slot in slots {
+-            let parameters = (slot["params"] as? [String: Any]) ?? slot
+-            guard let speculative = parameters["speculative"] as? Bool else { continue }
++            // Both placements are read, and neither is allowed to shadow the
++            // other. `?? slot` used to fall back to the slot only when `params`
++            // was ABSENT, which is the same substitution this whole type exists
++            // to refuse, one level down: a `params` object that does not name
++            // the field is not the field's value, and treating it as the
++            // authoritative place to look hides a reading that is right there.
++            //
++            // Measured on `llama.cpp 0.3.0` build `b10621-c1d0e7a00`, which is
++            // the build this comparison runs: `speculative` sits at the TOP
++            // level of a slot and `params` -- present only on a slot that has
++            // already served a request -- carries sampling settings and never
++            // names it. So every slot went to the `continue` above once traffic
++            // had touched it, and after TASK-260828-2wcrph's 20-iteration soak
++            // the whole array was invisible: `unread`, and a llama.cpp pass
++            // that was demonstrably not speculating was refused for a reading
++            // the gate had in its hands.
++            //
++            // Additive in the safe direction. Nothing that used to read as
++            // speculating stops doing so -- any `true` in either place still
++            // returns immediately -- and a slot that names the field in neither
++            // place is still a failed read.
++            var readings: [Bool] = []
++            if let direct = slot["speculative"] as? Bool { readings.append(direct) }
++            if let nested = (slot["params"] as? [String: Any])?["speculative"] as? Bool {
++                readings.append(nested)
++            }
++            guard !readings.isEmpty else { continue }
+             named = true
+-            if speculative { return .reported(true) }
++            if readings.contains(true) { return .reported(true) }
+         }
+         return named ? .reported(false) : .unread
+     }
+diff --git a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkContextBoundTests.swift b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkContextBoundTests.swift
+index 79b09d5..77af0ab 100644
+--- a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkContextBoundTests.swift
++++ b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkContextBoundTests.swift
+@@ -53,8 +53,32 @@ struct RuntimeBenchmarkContextBoundTests {
+         "--chat-template-args", #"{"reasoning_effort": "medium"}"#,
+     ]
+ 
+-    /// The same launch with the bound pinned, for the pair that *should* match.
+-    static let boundedMLXArgv = unboundedMLXArgv + ["--max-kv-size", "8192"]
++    /// The launch that *can* state the bound, for the pair that should match.
++    ///
++    /// This is the **Swift** runtime, not the Python one, and the distinction
++    /// is the whole of TASK-260828-2wcrph's result. An earlier revision built
++    /// this fixture as `unboundedMLXArgv + ["--max-kv-size", "8192"]` and
++    /// labelled the records it produced `python-mlx-lm`, which describes a
++    /// launch that cannot exist: `mlx_lm-relux.server --help` on the pinned
++    /// build lists no KV bound option at all, and TASK-260828-2jbufw had
++    /// already measured the same thing -- "KV bound: no flag; unbounded". The
++    /// fiction mattered because it made
++    /// ``admitsALlamaCPPCandidateWithNoClauseRelaxed`` look like it described
++    /// the comparison this story exists to run -- llama.cpp against the Python
++    /// incumbent -- when the only admissible pair is llama.cpp against the
++    /// Swift prototype. See
++    /// ``refusesTheLlamaCPPCandidateAgainstThePythonIncumbent``.
++    ///
++    /// Spelled as `examples/model-harness.benchmark.toml` spells the Swift
++    /// profile: the subcommand, this runtime's own reasoning flag, and the
++    /// prefill chunk under the name it shares with `mlx_lm.server`.
++    static let boundedSwiftArgv = [
++        "serve",
++        "--model", Fixture.modelPath, "--host", "127.0.0.1", "--port", "18031",
++        "--reasoning-effort", "medium",
++        "--prefill-step-size", "2048",
++        "--max-kv-size", "8192",
++    ]
+ 
+     /// One record with its pin derived exactly as the driver derives it.
+     ///
+@@ -132,7 +156,7 @@ struct RuntimeBenchmarkContextBoundTests {
+                 == "kv=unbounded;prefill-step=2048;reasoning=medium")
+         #expect(
+             RuntimeBenchmark.contextPolicy(
+-                derivedFrom: Self.boundedMLXArgv, observing: .notReported)
++                derivedFrom: Self.boundedSwiftArgv, observing: .notReported)
+                 == "kv=8192;prefill-step=2048;reasoning=medium")
+     }
+ 
+@@ -180,7 +204,7 @@ struct RuntimeBenchmarkContextBoundTests {
+         // the pair that genuinely shares every condition has to get through —
+         // and it does so with `unpinnableConditions` untouched.
+         let baseline = Self.record(
+-            runtime: "python-mlx-lm", argv: Self.boundedMLXArgv, window: .notReported,
++            runtime: "mlx-swift", argv: Self.boundedSwiftArgv, window: .notReported,
+             startedAt: 100, finishedAt: 200, executableDigest: Fixture.digest("cd"))
+         let candidate = Self.record(
+             runtime: "llama-cpp", argv: Self.llamaCPPArgv(), window: .reported(8192),
+@@ -191,6 +215,92 @@ struct RuntimeBenchmarkContextBoundTests {
+         #expect(comparison.pins.contextPolicy == "kv=8192;prefill-step=2048;reasoning=medium")
+     }
+ 
++    @Test(
++        "the llama.cpp candidate is refused against the Python incumbent, at any bound",
++        arguments: [512, 4096, 8192, 32768, 76800, 262144])
++    func refusesTheLlamaCPPCandidateAgainstThePythonIncumbent(bound: Int) {
++        // The pair TASK-260828-2wcrph was sent to measure, and the reason its
++        // report carries no score. `mlx_lm-relux.server` has no KV bound flag,
++        // so its launch can only derive `kv=unbounded`; `llama-server` has no
++        // unbounded mode, so its launch can only derive `kv=<n>`. There is no
++        // argv on either side that makes the two agree, which is why the
++        // argument list sweeps the bound rather than naming one: this is a
++        // refusal of the whole class, not of one badly chosen `--ctx-size`.
++        //
++        // It is also the correct refusal rather than a configuration mistake:
++        // `llama-server` allocates its whole KV arena at load, so the bound is
++        // resident before the first token, while `mlx_lm.server` grows its
++        // cache per request. Measured on the 27B Q8_0 GGUF, the arena is
++        // 65,536 bytes per token -- 5.03 GB at 76,800 -- and it is paid on the
++        // 15-token prompt too.
++        let baseline = Self.record(
++            runtime: "python-mlx-lm", argv: Self.unboundedMLXArgv, window: .notReported,
++            startedAt: 100, finishedAt: 200, executableDigest: Fixture.digest("cd"))
++        let candidate = Self.record(
++            runtime: "llama-cpp", argv: Self.llamaCPPArgv(contextSize: String(bound)),
++            window: .reported(bound), startedAt: 300, finishedAt: 400,
++            executableDigest: Fixture.digest("12"))
++        #expect(
++            throws: RuntimeBenchmark.AdmissionError.pinMismatch(
++                field: "contextPolicy",
++                baseline: "kv=unbounded;prefill-step=2048;reasoning=medium",
++                candidate: "kv=\(bound);prefill-step=2048;reasoning=medium")
++        ) {
++            try Self.admit(
++                baseline: baseline, baselineWindow: .notReported,
++                candidate: candidate, candidateWindow: .reported(bound))
++        }
++    }
++
++    @Test("the shipped benchmark config states no KV bound for the Python incumbent")
++    func theShippedConfigCannotBoundThePythonIncumbent() throws {
++        // Reads the versioned file, the way `trustedDecisionMatchesItsDocument`
++        // reads the equivalence document, so the comment beside the profile is
++        // an artifact the build checks rather than prose next to the code.
++        //
++        // What this proves: the `qwen-benchmark-python` profile names neither
++        // `--max-kv-size` -- the only spelling `contextPolicy` reads as a bound
++        // for a runtime that reports none -- nor either spelling of llama.cpp's
++        // context flag, so every record it can produce pins `kv=unbounded`.
++        // What it does not prove: that `mlx_lm-relux.server` would REJECT such
++        // a flag. That is a fact about the installed binary, measured by
++        // TASK-260828-2wcrph off `--help` and recorded in its report, and no
++        // unit test on this side of the process boundary can establish it.
++        let configPath = URL(fileURLWithPath: #filePath)
++            .deletingLastPathComponent()
++            .deletingLastPathComponent()
++            .deletingLastPathComponent()
++            .appendingPathComponent("examples/model-harness.benchmark.toml")
++        let text = try String(contentsOf: configPath, encoding: .utf8)
++
++        func profileBlock(_ name: String) throws -> String {
++            let header = "[profiles.\(name)]"
++            let start = try #require(text.range(of: header))
++            let rest = text[start.upperBound...]
++            guard let next = rest.range(of: "\n[profiles.") else { return String(rest) }
++            return String(rest[..<next.lowerBound])
++        }
++
++        let python = try profileBlock("qwen-benchmark-python")
++        // Every spelling of a KV bound this gate reads, absent.
++        #expect(!python.contains("--max-kv-size"))
++        #expect(!python.contains("--ctx-size"))
++        #expect(!python.contains("\"-c\""))
++        // The conditions it does state, so this is not passing because the
++        // block was sliced empty.
++        #expect(python.contains("--prefill-step-size"))
++        #expect(python.contains("--chat-template-args"))
++
++        let llamacpp = try profileBlock("qwen-benchmark-llamacpp")
++        #expect(llamacpp.contains("--ctx-size"))
++        #expect(llamacpp.contains("--ubatch-size"))
++
++        // And the consequence, derived rather than asserted as a string.
++        let derived = RuntimeBenchmark.contextPolicy(
++            derivedFrom: Self.unboundedMLXArgv, observing: .notReported)
++        #expect(derived.hasPrefix("kv=unbounded;"))
++    }
++
+     @Test("a record whose bound the gate never read is refused by name")
+     func refusesAnUnreadBound() {
+         let baseline = Self.record(
+@@ -214,7 +324,7 @@ struct RuntimeBenchmarkContextBoundTests {
+     @Test("a --ctx-size the process did not honour is refused")
+     func refusesAContextSizeTheProcessDidNotHonour() {
+         let baseline = Self.record(
+-            runtime: "python-mlx-lm", argv: Self.boundedMLXArgv, window: .notReported,
++            runtime: "mlx-swift", argv: Self.boundedSwiftArgv, window: .notReported,
+             startedAt: 100, finishedAt: 200, executableDigest: Fixture.digest("cd"))
+         // Asked for 8192, running 4096. The pin takes the process's number, so
+         // the pins still agree and nothing above this clause can see it.
+@@ -261,11 +371,16 @@ struct RuntimeBenchmarkContextBoundTests {
+         // The asymmetry is deliberate and measured: `--max-kv-size` belongs to
+         // runtimes that report no bound, so silence there is their answer, not
+         // a contradiction. Collapsing the two arms would refuse the incumbent.
++        // Both sides are Swift-shaped launches on purpose: `--max-kv-size` is
++        // the flag of a runtime that reports no bound, and this test is about
++        // that arm, so a pair in which only one side can spell it would never
++        // reach the clause. `admit` refuses two records naming one runtime, so
++        // the two builds are named apart.
+         let baseline = Self.record(
+-            runtime: "python-mlx-lm", argv: Self.boundedMLXArgv, window: .notReported,
++            runtime: "mlx-swift", argv: Self.boundedSwiftArgv, window: .notReported,
+             startedAt: 100, finishedAt: 200, executableDigest: Fixture.digest("cd"))
+         let candidate = Self.record(
+-            runtime: "mlx-swift", argv: Self.boundedMLXArgv, window: .notReported,
++            runtime: "mlx-swift-next", argv: Self.boundedSwiftArgv, window: .notReported,
+             startedAt: 300, finishedAt: 400, executableDigest: Fixture.digest("12"))
+         let comparison = try Self.admit(
+             baseline: baseline, baselineWindow: .notReported,
+diff --git a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeObservationReadingTests.swift b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeObservationReadingTests.swift
+index 01a7efe..1170ed9 100644
+--- a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeObservationReadingTests.swift
++++ b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeObservationReadingTests.swift
+@@ -176,6 +176,82 @@ struct RuntimeObservationReadingTests {
+                 == .reported(true))
+     }
+ 
++    // MARK: - Where the field is looked for (TASK-260828-2wcrph)
++
++    /// The exact `/slots` body this build serves once traffic has touched a
++    /// slot, transcribed from `.temp/TASK-260828-2wcrph/probe-slots/`.
++    ///
++    /// `speculative` is a top-level slot field on `llama.cpp 0.3.0` build
++    /// `b10621-c1d0e7a00`; `params` appears on a slot that has already served a
++    /// request and carries sampling settings that never name it.
++    static func usedSlots(speculative: Bool) -> String {
++        """
++        [{"id": 0, "n_ctx": 8192, "speculative": \(speculative), "is_processing": false,
++          "id_task": 53, "params": {"seed": 4294967295, "temperature": 1.0, "top_k": 20,
++          "top_p": 0.95, "n_predict": 8}}]
++        """
++    }
++
++    @Test("a params block that does not name the field cannot hide the slot's own reading")
++    func paramsDoesNotShadowTheTopLevelField() {
++        // The regression TASK-260828-2wcrph measured. Under the previous
++        // `(slot["params"] as? [String: Any]) ?? slot`, a slot carrying a
++        // `params` object was consulted ONLY there, the field was not in it,
++        // and once the soak had touched every slot the whole array read
++        // `unread` -- refusing a runtime that had answered the question.
++        let reading = Self.speculation(200, Self.usedSlots(speculative: false))
++        #expect(reading == .reported(false))
++        #expect(reading != .unread)
++    }
++
++    @Test("a speculating runtime is still caught when its params block is silent")
++    func paramsDoesNotHideASpeculatingRuntime() {
++        // The direction that must never regress. `--spec-type ngram-mod` was
++        // measured to set the top-level field `true` on used and unused slots
++        // alike, so a reader that stopped consulting the slot would report a
++        // drafting server as quiet -- and MTP-off is a precondition of every
++        // scored comparison in this story.
++        #expect(Self.speculation(200, Self.usedSlots(speculative: true)) == .reported(true))
++    }
++
++    @Test("either placement reporting true settles it, however the other reads")
++    func eitherPlacementCanSettleIt() {
++        // Neither reading is allowed to overrule the other towards `false`. A
++        // disagreement means at least one slot is drafting, which is the
++        // conservative direction and the only safe one.
++        #expect(
++            Self.speculation(200, #"[{"speculative": false, "params": {"speculative": true}}]"#)
++                == .reported(true))
++        #expect(
++            Self.speculation(200, #"[{"speculative": true, "params": {"speculative": false}}]"#)
++                == .reported(true))
++        #expect(
++            Self.speculation(200, #"[{"speculative": false, "params": {"speculative": false}}]"#)
++                == .reported(false))
++    }
++
++    @Test("the class was not widened: a slot naming the field nowhere is still a failed read")
++    func neitherPlacementIsStillUnread() {
++        // The narrowing counterpart. Reading two places must not turn "the
++        // server described its slots and never answered the question" into an
++        // answer, so a slot whose `params` block is present and silent AND
++        // whose top level is silent stays `unread`.
++        let reading = Self.speculation(
++            200, #"[{"id": 0, "state": 1, "params": {"temperature": 1.0}}]"#)
++        #expect(reading == .unread)
++        #expect(reading != .reported(false))
++        #expect(reading != .notReported)
++    }
++
++    @Test("a non-boolean speculative field is a failed read in either placement")
++    func nonBooleanSpeculativeIsUnread() {
++        // `as? Bool` is the whole guard here, and the F2 lesson applies: a
++        // field that is present and unusable is not a field that is absent.
++        #expect(Self.speculation(200, #"[{"speculative": "false"}]"#) == .unread)
++        #expect(Self.speculation(200, #"[{"params": {"speculative": "true"}}]"#) == .unread)
++        #expect(Self.speculation(200, #"[{"speculative": null}]"#) == .unread)
++    }
++
+     /// The consequence, spelled out: this is what F3 actually cost.
+     ///
+     /// The gate admits exactly one speculation reading, and a failed `/slots`
+diff --git a/tools/mlx-swift-runtime-prototype/examples/model-harness.benchmark.toml b/tools/mlx-swift-runtime-prototype/examples/model-harness.benchmark.toml
+index 072aa3c..eb1c68c 100644
+--- a/tools/mlx-swift-runtime-prototype/examples/model-harness.benchmark.toml
++++ b/tools/mlx-swift-runtime-prototype/examples/model-harness.benchmark.toml
+@@ -109,10 +109,25 @@ argv = [
+ # running server's `/v1/models` `meta.n_ctx` by the gate, inside its own
+ # observation window. The flag is still stated because admission refuses a
+ # launch that pins a bound the process did not honour: ask for 8192 and run
+-# 4096 and the pair is refused by name. Match it to the baseline's
+-# `--max-kv-size`, or the two contextPolicy pins will differ and the pair will
+-# be refused for that instead -- which is the correct refusal, because a
+-# 32k window and an unbounded one are not the same condition.
++# 4096 and the pair is refused by name.
++#
++# WHAT THIS PROFILE CANNOT BE COMPARED AGAINST, corrected by TASK-260828-2wcrph
++# after running it. An earlier revision of this comment told the operator to
++# "match it to the baseline's `--max-kv-size`". **The Python baseline has no
++# such flag.** `mlx_lm-relux.server --help` on the pinned build lists no KV
++# bound option at all, which TASK-260828-2jbufw had already measured -- its
++# table reads "KV bound: no flag; unbounded" for `mlx_lm.server` -- and this
++# runtime never reports `unbounded`, measured. So the two contextPolicy pins
++# are `kv=unbounded` against `kv=<n>` for every n, the pair is refused
++# `pinMismatch(field: "contextPolicy")`, and no argv on either side can fix it.
++#
++# That refusal is correct and is not a configuration mistake to work around:
++# `llama-server` allocates its whole KV arena at load, so `--ctx-size` is a
++# resident cost paid before the first token, while `mlx_lm.server` grows its
++# cache per request. They are genuinely not the same condition. A llama.cpp
++# candidate can only be admitted against a baseline that CAN state the same
++# bound -- `mlx-swift-runtime-prototype serve --max-kv-size <n>`, the profile
++# above -- and `RuntimeBenchmarkContextBoundTests` pins both directions.
+ [profiles.qwen-benchmark-llamacpp]
+ mode = "local"
+ executable = "/opt/homebrew/bin/llama-server"

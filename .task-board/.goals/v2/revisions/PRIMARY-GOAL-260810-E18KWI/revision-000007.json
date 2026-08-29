@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 7,
+  "expected_previous_revision": 6,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 6
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Complete the existing agents-infra local-setup and instruction-materialization work, preserve global setup/provider rendering and exact Codex config semantics, curate and deliver the existing verified repository changes, keep Pi as a project-aware primary launcher with reusable local-model runtime profiles, and add a vendor/environment/model target contract with config-driven vendor entrypoints openai-infra, anthropic-infra, and qwen-infra so OpenAI resolves to Codex gpt-5.6-sol/high, Anthropic resolves to Claude Code claude-opus-5/high, and Qwen resolves to Pi plus the configured local MLX model endpoint; implement no automatic config migration or rewriting, fail at startup with precise actionable diagnostics for invalid or conflicting configuration, and perform a controlled one-time rewrite plus verification of every existing project config found in the agreed local project roots.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 7
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "Owner clarified that migration is an operator-run repository sweep, not runtime migration behavior.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "alexis"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-24T15:13:00.001137Z",
+  "created_by": "alexis",
+  "reason": "Owner clarified that migration is an operator-run repository sweep, not runtime migration behavior."
+}

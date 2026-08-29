@@ -1,0 +1,15 @@
+clause as shipped: ["prefill-step=unpinned", "reasoning=unpinned"]
+clause relaxed to: ["reasoning=unpinned"]
+
+llama.cpp launch (the one the relaxation is for)
+  derived: kv=unbounded;prefill-step=unpinned;reasoning=medium
+  as shipped: REFUSED   relaxed: admitted
+mlx-swift WITHOUT --prefill-step-size (defaults to 512)
+  derived: kv=unbounded;prefill-step=unpinned;reasoning=medium
+  as shipped: REFUSED   relaxed: admitted
+python-mlx-lm WITHOUT --prefill-step-size (defaults to 2048)
+  derived: kv=unbounded;prefill-step=unpinned;reasoning=medium
+  as shipped: REFUSED   relaxed: admitted
+
+A 512-token prefill chunk measured against a 2048-token one is the exact
+comparison the clause exists to prevent, and the relaxation admits it.

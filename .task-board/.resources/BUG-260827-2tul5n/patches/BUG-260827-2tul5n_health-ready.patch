@@ -1,0 +1,101 @@
+diff --git a/mlx_lm/server.py b/mlx_lm/server.py
+index b6f563a..5dc0130 100644
+--- a/mlx_lm/server.py
++++ b/mlx_lm/server.py
+@@ -437,6 +437,10 @@ class ResponseGenerator:
+     def join(self):
+         self._generation_thread.join()
+ 
++    @property
++    def is_healthy(self):
++        return self._generation_thread.is_alive()
++
+     def _log_cache_stats(self):
+         n_sequences = len(self.prompt_cache)
+         n_bytes = self.prompt_cache.nbytes
+@@ -1603,10 +1607,14 @@ class APIHandler(BaseHTTPRequestHandler):
+         """
+         Handle a GET request for the /health endpoint.
+         """
+-        self._set_completion_headers(200)
++        is_healthy = self.response_generator.is_healthy
++        status_code = 200 if is_healthy else 503
++        status = "ok" if is_healthy else "unavailable"
++
++        self._set_completion_headers(status_code)
+         self.end_headers()
+ 
+-        self.wfile.write('{"status": "ok"}'.encode())
++        self.wfile.write(json.dumps({"status": status}).encode())
+         self.wfile.flush()
+ 
+     def handle_models_request(self):
+diff --git a/tests/test_server.py b/tests/test_server.py
+index e1f9e94..91faaa5 100644
+--- a/tests/test_server.py
++++ b/tests/test_server.py
+@@ -5,6 +5,7 @@ import io
+ import json
+ import threading
+ import unittest
++from unittest import mock
+ 
+ import mlx.core as mx
+ import requests
+@@ -198,6 +199,56 @@ class TestTextStateMachine(unittest.TestCase):
+         self.assertEqual(s, "tool")
+ 
+ 
++class TestResponseGeneratorHealth(unittest.TestCase):
++    def test_health_tracks_generation_thread(self):
++        response_generator = ResponseGenerator.__new__(ResponseGenerator)
++        response_generator._generation_thread = mock.Mock()
++
++        response_generator._generation_thread.is_alive.return_value = True
++        self.assertTrue(response_generator.is_healthy)
++
++        response_generator._generation_thread.is_alive.return_value = False
++        self.assertFalse(response_generator.is_healthy)
++
++
++class TestHealthEndpoint(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.response_generator = mock.Mock()
++        cls.response_generator.cli_args.allowed_origins = ["*"]
++        cls.response_generator.is_healthy = True
++        cls.httpd = http.server.HTTPServer(
++            ("localhost", 0),
++            lambda *args, **kwargs: APIHandler(cls.response_generator, *args, **kwargs),
++        )
++        cls.port = cls.httpd.server_port
++        cls.server_thread = threading.Thread(target=cls.httpd.serve_forever)
++        cls.server_thread.daemon = True
++        cls.server_thread.start()
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.httpd.shutdown()
++        cls.httpd.server_close()
++        cls.server_thread.join()
++
++    def test_health_reflects_generation_thread_liveness(self):
++        url = f"http://localhost:{self.port}/health"
++
++        response = requests.get(url)
++        self.assertEqual(response.status_code, 200)
++        self.assertEqual(response.json(), {"status": "ok"})
++
++        self.response_generator.is_healthy = False
++        try:
++            response = requests.get(url)
++        finally:
++            self.response_generator.is_healthy = True
++
++        self.assertEqual(response.status_code, 503)
++        self.assertEqual(response.json(), {"status": "unavailable"})
++
++
+ class TestServer(unittest.TestCase):
+     @classmethod
+     def setUpClass(cls):

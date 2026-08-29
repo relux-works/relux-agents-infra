@@ -1,0 +1,21 @@
+{
+  "contract": "primary-goal-v1",
+  "id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 17,
+  "previous_revision": 16,
+  "state": "active",
+  "scope": {
+    "kind": "board"
+  },
+  "objective": "Complete the existing agents-infra local setup, instruction materialization, provider rendering, canonical vendor targets, Qwen/Pi local-model profiles, bounded model-check tooling, shared local-Qwen runtime broker, and local/remote model-harness work; preserve precise fail-closed config semantics and no automatic migrations; keep canonical OpenAI Codex gpt-5.6-sol/high and Anthropic Claude Opus 5/high targets; keep Qwen native reasoning at medium with YOLO tool use and inherited skills; stabilize exact Pi session restore, 75000-token context with compaction beginning at 50000, bounded memory, request/compaction timeouts, and multi-week unattended operation; retain synthetic capacity stress and separately configurable local/remote runtime modes; maintain a relux-works mlx-lm fork pinned by the local Qwen runtime until upstream releases the required fixes, prepare the missing generation-thread health contribution for human-authored upstream publication under mlx-lm policy, and remove duplicated global version-control authorization/commit policy from generated agent instructions in favor of task-board version_control configuration while preserving operational dirty-checkout safety; track this work in task-board but execute it inline without spawns or subagents; do not register local Qwen as a task-board execution backend yet; never grant Pi unrestricted sudo/root authority.",
+  "mutation": {
+    "kind": "objective_realigned",
+    "reason": "User directed removal of duplicated global AGENTS version-control policy because task-board version_control is authoritative; upstream mlx-lm publication remains constrained by the target repository's own AI contribution policy.",
+    "actor": {
+      "kind": "primary_parent",
+      "actor_id": "alexis"
+    }
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-27T08:43:31.831923Z"
+}

@@ -1,0 +1,96 @@
+
+=== M1-argv-kv — the pre-fix derivation: the KV bound read off argv, absence as unbounded ===
+    file: Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+    swift test exit=1
+      RED  --batch-size is not the prefill chunk and does not pin it
+      RED  a --ctx-size the process did not honour is refused
+      RED  a bound the gate could not read is unpinned, not unbounded
+      RED  a bounded candidate cannot match an unbounded baseline
+      RED  a llama.cpp candidate is admitted against a baseline pinned to the same bound
+      RED  a llama.cpp launch that left the prefill chunk to its default is still refused
+      RED  a record whose bound the gate never read is refused by name
+      RED  a runtime that reports its bound pins that number, however argv is spelled
+      RED  no llama.cpp launch derives an unbounded KV pin, with or without --ctx-size
+      RED  the llama.cpp spelling of the prefill chunk derives the same value
+    benchmark-gate-smoke exit=1
+      FAIL  a 32k context window cannot match an unbounded baseline: expected exit 4, got 0
+      FAIL  the false-match refusal does not show the two bounds it compared
+      FAIL  a bound reported by the process and a bound pinned in argv compare equal: expected exit 0, got 4
+      FAIL  the accepted pass did not record the bound it read off the runtime
+      FAIL  a launch that pinned a bound the process did not run is refused: exit 4 but the output never mentions is not the one the process ran
+      FAIL  the -ub spelling pins the chunk at the same value: expected exit 0, got 4
+
+=== M2-unread-is-absence — a failed read spent as an absence ===
+    file: Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+    swift test exit=1
+      RED  a bound the gate could not read is unpinned, not unbounded
+      RED  a record whose bound the gate never read is refused by name
+
+=== M3-narrow-unbounded — NARROWING: unbounded declared unpinnable, refusing the MLX pair the gate must admit ===
+    file: Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+    swift test exit=1
+      RED  a --ctx-size launch whose runtime reports nothing cannot reach the argv fallback
+      RED  a 200 with an empty body is not a served completion
+      RED  a binary that did not observe the runs cannot judge them
+      RED  a caller-authored context policy its launch does not carry is refused
+      RED  a candidate inside every threshold is accepted
+      RED  a candidate outside any single threshold is rejected
+      RED  a completion the runtime refused is not a served completion
+      RED  a digest that is not a digest is refused, field by field
+      RED  a launch that left a condition to a runtime default is refused, not defaulted
+      RED  a launch that states no reasoning policy is refused, not defaulted
+      RED  a launcher command that does not carry the recorded config is refused
+      RED  a pair the gate watched from open to close is admitted
+
+=== M4-relax-prefill — the relaxation this task was told not to make ===
+    file: Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+    swift test exit=1
+      RED  a launch that left a condition to a runtime default is refused, not defaulted
+      RED  a llama.cpp launch that left the prefill chunk to its default is still refused
+      RED  the unpinnable clause list only ever grew
+    benchmark-gate-smoke exit=1
+      FAIL  an unpinned prefill chunk is refused rather than defaulted: expected exit 4 (inadmissible), got 3
+      FAIL  an unstated prompt-evaluation chunk is refused for llama.cpp too: expected exit 4, got 0
+
+=== M5-drop-ubatch — G1 undone: llama.cpp's spelling of the prefill chunk unread ===
+    file: Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+    swift test exit=1
+      RED  a --ctx-size launch whose runtime reports nothing cannot reach the argv fallback
+      RED  a --ctx-size the process did not honour is refused
+      RED  a bounded candidate cannot match an unbounded baseline
+      RED  a llama.cpp candidate is admitted against a baseline pinned to the same bound
+      RED  a record whose bound the gate never read is refused by name
+      RED  a runtime that reports its bound pins that number, however argv is spelled
+      RED  the llama.cpp spelling of the prefill chunk derives the same value
+    benchmark-gate-smoke exit=1
+      FAIL  a bound reported by the process and a bound pinned in argv compare equal: expected exit 0, got 4
+      FAIL  the accepted pass did not record the bound it read off the runtime
+      FAIL  a launch that pinned a bound the process did not run is refused: exit 4 but the output never mentions is not the one the process ran
+      FAIL  the -ub spelling pins the chunk at the same value: expected exit 0, got 4
+
+=== M6-narrow-honoured — NARROWING: every pinned bound must be confirmed, refusing the silent MLX runtimes ===
+    file: Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+    swift test exit=1
+      RED  a --ctx-size the process did not honour is refused
+      RED  a --max-kv-size launch whose runtime reports nothing is its normal case
+      RED  a llama.cpp candidate is admitted against a baseline pinned to the same bound
+    benchmark-gate-smoke exit=1
+      FAIL  a bound reported by the process and a bound pinned in argv compare equal: expected exit 0, got 4
+      FAIL  the -ub spelling pins the chunk at the same value: expected exit 0, got 4
+
+=== M7-batch-size-as-chunk — the logical batch read as the physical prompt-evaluation chunk ===
+    file: Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+    swift test exit=1
+      RED  --batch-size is not the prefill chunk and does not pin it
+
+=== M8-driver-never-asks — PRODUCTION CALL SITE: the gate stops asking the runtime and falls back to argv ===
+    file: Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift
+    swift test exit=0
+      (no unit test reddened)
+    benchmark-gate-smoke exit=1
+      FAIL  a 32k context window cannot match an unbounded baseline: expected exit 4, got 0
+      FAIL  the false-match refusal does not show the two bounds it compared
+      FAIL  a bound reported by the process and a bound pinned in argv compare equal: expected exit 0, got 4
+      FAIL  the accepted pass did not record the bound it read off the runtime
+      FAIL  a launch that pinned a bound the process did not run is refused: exit 4 but the output never mentions is not the one the process ran
+      FAIL  the -ub spelling pins the chunk at the same value: expected exit 0, got 4

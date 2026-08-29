@@ -1,0 +1,21 @@
+{
+  "contract": "primary-goal-v1",
+  "id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 21,
+  "previous_revision": 20,
+  "state": "active",
+  "scope": {
+    "kind": "board"
+  },
+  "objective": "Complete the existing agents-infra local setup, instruction materialization, provider rendering, canonical vendor targets, Qwen/Pi local-model profiles, bounded model-check tooling, shared local-Qwen runtime broker, and local/remote model-harness work; preserve precise fail-closed config semantics and no automatic migrations; keep canonical OpenAI Codex gpt-5.6-sol/high and Anthropic Claude Opus 5/high targets; keep Qwen native reasoning at medium with YOLO tool use and inherited skills; stabilize exact Pi session restore, 75000-token context with compaction beginning at 50000, bounded memory, request/compaction timeouts, and multi-week unattended operation; retain synthetic capacity stress and separately configurable local/remote runtime modes; maintain the relux-works mlx-lm fork pinned by the local Qwen runtime until an accepted replacement or upstream release carries the required fixes, monitor human-authored upstream mlx-lm PR #1791 and the generation-batch recovery branch; evaluate candidate replacements for the managed local Qwen inference backend against the pinned Python mlx-lm baseline on one host with one comparison harness that refuses non-comparable pairs, currently official MLX Swift LM and additionally llama.cpp with equivalent-quantization GGUF weights staged under src/local-models, scoring memory economy as a first-class acceptance criterion alongside prefill and decode throughput, time to first token, 75000-token capacity, tool-call parity, health, lifecycle, and long-running stability; resolve the llama.cpp question to an explicit GO or NO-GO decision on migrating the managed local Qwen backend, reached only after the cross-runtime measurement asymmetries that flattered llama.cpp are corrected and audited for the symmetric class that would penalise it, so no known directional bias remains in the instrumentation the decision rests on; publish that decision inside one research article in the classic structure covering all three runtimes, presenting every measured comparison with exact revisions and commands, naming every invalid comparison and the direction of every remaining limitation; adopt any replacement only with compatibility, capacity, performance, memory, and reliability evidence, otherwise keep Python mlx-lm as default and rollback path; remove duplicated global version-control authorization and commit policy from generated agent instructions in favor of task-board version_control configuration while preserving operational dirty-checkout safety; track and execute this work through task-board with tracked producer and reviewer spawn runs; establish and record what the managed harness path actually captures of model input and output across the full chain from a Pi session turn through agents-infra to the inference engine and back, covering stdout/stderr proxying and HTTP-borne request and response bodies, request attribution under a shared runtime broker, and failure paths, recording every observability gap as a named blocker rather than an assumed capability; do not register local Qwen as a task-board execution backend yet; never grant Pi unrestricted sudo/root authority.",
+  "mutation": {
+    "kind": "objective_realigned",
+    "reason": "Owner set the end state explicitly: an explicit go/no-go on the llama.cpp migration delivered as a classic research article covering all three runtimes; the provisional comparison found three measurement defects that all flattered llama.cpp and none that penalised it, so correcting that directional bias becomes a precondition of the decision rather than a caveat in it.",
+    "actor": {
+      "kind": "primary_parent",
+      "actor_id": "alexis"
+    }
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-29T10:39:46.791318Z"
+}

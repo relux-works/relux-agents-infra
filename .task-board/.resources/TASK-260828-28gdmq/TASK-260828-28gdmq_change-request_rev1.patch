@@ -1,0 +1,667 @@
+diff --git a/.research/260828_model-io-observability-through-harness.md b/.research/260828_model-io-observability-through-harness.md
+new file mode 100644
+index 0000000..b65a2a1
+--- /dev/null
++++ b/.research/260828_model-io-observability-through-harness.md
+@@ -0,0 +1,484 @@
++# Model I/O observability through the agents-infra managed harness
++
++Task: TASK-260828-28gdmq (story STORY-260828-2faxgm)
++Date: 2026-08-28
++Author role: developer
++Status: investigation result — no observability feature was implemented
++
++## Verdict
++
++The belief under test was: *because agents-infra proxies child stdin/stdout,
++everything that happens with the model can be tracked.*
++
++**That belief is false.** The harness proxies the child's stdout/stderr
++faithfully, but on every managed runtime the prompt and completion bodies never
++enter that stream — they travel over the HTTP socket between Pi and the engine,
++which the harness does not sit on. Nothing captured on the managed path contains
++a prompt, a completion, a tool call, a tool result, or reasoning content, and no
++captured engine-side record carries any identifier that can be joined to the Pi
++turn that caused it.
++
++Eight named blockers are recorded in [Blockers](#blockers). None was fixed here,
++deliberately: fixing one in passing would have made this report describe a system
++that did not exist when the question was asked.
++
++## Host constraint and fixture
++
++Another tracked run (TASK-260827-2v13w8) was serving the 28 GB Qwen model on this
++host throughout. That model was never loaded by this task. All live tracing used
++the cached `mlx-community/Qwen1.5-0.5B-Chat-4bit` fixture (261 MB), as
++TASK-260827-2h39ya and TASK-260827-2q77g8 did. Observability is a property of the
++harness path rather than of model size, so the small fixture is sufficient for
++every claim below **except retention under sustained load**, which is reported as
++untested.
++
++The 28 GB run was used once, read-only, as a passive natural experiment: its
++process file descriptors and its runtime log were inspected without sending it a
++single request.
++
++## 1. What the harness proxies today
++
++`model-harness run` (`tools/agents-infra/internal/modelharness/run.go`):
++
++| Channel | Behaviour | Code |
++| --- | --- | --- |
++| child stdin | inherited from the harness process (`os.Stdin`) | `run.go:32`, `run.go:80` |
++| child stdout | forwarded byte-for-byte to the harness's own stdout | `run.go:33`, `run.go:81` |
++| child stderr | forwarded byte-for-byte to the harness's own stderr | `run.go:34`, `run.go:82` |
++| emitted JSON events | **none authored by the harness**; any JSON seen is the child's own | — |
++| supervision markers | literal substring scan over the forwarded bytes; scanning only, never recording | `run.go:137-166` |
++| exit handling | child exit status wrapped into the harness's error and exit code 1 | `run.go:36`, `cmd/model-harness/main.go:20-21` |
++| signal handling | **none installed** | see [B7](#b7) |
++
++The harness authors exactly two kinds of line of its own, both on stderr, both
++only on the supervision path:
++
++```
++model-harness: restarting profile "fixture-tiny" after supervised runtime failure (1/2): signal: killed
++model-harness: run local profile "fatal-fixture": restart budget exhausted after 2 restarts in 3600s: fatal output "RuntimeError: [metal::malloc] Resource limit (": signal: killed
++```
++
++On the shared-broker path the same child streams are redirected into a single
++`runtime.log` file (`internal/infra/pi_shared_broker_darwin.go:330,344-345`). On
++the exclusive Pi path they go to the launcher's stderr — the operator's terminal
++— and are not persisted at all (`internal/infra/pi_launch_posix.go:225-227`).
++
++## 2. Which channel carries prompts and completions, per runtime
++
++Answered from evidence, not from assumption.
++
++| Runtime | Prompt body | Completion body | Tool calls | Basis |
++| --- | --- | --- | --- | --- |
++| `mlx_lm.server` 0.31.3 | HTTP socket only | HTTP socket only | HTTP socket only | live trace, §3 |
++| Swift prototype (`mlx-swift-runtime-prototype`) | HTTP socket only | HTTP socket only | HTTP socket only | source read + live 28 GB runtime log, §2.2 |
++| `llama-server` | **unknown — untested** | **unknown — untested** | **unknown — untested** | see [B8](#b8) |
++
++### 2.1 `mlx_lm.server`
++
++Everything the runtime writes goes to **stderr**; its stdout was 0 bytes across
++the entire session. Per request it emits one Python `http.server` access line:
++
++```
++127.0.0.1 - - [28/Aug/2026 13:19:46] "POST /v1/chat/completions HTTP/1.1" 200 -
++```
++
++plus prompt-cache and prefill-progress `INFO` lines. That line contains the
++method, the URL path, the protocol, and a status. It contains no body, no
++response id, and not even the client's source port — Python's
++`BaseHTTPRequestHandler` logs `address_string()`, which is the host alone.
++
++### 2.2 Swift prototype
++
++Read-only inspection of the live 28 GB runtime owned by TASK-260827-2v13w8
++(pid 4691 harness, pid 4694 child; both fds 1 and 2 pointing at one log file):
++
++```
++{"event":"listening", ...}
++{"event":"model_loaded", ...}
++{"event":"ready", ...}
++```
++
++986 bytes total for a whole serving session — three lifecycle events and nothing
++else. The source confirms this is by design: the only per-request event site is
++`Router.swift:99` `generation_worker_failed`, on the failure path. There is no
++success-path request event, and no request body is ever written to stdout.
++
++## 3. Live recoverability from harness-captured output alone
++
++A supervised `model-harness run` of the fixture was driven through six real
++requests with distinctive nonces planted in prompts, headers, tool schemas and
++URL paths. Both harness streams were captured to separate files and grepped.
++
++| Nonce planted in | stdout hits | stderr hits |
++| --- | ---: | ---: |
++| `PROMPTNONCE-7f3a9c21-ALPHA` (user message body) | 0 | 0 |
++| `REQIDNONCE-11223344` (`X-Request-Id` header) | 0 | 0 |
++| `TOOLNONCE` (tool argument in the prompt) | 0 | 0 |
++| `get_weather_TOOLNONCE` (tool schema function name) | 0 | 0 |
++| `chatcmpl-` (engine's own response id) | 0 | 0 |
++| `"cannot provide information"` (completion text) | 0 | 0 |
++| `STREAMNONCE-abc123` (streamed request) | 0 | 0 |
++| `REFUSEDNONCE` (**URL path**, 404) | 0 | 1 |
++| `MALFORMEDNONCE` (**URL path** of an upstream fetch) | 0 | 1 |
++
++The only nonces that survive are the two that were placed in a **URL**, and they
++survive only because the access-log line echoes the request line. Nothing that
++travels in a body — prompt, completion, tool schema, tool call, tool result,
++reasoning content, or a caller-supplied correlation header — appears anywhere in
++harness-captured output. Streaming behaves identically to buffered.
++
++Reasoning content was not separately exercised on the fixture (Qwen1.5-0.5B emits
++none), but it travels in the same response body as the completion text, which is
++demonstrably absent; the finding covers it by construction rather than by proxy.
++
++## 4. Correlation back to the originating request
++
++**There is no request identity carried end to end.** This is [B2](#b2).
++
++Three concurrent completions were issued against one runtime. The three responses
++were distinct — three different `chatcmpl-` ids and three different completions —
++and the captured output for them is three byte-identical lines:
++
++```
++127.0.0.1 - - [28/Aug/2026 13:20:18] "POST /v1/chat/completions HTTP/1.1" 200 -
++127.0.0.1 - - [28/Aug/2026 13:20:18] "POST /v1/chat/completions HTTP/1.1" 200 -
++127.0.0.1 - - [28/Aug/2026 13:20:18] "POST /v1/chat/completions HTTP/1.1" 200 -
++```
++
++Same second, same text, no ordering guarantee relative to the interleaved
++prefill-progress lines. Given N in-flight requests, the captured record cannot
++tell you which of them any line belongs to.
++
++A half-key does exist and is worth naming precisely. Pi's own event stream
++records the engine's response id:
++
++```json
++"responseId":"chatcmpl-03529889-dc3d-41f2-b3b8-21211362087f","rawStopReason":"stop","willRetry":false
++```
++
++So Pi knows the engine's identifier for its request. The engine never writes that
++identifier anywhere the harness can see. The join key exists on one side of the
++boundary only, which is why the correlation fails — not because no identifier
++exists, but because it is never emitted on the side that would need it.
++
++## 5. Failure paths
++
++### 5.1 Refused request
++
++`POST /v1/chat/completions-REFUSEDNONCE` → `404`. Captured evidence is one access
++line carrying the path and status. The refused body is not captured. A refusal is
++attributable only to the extent that its URL differs from a successful one.
++
++### 5.2 Crashed child
++
++`kill -9` of the runtime child while the harness supervised it:
++
++```
++model-harness: restarting profile "fixture-tiny" after supervised runtime failure (1/2): signal: killed
++```
++
++One line, correctly identifying the profile, the restart counter and the signal.
++It carries no timestamp, no PID, and no accounting of what was in flight.
++
++### 5.3 Crashed child with a request in flight — the captured record is *wrong*
++
++The same kill was repeated with a 600-token completion in flight. The client
++received nothing (`curl` reported status `000`, "Empty reply from server"). The
++captured record for that request says:
++
++```
++127.0.0.1 - - [28/Aug/2026 13:21:01] "POST /v1/chat/completions HTTP/1.1" 200 -
++```
++
++The status is logged when the response header is written, before the body is
++generated. A request that returned zero bytes to its caller is recorded as `200`.
++For the failure path the captured evidence is not merely absent — it actively
++misreports the outcome. This is [B4](#b4).
++
++### 5.4 Condemned worker
++
++A synthetic child emitting the configured fatal substring exercised the
++supervision path end to end:
++
++```
++RuntimeError: [metal::malloc] Resource limit (condemned worker)
++model-harness: restarting profile "fatal-fixture" after supervised runtime failure (1/2): fatal output "..." : signal: killed
++model-harness: restarting profile "fatal-fixture" after supervised runtime failure (2/2): fatal output "..." : signal: killed
++model-harness: run local profile "fatal-fixture": restart budget exhausted after 2 restarts in 3600s: fatal output "..." : signal: killed
++```
++
++Harness exit code 1. This is the one path where the harness authors genuinely
++attributable evidence of its own: marker matched, restart counter, budget
++exhaustion, non-zero exit. It still says nothing about which requests died with
++the condemned worker.
++
++The same run also proved the pipe itself is honest: the synthetic child's
++`SECRETPROMPT-should-not-leak` line appears verbatim in captured stdout on every
++attempt. The channel works. The runtimes simply do not write bodies to it.
++
++## 6. Retention, location and size
++
++| Path | Location | Rotation | Size cap | Retention |
++| --- | --- | --- | --- | --- |
++| `model-harness run` standalone | **none** — inherits the caller's stdout/stderr | n/a | n/a | entirely the operator's |
++| Pi exclusive mode | launcher's terminal stderr (`pi_launch_posix.go:225-227`) | n/a | n/a | **not persisted at all** |
++| Pi shared-broker mode | `~/Library/Caches/agents-infra/pi-runtimes/<key>/runtime.log` | **none** | **none** | append-only, forever |
++| Pi session lifecycle log | `<pi state>/runs/<run>/logs/<ts>-<nonce>.jsonl`, mode 0600 | new file per session | none | accumulates, never pruned |
++| Broker lease records | `<runtime key>/leases/` | — | — | **deleted on release** |
++
++`openSharedLog` (`pi_shared_broker_darwin.go:373-387`) opens with
++`O_CREAT|O_APPEND|O_WRONLY` and never truncates. A repo-wide search for
++truncation, rotation, pruning or size-cap logic in `internal/infra` returns
++nothing. `cleanupSharedRuntimeState` (`:490-500`) removes lease mirrors, broker
++state and the rendezvous socket, and deliberately leaves `runtime.log` in place —
++so the log outlives its runtime while nothing ever bounds it.
++
++Observed on this host: 8 stale `pi-runtimes/*/runtime.log` files from prior days,
++147 HTTP request lines across them, largest 72 KB, and 29 accumulated session
++JSONL files. Aggregate is small today because these are short sessions; nothing
++in the code makes that a property rather than an accident. Retention behaviour
++under sustained load was **not tested** — see [B6](#b6).
++
++Content check across all 8 real production runtime logs, for the avoidance of
++doubt: `"content"` 0 hits, `"role"` 0 hits, `chatcmpl-` 0 hits, `tool_call`
++0 hits.
++
++## 7. One real Pi turn, end to end
++
++A managed `agents-infra pi spawn` turn was run against the fixture through the
++harness — the full chain, not a simulation.
++
++**Pi side** (session `01a047e6-f98c-7540-903b-d750fe9c2dbc`): 77 JSON events —
++`session`, `agent_start`, `turn_start`, 2 × `message_start`/`message_end`,
++68 × `message_update`, `turn_end`, `agent_end`, `agent_settled`. Final record
++carries `responseId`, `stopReason`, `willRetry`, and usage
++`input=4966, output=67`.
++
++**agents-infra session log** (8 JSONL records): `session_start`,
++`runtime_started` (pid/pgid 21012), `runtime_ready`, `pi_started` (pid/pgid
++21022), `pi_exited`, `pi_cleanup`, `runtime_cleanup`, `session_end`.
++
++**Engine side**: `GET /v1/models` (readiness probe) then exactly one
++`POST /v1/chat/completions`, plus prefill-progress lines for 4966 tokens.
++
++So one Pi turn produced one engine completion request here.
++
++### 7.1 Compaction — attempted in the traced session, did not fire
++
++Compaction was not left inferred. A four-turn session was run on one session id
++with compaction enabled and the threshold pushed down to
++`compact_at_tokens = 4870` against a context that Pi reported as 4861 input
++tokens. agents-infra wrote the policy through correctly — the profile's isolated
++`agent/settings.json` shows `{"enabled":true,"reserveTokens":27898,
++"keepRecentTokens":512}`, and 27898 = 32768 - 4870 — and the session transcript
++accumulated all four turns (8 message records). **No `compaction` record was
++produced**, on the one-shot `agents-infra pi --print --session-id` path, within
++those four turns.
++
++So compaction is reported here from production transcript evidence — three real
++`compaction` records on this host, carrying `tokensBefore`, `firstKeptEntryId`
++and their own usage accounting — rather than from the traced session. Why it did
++not fire at that threshold on the one-shot path was not chased further; it is out
++of this task's scope and is **not** claimed as a defect. What matters for the
++observability question is unchanged and was observed on every one of the four
++turns: each turn, compacted or not, produces exactly one
++`POST /v1/chat/completions` line on the engine side, and a compaction request
++would be a fifth line of the same indistinguishable shape.
++
++Retry likewise did not occur in the traced session and is reported from the
++transcript's record shape (§8), not from a forced failure.
++
++A detail worth stating plainly: the user prompt was 85 characters, and the engine
++processed **4966 prompt tokens**. The Pi-side record shows the 85 characters. The
++wire payload — system prompt, tool schemas, assembled message array — is what the
++model actually saw, and it appears in full on neither side. Pi's transcript is the
++agent's view of the conversation, not the request that was sent.
++
++## 8. Does Pi-side turn identity reach the engine request?
++
++No. This is [B2](#b2), stated from the Pi direction.
++
++Pi's session transcript is rich — `id`/`parentId` chains, session UUID,
++millisecond timestamps, full message content, and `compaction` records carrying
++`tokensBefore`, `firstKeptEntryId` and usage. Record-type census over all
++persisted transcripts on this host: 230 `message`, 4 `session`, 4 `model_change`,
++4 `thinking_level_change`, 3 `compaction`, 2 `session_info`.
++
++None of it reaches the engine. The engine-side record has second granularity, no
++session id, no run key, no lease id, no response id and no client port. The only
++available join is timestamp proximity, which is a proxy, not a key, and which
++collapses entirely under concurrency (§4, §9).
++
++Two specific consequences:
++
++- **Compaction** is visible on the Pi side as a typed record with its own usage
++  accounting. On the engine side it is an ordinary indistinguishable POST.
++- **Retries** are worse: the transcript has no `retry` record type at all. Pi
++  carries a `willRetry` flag on the assistant message, so a retried turn can be
++  detected, but N engine attempts still collapse to one transcript message with
++  nothing tying the attempts to it. This is [B5](#b5).
++
++## 9. The shared-broker case
++
++Two independent Pi sessions — separate project roots, separate run keys, separate
++leases — were run concurrently against one broker-owned runtime.
++
++| Session | Pi session id | Pi-side responseId |
++| --- | --- | --- |
++| A | `01a047e7-abc4-70c0-8cb3-2ae9bc0cf7b4` | `chatcmpl-c6a63791-f20b-4cfd-93d8-edb9d5b2ec20` |
++| B | `01a047e7-af88-7d55-964c-ad10122ead59` | `chatcmpl-1c45bc5d-8d9f-4d38-b7be-c54aff308de7` |
++
++The broker's single `runtime.log` contains, for those two sessions:
++
++```
++127.0.0.1 - - [28/Aug/2026 13:26:00] "POST /v1/chat/completions HTTP/1.1" 200 -
++127.0.0.1 - - [28/Aug/2026 13:26:01] "POST /v1/chat/completions HTTP/1.1" 200 -
++```
++
++Grep over that log: `SHAREDNONCE-AAA` 0, `SHAREDNONCE-BBB` 0, `chatcmpl-` 0, both
++run-key prefixes 0, `lease` 0.
++
++**Captured engine traffic cannot be attributed to the session that caused it.**
++Under the shared broker the situation is strictly worse than the exclusive case,
++because the two sessions' traffic is interleaved into one file with no
++per-connection marker, and because `broker.log` was 0 bytes and `leases/` was
++already empty by the time both sessions ended — the lease records that would at
++least establish *who held a lease when* are deleted on release. This is
++[B3](#b3).
++
++## Blockers
++
++Recorded as gaps, not implemented.
++
++<a id="b1"></a>
++### B1 — HTTP request and response bodies are not on any channel the harness observes
++
++The harness proxies stdout/stderr; prompts and completions travel over the HTTP
++socket. No amount of stream capture can recover them.
++**To close:** terminate the model connection inside agents-infra — a loopback
++reverse proxy between Pi and the engine that records request/response bodies —
++or require every managed runtime to emit structured per-request records on
++stdout. The first is runtime-agnostic and costs a hop; the second needs
++cooperation from `mlx_lm.server`, which is upstream and out of our control.
++**Decision needed:** proxy vs. runtime-cooperation, and whether recording prompt
++bodies at all is acceptable given they carry repository contents.
++
++<a id="b2"></a>
++### B2 — No request identity is carried end to end
++
++Pi knows the engine's `responseId`; the engine never emits it into any captured
++stream. There is no agents-infra-minted request id anywhere.
++**To close:** mint a request id at the Pi boundary, carry it as a header, and
++have whatever terminates the connection log it alongside the Pi session id, run
++key and lease id.
++**Blocked on B1** — there is no component on the engine side today that could
++write such a record.
++
++<a id="b3"></a>
++### B3 — Shared-broker traffic is unattributable, and lease evidence is not durable
++
++One `runtime.log` per runtime key, N leasing sessions, no per-lease marker;
++`leases/` is emptied on release and `broker.log` stays 0 bytes.
++**To close:** either per-lease log segregation or a durable broker event log
++recording lease grant/release with run key, project and PID. The second is
++cheap and independently useful, and does **not** depend on B1.
++
++<a id="b4"></a>
++### B4 — Captured status misreports requests that died mid-body
++
++An access line reads `200` for a request whose caller received zero bytes,
++because the status is logged at header-write time (§5.3).
++**To close:** log completion outcome after the body is flushed. Requires B1 or
++runtime cooperation. Until then, a `200` in a runtime log is not evidence that a
++request succeeded, and anything reasoning over these logs must treat it as
++unknown rather than as success.
++
++<a id="b5"></a>
++### B5 — Retries collapse
++
++Pi's transcript has no retry record type; N engine attempts appear as one
++message. `willRetry` detects that a retry happened but does not enumerate the
++attempts.
++**To close:** a Pi-side per-attempt record, or B1+B2 giving one record per
++engine request.
++
++<a id="b6"></a>
++### B6 — `runtime.log` is unbounded and unrotated; behaviour under load untested
++
++`O_APPEND` with no rotation, no size cap, no pruning, and cleanup deliberately
++preserves the file. Small today only because sessions have been short.
++**Untested:** growth and retention under sustained unattended operation. Not
++inferred from the small fixture, because the property depends on request volume
++and prefill-progress verbosity, which the fixture does not represent.
++**To close:** size-capped rotation with an explicit retention policy, plus a
++long-run measurement.
++
++<a id="b7"></a>
++### B7 — A directed SIGTERM to `model-harness run` orphans the runtime silently
++
++Reproduced twice (once with the fixture, once with a trivial child):
++`kill -TERM <harness pid>` leaves the harness dead with **zero bytes** written —
++no session-end record, no lifecycle marker — while the child is reparented to
++pid 1 and keeps holding its port. `runOnce`/`runSupervisedAttempt` install no
++signal handler and set no `SysProcAttr`.
++**Caveat, stated so the finding is not overclaimed:** an interactive Ctrl-C
++sends SIGINT to the whole foreground process group and both processes die; and
++the Pi-managed path does clean up correctly — the session log for the traced turn
++shows `runtime_cleanup {"state":"confirmed"}`. The gap is specific to a directed
++signal at a standalone `model-harness run`, which is exactly what a service
++supervisor or a scripted stop would send.
++**To close:** handle SIGTERM/SIGINT, put the child in its own process group, and
++emit a lifecycle record before exiting.
++
++<a id="b8"></a>
++### B8 — `llama-server` is untested
++
++Not installed on this host (`llama-server` and `llama-cli` both absent;
++Homebrew has only `ollama` and `whisper-talk-llama`). Its logging behaviour is
++reported as **unknown**, not inferred from the other two runtimes.
++**To close:** repeat §3 against `llama-server` once it is a real deployment
++target.
++
++## Tests added
++
++`tools/agents-infra/internal/modelharness/run_observability_test.go` — four
++characterisation and negative tests. They add no capability; they pin the audited
++facts so a later claim that the harness captures model I/O contradicts a test,
++and so a silently added capture sink fails the build rather than quietly
++invalidating this report.
++
++Every test was verified against a mutant that should kill it. Production call
++sites: `Run` → `runSupervised` → `runSupervisedAttempt` → `newFatalOutputWriter`
++for the gate tests, `Run` → `runOnce` for the forwarding and sink tests.
++
++| Test | Mutant applied to `run.go` | Result |
++| --- | --- | --- |
++| `TestSupervisionMarkerGateRejectsNearMissOutput` | widen gate to `marker[:14]` (head truncation) | FAIL — killed |
++| `TestSupervisionMarkerGateRejectsNearMissOutput` | widen gate to `marker[:len(marker)-1]` (tail truncation) | FAIL — killed |
++| `TestSupervisionMarkerGateMatchesAcrossWriteBoundary` | drop the carry (narrows the gate) | FAIL — killed |
++| `TestRunForwardsChildBytesVerbatimAndAddsNoRecords` | stop forwarding child stdout | FAIL — killed |
++| `TestRunPersistsNothingItself` | harness opens its own `os.CreateTemp` sink | FAIL — killed |
++
++The gate is bounded from both directions: the near-miss input shares every byte
++of the configured marker except its trailing `(`, so any truncation of the match
++from either end admits it, and the boundary test fails if the match is narrowed
++by chunking. A delete-only mutant is not relied on.
++
++## Commands run and exit codes
++
++| Command | Exit |
++| --- | ---: |
++| `gofmt -l .` (in `tools/agents-infra`) | 0, no output |
++| `go vet ./...` | 0 |
++| `go build ./...` | 0 |
++| `go test ./internal/...` | ok — attachments 0.64s, infra 121.67s, modelharness cached |
++| `go test . ./internal/modelharness/ ./internal/attachments/` | 0 |
++| 5 × mutation runs | non-zero as intended, each named above |
++
++## Artifacts
++
++Raw evidence under `.temp/TASK-260828-28gdmq/` (gitignored), archived to the
++board as `TASK-260828-28gdmq_evidence.tar.gz`: harness stdout/stderr captures,
++the fatal-marker run, the Pi spawn event stream, the agents-infra session log,
++the shared-broker runtime log, both shared-session event streams, and the
++harness configs used.
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 0369fa0..30f8472 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,18 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-28
++
++### 1339 — Managed Harness Captures No Model I/O
++- FINDING: `model-harness run` forwards child stdout/stderr verbatim and authors nothing per request (`internal/modelharness/run.go:30-39,77-105`). On `mlx_lm.server` and the Swift prototype, prompts, completions, tool schemas, tool calls and response ids travel over the HTTP socket only; live nonce trace found 0 hits for all of them in harness-captured output. Only nonces planted in a URL survive, via the access-log request line.
++- FINDING: No request identity is carried end to end. Three concurrent completions produced three byte-identical `POST /v1/chat/completions ... 200 -` lines. Pi records the engine's `responseId`; the engine never emits it. The join key exists on one side of the boundary only.
++- ANOMALY: A worker killed mid-body leaves an access line reading `200` for a request whose caller received zero bytes — status is logged at header-write time. Failure-path evidence is not merely absent, it misreports the outcome.
++- FINDING: A directed `SIGTERM` to a standalone `model-harness run` kills the harness with zero bytes written and reparents the runtime to PID 1, still holding its port. No signal handler, no `SysProcAttr`. Interactive Ctrl-C and the Pi-managed path both clean up correctly; the gap is specific to a directed signal.
++- FINDING: Shared-broker traffic is unattributable — one `runtime.log` per runtime key, no lease/session/run marker, `broker.log` 0 bytes, and `leases/` emptied on release. `runtime.log` is `O_APPEND` with no rotation, no size cap, and `cleanupSharedRuntimeState` (`pi_shared_broker_darwin.go:490-500`) deliberately preserves it.
++- SCOPE: Report `.research/260828_model-io-observability-through-harness.md`; tests `tools/agents-infra/internal/modelharness/run_observability_test.go` (4 characterisation/negative tests, each verified against a killing mutant).
++- DECISION: Nothing was implemented. Eight gaps recorded as named blockers B1–B8 — fixing one in passing would have made the report describe a system that did not exist when the question was asked.
++- STATUS: TASK-260828-28gdmq ready for review. `llama-server` untested (not installed); retention under sustained load untested.
++
+ ## 2026-08-27
+ 
+ ### 0144 — Historical Test Fixtures Survived As Orphans
+diff --git a/tools/agents-infra/internal/modelharness/run_observability_test.go b/tools/agents-infra/internal/modelharness/run_observability_test.go
+new file mode 100644
+index 0000000..82c3941
+--- /dev/null
++++ b/tools/agents-infra/internal/modelharness/run_observability_test.go
+@@ -0,0 +1,148 @@
++package modelharness
++
++import (
++	"bytes"
++	"os"
++	"runtime"
++	"strings"
++	"testing"
++	"time"
++)
++
++// TestSupervisionMarkerGateRejectsNearMissOutput bounds the condemn decision in
++// `newFatalOutputWriter`, reached in production from Run -> runSupervised ->
++// runSupervisedAttempt. The positive tests in run_test.go only prove the gate is
++// reachable; this one proves the class it condemns is the configured literal and
++// not a looser prefix of it. Widening the match (for example to "Resource limit")
++// makes this test fail, so the bound survives a narrowing mutant and not only a
++// delete-only one.
++func TestSupervisionMarkerGateRejectsNearMissOutput(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("requires /bin/sh")
++	}
++	plan := Plan{
++		Profile:    "near-miss",
++		Mode:       "local",
++		Executable: "/bin/sh",
++		// The near miss shares every byte of the configured marker except its
++		// trailing open paren, so any truncation of the match — from either end —
++		// admits it.
++		Argv: []string{"-c", `printf 'RuntimeError: [metal::malloc] Resource limit exceeded\n' >&2; exit 0`},
++		Supervision: &SupervisionPolicy{
++			FatalOutputSubstrings:    []string{"RuntimeError: [metal::malloc] Resource limit ("},
++			RestartOnFailure:         false,
++			MaxRestarts:              3,
++			RestartWindowSeconds:     60,
++			RestartDelayMilliseconds: 1,
++		},
++	}
++	var stdout, stderr bytes.Buffer
++	if err := run(plan, &stdout, &stderr, func(time.Duration) {}); err != nil {
++		t.Fatalf("run: %v", err)
++	}
++	if strings.Contains(stderr.String(), "restarting profile") {
++		t.Fatalf("near-miss output condemned the worker; stderr=%q", stderr.String())
++	}
++	if !strings.Contains(stderr.String(), "Resource limit exceeded") {
++		t.Fatalf("child stderr was not forwarded; stderr=%q", stderr.String())
++	}
++}
++
++// TestSupervisionMarkerGateMatchesAcrossWriteBoundary keeps the same gate from
++// being narrowed by chunking: a runtime that flushes the marker in two writes is
++// exactly as condemned as one that flushes it in a single write. Removing the
++// carry in fatalOutputWriter makes this fail while the run_test.go cases still
++// pass.
++func TestSupervisionMarkerGateMatchesAcrossWriteBoundary(t *testing.T) {
++	notify := make(chan string, 1)
++	marker := "RuntimeError: [metal::malloc] Resource limit ("
++	var sink bytes.Buffer
++	writer := newFatalOutputWriter(&sink, []string{marker}, notify)
++	head, tail := marker[:20], marker[20:]
++	if _, err := writer.Write([]byte("noise " + head)); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case got := <-notify:
++		t.Fatalf("partial marker condemned the worker: %q", got)
++	default:
++	}
++	if _, err := writer.Write([]byte(tail + " 499000)\n")); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case got := <-notify:
++		if got != marker {
++			t.Fatalf("marker=%q want %q", got, marker)
++		}
++	default:
++		t.Fatal("split marker was not condemned")
++	}
++	if sink.String() != "noise "+marker+" 499000)\n" {
++		t.Fatalf("forwarded bytes=%q", sink.String())
++	}
++}
++
++// TestRunForwardsChildBytesVerbatimAndAddsNoRecords is the characterisation
++// behind TASK-260828-28gdmq: `model-harness run` is a pipe, not a recorder. It
++// forwards exactly what the child wrote and authors nothing of its own on a
++// clean run, so nothing the child keeps off stdout/stderr — which is every
++// prompt and completion body on all three candidate runtimes, since they travel
++// over the HTTP socket — can be recovered from harness-captured output.
++func TestRunForwardsChildBytesVerbatimAndAddsNoRecords(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("requires /bin/sh")
++	}
++	const outLine = "runtime: listening on 127.0.0.1:18081\n"
++	const errLine = "127.0.0.1 - - [28/Aug/2026 13:19:46] \"POST /v1/chat/completions HTTP/1.1\" 200 -\n"
++	plan := Plan{
++		Profile:    "verbatim",
++		Mode:       "local",
++		Executable: "/bin/sh",
++		Argv:       []string{"-c", `printf '` + outLine + `'; printf '` + errLine + `' >&2`},
++	}
++	var stdout, stderr bytes.Buffer
++	if err := run(plan, &stdout, &stderr, func(time.Duration) {}); err != nil {
++		t.Fatalf("run: %v", err)
++	}
++	if stdout.String() != outLine {
++		t.Fatalf("stdout=%q want %q", stdout.String(), outLine)
++	}
++	if stderr.String() != errLine {
++		t.Fatalf("stderr=%q want %q", stderr.String(), errLine)
++	}
++}
++
++// TestRunPersistsNothingItself pins the retention finding: `model-harness run`
++// opens no capture sink of its own, so where forwarded output lands, how long it
++// is kept, and how large it grows are entirely the caller's. It also guards the
++// scope discipline of TASK-260828-28gdmq — a silently added log file would make
++// the recorded gap untrue, and would fail here.
++func TestRunPersistsNothingItself(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("requires /bin/sh")
++	}
++	dir := t.TempDir()
++	t.Setenv("TMPDIR", dir)
++	plan := Plan{
++		Profile:    "no-sink",
++		Mode:       "local",
++		Executable: "/bin/sh",
++		Argv:       []string{"-c", `printf 'PROMPTNONCE\n'; printf 'COMPLETIONNONCE\n' >&2`},
++	}
++	var stdout, stderr bytes.Buffer
++	if err := run(plan, &stdout, &stderr, func(time.Duration) {}); err != nil {
++		t.Fatalf("run: %v", err)
++	}
++	entries, err := os.ReadDir(dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(entries) != 0 {
++		names := make([]string, 0, len(entries))
++		for _, entry := range entries {
++			names = append(names, entry.Name())
++		}
++		t.Fatalf("run created %v; it must open no capture sink of its own", names)
++	}
++}

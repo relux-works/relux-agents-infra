@@ -1,0 +1,21 @@
+{
+  "contract": "primary-goal-v1",
+  "id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 11,
+  "previous_revision": 10,
+  "state": "active",
+  "scope": {
+    "kind": "board"
+  },
+  "objective": "Complete the existing agents-infra local-setup and instruction-materialization work, preserve global setup/provider rendering and exact Codex config semantics, curate and deliver the existing verified repository changes, keep Pi as a project-aware primary launcher with reusable local-model runtime profiles, add a vendor/environment/model target contract with config-driven vendor entrypoints openai-infra, anthropic-infra, and qwen-infra so OpenAI resolves to Codex gpt-5.6-sol/high, Anthropic resolves to Claude Code claude-opus-5/high, and Qwen resolves to Pi plus the configured local MLX 8-bit model endpoint with supported reasoning forwarded end-to-end; set the canonical src infra configuration Qwen reasoning effort to medium and enable yolo_mode=true when the Pi/Qwen environment supports that capability, otherwise fail or report the unsupported boundary explicitly rather than silently ignoring it; implement no automatic runtime config migration, fail at startup with precise actionable diagnostics, use a task-scoped one-time script to scan /Users/alexis/src recursively while preserving each config’s MCP section and replacing remaining agent configuration with the three canonical targets, add a reusable bounded agents-infra local-model check command that captures JSONL behavior evidence, summarizes tool use/final output/errors, validates expectations, and proves runtime cleanup without ad-hoc shell scripts, and add a trusted shared local-Qwen runtime owner/broker so multiple concurrent agent-system clients can lease one verified model process, reuse its endpoint without attaching to an arbitrary listener, and shut it down only after the final lease releases.",
+  "mutation": {
+    "kind": "objective_realigned",
+    "reason": "Add the user-required local Qwen reasoning propagation, canonical medium reasoning setting, and capability-aware yolo mode while preserving the existing shared-runtime and migration scope.",
+    "actor": {
+      "kind": "primary_parent",
+      "actor_id": "alexis"
+    }
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-25T16:57:51.965749Z"
+}

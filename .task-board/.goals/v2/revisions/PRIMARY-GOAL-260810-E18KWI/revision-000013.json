@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 13,
+  "expected_previous_revision": 12,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 12
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Complete the existing agents-infra local setup, instruction materialization, provider rendering, canonical vendor targets, Qwen/Pi local-model profiles, bounded model-check tooling, and shared local-Qwen runtime broker work; preserve precise fail-closed config semantics and no automatic migrations; keep canonical OpenAI Codex gpt-5.6-sol/high and Anthropic Claude Opus 5/high targets; keep Qwen native reasoning forwarded at medium; and research, design, and implement a real unattended Pi tool-call authorization/yolo boundary suitable for independently spawned agents, using upstream-supported mechanisms when available or an explicitly reviewed minimal extension/patch when not, without misrepresenting project trust as tool authorization or silently weakening security; evaluate reusing an existing tool boundary for narrowly allowlisted privileged operations, but do not grant Pi an unrestricted sudo/root shell.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 13
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "The user added a possible sudo/admin wrapper and asked whether it is a sound way to keep spawned Pi agents autonomous; the goal now records evaluation of that option while preserving a least-privilege boundary.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "alexis"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-25T20:30:41.312914Z",
+  "created_by": "alexis",
+  "reason": "The user added a possible sudo/admin wrapper and asked whether it is a sound way to keep spawned Pi agents autonomous; the goal now records evaluation of that option while preserving a least-privilege boundary."
+}

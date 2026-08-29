@@ -44,6 +44,14 @@ project's `task-board.config.json -> version_control` policy and the board
 workflow. This global module adds no separate commit, push, message, or
 attribution policy. Repository-specific contribution rules still apply.
 
+### Canonical pull-request delivery
+
+* When a hosted repository supports pull requests or merge requests, use a non-default branch and the canonical **branch → PR/MR → review → green checks → merge** flow by default. Do not push directly to the default branch merely because it is faster.
+* When publication and merge are within the current authorization, the agent that owns the change owns the complete delivery lifecycle: push the branch, open the PR/MR, inspect the complete remote diff and current checks, submit a real review verdict through the hosting platform, and merge only after that review accepts the change and all required checks pass.
+* Use the platform's actual review mechanism so repository history accurately represents the pull-request and code-review work. GitHub does not allow an author to approve their own pull request; in that case submit a comment review containing the verdict, and never invent another identity or misrepresent approval.
+* A direct default-branch push is an exception only when the user or repository workflow explicitly requires it, or when the remote has no review workflow. A stricter repository-local PR/MR-only rule always wins. If the canonical flow is required but authentication, policy, or hosting constraints prevent it, report the exact blocker instead of silently falling back to a direct push.
+* This section governs the shape of remote publication. It does not grant commit, push, review, or merge authority, and it does not replace task-board commit confirmation or repository-specific acceptance gates.
+
 ## Worktrees
 
 * When you need to work on multiple revisions, parallel fixes, or isolated experiments in the same repo, prefer **`git worktree`** over juggling branches in one checkout.

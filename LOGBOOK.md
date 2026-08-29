@@ -247,6 +247,8 @@
 - MILESTONE: Contributor-authored commit `b0a45b8` passed two focused tests plus black/isort, was pushed to `relux-works:fix/generation-health-readiness`, and opened upstream PR `ml-explore/mlx-lm#1791`.
 - STATUS: Published; upstream review pending.
 
+## 2026-08-27
+
 ### 0144 — Historical Test Fixtures Survived As Orphans
 - ANOMALY: Ten `/tmp/pi-*/fake-runtime` fixtures from earlier standalone/review tests remained reparented to PID 1 for 9–12 hours, each holding a random loopback listener; today's full and focused suites created no additional leak.
 - FIX: Exact verified fixture process groups were terminated and all ten listeners disappeared; the active Qwen broker, harness, MLX server, Pi client, and port 18011 remained live.

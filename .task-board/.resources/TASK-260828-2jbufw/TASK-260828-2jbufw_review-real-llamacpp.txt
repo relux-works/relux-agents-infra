@@ -1,0 +1,18 @@
+binary=/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260828-2faxgm/worktree/.temp/TASK-260828-2jbufw/model-harness-candidate
+llama_version=version: 0.3.0 (build 10621, commit c1d0e7a00)
+port=52989
+readiness_code=200
+readiness_seconds=1.137
+health_code=200
+health_body={"status":"ok"}
+runtime_pid=56291
+runtime_pgid=56291
+harness_pgid=56267
+models_has_n_ctx_8192=1
+harness_exit=0
+runtime_after_sigterm=gone
+port_after_sigterm=free
+stdout_bytes=0
+lifecycle_records=2
+model-harness: received terminated; stopping profile "llamacpp-review" process group 56291
+model-harness: profile "llamacpp-review" process group 56291 stopped after terminated (child: <nil>)

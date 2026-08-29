@@ -1,0 +1,3214 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 76fda0d..e55f066 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,74 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-24
++
++### 2152 — Local Setup Honors Provider-Owned Skill Links
++- ROOT CAUSE: `managedSkillLinkFailures` filtered provider surfaces by source-managed names only in global mode, so local setup contradicted the documented ownership boundary and rejected preserved external packages such as `mac-infra`.
++- FIX: `tools/agents-infra/internal/infra/skill_link_validation.go` now derives managed names from `.agents/.skills` for both modes; production CLI tests preserve unmanaged links while still refusing a narrowed managed-name gate.
++- EVIDENCE: Full Go suite, vet, build, source/global/local setup, and both verifies exit 0; the observed `casual-talks` external links remain unchanged.
++- SCOPE: `TASK-260824-2a4gk3`; no relaxation inside source-managed skill packages.
++
++### 2151 — Casual Talks Qwen Target Runs Text And Tools
++- MILESTONE: Installed `openai-infra`, `anthropic-infra`, and `qwen-infra` resolve the configured target tuples in `/Users/alexis/src/casual-talks`; print/compose remain non-launching and preserve config bytes.
++- EVIDENCE: Real Qwen/Pi run on mlx-lm 0.31.3 emits `TEXT_RESPONSE_OK`, completes successful `write` and `read` tool results on a task-scoped 39-byte file, emits `TOOL_ROUNDTRIP_OK`, and exits 0.
++- FINDING: Runtime bound only `127.0.0.1:18011`; post-run listener, runtime process, and profile-lock holder checks all return expected absence.
++- SCOPE: `TASK-260824-2a4gk3`; no secrets or arbitrary environment values persisted.
++
++### 2109 — Absolute MLX Identity Unblocks Project Target Rollout
++- DECISION: Operator selected `/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit` as the exact Qwen target/profile identity because real `mlx_lm.server` uses that resolved path for load, requests, and `/v1/models` readiness.
++- MILESTONE: `TASK-260824-1jjze0` atomically rewrote all 121 in-scope project configs after a real-server exact-ID plus completion gate; 363 post-apply production alias composes and rollback-readiness verification exit 0.
++- FINDING: Per-file backup/current/candidate hashes and raw MCP comparisons pass for all 121 configs; unrelated status lines across 116 Git worktrees remain unchanged.
++- SCOPE: Task-only script and evidence under `.temp/TASK-260824-1jjze0`; no runtime migration path added.
++
++### 2051 — Canonical Qwen Selector Is Not An MLX Runtime Identity
++- ROOT CAUSE: Real `mlx_lm.server --model Qwen3.8-27B-MLX-8bit` treats the required canonical model ID as a Hugging Face repo, receives `RepositoryNotFound`, and keeps an empty HTTP shell alive; the local weights live at a differently named absolute path.
++- FINDING: MLX reports a local model at `/v1/models` by resolved absolute path; managed Pi correctly reaches that route as `base_url + readiness_path`, but `waitPiRuntimeReady` requires the inventory ID to equal the canonical profile model exactly.
++- EVIDENCE: `TASK-260824-1jjze0` full dry-run validates 121 candidates through 363 production alias compose calls; real apply gate exits 3 before writes, records zero writes, and post-refusal hashes match all 121 sources.
++- BLOCKED: Recursive rollout requires an architecture decision that separates public target model identity from the MLX load selector/readiness identity, or changes the canonical target/runtime; proxy/symlink hacks would violate the managed-Pi boundary.
++
++### 2013 — Hosted Identity Locks Cross The Wrapper Delimiter
++- FIX: `lockCodexTargetArguments` and `lockClaudeTargetArguments` now scan identity selectors through the first wrapper `--` and stop only at the second provider operand boundary; Pi keeps its first-`--` message boundary.
++- FIX: Ordinary hosted alias launches no longer dump the resolved launch plan to stderr; diagnostics remain explicit `--print-config` behavior.
++- EVIDENCE: Production `runTarget` negatives reject eight post-delimiter model/reasoning/profile selector classes before provider execution or config mutation; narrowing both locks back to first-delimiter termination reddens every case with `-count=1`.
++- SCOPE: `TASK-260824-2o4zq8` reviewer rework in `tools/agents-infra/internal/infra/canonical_target.go`, `tools/agents-infra/main.go`, and focused tests.
++
++### 2002 — A Wrapper `--` Is Not An Operand Boundary
++- ROOT CAUSE: `lockCodexTargetArguments`/`lockClaudeTargetArguments` in `tools/agents-infra/internal/infra/canonical_target.go` return the remaining argv raw on a literal `--`, treating it as an operand boundary; `parseCodexWrapperArgs` (`internal/infra/codex_launch.go:563`) and `parseClaudeWrapperArgs` (`internal/infra/claude_launch.go:414`) instead consume that `--` as a wrapper delimiter and keep parsing every following token as a provider flag.
++- FINDING: The canonical identity lock is bypassable at the production `runTarget` entrypoint. With a recording fake provider and `err=nil`: `openai-infra -- exec -- --profile work` launches Codex with `--profile work`, which contract Section 3.6 says must always fail `target_identity_conflict`, while `--print-config` still reports `effective_profile_source: native`; `anthropic-infra -- -- --model other` launches Claude with `--model claude-opus-5 --effort high --model other`, and last-wins means `other` is what runs while the plan reports `claude-opus-5`. Same shape for Claude `--effort` and Codex `--model-reasoning-effort`.
++- FINDING: Pi is unaffected — its `--` is a real message-operand boundary and the Pi composer refuses flag-like operands (`unsafe Pi message operand "--model"`).
++- FINDING: No test passes `--` through any of the three lock functions, so that branch is entirely uncovered; the suite is green around a live bypass path.
++- SCOPE: `TASK-260824-2o4zq8` review verdict, routed to `to-dev`.
++
++### 1941 — Worktree Pi Fixtures Must Resolve The Common Checkout
++- ROOT CAUSE: `officialPiAsset` looked only under the active Story worktree `.temp`, while the reviewed Pi asset lived under the primary checkout; required Qwen acceptance tests reported package success by skipping.
++- FIX: `tools/agents-infra/main_test.go` and `internal/infra/pi_test.go` now derive a primary-checkout fallback from the worktree `.git` gitdir; production Qwen compose and all canonical Qwen tests report `PASS`, not `SKIP`.
++- FINDING: Package-level `go test` success is insufficient evidence for external-asset acceptance tests unless their named verbose result is checked.
++- SCOPE: `TASK-260824-2o4zq8` test infrastructure and Qwen target evidence.
++
++### 1842 — Hosted Alias Profile Provenance Stays Provider-Specific
++- DECISION: Hosted alias model/reasoning provenance comes from the target, but `resolved.profile` retains provider semantics: Claude is `not_applicable`; a Codex alias is `native` because explicit `--profile` and `-c profile=` are identity conflicts.
++- DECISION: Codex `-c model=` and `-c model_reasoning_effort=` are identity selectors alongside their dedicated flags; exact repeats pass and divergences fail.
++- FINDING: Contract evidence now creates clause-removal mutants and requires the actual validator to reject them; absent markers fail before mutation.
++- SCOPE: `TASK-260824-3rl3ws` revision-3 rework for reviewer findings G1-G2.
++
++### 1824 — Vendor Config Migration Is Operator-Only
++- DECISION: Parse, compose, setup, verify, target dispatch, and launch never rewrite project config; invalid canonical targets fail before side effects with source/field identity and corrective action.
++- DECISION: The recursive all-project rewrite is a separate task-scoped operator rollout, never installed product behavior or a startup fallback.
++- SCOPE: Contract Sections 5-7 and `TASK-260824-1jjze0`, per owner rollout clarification.
++
++### 1823 — Vendor Targets Separate Canonical And Pi Namespaces
++- DECISION: Codex target reasoning remains a non-empty provider-owned string; Claude targets admit only efforts the composer can prove effective; Pi targets retain the owned thinking enum.
++- DECISION: Pi profile `provider` is an operator namespace, not Qwen vendor evidence. Optional `profile_provider` asserts the existing label without forcing legacy profile mutation.
++- FINDING: Pi `resolved.model` remains provider-qualified; target model stays unqualified, with explicit profile-provider/model and endpoint invariants in alias plans.
++- SCOPE: `TASK-260824-3rl3ws` contract rework after reviewer findings F1-F5.
++
++### 1751 — Vendor Targets Stay Additive And Identity-Locked
++- DECISION: Canonical `[agents.targets]` plus `[agents.entrypoints]` is a strict alias-only launch path; declaring it does not alter direct `agents-infra codex|claude|pi` precedence.
++- DECISION: Hosted target identity overrides matching legacy model policy; Qwen/Pi reuses an atomic `[agents.pi.profiles]` definition and validates target model/reasoning/endpoint as exact assertions over that profile.
++- FINDING: This avoids both unsafe legacy fallback after target resolution fails and duplicated Pi runtime/endpoint policy while keeping existing project configs valid.
++- SCOPE: `STORY-260824-1yr6m0`, contract outcome `TASK-260824-3rl3ws_vendor-target-contract.md`.
++
+ ## 2026-08-18
+ 
+ ### 0504 — 503 Retry Accepted; Configured-Timeout Magnitude Still Unbound
+diff --git a/README.md b/README.md
+index 2b6812d..3d47753 100644
+--- a/README.md
++++ b/README.md
+@@ -25,6 +25,7 @@ agents-infra setup local /path/to/project
+ agents-infra doctor global
+ agents-infra doctor local /path/to/project
+ agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json
++openai-infra --print-config
+ pi-infra --print-config
+ agents-infra version
+ ```
+@@ -45,11 +46,14 @@ The canonical interface after bootstrap is:
+ - `agents-infra doctor global|local`
+ - `agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json`
+ - `agents-infra compose --mode primary-session --agent codex|claude|pi --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
++- `agents-infra compose --mode primary-session --entrypoint openai-infra|anthropic-infra|qwen-infra --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
++- `agents-infra target openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
+ - `agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json`
+ - `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
+ - `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
+ - `agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+ - `pi-infra [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
++- `openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
+ - `agents-infra version`
+ 
+ Setup syncs the repo into `.agents`, treats `.skills/` as the authoritative
+@@ -130,9 +134,11 @@ Two consequences worth knowing:
+ `~/.local/bin/agents-infra` — so it makes no claim about a build and does not
+ run one.
+ 
+-Both setup modes install a sibling-only `pi-infra` launcher: global setup writes
++Both setup modes install sibling-only `pi-infra`, `openai-infra`,
++`anthropic-infra`, and `qwen-infra` launchers: global setup writes
+ it beside the bootstrap-owned `agents-infra`, and local setup writes it beside
+-the generated project launcher. It delegates as `agents-infra pi` without
++the generated project launcher. `pi-infra` delegates as `agents-infra pi`; the
++three vendor aliases delegate as `agents-infra target <exact-alias>` without
+ changing the caller's working directory or argument bytes/order, including a
+ literal wrapper delimiter and its following operands. It never searches `PATH`
+ for a substitute target. Setup repairs a drifted managed alias; setup's
+@@ -198,6 +204,7 @@ That creates a local runtime layout under the project root:
+ - `.codex/`: thin Codex shim that points into `.agents`
+ - `.local/bin/`: helper CLIs for the local setup, including `agents-infra`
+ - `.local/bin/pi-infra`: managed sibling alias for `agents-infra pi`
++- `.local/bin/openai-infra`, `.local/bin/anthropic-infra`, `.local/bin/qwen-infra`: canonical target aliases
+ 
+ Local setup reproduces the global runtime topology, not the global instruction
+ content. It does not copy source `.instructions/` modules into the project.
+@@ -723,6 +730,84 @@ remains provider-native. Codex fields never configure `agents-infra claude`,
+ and Claude fields never configure `agents-infra codex`; `[mcp]` remains the one
+ intentional provider-shared project section.
+ 
++### Canonical vendor target entrypoints
++
++Canonical targets are an additive, strict launch path for installed vendor
++aliases. They separate vendor identity from the provider harness and map each
++public entrypoint explicitly:
++
++```toml
++[agents.targets."openai-sol-high"]
++vendor = "openai"
++environment = "codex"
++model = "gpt-5.6-sol"
++reasoning = "high"
++
++[agents.targets."anthropic-opus-high"]
++vendor = "anthropic"
++environment = "claude-code"
++model = "claude-opus-5"
++reasoning = "high"
++
++[agents.targets."qwen-mlx-8bit"]
++vendor = "qwen"
++environment = "pi"
++model = "Qwen3.8-27B-MLX-8bit"
++reasoning = "off"
++profile = "qwen-3.8-27b-mlx-8bit"
++profile_provider = "local-qwen" # optional assertion
++endpoint = "http://127.0.0.1:18011/v1" # optional assertion
++
++[agents.entrypoints]
++openai-infra = "openai-sol-high"
++anthropic-infra = "anthropic-opus-high"
++qwen-infra = "qwen-mlx-8bit"
++```
++
++Only `openai/codex`, `anthropic/claude-code`, and `qwen/pi` are admitted.
++Claude reasoning is limited to `low`, `medium`, `high`, `xhigh`, and `max`;
++Pi uses its documented thinking levels; Codex accepts any non-empty reasoning
++token and leaves model/effort compatibility to Codex. A Qwen target must name
++an existing complete managed Pi profile with `api = "openai-completions"`.
++Its model and thinking must match the profile. Optional provider and endpoint
++fields are exact assertions; the effective qualified model, provider, and
++endpoint always come from the selected profile definition.
++
++Target definitions compose atomically from filesystem root to current working
++directory: a nearer complete target replaces the same exact name, and a nearer
++entrypoint mapping replaces that alias mapping. Missing mappings, unknown
++targets, malformed fields, alias/vendor disagreement, invalid Pi profiles, or
++conflicting identity selectors fail before provider/runtime side effects. No
++alias infers a target from legacy tables and no setup, verify, compose, print,
++or launch operation rewrites project configuration.
++
++Alias invocations identity-lock model and reasoning. Exact repeats are
++accepted; divergent repeats fail with `target_identity_conflict`. Codex also
++locks `-c model=...` and `-c model_reasoning_effort=...` and refuses profile
++selectors. Pi decodes `model`, `provider/model`, `model:thinking`, and
++`provider/model:thinking`, refusing a divergent provider or thinking suffix
++before the legacy Pi composer can normalize it.
++
++Inspect or compose the selected target without launching it:
++
++```bash
++openai-infra --print-config
++anthropic-infra --print-config
++qwen-infra --print-config
++
++agents-infra compose --mode primary-session \
++  --entrypoint qwen-infra --project "$PWD" --schema-version 1 --json \
++  -- --model 'local-qwen/Qwen3.8-27B-MLX-8bit:off'
++```
++
++Alias JSON plans retain schema version 1 and add `target`, plus Pi-only
++`resolved.profile_provider` and `resolved.endpoint` provenance. Legacy
++`compose --agent ...` plans omit those fields byte-for-byte. Direct
++`agents-infra codex`, `agents-infra claude`, `agents-infra pi`, and `pi-infra`
++keep their existing CLI/project/provider precedence; merely declaring targets
++does not change them. `doctor local` reports configured mappings and their
++resolved coordinates with sources.
++
+ When launched from a project directory, `agents-infra codex` walks from the
+ filesystem root to the current directory and reads each
+ `.agents/.configs/project-config.toml` it finds. It parses every discovered
+@@ -925,6 +1010,7 @@ rg -n "Primary Parent Goal Actualization" \
+ | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
+ | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi state under the user cache directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
++| `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+ | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
+ | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
+@@ -1441,8 +1527,9 @@ Before mutation, setup recursively validates every source-managed skill link it
+ can materialize. Setup's postcondition and `verify` repeat that check across the
+ managed installed surfaces. Links must remain contained, resolve successfully,
+ and form an acyclic directory graph; multiple contained links may share a target
+-when they form a DAG. Global provider-owned top-level skill packages remain
+-outside this ownership boundary unless setup manages their name.
++when they form a DAG. Provider-owned top-level skill packages remain outside
++this ownership boundary unless setup manages their name, in both global and
++project-local runtimes.
+ 
+ Project-local install example:
+ 
+diff --git a/SKILL.md b/SKILL.md
+index b1fb57e..375378c 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -1,21 +1,6 @@
+ ---
+ name: relux-agents-infra
+ description: Shared agent infrastructure repo for Claude Code and Codex CLI. Use when updating global agent instructions, skills, symlink setup, tool configs, rules, or the generic agents attachments manifest contract and helper tooling.
+-triggers:
+-  - relux-agents-infra
+-  - agents infra
+-  - agent infrastructure
+-  - shared agent config
+-  - global agent instructions
+-  - codex config
+-  - claude settings
+-  - setup symlinks
+-  - agents attachments manifest
+-  - attachments manifest
+-  - агентская инфра
+-  - конфиг агентов
+-  - настройки codex
+-  - настройки claude
+ ---
+ 
+ # relux-agents-infra
+@@ -234,6 +219,71 @@ yolo is `false` from `default`. For complete troubleshooting and
+ `.codex/config.toml` coexistence, see
+ [README.md](README.md#project-primary-codex-session-policy).
+ 
++## Canonical vendor targets
++
++Use canonical targets when a project needs an explicit vendor/environment/model
++identity behind an installed vendor alias. Define complete atomic targets and
++exact mappings in contributing project configs:
++
++```toml
++[agents.targets.openai]
++vendor = "openai"
++environment = "codex"
++model = "gpt-5.6-sol"
++reasoning = "high"
++
++[agents.targets.anthropic]
++vendor = "anthropic"
++environment = "claude-code"
++model = "claude-opus-5"
++reasoning = "high"
++
++[agents.targets.qwen]
++vendor = "qwen"
++environment = "pi"
++model = "Qwen3.8-27B-MLX-8bit"
++reasoning = "off"
++profile = "qwen-3.8-27b-mlx-8bit"
++profile_provider = "local-qwen"
++endpoint = "http://127.0.0.1:18011/v1"
++
++[agents.entrypoints]
++openai-infra = "openai"
++anthropic-infra = "anthropic"
++qwen-infra = "qwen"
++```
++
++Only `openai/codex`, `anthropic/claude-code`, and `qwen/pi` are admitted.
++Qwen reuses an existing complete managed Pi profile: model and thinking must
++match it, optional provider/endpoint values are assertions, and effective
++provider/endpoint provenance remains the profile definition. A nearer target
++replaces the same name atomically; a nearer mapping replaces only that alias.
++
++Inspect without launching:
++
++```bash
++openai-infra --print-config
++anthropic-infra --print-config
++qwen-infra --print-config
++agents-infra compose --mode primary-session --entrypoint qwen-infra \
++  --project "$PWD" --schema-version 1 --json
++```
++
++Missing/malformed mappings, invalid tuples/profiles, and conflicting explicit
++identity selectors fail before provider/runtime side effects and carry source,
++field/identity, and remediation. Exact repeats are accepted. Pi model tokens
++are decoded as `model`, `provider/model`, `model:thinking`, or
++`provider/model:thinking`; divergent suffix/provider coordinates conflict.
++Codex aliases also lock `-c model=...` and `-c
++model_reasoning_effort=...` and always reject profile selectors.
++
++Canonical declarations never rewrite config and never become defaults for
++direct `agents-infra codex|claude|pi` or `pi-infra`; those commands retain
++legacy precedence. Alias schema-v1 plans add `target` and Qwen effective
++provider/endpoint fields, while legacy `--agent` plans keep their existing
++shape. See [README.md](README.md#canonical-vendor-target-entrypoints) for full
++field domains and diagnostics.
++
+ Task-board spawn ceilings are documented by the separate
+ [task-board spawn-ceiling contract](https://github.com/relux-works/skill-project-management/blob/main/.specs/project-agent-selection-policy.md#task-board-spawn-ceiling-contract).
+ Do not add spawn ceilings, model ranks, or task-board resolver policy to
+@@ -259,7 +309,9 @@ The alias preserves caller cwd and argv order/bytes and delegates only as
+ drift, while setup's postcondition and `verify` reject missing/changed alias
+ bytes or mode and a missing, wrong, or unusable sibling target. Both paths must
+ themselves be regular files; a symlink is drift even when it resolves to
+-byte-identical content. They also
++byte-identical content. Setup also installs and repairs the exact sibling-only
++`openai-infra`, `anthropic-infra`, and `qwen-infra` aliases, each delegating as
++`agents-infra target <exact-entrypoint>` with no embedded target policy. They also
+ validate the authoritative source/installed manifest at
+ `tools/agents-infra/internal/infra/pi-v0.84.2-darwin-arm64-tree-manifest.txt`
+ with SHA-256
+diff --git a/tools/agents-infra/canonical_target_main_test.go b/tools/agents-infra/canonical_target_main_test.go
+new file mode 100644
+index 0000000..d2f37ca
+--- /dev/null
++++ b/tools/agents-infra/canonical_target_main_test.go
+@@ -0,0 +1,277 @@
++package main
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
++)
++
++func mainCanonicalOpenAITOML() string {
++	return "[agents.targets.openai]\n" +
++		"vendor=\"openai\"\n" +
++		"environment=\"codex\"\n" +
++		"model=\"gpt-5.6-sol\"\n" +
++		"reasoning=\"high\"\n" +
++		"[agents.entrypoints]\n" +
++		"openai-infra=\"openai\"\n"
++}
++
++func mainCanonicalHostedTOML() string {
++	return "[agents.targets.openai]\n" +
++		"vendor=\"openai\"\n" +
++		"environment=\"codex\"\n" +
++		"model=\"gpt-5.6-sol\"\n" +
++		"reasoning=\"high\"\n" +
++		"[agents.targets.anthropic]\n" +
++		"vendor=\"anthropic\"\n" +
++		"environment=\"claude-code\"\n" +
++		"model=\"claude-opus-5\"\n" +
++		"reasoning=\"high\"\n" +
++		"[agents.entrypoints]\n" +
++		"openai-infra=\"openai\"\n" +
++		"anthropic-infra=\"anthropic\"\n"
++}
++
++func writeMainCanonicalConfig(t *testing.T, project, body string) string {
++	t.Helper()
++	path := filepath.Join(project, ".agents", ".configs", "project-config.toml")
++	mustMkdir(t, filepath.Dir(path))
++	mustWrite(t, path, body)
++	return path
++}
++
++func TestRunComposeCanonicalEntrypointEmitsAliasPlan(t *testing.T) {
++	home, project, binDir := t.TempDir(), t.TempDir(), t.TempDir()
++	configPath := writeMainCanonicalConfig(t, project, mainCanonicalOpenAITOML())
++	mustWrite(t, filepath.Join(binDir, "codex"), "#!/bin/sh\nexit 0\n")
++	t.Setenv("HOME", home)
++	t.Setenv("PATH", binDir)
++
++	output := captureStdout(t, func() {
++		if err := runCompose([]string{"--mode", "primary-session", "--entrypoint", "openai-infra", "--project", project, "--schema-version", "1", "--json", "--", "--model", "gpt-5.6-sol"}); err != nil {
++			t.Fatalf("runCompose: %v", err)
++		}
++	})
++	var plan infra.PrimarySessionLaunchPlan
++	decodeSingleJSONDocument(t, output, &plan)
++	canonicalConfigPath, err := filepath.EvalSymlinks(configPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if plan.Provider != "codex" || plan.Target == nil || plan.Target.Entrypoint != "openai-infra" || plan.Target.Source != canonicalConfigPath {
++		t.Fatalf("canonical plan = %#v", plan)
++	}
++	if plan.Resolved.Model.Value == nil || *plan.Resolved.Model.Value != "gpt-5.6-sol" || plan.Resolved.Model.Source != canonicalConfigPath {
++		t.Fatalf("resolved model = %#v", plan.Resolved.Model)
++	}
++}
++
++func TestRunComposePrimarySessionRequiresExactlyOneSelector(t *testing.T) {
++	project := t.TempDir()
++	for name, args := range map[string][]string{
++		"neither": {"--mode", "primary-session", "--project", project, "--schema-version", "1", "--json"},
++		"both":    {"--mode", "primary-session", "--agent", "codex", "--entrypoint", "openai-infra", "--project", project, "--schema-version", "1", "--json"},
++	} {
++		t.Run(name, func(t *testing.T) {
++			if err := runCompose(args); err == nil || !strings.Contains(err.Error(), "exactly one") {
++				t.Fatalf("selector error = %v", err)
++			}
++		})
++	}
++	if err := runCompose([]string{"--entrypoint", "openai-infra", "--project", project, "--schema-version", "1", "--json"}); err == nil || !strings.Contains(err.Error(), "child compose") {
++		t.Fatalf("child entrypoint error = %v", err)
++	}
++}
++
++func TestRunComposeCanonicalErrorsCarrySafeActionableContext(t *testing.T) {
++	home, binDir := t.TempDir(), t.TempDir()
++	mustWrite(t, filepath.Join(binDir, "codex"), "#!/bin/sh\nexit 0\n")
++	t.Setenv("HOME", home)
++	t.Setenv("PATH", binDir)
++	tests := []struct {
++		name        string
++		body        string
++		providerArg []string
++		wantCode    string
++		wantField   string
++	}{
++		{name: "missing mapping", body: "[agents.codex.primary_session]\nmodel=\"legacy\"\n", wantCode: infra.PrimarySessionErrorUnknownEntrypoint, wantField: "agents.entrypoints.openai-infra"},
++		{name: "unknown target", body: "[agents.entrypoints]\nopenai-infra=\"missing\"\n", wantCode: infra.PrimarySessionErrorUnknownTarget, wantField: "agents.entrypoints.openai-infra"},
++		{name: "malformed field", body: "[agents.targets.openai]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=7\nreasoning=\"high\"\n[agents.entrypoints]\nopenai-infra=\"openai\"\n", wantCode: infra.PrimarySessionErrorInvalidProjectConfiguration, wantField: "agents.targets.openai.model"},
++		{name: "identity conflict", body: mainCanonicalOpenAITOML(), providerArg: []string{"--", "--model", "other"}, wantCode: infra.PrimarySessionErrorTargetIdentityConflict, wantField: "provider_args.model"},
++	}
++	for _, testCase := range tests {
++		t.Run(testCase.name, func(t *testing.T) {
++			project := t.TempDir()
++			configPath := writeMainCanonicalConfig(t, project, testCase.body)
++			before, err := os.ReadFile(configPath)
++			if err != nil {
++				t.Fatal(err)
++			}
++			args := []string{"--mode", "primary-session", "--entrypoint", "openai-infra", "--project", project, "--schema-version", "1", "--json"}
++			args = append(args, testCase.providerArg...)
++			var composeErr error
++			output := captureStdout(t, func() { composeErr = runCompose(args) })
++			if composeErr == nil || !strings.Contains(composeErr.Error(), "Remediation:") {
++				t.Fatalf("human error = %v", composeErr)
++			}
++			var envelope infra.PrimarySessionLaunchPlanErrorEnvelope
++			decodeSingleJSONDocument(t, output, &envelope)
++			if envelope.Error.Code != testCase.wantCode || envelope.Error.Context == nil || envelope.Error.Context.Field != testCase.wantField || envelope.Error.Remediation == "" {
++				t.Fatalf("error envelope = %#v", envelope)
++			}
++			after, err := os.ReadFile(configPath)
++			if err != nil || string(after) != string(before) {
++				t.Fatalf("compose rewrote project config: err=%v before=%q after=%q", err, before, after)
++			}
++		})
++	}
++}
++
++func TestRunComposeCanonicalUnreadableSourceIsNotReportedAsMissingMapping(t *testing.T) {
++	home, project := t.TempDir(), t.TempDir()
++	configPath := filepath.Join(project, ".agents", ".configs", "project-config.toml")
++	mustMkdir(t, configPath)
++	t.Setenv("HOME", home)
++	var composeErr error
++	output := captureStdout(t, func() {
++		composeErr = runCompose([]string{"--mode", "primary-session", "--entrypoint", "openai-infra", "--project", project, "--schema-version", "1", "--json"})
++	})
++	if composeErr == nil || !strings.Contains(composeErr.Error(), "Remediation:") || strings.Contains(composeErr.Error(), infra.PrimarySessionErrorUnknownEntrypoint) {
++		t.Fatalf("unreadable source error = %v", composeErr)
++	}
++	var envelope infra.PrimarySessionLaunchPlanErrorEnvelope
++	decodeSingleJSONDocument(t, output, &envelope)
++	if envelope.Error.Code != infra.PrimarySessionErrorInvalidProjectConfiguration || envelope.Error.Context == nil || envelope.Error.Context.Field != "project_config" || envelope.Error.Context.Source == "" || envelope.Error.Remediation == "" {
++		t.Fatalf("unreadable source envelope = %#v", envelope)
++	}
++	info, err := os.Stat(configPath)
++	if err != nil || !info.IsDir() {
++		t.Fatalf("compose rewrote unreadable source: %v %#v", err, info)
++	}
++}
++
++func TestRunTargetDispatchPreservesCallerCWDAndLocksBeforeProviderSideEffects(t *testing.T) {
++	home, project, binDir := t.TempDir(), t.TempDir(), t.TempDir()
++	record := filepath.Join(t.TempDir(), "provider-record")
++	writeMainCanonicalConfig(t, project, mainCanonicalOpenAITOML())
++	mustMkdir(t, filepath.Join(project, ".agents", ".instructions"))
++	mustMkdir(t, filepath.Join(project, ".agents", ".rules"))
++	mustMkdir(t, filepath.Join(project, ".agents", "skills"))
++	mustWrite(t, filepath.Join(project, ".agents", ".instructions", "AGENTS.md"), "# Test instructions\n")
++	mustWrite(t, filepath.Join(binDir, "codex"), "#!/bin/sh\npwd > \""+record+"\"\nprintf '%s\\n' \"$@\" >> \""+record+"\"\n")
++	t.Setenv("HOME", home)
++	t.Setenv("PATH", binDir)
++	t.Setenv(callerCWDEnv, project)
++
++	stderr := captureStderr(t, func() {
++		if err := runTarget([]string{"openai-infra", "--", "--model", "gpt-5.6-sol", "exec", "inspect"}); err != nil {
++			t.Fatalf("runTarget: %v", err)
++		}
++	})
++	if stderr != "" {
++		t.Fatalf("ordinary target launch printed diagnostics to stderr:\n%s", stderr)
++	}
++	data, err := os.ReadFile(record)
++	if err != nil {
++		t.Fatal(err)
++	}
++	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
++	canonicalProject, _ := filepath.EvalSymlinks(project)
++	if lines[0] != canonicalProject || !strings.Contains(string(data), "gpt-5.6-sol") || !strings.Contains(string(data), "inspect") {
++		t.Fatalf("provider record = %q", data)
++	}
++
++	if err := os.Remove(record); err != nil {
++		t.Fatal(err)
++	}
++	if err := runTarget([]string{"openai-infra", "--", "--model", "other"}); err == nil {
++		t.Fatal("identity conflict launched")
++	}
++	if _, err := os.Stat(record); !os.IsNotExist(err) {
++		t.Fatalf("identity conflict reached provider: %v", err)
++	}
++
++	legacyConfig := writeMainCanonicalConfig(t, project, "[agents.codex.primary_session]\nmodel=\"gpt-5.6-sol\"\nreasoning_effort=\"high\"\n")
++	legacyBefore, err := os.ReadFile(legacyConfig)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := runTarget([]string{"openai-infra", "--", "exec", "inspect"}); err == nil || !strings.Contains(err.Error(), infra.PrimarySessionErrorUnknownEntrypoint) {
++		t.Fatalf("unconfigured alias error = %v", err)
++	}
++	if _, err := os.Stat(record); !os.IsNotExist(err) {
++		t.Fatalf("legacy-only configuration bypassed target resolution: %v", err)
++	}
++	legacyAfter, err := os.ReadFile(legacyConfig)
++	if err != nil || string(legacyAfter) != string(legacyBefore) {
++		t.Fatalf("unconfigured alias rewrote legacy config: err=%v before=%q after=%q", err, legacyBefore, legacyAfter)
++	}
++}
++
++// Production call site: runTarget -> BuildCanonicalTargetLaunchPlan ->
++// lockCanonicalTargetArguments. The first delimiter in provider args belongs
++// to the hosted wrapper, so identity selectors after it remain active and must
++// be locked before preparation or provider execution.
++func TestRunTargetRejectsHostedIdentitySelectorsAfterWrapperDelimiter(t *testing.T) {
++	home, project, binDir := t.TempDir(), t.TempDir(), t.TempDir()
++	recordDir := t.TempDir()
++	configPath := writeMainCanonicalConfig(t, project, mainCanonicalHostedTOML())
++	for _, path := range []string{
++		filepath.Join(project, ".agents", ".instructions"),
++		filepath.Join(project, ".agents", ".rules"),
++		filepath.Join(project, ".agents", "skills"),
++	} {
++		mustMkdir(t, path)
++	}
++	mustWrite(t, filepath.Join(project, ".agents", ".instructions", "AGENTS.md"), "# Test instructions\n")
++	for _, provider := range []string{"codex", "claude"} {
++		record := filepath.Join(recordDir, provider)
++		mustWrite(t, filepath.Join(binDir, provider), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+record+"\"\n")
++	}
++	t.Setenv("HOME", home)
++	t.Setenv("PATH", binDir)
++	t.Setenv(callerCWDEnv, project)
++	before, err := os.ReadFile(configPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	tests := []struct {
++		name       string
++		entrypoint string
++		provider   string
++		args       []string
++		wantField  string
++	}{
++		{name: "Codex model", entrypoint: "openai-infra", provider: "codex", args: []string{"exec", "--", "--model", "other"}, wantField: "provider_args.model"},
++		{name: "Codex reasoning", entrypoint: "openai-infra", provider: "codex", args: []string{"exec", "--", "--model-reasoning-effort", "low"}, wantField: "provider_args.reasoning"},
++		{name: "Codex config model", entrypoint: "openai-infra", provider: "codex", args: []string{"exec", "--", "-c", `model="other"`}, wantField: "provider_args.model"},
++		{name: "Codex config reasoning", entrypoint: "openai-infra", provider: "codex", args: []string{"exec", "--", "-c", `model_reasoning_effort="low"`}, wantField: "provider_args.reasoning"},
++		{name: "Codex profile", entrypoint: "openai-infra", provider: "codex", args: []string{"exec", "--", "--profile", "work"}, wantField: "provider_args.profile"},
++		{name: "Codex config profile", entrypoint: "openai-infra", provider: "codex", args: []string{"exec", "--", "-c", `profile="work"`}, wantField: "provider_args.profile"},
++		{name: "Claude model", entrypoint: "anthropic-infra", provider: "claude", args: []string{"--", "--model", "other"}, wantField: "provider_args.model"},
++		{name: "Claude reasoning", entrypoint: "anthropic-infra", provider: "claude", args: []string{"--", "--effort", "low"}, wantField: "provider_args.reasoning"},
++	}
++	for _, testCase := range tests {
++		t.Run(testCase.name, func(t *testing.T) {
++			record := filepath.Join(recordDir, testCase.provider)
++			_ = os.Remove(record)
++			args := append([]string{testCase.entrypoint, "--"}, testCase.args...)
++			err := runTarget(args)
++			if err == nil || !strings.Contains(err.Error(), infra.PrimarySessionErrorTargetIdentityConflict) || !strings.Contains(err.Error(), testCase.wantField) {
++				t.Fatalf("identity conflict = %v, want code and field %s", err, testCase.wantField)
++			}
++			if _, statErr := os.Stat(record); !os.IsNotExist(statErr) {
++				t.Fatalf("identity conflict reached %s provider: %v", testCase.provider, statErr)
++			}
++			after, readErr := os.ReadFile(configPath)
++			if readErr != nil || string(after) != string(before) {
++				t.Fatalf("identity conflict rewrote config: err=%v before=%q after=%q", readErr, before, after)
++			}
++		})
++	}
++}
+diff --git a/tools/agents-infra/canonical_target_pi_main_test.go b/tools/agents-infra/canonical_target_pi_main_test.go
+new file mode 100644
+index 0000000..ea484e4
+--- /dev/null
++++ b/tools/agents-infra/canonical_target_pi_main_test.go
+@@ -0,0 +1,88 @@
++//go:build !windows
++
++package main
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
++)
++
++// Production call site: runCompose -> BuildCanonicalTargetLaunchPlan ->
++// buildPiPrimarySessionLaunchPlan. Keeping the profile and target in separate
++// ancestor configs proves that effective provider/endpoint provenance cannot
++// be narrowed to the optional target assertions.
++func TestRunComposeCanonicalQwenUsesProfileDerivedEffectiveCoordinates(t *testing.T) {
++	home, root := t.TempDir(), t.TempDir()
++	project := filepath.Join(root, "nested")
++	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
++	mustMkdir(t, project)
++	profileConfig := writeMainCanonicalConfig(t, root, mainTestPiConfig("/bin/echo", 18011))
++	targetConfig := writeMainCanonicalConfig(t, project, `[agents.targets.qwen]
++vendor = "qwen"
++environment = "pi"
++model = "Model"
++reasoning = "off"
++profile = "profile"
++profile_provider = "local-provider"
++endpoint = "http://127.0.0.1:18011/v1"
++
++[agents.entrypoints]
++qwen-infra = "qwen"
++`)
++	profileBefore, err := os.ReadFile(profileConfig)
++	if err != nil {
++		t.Fatal(err)
++	}
++	targetBefore, err := os.ReadFile(targetConfig)
++	if err != nil {
++		t.Fatal(err)
++	}
++	canonicalProfileConfig, err := filepath.EvalSymlinks(profileConfig)
++	if err != nil {
++		t.Fatal(err)
++	}
++	canonicalTargetConfig, err := filepath.EvalSymlinks(targetConfig)
++	if err != nil {
++		t.Fatal(err)
++	}
++	piRoot := mainTestOfficialPiAsset(t)
++	t.Setenv("HOME", home)
++	t.Setenv("PATH", piRoot)
++
++	output := captureStdout(t, func() {
++		if err := runCompose([]string{"--mode", "primary-session", "--entrypoint", "qwen-infra", "--project", project, "--schema-version", "1", "--json", "--", "--model", "local-provider/Model:off"}); err != nil {
++			t.Fatalf("runCompose: %v", err)
++		}
++	})
++	var plan infra.PrimarySessionLaunchPlan
++	decodeSingleJSONDocument(t, output, &plan)
++	if plan.Target == nil || plan.Target.Model != "Model" || plan.Target.Source != canonicalTargetConfig {
++		t.Fatalf("target = %#v", plan.Target)
++	}
++	if plan.Resolved.Model.Value == nil || *plan.Resolved.Model.Value != "local-provider/Model" || plan.Resolved.Model.Source != canonicalProfileConfig {
++		t.Fatalf("qualified model = %#v", plan.Resolved.Model)
++	}
++	if plan.Resolved.ProfileProvider == nil || plan.Resolved.ProfileProvider.Value == nil || *plan.Resolved.ProfileProvider.Value != "local-provider" || plan.Resolved.ProfileProvider.Source != canonicalProfileConfig {
++		t.Fatalf("profile provider = %#v", plan.Resolved.ProfileProvider)
++	}
++	if plan.Resolved.Endpoint == nil || plan.Resolved.Endpoint.Value == nil || *plan.Resolved.Endpoint.Value != "http://127.0.0.1:18011/v1" || plan.Resolved.Endpoint.Source != canonicalProfileConfig {
++		t.Fatalf("endpoint = %#v", plan.Resolved.Endpoint)
++	}
++	if plan.Pi == nil || plan.Pi.Runtime == nil || plan.Pi.Runtime.Endpoint != *plan.Resolved.Endpoint.Value {
++		t.Fatalf("runtime endpoint invariant = %#v", plan.Pi)
++	}
++	for path, before := range map[string][]byte{profileConfig: profileBefore, targetConfig: targetBefore} {
++		after, err := os.ReadFile(path)
++		if err != nil || string(after) != string(before) {
++			t.Fatalf("Qwen compose rewrote %s: err=%v before=%q after=%q", path, err, before, after)
++		}
++	}
++	for _, path := range []string{plan.Pi.State.Lock, plan.Pi.State.ModelsJSON} {
++		if _, err := os.Lstat(path); !os.IsNotExist(err) {
++			t.Fatalf("Qwen compose created runtime state %s: %v", path, err)
++		}
++	}
++}
+diff --git a/tools/agents-infra/installed_binary_setup_test.go b/tools/agents-infra/installed_binary_setup_test.go
+index cca398d..0ad037c 100644
+--- a/tools/agents-infra/installed_binary_setup_test.go
++++ b/tools/agents-infra/installed_binary_setup_test.go
+@@ -378,6 +378,7 @@ func TestInstalledBinaryVerifyLocalRefusesContainedTransitiveManagedSkillCycle(t
+ 
+ func TestInstalledBinaryVerifyLocalInspectsEveryManagedSkillSurface(t *testing.T) {
+ 	binary := buildInstalledBinary(t)
++	const managedRepoSkillName = "relux-agents-infra"
+ 	home := t.TempDir()
+ 	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
+ 	configDir := filepath.Join(home, "config")
+@@ -388,23 +389,74 @@ func TestInstalledBinaryVerifyLocalInspectsEveryManagedSkillSurface(t *testing.T
+ 	}
+ 	outside := filepath.Join(t.TempDir(), "outside-runtime")
+ 	mustMkdir(t, outside)
+-	for _, surface := range []string{
+-		filepath.Join(project, ".agents", ".skills"),
+-		filepath.Join(project, ".agents", "skills"),
+-		filepath.Join(project, ".claude", "skills"),
+-		filepath.Join(project, ".codex", "skills"),
++	for _, surface := range []struct {
++		root string
++		name string
++	}{
++		{root: filepath.Join(project, ".agents", ".skills"), name: "surface-escape-probe"},
++		{root: filepath.Join(project, ".agents", "skills"), name: managedRepoSkillName},
++		{root: filepath.Join(project, ".claude", "skills"), name: managedRepoSkillName},
++		{root: filepath.Join(project, ".codex", "skills"), name: managedRepoSkillName},
+ 	} {
+-		probe := filepath.Join(surface, "surface-escape-probe")
++		probe := filepath.Join(surface.root, surface.name)
++		if err := os.Remove(probe); err != nil && !os.IsNotExist(err) {
++			t.Fatalf("remove existing managed skill link %s: %v", probe, err)
++		}
+ 		if err := os.Symlink(outside, probe); err != nil {
+ 			t.Skipf("cannot create installed skill symlink: %v", err)
+ 		}
+ 		output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
+ 		if err == nil || !strings.Contains(output, probe) || !strings.Contains(output, "escapes runtime containment") {
+-			t.Fatalf("verify local did not inspect managed surface %s: %v\n%s", surface, err, output)
++			t.Fatalf("verify local did not inspect managed surface %s: %v\n%s", surface.root, err, output)
+ 		}
+ 		if err := os.Remove(probe); err != nil {
+ 			t.Fatalf("remove surface probe %s: %v", probe, err)
+ 		}
++		if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
++			t.Fatalf("setup local did not restore managed skill surface %s: %v\n%s", surface.root, err, output)
++		}
++	}
++}
++
++func TestInstalledBinarySetupAndVerifyLocalPreserveUnmanagedProviderSkillLinks(t *testing.T) {
++	binary := buildInstalledBinary(t)
++	home := t.TempDir()
++	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
++	configDir := filepath.Join(home, "config")
++	writeInstallState(t, configDir, source)
++	project := t.TempDir()
++	externalSkill := filepath.Join(t.TempDir(), "mac-infra")
++	mustMkdir(t, externalSkill)
++	mustWrite(t, filepath.Join(externalSkill, "SKILL.md"), "external provider-owned skill\n")
++
++	for _, providerSkills := range []string{
++		filepath.Join(project, ".claude", "skills"),
++		filepath.Join(project, ".codex", "skills"),
++	} {
++		mustMkdir(t, providerSkills)
++		if err := os.Symlink(externalSkill, filepath.Join(providerSkills, "mac-infra")); err != nil {
++			t.Skipf("cannot create provider-owned skill symlink: %v", err)
++		}
++	}
++
++	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
++		t.Fatalf("setup local refused provider-owned skill links: %v\n%s", err, output)
++	}
++	if output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project); err != nil {
++		t.Fatalf("verify local refused provider-owned skill links: %v\n%s", err, output)
++	}
++	for _, providerSkills := range []string{
++		filepath.Join(project, ".claude", "skills"),
++		filepath.Join(project, ".codex", "skills"),
++	} {
++		link := filepath.Join(providerSkills, "mac-infra")
++		target, err := os.Readlink(link)
++		if err != nil {
++			t.Fatalf("Readlink(%s): %v", link, err)
++		}
++		if target != externalSkill {
++			t.Fatalf("provider-owned skill link %s changed: got %q, want %q", link, target, externalSkill)
++		}
+ 	}
+ }
+ 
+diff --git a/tools/agents-infra/internal/infra/canonical_alias_posix_test.go b/tools/agents-infra/internal/infra/canonical_alias_posix_test.go
+new file mode 100644
+index 0000000..759d37a
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/canonical_alias_posix_test.go
+@@ -0,0 +1,73 @@
++//go:build !windows
++
++package infra
++
++import (
++	"io"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++)
++
++func TestCanonicalAliasReachesSiblingTargetAndPreservesCWDArgv(t *testing.T) {
++	binDir := t.TempDir()
++	project := t.TempDir()
++	record := filepath.Join(t.TempDir(), "record")
++	layout := Layout{Mode: ModeLocal, BinDir: binDir}
++	mustWrite(t, filepath.Join(binDir, "agents-infra"), "#!/bin/sh\npwd > \""+record+"\"\nprintf '%s\\n' \"$@\" >> \""+record+"\"\n")
++	if err := installCanonicalTargetLaunchers(layout, io.Discard); err != nil {
++		t.Fatalf("installCanonicalTargetLaunchers: %v", err)
++	}
++
++	alias := filepath.Join(binDir, "openai-infra")
++	cmd := exec.Command(alias, "--print-config", "--", "a b")
++	cmd.Dir = project
++	if output, err := cmd.CombinedOutput(); err != nil {
++		t.Fatalf("alias: %v\n%s", err, output)
++	}
++	data, err := os.ReadFile(record)
++	if err != nil {
++		t.Fatal(err)
++	}
++	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
++	want := []string{project, "target", "openai-infra", "--print-config", "--", "a b"}
++	if !reflect.DeepEqual(lines, want) {
++		t.Fatalf("alias record = %#v, want %#v", lines, want)
++	}
++}
++
++func TestCanonicalAliasRefusesMissingAndNonRegularSibling(t *testing.T) {
++	for _, state := range []string{"missing", "non_regular", "non_executable"} {
++		t.Run(state, func(t *testing.T) {
++			binDir := t.TempDir()
++			layout := Layout{Mode: ModeLocal, BinDir: binDir}
++			target := filepath.Join(binDir, "agents-infra")
++			mustWrite(t, target, "#!/bin/sh\nexit 0\n")
++			if err := installCanonicalTargetLaunchers(layout, io.Discard); err != nil {
++				t.Fatal(err)
++			}
++			switch state {
++			case "missing", "non_regular":
++				if err := os.Remove(target); err != nil {
++					t.Fatal(err)
++				}
++			}
++			if state == "non_regular" {
++				if err := os.Mkdir(target, 0o755); err != nil {
++					t.Fatal(err)
++				}
++			} else if state == "non_executable" {
++				if err := os.Chmod(target, 0o644); err != nil {
++					t.Fatal(err)
++				}
++			}
++			output, err := exec.Command(filepath.Join(binDir, "qwen-infra"), "--print-config").CombinedOutput()
++			if err == nil || !strings.Contains(string(output), "missing or non-regular sibling") {
++				t.Fatalf("alias error = %v output=%s", err, output)
++			}
++		})
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/canonical_target.go b/tools/agents-infra/internal/infra/canonical_target.go
+new file mode 100644
+index 0000000..4c50842
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/canonical_target.go
+@@ -0,0 +1,636 @@
++package infra
++
++import (
++	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
++	"sort"
++	"strconv"
++	"strings"
++)
++
++const (
++	PrimarySessionErrorUnknownEntrypoint      = "unknown_entrypoint"
++	PrimarySessionErrorUnknownTarget          = "unknown_target"
++	PrimarySessionErrorInvalidTarget          = "invalid_target"
++	PrimarySessionErrorTargetIdentityConflict = "target_identity_conflict"
++)
++
++type TargetErrorContext struct {
++	Entrypoint string `json:"entrypoint,omitempty"`
++	Target     string `json:"target,omitempty"`
++	Profile    string `json:"profile,omitempty"`
++	Field      string `json:"field,omitempty"`
++	Source     string `json:"source,omitempty"`
++}
++
++// CanonicalTargetError is safe to render on both human and machine startup
++// surfaces. Context contains identities and field/source provenance only.
++type CanonicalTargetError struct {
++	Code        string
++	Context     TargetErrorContext
++	Remediation string
++	Err         error
++}
++
++func (e *CanonicalTargetError) Error() string {
++	var b strings.Builder
++	fmt.Fprintf(&b, "%s: %v", e.Code, e.Err)
++	var context []string
++	if e.Context.Entrypoint != "" {
++		context = append(context, "entrypoint="+strconv.Quote(e.Context.Entrypoint))
++	}
++	if e.Context.Target != "" {
++		context = append(context, "target="+strconv.Quote(e.Context.Target))
++	}
++	if e.Context.Profile != "" {
++		context = append(context, "profile="+strconv.Quote(e.Context.Profile))
++	}
++	if e.Context.Field != "" {
++		context = append(context, "field="+strconv.Quote(e.Context.Field))
++	}
++	if e.Context.Source != "" {
++		context = append(context, "source="+strconv.Quote(e.Context.Source))
++	}
++	if len(context) > 0 {
++		b.WriteString(" (")
++		b.WriteString(strings.Join(context, ", "))
++		b.WriteString(")")
++	}
++	if e.Remediation != "" {
++		b.WriteString(". Remediation: ")
++		b.WriteString(e.Remediation)
++	}
++	return b.String()
++}
++
++func (e *CanonicalTargetError) Unwrap() error { return e.Err }
++
++type ResolvedCanonicalTarget struct {
++	Entrypoint        ProjectEntrypoint
++	Target            ProjectTarget
++	Profile           *PiProfile
++	EffectiveProvider string
++	EffectiveEndpoint string
++}
++
++func canonicalProviderForEnvironment(environment string) string {
++	switch environment {
++	case "codex":
++		return "codex"
++	case "claude-code":
++		return "claude"
++	case "pi":
++		return "pi"
++	default:
++		return ""
++	}
++}
++
++func CanonicalProviderForEntrypoint(entrypoint string) string {
++	switch entrypoint {
++	case "openai-infra":
++		return "codex"
++	case "anthropic-infra":
++		return "claude"
++	case "qwen-infra":
++		return "pi"
++	default:
++		return ""
++	}
++}
++
++func wrapCanonicalConfigurationError(err error) error {
++	var configErr *ProjectConfigurationError
++	if !errors.As(err, &configErr) {
++		return err
++	}
++	return &CanonicalTargetError{
++		Code: PrimarySessionErrorInvalidProjectConfiguration,
++		Context: TargetErrorContext{
++			Field:  configErr.Field,
++			Source: configErr.Source,
++		},
++		Remediation: "correct the named project-config.toml field; agents-infra will not rewrite configuration automatically",
++		Err:         configErr,
++	}
++}
++
++func loadCanonicalTargetConfig(projectDir, homeDir string) (compositeProjectConfig, error) {
++	if homeDir == "" {
++		var err error
++		homeDir, err = os.UserHomeDir()
++		if err != nil {
++			return compositeProjectConfig{}, err
++		}
++	}
++	homeDir, err := filepath.Abs(homeDir)
++	if err != nil {
++		return compositeProjectConfig{}, err
++	}
++	composite, err := loadCompositeProjectConfig(
++		ancestorDirsRootFirst(projectDir),
++		filepath.Join(homeDir, ".agents", ".configs", projectConfigFileName),
++	)
++	if err != nil {
++		return compositeProjectConfig{}, wrapCanonicalConfigurationError(err)
++	}
++	if err := validateComposedCanonicalTargets(composite); err != nil {
++		return compositeProjectConfig{}, err
++	}
++	return composite, nil
++}
++
++// ValidateCanonicalProjectConfiguration is used by setup/verify before they
++// attest an installed alias surface. Legacy-only projects remain valid.
++func ValidateCanonicalProjectConfiguration(projectDir, homeDir string) error {
++	canonical, err := CanonicalProjectDir(projectDir)
++	if err != nil {
++		return err
++	}
++	_, err = loadCanonicalTargetConfig(canonical, homeDir)
++	return err
++}
++
++func validateComposedCanonicalTargets(composite compositeProjectConfig) error {
++	var targetNames []string
++	for name := range composite.Targets {
++		targetNames = append(targetNames, name)
++	}
++	sort.Strings(targetNames)
++	for _, name := range targetNames {
++		target := composite.Targets[name]
++		if target.Environment != "pi" {
++			continue
++		}
++		if err := validateResolvedPiTarget(target, composite.PiProfiles); err != nil {
++			return err
++		}
++	}
++	var entrypointNames []string
++	for entrypoint := range composite.Entrypoints {
++		entrypointNames = append(entrypointNames, entrypoint)
++	}
++	sort.Strings(entrypointNames)
++	for _, entrypoint := range entrypointNames {
++		mapping := composite.Entrypoints[entrypoint]
++		target, ok := composite.Targets[mapping.TargetName]
++		if !ok {
++			return &CanonicalTargetError{
++				Code:        PrimarySessionErrorUnknownTarget,
++				Context:     TargetErrorContext{Entrypoint: entrypoint, Target: mapping.TargetName, Field: entrypointsField + "." + entrypoint, Source: mapping.Source},
++				Remediation: "define the exact target name in [agents.targets] or correct this entrypoint mapping",
++				Err:         fmt.Errorf("entrypoint references an unknown canonical target"),
++			}
++		}
++		if target.Vendor != canonicalEntrypointVendors[entrypoint] {
++			return &CanonicalTargetError{
++				Code:        PrimarySessionErrorInvalidTarget,
++				Context:     TargetErrorContext{Entrypoint: entrypoint, Target: target.Name, Field: entrypointsField + "." + entrypoint, Source: mapping.Source},
++				Remediation: "map the entrypoint to a target with the required vendor identity",
++				Err:         fmt.Errorf("entrypoint vendor does not match its target vendor"),
++			}
++		}
++	}
++	return nil
++}
++
++func validateResolvedPiTarget(target ProjectTarget, profiles map[string]PiProfile) error {
++	profileName := ""
++	if target.Profile != nil {
++		profileName = *target.Profile
++	}
++	profile, ok := profiles[profileName]
++	if !ok {
++		return &CanonicalTargetError{
++			Code:        PrimarySessionErrorInvalidTarget,
++			Context:     TargetErrorContext{Target: target.Name, Profile: profileName, Field: targetsField + "." + target.Name + ".profile", Source: target.Source},
++			Remediation: "define the referenced complete managed Pi profile or select an existing exact profile name",
++			Err:         errors.New("canonical Qwen target references an unknown managed Pi profile"),
++		}
++	}
++	mismatch := func(field, remediation string) error {
++		return &CanonicalTargetError{
++			Code:        PrimarySessionErrorInvalidTarget,
++			Context:     TargetErrorContext{Target: target.Name, Profile: profileName, Field: targetsField + "." + target.Name + "." + field, Source: target.Source},
++			Remediation: remediation,
++			Err:         errors.New("canonical Qwen target assertion does not match the selected managed Pi profile"),
++		}
++	}
++	if profile.API != "openai-completions" {
++		return mismatch("profile", "select a managed Pi profile whose api is exactly openai-completions")
++	}
++	if target.Model != profile.Model {
++		return mismatch("model", "set target model to the selected profile model exactly")
++	}
++	if target.Reasoning != profile.Thinking {
++		return mismatch("reasoning", "set target reasoning to the selected profile thinking value exactly")
++	}
++	if target.ProfileProvider != nil && *target.ProfileProvider != profile.Provider {
++		return mismatch("profile_provider", "remove the optional assertion or set it to the selected profile provider exactly")
++	}
++	if target.Endpoint != nil && *target.Endpoint != profile.BaseURL {
++		return mismatch("endpoint", "remove the optional assertion or set it to the selected profile base_url exactly")
++	}
++	return nil
++}
++
++func ResolveCanonicalTarget(entrypoint, projectDir, homeDir string) (ResolvedCanonicalTarget, error) {
++	composite, err := loadCanonicalTargetConfig(projectDir, homeDir)
++	if err != nil {
++		return ResolvedCanonicalTarget{}, err
++	}
++	mapping, ok := composite.Entrypoints[entrypoint]
++	if !ok {
++		return ResolvedCanonicalTarget{}, &CanonicalTargetError{
++			Code:        PrimarySessionErrorUnknownEntrypoint,
++			Context:     TargetErrorContext{Entrypoint: entrypoint, Field: entrypointsField + "." + entrypoint},
++			Remediation: "add an explicit mapping for this installed alias in [agents.entrypoints]",
++			Err:         errors.New("canonical entrypoint is not configured; legacy provider policy is not a fallback"),
++		}
++	}
++	target := composite.Targets[mapping.TargetName]
++	resolved := ResolvedCanonicalTarget{Entrypoint: mapping, Target: target}
++	if target.Environment == "pi" {
++		profile := composite.PiProfiles[*target.Profile]
++		resolved.Profile = &profile
++		resolved.EffectiveProvider = profile.Provider
++		resolved.EffectiveEndpoint = profile.BaseURL
++	}
++	return resolved, nil
++}
++
++func targetIdentityConflict(resolved ResolvedCanonicalTarget, field, remediation string) error {
++	return &CanonicalTargetError{
++		Code:        PrimarySessionErrorTargetIdentityConflict,
++		Context:     TargetErrorContext{Entrypoint: resolved.Entrypoint.Name, Target: resolved.Target.Name, Field: field, Source: resolved.Target.Source},
++		Remediation: remediation,
++		Err:         errors.New("explicit provider arguments diverge from the configured canonical target identity"),
++	}
++}
++
++func BuildCanonicalTargetLaunchPlan(entrypoint, projectDir, homeDir string, userArgs []string, producer ChildLaunchCompositionProducer, lookPath func(string) (string, error)) (PrimarySessionLaunchPlan, error) {
++	canonicalProjectDir, err := CanonicalProjectDir(projectDir)
++	if err != nil {
++		return PrimarySessionLaunchPlan{}, err
++	}
++	resolved, err := ResolveCanonicalTarget(entrypoint, canonicalProjectDir, homeDir)
++	if err != nil {
++		return PrimarySessionLaunchPlan{}, err
++	}
++	lockedArgs, err := lockCanonicalTargetArguments(resolved, userArgs)
++	if err != nil {
++		var targetErr *CanonicalTargetError
++		if errors.As(err, &targetErr) {
++			return PrimarySessionLaunchPlan{}, err
++		}
++		var argErr *ProviderArgumentError
++		if errors.As(err, &argErr) {
++			return PrimarySessionLaunchPlan{}, &PrimarySessionComposeError{Code: PrimarySessionErrorInvalidProviderArguments, Err: err}
++		}
++		return PrimarySessionLaunchPlan{}, err
++	}
++	provider := canonicalProviderForEnvironment(resolved.Target.Environment)
++	plan, err := BuildPrimarySessionLaunchPlan(provider, canonicalProjectDir, homeDir, lockedArgs, producer, lookPath)
++	if err != nil {
++		return PrimarySessionLaunchPlan{}, err
++	}
++	plan.targetProviderArgs = append([]string(nil), lockedArgs...)
++	plan.Target = primarySessionTargetFromResolution(resolved)
++	if provider == "codex" || provider == "claude" {
++		plan.Resolved.Model = resolvedStringValue(resolved.Target.Model, resolved.Target.Source)
++		plan.Resolved.Reasoning = resolvedStringValue(resolved.Target.Reasoning, resolved.Target.Source)
++		plan.Resolved.Profile = PrimarySessionResolvedString{Source: map[string]string{"codex": "native", "claude": "not_applicable"}[provider]}
++		plan.Resolved.ProfileProvider = &PrimarySessionResolvedString{Source: "not_applicable"}
++		plan.Resolved.Endpoint = &PrimarySessionResolvedString{Source: "not_applicable"}
++	} else {
++		profile := *resolved.Profile
++		plan.Resolved.Profile = resolvedStringValue(*resolved.Target.Profile, resolved.Target.Source)
++		plan.Resolved.ProfileProvider = primarySessionResolvedStringPointer(profile.Provider, profile.Source)
++		plan.Resolved.Endpoint = primarySessionResolvedStringPointer(profile.BaseURL, profile.Source)
++	}
++	return plan, nil
++}
++
++func primarySessionTargetFromResolution(resolved ResolvedCanonicalTarget) *PrimarySessionTarget {
++	return &PrimarySessionTarget{
++		Entrypoint:       resolved.Entrypoint.Name,
++		EntrypointSource: resolved.Entrypoint.Source,
++		Name:             resolved.Target.Name,
++		Source:           resolved.Target.Source,
++		Vendor:           resolved.Target.Vendor,
++		Environment:      resolved.Target.Environment,
++		Model:            resolved.Target.Model,
++		Reasoning:        resolved.Target.Reasoning,
++		Profile:          cloneStringPointer(resolved.Target.Profile),
++		ProfileProvider:  cloneStringPointer(resolved.Target.ProfileProvider),
++		Endpoint:         cloneStringPointer(resolved.Target.Endpoint),
++	}
++}
++
++func primarySessionResolvedStringPointer(value, source string) *PrimarySessionResolvedString {
++	resolved := resolvedStringValue(value, source)
++	return &resolved
++}
++
++func RenderCanonicalTargetLaunchPlan(plan PrimarySessionLaunchPlan) string {
++	if plan.Target == nil {
++		return ""
++	}
++	target := plan.Target
++	optional := func(value *string) string {
++		if value == nil {
++			return "<not-configured>"
++		}
++		return *value
++	}
++	var b strings.Builder
++	fmt.Fprintf(&b, "entrypoint: %s\n", target.Entrypoint)
++	fmt.Fprintf(&b, "entrypoint_source: %s\n", target.EntrypointSource)
++	fmt.Fprintf(&b, "target: %s\n", target.Name)
++	fmt.Fprintf(&b, "target_source: %s\n", target.Source)
++	fmt.Fprintf(&b, "vendor: %s\n", target.Vendor)
++	fmt.Fprintf(&b, "environment: %s\n", target.Environment)
++	fmt.Fprintf(&b, "model: %s\n", target.Model)
++	fmt.Fprintf(&b, "reasoning: %s\n", target.Reasoning)
++	fmt.Fprintf(&b, "profile: %s\n", optional(target.Profile))
++	fmt.Fprintf(&b, "profile_provider_assertion: %s\n", optional(target.ProfileProvider))
++	fmt.Fprintf(&b, "endpoint_assertion: %s\n", optional(target.Endpoint))
++	fmt.Fprintf(&b, "effective_launch_provider: %s\n", plan.Provider)
++	resolved := func(name string, value PrimarySessionResolvedString) {
++		fmt.Fprintf(&b, "%s: %s\n", name, optional(value.Value))
++		fmt.Fprintf(&b, "%s_source: %s\n", name, value.Source)
++	}
++	resolved("effective_model", plan.Resolved.Model)
++	resolved("effective_reasoning", plan.Resolved.Reasoning)
++	resolved("effective_profile", plan.Resolved.Profile)
++	if plan.Resolved.ProfileProvider != nil {
++		resolved("effective_profile_provider", *plan.Resolved.ProfileProvider)
++	}
++	if plan.Resolved.Endpoint != nil {
++		resolved("effective_endpoint", *plan.Resolved.Endpoint)
++	}
++	b.WriteString("provider_argv:\n")
++	for _, arg := range redactCanonicalDiagnosticArgs(plan.LaunchVariants.Interactive.Argv) {
++		fmt.Fprintf(&b, "  - %s\n", strconv.Quote(arg))
++	}
++	return b.String()
++}
++
++func redactCanonicalDiagnosticArgs(args []string) []string {
++	result := append([]string(nil), args...)
++	for i := 0; i < len(result); i++ {
++		switch {
++		case result[i] == "--api-key" && i+1 < len(result):
++			i++
++			result[i] = "<redacted>"
++		case strings.HasPrefix(result[i], "--api-key="):
++			result[i] = "--api-key=<redacted>"
++		}
++	}
++	return result
++}
++
++func lockCanonicalTargetArguments(resolved ResolvedCanonicalTarget, args []string) ([]string, error) {
++	switch resolved.Target.Environment {
++	case "codex":
++		return lockCodexTargetArguments(resolved, args)
++	case "claude-code":
++		return lockClaudeTargetArguments(resolved, args)
++	case "pi":
++		return lockPiTargetArguments(resolved, args)
++	default:
++		return nil, targetIdentityConflict(resolved, targetsField+"."+resolved.Target.Name+".environment", "select an admitted target environment")
++	}
++}
++
++func requireExactTargetValue(resolved ResolvedCanonicalTarget, field, got, want string) error {
++	if got == want {
++		return nil
++	}
++	return targetIdentityConflict(resolved, field, "remove the conflicting selector or repeat the configured target value exactly")
++}
++
++func lockCodexTargetArguments(resolved ResolvedCanonicalTarget, args []string) ([]string, error) {
++	out := []string{"--model", resolved.Target.Model, "-c", fmt.Sprintf("model_reasoning_effort=%s", strconv.Quote(resolved.Target.Reasoning))}
++	wrapperDelimiterSeen := false
++	for i := 0; i < len(args); i++ {
++		arg := args[i]
++		if arg == "--" {
++			// The hosted wrapper consumes the first delimiter and continues
++			// parsing provider-native selectors after it. A second delimiter
++			// reaches Codex itself and is its operand boundary.
++			out = append(out, arg)
++			if wrapperDelimiterSeen {
++				return append(out, args[i+1:]...), nil
++			}
++			wrapperDelimiterSeen = true
++			continue
++		}
++		take := func(name string) (string, error) {
++			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
++				return "", providerArgErrorf("a value is required for the Codex argument %s", name)
++			}
++			i++
++			return args[i], nil
++		}
++		switch {
++		case arg == "--model" || arg == "-m":
++			value, err := take(arg)
++			if err != nil {
++				return nil, err
++			}
++			if err := requireExactTargetValue(resolved, "provider_args.model", value, resolved.Target.Model); err != nil {
++				return nil, err
++			}
++		case strings.HasPrefix(arg, "--model=") || strings.HasPrefix(arg, "-m="):
++			_, value, _ := strings.Cut(arg, "=")
++			if err := requireExactTargetValue(resolved, "provider_args.model", value, resolved.Target.Model); err != nil {
++				return nil, err
++			}
++		case strings.HasPrefix(arg, "-m") && len(arg) > 2:
++			if err := requireExactTargetValue(resolved, "provider_args.model", strings.TrimPrefix(arg, "-m"), resolved.Target.Model); err != nil {
++				return nil, err
++			}
++		case arg == "--model-reasoning-effort":
++			value, err := take(arg)
++			if err != nil {
++				return nil, err
++			}
++			if err := requireExactTargetValue(resolved, "provider_args.reasoning", value, resolved.Target.Reasoning); err != nil {
++				return nil, err
++			}
++		case strings.HasPrefix(arg, "--model-reasoning-effort="):
++			if err := requireExactTargetValue(resolved, "provider_args.reasoning", strings.TrimPrefix(arg, "--model-reasoning-effort="), resolved.Target.Reasoning); err != nil {
++				return nil, err
++			}
++		case arg == "--profile" || arg == "-p":
++			if _, err := take(arg); err != nil {
++				return nil, err
++			}
++			return nil, targetIdentityConflict(resolved, "provider_args.profile", "canonical hosted targets do not admit a Codex profile; remove the profile selector")
++		case strings.HasPrefix(arg, "--profile=") || strings.HasPrefix(arg, "-p=") || (strings.HasPrefix(arg, "-p") && len(arg) > 2):
++			return nil, targetIdentityConflict(resolved, "provider_args.profile", "canonical hosted targets do not admit a Codex profile; remove the profile selector")
++		case arg == "-c" || arg == "--config":
++			value, err := take(arg)
++			if err != nil {
++				return nil, err
++			}
++			keep, err := lockCodexTargetConfigOverride(resolved, value)
++			if err != nil {
++				return nil, err
++			}
++			if keep {
++				out = append(out, arg, value)
++			}
++		case strings.HasPrefix(arg, "-c=") || strings.HasPrefix(arg, "--config="):
++			_, value, _ := strings.Cut(arg, "=")
++			keep, err := lockCodexTargetConfigOverride(resolved, value)
++			if err != nil {
++				return nil, err
++			}
++			if keep {
++				out = append(out, arg)
++			}
++		default:
++			out = append(out, arg)
++		}
++	}
++	return out, nil
++}
++
++func lockCodexTargetConfigOverride(resolved ResolvedCanonicalTarget, override string) (bool, error) {
++	key, raw, ok := strings.Cut(override, "=")
++	if !ok {
++		return true, nil
++	}
++	switch strings.TrimSpace(key) {
++	case "model":
++		value := configCodexExplicitValue(raw, "canonical-target model").effective
++		return false, requireExactTargetValue(resolved, "provider_args.model", value, resolved.Target.Model)
++	case "model_reasoning_effort":
++		value := configCodexExplicitValue(raw, "canonical-target reasoning").effective
++		return false, requireExactTargetValue(resolved, "provider_args.reasoning", value, resolved.Target.Reasoning)
++	case "profile":
++		return false, targetIdentityConflict(resolved, "provider_args.profile", "canonical hosted targets do not admit a Codex profile; remove the profile config override")
++	default:
++		return true, nil
++	}
++}
++
++func lockClaudeTargetArguments(resolved ResolvedCanonicalTarget, args []string) ([]string, error) {
++	out := []string{"--model", resolved.Target.Model, "--effort", resolved.Target.Reasoning}
++	wrapperDelimiterSeen := false
++	for i := 0; i < len(args); i++ {
++		arg := args[i]
++		if arg == "--" {
++			// The hosted wrapper consumes the first delimiter. Claude sees a
++			// second delimiter, so only that one ends identity selection.
++			out = append(out, arg)
++			if wrapperDelimiterSeen {
++				return append(out, args[i+1:]...), nil
++			}
++			wrapperDelimiterSeen = true
++			continue
++		}
++		take := func(name string) (string, error) {
++			if i+1 >= len(args) {
++				return "", providerArgErrorf("the Claude argument %s requires a value", name)
++			}
++			i++
++			return args[i], nil
++		}
++		switch {
++		case arg == "--model":
++			value, err := take(arg)
++			if err != nil {
++				return nil, err
++			}
++			if err := requireExactTargetValue(resolved, "provider_args.model", value, resolved.Target.Model); err != nil {
++				return nil, err
++			}
++		case strings.HasPrefix(arg, "--model="):
++			if err := requireExactTargetValue(resolved, "provider_args.model", strings.TrimPrefix(arg, "--model="), resolved.Target.Model); err != nil {
++				return nil, err
++			}
++		case arg == "--effort":
++			value, err := take(arg)
++			if err != nil {
++				return nil, err
++			}
++			if err := requireExactTargetValue(resolved, "provider_args.reasoning", value, resolved.Target.Reasoning); err != nil {
++				return nil, err
++			}
++		case strings.HasPrefix(arg, "--effort="):
++			if err := requireExactTargetValue(resolved, "provider_args.reasoning", strings.TrimPrefix(arg, "--effort="), resolved.Target.Reasoning); err != nil {
++				return nil, err
++			}
++		default:
++			out = append(out, arg)
++		}
++	}
++	return out, nil
++}
++
++func lockPiTargetArguments(resolved ResolvedCanonicalTarget, args []string) ([]string, error) {
++	profile := *resolved.Profile
++	out := []string{"--profile", *resolved.Target.Profile, "--provider", profile.Provider, "--model", resolved.Target.Model, "--thinking", resolved.Target.Reasoning}
++	for i := 0; i < len(args); i++ {
++		arg := args[i]
++		if arg == "--" {
++			return append(out, args[i:]...), nil
++		}
++		take := func(name string) (string, error) {
++			if i+1 >= len(args) {
++				return "", piError("invalid_provider_arguments", fmt.Errorf("%s requires a value", name))
++			}
++			i++
++			return args[i], nil
++		}
++		name, equalValue, hasEqual := strings.Cut(arg, "=")
++		if hasEqual && containsString([]string{"--profile", "--provider", "--model", "--thinking", "--endpoint"}, name) {
++			if err := checkPiTargetCoordinate(resolved, profile, name, equalValue); err != nil {
++				return nil, err
++			}
++			continue
++		}
++		if containsString([]string{"--profile", "--provider", "--model", "--thinking", "--endpoint"}, arg) {
++			value, err := take(arg)
++			if err != nil {
++				return nil, err
++			}
++			if err := checkPiTargetCoordinate(resolved, profile, arg, value); err != nil {
++				return nil, err
++			}
++			continue
++		}
++		out = append(out, arg)
++	}
++	return out, nil
++}
++
++func checkPiTargetCoordinate(resolved ResolvedCanonicalTarget, profile PiProfile, selector, value string) error {
++	switch selector {
++	case "--profile":
++		return requireExactTargetValue(resolved, "provider_args.profile", value, *resolved.Target.Profile)
++	case "--provider":
++		return requireExactTargetValue(resolved, "provider_args.profile_provider", value, profile.Provider)
++	case "--thinking":
++		return requireExactTargetValue(resolved, "provider_args.reasoning", value, resolved.Target.Reasoning)
++	case "--endpoint":
++		return requireExactTargetValue(resolved, "provider_args.endpoint", value, profile.BaseURL)
++	case "--model":
++		allowed := []string{
++			resolved.Target.Model,
++			profile.Provider + "/" + resolved.Target.Model,
++			resolved.Target.Model + ":" + resolved.Target.Reasoning,
++			profile.Provider + "/" + resolved.Target.Model + ":" + resolved.Target.Reasoning,
++		}
++		if containsString(allowed, value) {
++			return nil
++		}
++		return targetIdentityConflict(resolved, "provider_args.model", "use the exact target model, optional selected profile provider, and optional matching thinking suffix")
++	}
++	return nil
++}
+diff --git a/tools/agents-infra/internal/infra/canonical_target_pi_test.go b/tools/agents-infra/internal/infra/canonical_target_pi_test.go
+new file mode 100644
+index 0000000..8d458db
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/canonical_target_pi_test.go
+@@ -0,0 +1,192 @@
++//go:build !windows
++
++package infra
++
++import (
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++)
++
++func canonicalQwenTargetTOML(assertProvider, assertEndpoint bool) string {
++	body := "\n[agents.targets.\"qwen-mlx-8bit\"]\n" +
++		"vendor=\"qwen\"\n" +
++		"environment=\"pi\"\n" +
++		"model=\"Model\"\n" +
++		"reasoning=\"off\"\n" +
++		"profile=\"profile\"\n"
++	if assertProvider {
++		body += "profile_provider=\"local-provider\"\n"
++	}
++	if assertEndpoint {
++		body += "endpoint=\"http://127.0.0.1:18011/v1\"\n"
++	}
++	return body + "[agents.entrypoints]\nqwen-infra=\"qwen-mlx-8bit\"\n"
++}
++
++func canonicalQwenProject(t *testing.T, body string) (project, home, configPath, piPath string) {
++	t.Helper()
++	project, home = t.TempDir(), t.TempDir()
++	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
++	piRoot := officialPiAsset(t)
++	piPath = filepath.Join(piRoot, "pi")
++	configPath = writeCanonicalConfig(t, project, validPiProfileTOML("profile", "/bin/echo", 18011, false)+body)
++	return
++}
++
++func TestCanonicalQwenPlanProvesProfileDerivedIdentityAndEndpointInvariants(t *testing.T) {
++	project, home, configPath, piPath := canonicalQwenProject(t, canonicalQwenTargetTOML(true, true))
++	plan, err := BuildCanonicalTargetLaunchPlan("qwen-infra", project, home,
++		[]string{"--model", "local-provider/Model:off", "--provider=local-provider", "--thinking", "off", "--endpoint", "http://127.0.0.1:18011/v1", "--api-key=secret"},
++		ChildLaunchCompositionProducer{}, func(string) (string, error) { return piPath, nil })
++	if err != nil {
++		t.Fatalf("BuildCanonicalTargetLaunchPlan: %v", err)
++	}
++	if plan.Target == nil || plan.Target.Model != "Model" || plan.Target.Profile == nil || *plan.Target.Profile != "profile" {
++		t.Fatalf("target = %#v", plan.Target)
++	}
++	if plan.Resolved.Model.Value == nil || *plan.Resolved.Model.Value != "local-provider/Model" || !samePath(plan.Resolved.Model.Source, configPath) {
++		t.Fatalf("profile-qualified model = %#v", plan.Resolved.Model)
++	}
++	if plan.Resolved.ProfileProvider == nil || plan.Resolved.ProfileProvider.Value == nil || *plan.Resolved.ProfileProvider.Value != "local-provider" || !samePath(plan.Resolved.ProfileProvider.Source, configPath) {
++		t.Fatalf("profile provider = %#v", plan.Resolved.ProfileProvider)
++	}
++	if plan.Resolved.Endpoint == nil || plan.Resolved.Endpoint.Value == nil || *plan.Resolved.Endpoint.Value != "http://127.0.0.1:18011/v1" || !samePath(plan.Resolved.Endpoint.Source, configPath) {
++		t.Fatalf("profile endpoint = %#v", plan.Resolved.Endpoint)
++	}
++	if plan.Pi == nil || plan.Pi.Runtime == nil || plan.Pi.Runtime.Endpoint != *plan.Resolved.Endpoint.Value {
++		t.Fatalf("runtime endpoint invariant = %#v", plan.Pi)
++	}
++	if plan.Resolved.Reasoning.Value == nil || *plan.Resolved.Reasoning.Value != "off" || !samePath(plan.Resolved.Reasoning.Source, configPath) {
++		t.Fatalf("profile reasoning = %#v", plan.Resolved.Reasoning)
++	}
++	wantArgs := []string{"--provider", "local-provider", "--model", "Model", "--thinking", "off", "--api-key", "<redacted>"}
++	if !reflect.DeepEqual(plan.LaunchVariants.Interactive.Argv, wantArgs) {
++		t.Fatalf("normalized Pi argv = %#v, want %#v", plan.LaunchVariants.Interactive.Argv, wantArgs)
++	}
++	rendered := RenderCanonicalTargetLaunchPlan(plan)
++	for _, want := range []string{"effective_model: local-provider/Model", "effective_profile_provider: local-provider", "effective_endpoint: http://127.0.0.1:18011/v1", `  - "--api-key"`, `  - "<redacted>"`} {
++		if !strings.Contains(rendered, want) {
++			t.Fatalf("rendered plan missing %q:\n%s", want, rendered)
++		}
++	}
++	if strings.Contains(rendered, "secret") {
++		t.Fatalf("rendered plan leaked API key:\n%s", rendered)
++	}
++}
++
++func TestCanonicalQwenAcceptsOperatorProviderWithoutLiteralLocalQwen(t *testing.T) {
++	project, home, _, _ := canonicalQwenProject(t, canonicalQwenTargetTOML(false, false))
++	resolved, err := ResolveCanonicalTarget("qwen-infra", project, home)
++	if err != nil {
++		t.Fatalf("operator-defined provider without assertion: %v", err)
++	}
++	if resolved.EffectiveProvider != "local-provider" || resolved.Target.ProfileProvider != nil {
++		t.Fatalf("provider resolution = %#v", resolved)
++	}
++}
++
++func TestCanonicalQwenProfileAssertionsFailClosed(t *testing.T) {
++	baseProfile := validPiProfileTOML("profile", "/bin/echo", 18011, false)
++	baseTarget := canonicalQwenTargetTOML(true, true)
++	tests := []struct {
++		name      string
++		body      string
++		wantCode  string
++		wantField string
++	}{
++		{name: "non openai api", body: strings.Replace(baseProfile, `api = "openai-completions"`, `api = "anthropic-messages"`, 1) + baseTarget, wantCode: PrimarySessionErrorInvalidProjectConfiguration, wantField: "agents.pi.profiles.profile.api"},
++		{name: "model mismatch", body: baseProfile + strings.Replace(baseTarget, `model="Model"`, `model="Other"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.model"},
++		{name: "reasoning mismatch", body: baseProfile + strings.Replace(baseTarget, `reasoning="off"`, `reasoning="high"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.reasoning"},
++		{name: "provider assertion mismatch", body: baseProfile + strings.Replace(baseTarget, `profile_provider="local-provider"`, `profile_provider="other"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.profile_provider"},
++		{name: "endpoint assertion mismatch", body: baseProfile + strings.Replace(baseTarget, `endpoint="http://127.0.0.1:18011/v1"`, `endpoint="http://127.0.0.1:18012/v1"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.endpoint"},
++		{name: "unknown profile", body: baseProfile + strings.Replace(baseTarget, `profile="profile"`, `profile="missing"`, 1), wantCode: PrimarySessionErrorInvalidTarget, wantField: "agents.targets.qwen-mlx-8bit.profile"},
++	}
++	for _, testCase := range tests {
++		t.Run(testCase.name, func(t *testing.T) {
++			project, home := t.TempDir(), t.TempDir()
++			writeCanonicalConfig(t, project, testCase.body)
++			_, err := ResolveCanonicalTarget("qwen-infra", project, home)
++			if canonicalErrorCode(t, err) != testCase.wantCode || !strings.Contains(err.Error(), testCase.wantField) {
++				t.Fatalf("error = %v, want %s and %s", err, testCase.wantCode, testCase.wantField)
++			}
++		})
++	}
++}
++
++func TestCanonicalQwenCompositeModelAndCoordinatesAreIdentityLocked(t *testing.T) {
++	project, home, _, piPath := canonicalQwenProject(t, canonicalQwenTargetTOML(false, false))
++	exact := [][]string{
++		{"--model", "Model"},
++		{"--model", "local-provider/Model"},
++		{"--model", "Model:off"},
++		{"--model", "local-provider/Model:off"},
++		{"--profile=profile", "--provider", "local-provider", "--thinking=off"},
++	}
++	for _, args := range exact {
++		if _, err := BuildCanonicalTargetLaunchPlan("qwen-infra", project, home, args, ChildLaunchCompositionProducer{}, func(string) (string, error) { return piPath, nil }); err != nil {
++			t.Fatalf("exact selector %v: %v", args, err)
++		}
++	}
++	conflicts := [][]string{
++		{"--model", "Model:high"},
++		{"--model", "local-provider/Model:high"},
++		{"--model", "other/Model:off"},
++		{"--provider", "other"},
++		{"--thinking", "high"},
++		{"--profile", "other"},
++		{"--endpoint", "http://127.0.0.1:18012/v1"},
++	}
++	for _, args := range conflicts {
++		_, err := BuildCanonicalTargetLaunchPlan("qwen-infra", project, home, args, ChildLaunchCompositionProducer{}, func(string) (string, error) { return piPath, nil })
++		if canonicalErrorCode(t, err) != PrimarySessionErrorTargetIdentityConflict {
++			t.Fatalf("conflicting selector %v error = %v", args, err)
++		}
++	}
++}
++
++func TestCanonicalQwenDelimiterRemainsMessageOperandBoundary(t *testing.T) {
++	project, home, _, piPath := canonicalQwenProject(t, canonicalQwenTargetTOML(false, false))
++	_, err := BuildCanonicalTargetLaunchPlan("qwen-infra", project, home,
++		[]string{"--", "--model", "other"},
++		ChildLaunchCompositionProducer{}, func(string) (string, error) { return piPath, nil })
++	if err == nil || !strings.Contains(err.Error(), `unsafe Pi message operand "--model"`) {
++		t.Fatalf("Pi delimiter stopped being a message operand boundary: %v", err)
++	}
++}
++
++func TestCanonicalQwenDeclarationsDoNotChangeDirectPiPrecedence(t *testing.T) {
++	project, home, _, piPath := canonicalQwenProject(t, canonicalQwenTargetTOML(false, false))
++	plan, err := BuildPrimarySessionLaunchPlan("pi", project, home, []string{"--profile=profile"}, ChildLaunchCompositionProducer{}, func(string) (string, error) { return piPath, nil })
++	if err != nil {
++		t.Fatalf("direct Pi: %v", err)
++	}
++	if plan.Resolved.Profile.Value == nil || *plan.Resolved.Profile.Value != "profile" || plan.Resolved.Profile.Source != "cli" || plan.Target != nil || plan.Resolved.ProfileProvider != nil || plan.Resolved.Endpoint != nil {
++		t.Fatalf("direct Pi precedence changed: %#v", plan)
++	}
++}
++
++func TestDoctorReportsCanonicalQwenTargetAndProfileProvenance(t *testing.T) {
++	home, root := t.TempDir(), t.TempDir()
++	project := filepath.Join(root, "nested")
++	mustMkdir(t, project)
++	profileConfig := writeCanonicalConfig(t, root, validPiProfileTOML("profile", "/bin/echo", 18011, false))
++	targetConfig := writeCanonicalConfig(t, project, canonicalQwenTargetTOML(false, false))
++	t.Setenv("HOME", home)
++	layout, err := LocalLayout("", project)
++	if err != nil {
++		t.Fatalf("LocalLayout: %v", err)
++	}
++	report, err := Doctor(layout)
++	if err != nil {
++		t.Fatalf("Doctor: %v", err)
++	}
++	if len(report.CanonicalTargets) != 1 {
++		t.Fatalf("canonical targets = %#v", report.CanonicalTargets)
++	}
++	target := report.CanonicalTargets[0]
++	if target.Entrypoint != "qwen-infra" || !samePath(target.TargetSource, targetConfig) || !samePath(target.ProfileSource, profileConfig) || target.ProfileProvider != "local-provider" || target.Endpoint != "http://127.0.0.1:18011/v1" {
++		t.Fatalf("doctor canonical target = %#v", target)
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/canonical_target_test.go b/tools/agents-infra/internal/infra/canonical_target_test.go
+new file mode 100644
+index 0000000..7b48bc7
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/canonical_target_test.go
+@@ -0,0 +1,323 @@
++package infra
++
++import (
++	"errors"
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++)
++
++func canonicalHostedTargetsTOML() string {
++	return "[agents.targets.\"openai-sol-high\"]\n" +
++		"vendor = \"openai\"\n" +
++		"environment = \"codex\"\n" +
++		"model = \"gpt-5.6-sol\"\n" +
++		"reasoning = \"high\"\n\n" +
++		"[agents.targets.\"anthropic-opus-high\"]\n" +
++		"vendor = \"anthropic\"\n" +
++		"environment = \"claude-code\"\n" +
++		"model = \"claude-opus-5\"\n" +
++		"reasoning = \"high\"\n\n" +
++		"[agents.entrypoints]\n" +
++		"openai-infra = \"openai-sol-high\"\n" +
++		"anthropic-infra = \"anthropic-opus-high\"\n"
++}
++
++func writeCanonicalConfig(t *testing.T, project, body string) string {
++	t.Helper()
++	path := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
++	mustMkdir(t, filepath.Dir(path))
++	mustWrite(t, path, body)
++	return path
++}
++
++func canonicalErrorCode(t *testing.T, err error) string {
++	t.Helper()
++	var targetErr *CanonicalTargetError
++	if !errors.As(err, &targetErr) {
++		t.Fatalf("error = %#v, want CanonicalTargetError", err)
++	}
++	return targetErr.Code
++}
++
++func TestCanonicalTargetsComposeAtomicallyRootToCWD(t *testing.T) {
++	home := t.TempDir()
++	root := t.TempDir()
++	parent := filepath.Join(root, "parent")
++	child := filepath.Join(parent, "child")
++	mustMkdir(t, child)
++	parentPath := writeCanonicalConfig(t, parent, "[agents.targets.shared]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"parent-model\"\nreasoning=\"parent-reasoning\"\n[agents.entrypoints]\nopenai-infra=\"shared\"\n")
++	childPath := writeCanonicalConfig(t, child, "[agents.targets.shared]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"child-model\"\nreasoning=\"child-reasoning\"\n")
++
++	resolved, err := ResolveCanonicalTarget("openai-infra", child, home)
++	if err != nil {
++		t.Fatalf("ResolveCanonicalTarget: %v", err)
++	}
++	if resolved.Target.Model != "child-model" || resolved.Target.Reasoning != "child-reasoning" || resolved.Target.Source != childPath {
++		t.Fatalf("atomic target = %#v", resolved.Target)
++	}
++	if resolved.Entrypoint.Source != parentPath {
++		t.Fatalf("entrypoint source = %q, want %q", resolved.Entrypoint.Source, parentPath)
++	}
++
++	mustWrite(t, childPath, "[agents.targets.shared]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"child-model\"\n")
++	_, err = ResolveCanonicalTarget("openai-infra", child, home)
++	if err == nil || !strings.Contains(err.Error(), "agents.targets.shared.reasoning") {
++		t.Fatalf("nearer partial target merged with ancestor: %v", err)
++	}
++}
++
++func TestCanonicalTargetParserRejectsEveryCrossVendorEnvironmentPair(t *testing.T) {
++	admitted := map[string]bool{"openai/codex": true, "anthropic/claude-code": true, "qwen/pi": true}
++	for _, vendor := range []string{"openai", "anthropic", "qwen"} {
++		for _, environment := range []string{"codex", "claude-code", "pi"} {
++			pair := vendor + "/" + environment
++			if admitted[pair] {
++				continue
++			}
++			t.Run(strings.ReplaceAll(pair, "/", "_"), func(t *testing.T) {
++				body := "[agents.targets.bad]\nvendor=\"" + vendor + "\"\nenvironment=\"" + environment + "\"\nmodel=\"Model\"\nreasoning=\"high\"\nprofile=\"profile\"\n"
++				_, err := parseProjectConfig([]byte(body), "/project/.agents/.configs/project-config.toml")
++				if err == nil || !strings.Contains(err.Error(), "agents.targets.bad.environment") || !strings.Contains(err.Error(), "not admitted") {
++					t.Fatalf("cross-pair %s error = %v", pair, err)
++				}
++			})
++		}
++	}
++}
++
++func TestCanonicalTargetParserFieldAndReasoningDomainsFailClosed(t *testing.T) {
++	tests := []struct {
++		name      string
++		body      string
++		wantField string
++	}{
++		{name: "targets wrong type", body: "agents.targets = \"bad\"", wantField: "agents.targets"},
++		{name: "target wrong type", body: "[agents.targets]\nbad = \"bad\"", wantField: "agents.targets.bad"},
++		{name: "missing vendor", body: "[agents.targets.bad]\nenvironment=\"codex\"\nmodel=\"m\"\nreasoning=\"high\"", wantField: "agents.targets.bad.vendor"},
++		{name: "missing environment", body: "[agents.targets.bad]\nvendor=\"openai\"\nmodel=\"m\"\nreasoning=\"high\"", wantField: "agents.targets.bad.environment"},
++		{name: "missing model", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"codex\"\nreasoning=\"high\"", wantField: "agents.targets.bad.model"},
++		{name: "missing reasoning", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"m\"", wantField: "agents.targets.bad.reasoning"},
++		{name: "empty vendor", body: "[agents.targets.bad]\nvendor=\"\"\nenvironment=\"codex\"\nmodel=\"m\"\nreasoning=\"high\"", wantField: "agents.targets.bad.vendor"},
++		{name: "empty environment", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"\"\nmodel=\"m\"\nreasoning=\"high\"", wantField: "agents.targets.bad.environment"},
++		{name: "empty model", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"\"\nreasoning=\"high\"", wantField: "agents.targets.bad.model"},
++		{name: "wrong vendor type", body: "[agents.targets.bad]\nvendor=7\nenvironment=\"codex\"\nmodel=\"m\"\nreasoning=\"high\"", wantField: "agents.targets.bad.vendor"},
++		{name: "wrong environment type", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=7\nmodel=\"m\"\nreasoning=\"high\"", wantField: "agents.targets.bad.environment"},
++		{name: "wrong model type", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=7\nreasoning=\"high\"", wantField: "agents.targets.bad.model"},
++		{name: "wrong reasoning type", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"m\"\nreasoning=7", wantField: "agents.targets.bad.reasoning"},
++		{name: "wrong profile type", body: "[agents.targets.bad]\nvendor=\"qwen\"\nenvironment=\"pi\"\nmodel=\"m\"\nreasoning=\"off\"\nprofile=7", wantField: "agents.targets.bad.profile"},
++		{name: "wrong provider assertion type", body: "[agents.targets.bad]\nvendor=\"qwen\"\nenvironment=\"pi\"\nmodel=\"m\"\nreasoning=\"off\"\nprofile=\"p\"\nprofile_provider=7", wantField: "agents.targets.bad.profile_provider"},
++		{name: "wrong endpoint type", body: "[agents.targets.bad]\nvendor=\"qwen\"\nenvironment=\"pi\"\nmodel=\"m\"\nreasoning=\"off\"\nprofile=\"p\"\nendpoint=7", wantField: "agents.targets.bad.endpoint"},
++		{name: "whitespace model", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"  \"\nreasoning=\"high\"", wantField: "agents.targets.bad.model"},
++		{name: "empty codex reasoning", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"m\"\nreasoning=\"\"", wantField: "agents.targets.bad.reasoning"},
++		{name: "unknown vendor", body: "[agents.targets.bad]\nvendor=\"other\"\nenvironment=\"codex\"\nmodel=\"m\"\nreasoning=\"high\"", wantField: "agents.targets.bad.vendor"},
++		{name: "unknown environment", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"other\"\nmodel=\"m\"\nreasoning=\"high\"", wantField: "agents.targets.bad.environment"},
++		{name: "unknown field", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"m\"\nreasoning=\"high\"\nextra=true", wantField: "agents.targets.bad.extra"},
++		{name: "claude reasoning", body: "[agents.targets.bad]\nvendor=\"anthropic\"\nenvironment=\"claude-code\"\nmodel=\"m\"\nreasoning=\"banana\"", wantField: "agents.targets.bad.reasoning"},
++		{name: "pi reasoning", body: "[agents.targets.bad]\nvendor=\"qwen\"\nenvironment=\"pi\"\nmodel=\"m\"\nreasoning=\"banana\"\nprofile=\"p\"", wantField: "agents.targets.bad.reasoning"},
++		{name: "hosted profile", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"m\"\nreasoning=\"future-effort\"\nprofile=\"p\"", wantField: "agents.targets.bad.profile"},
++		{name: "hosted profile provider", body: "[agents.targets.bad]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"m\"\nreasoning=\"future-effort\"\nprofile_provider=\"p\"", wantField: "agents.targets.bad.profile_provider"},
++		{name: "hosted endpoint", body: "[agents.targets.bad]\nvendor=\"anthropic\"\nenvironment=\"claude-code\"\nmodel=\"m\"\nreasoning=\"high\"\nendpoint=\"https://example.test/v1\"", wantField: "agents.targets.bad.endpoint"},
++		{name: "pi missing profile", body: "[agents.targets.bad]\nvendor=\"qwen\"\nenvironment=\"pi\"\nmodel=\"m\"\nreasoning=\"off\"", wantField: "agents.targets.bad.profile"},
++		{name: "pi relative endpoint", body: "[agents.targets.bad]\nvendor=\"qwen\"\nenvironment=\"pi\"\nmodel=\"m\"\nreasoning=\"off\"\nprofile=\"p\"\nendpoint=\"/v1\"", wantField: "agents.targets.bad.endpoint"},
++		{name: "entrypoints wrong type", body: "agents.entrypoints = []", wantField: "agents.entrypoints"},
++		{name: "unknown entrypoint key", body: "[agents.entrypoints]\nother=\"target\"", wantField: "agents.entrypoints.other"},
++		{name: "entrypoint wrong value type", body: "[agents.entrypoints]\nopenai-infra=7", wantField: "agents.entrypoints.openai-infra"},
++		{name: "entrypoint empty", body: "[agents.entrypoints]\nopenai-infra=\"\"", wantField: "agents.entrypoints.openai-infra"},
++	}
++	for _, testCase := range tests {
++		t.Run(testCase.name, func(t *testing.T) {
++			_, err := parseProjectConfig([]byte(testCase.body), "/project/.agents/.configs/project-config.toml")
++			if err == nil || !strings.Contains(err.Error(), testCase.wantField) {
++				t.Fatalf("error = %v, want field %s", err, testCase.wantField)
++			}
++		})
++	}
++
++	if _, err := parseProjectConfig([]byte("[agents.targets.ok]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"m\"\nreasoning=\"future-provider-token\""), "/project/config.toml"); err != nil {
++		t.Fatalf("non-empty future Codex reasoning was locally enumerated: %v", err)
++	}
++}
++
++func TestCanonicalEntrypointResolutionNeverInfersOrFallsBack(t *testing.T) {
++	home := t.TempDir()
++	t.Run("missing mapping with multiple candidates", func(t *testing.T) {
++		project := t.TempDir()
++		writeCanonicalConfig(t, project, "[agents.targets.one]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"one\"\nreasoning=\"high\"\n[agents.targets.two]\nvendor=\"openai\"\nenvironment=\"codex\"\nmodel=\"two\"\nreasoning=\"high\"\n[agents.codex.primary_session]\nmodel=\"legacy\"\nreasoning_effort=\"high\"\n")
++		_, err := ResolveCanonicalTarget("openai-infra", project, home)
++		if canonicalErrorCode(t, err) != PrimarySessionErrorUnknownEntrypoint {
++			t.Fatalf("error = %v", err)
++		}
++	})
++	t.Run("unknown target", func(t *testing.T) {
++		project := t.TempDir()
++		writeCanonicalConfig(t, project, "[agents.entrypoints]\nopenai-infra=\"missing\"")
++		_, err := ResolveCanonicalTarget("openai-infra", project, home)
++		if canonicalErrorCode(t, err) != PrimarySessionErrorUnknownTarget || !strings.Contains(err.Error(), "Remediation:") {
++			t.Fatalf("error = %v", err)
++		}
++	})
++	t.Run("alias vendor mismatch", func(t *testing.T) {
++		project := t.TempDir()
++		writeCanonicalConfig(t, project, "[agents.targets.wrong]\nvendor=\"anthropic\"\nenvironment=\"claude-code\"\nmodel=\"opus\"\nreasoning=\"high\"\n[agents.entrypoints]\nopenai-infra=\"wrong\"")
++		_, err := ResolveCanonicalTarget("openai-infra", project, home)
++		if canonicalErrorCode(t, err) != PrimarySessionErrorInvalidTarget {
++			t.Fatalf("error = %v", err)
++		}
++	})
++}
++
++func TestCanonicalHostedPlanLocksIdentityAndKeepsLegacyPolicyUnrelated(t *testing.T) {
++	home := t.TempDir()
++	project := t.TempDir()
++	configPath := writeCanonicalConfig(t, project, canonicalHostedTargetsTOML()+"\n[agents.codex.primary_session]\nmodel=\"legacy-model\"\nreasoning_effort=\"legacy-reasoning\"\nyolo_mode=true\n")
++	plan, err := BuildCanonicalTargetLaunchPlan("openai-infra", project, home,
++		[]string{"--model", "gpt-5.6-sol", "--model-reasoning-effort=high", "-c", `model="gpt-5.6-sol"`, "-c", `model_reasoning_effort="high"`, "exec", "inspect"},
++		ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++	if err != nil {
++		t.Fatalf("BuildCanonicalTargetLaunchPlan: %v", err)
++	}
++	wantPrefix := []string{codexDangerouslyBypassApprovalsAndSandbox, "--model", "gpt-5.6-sol", "-c", `model_reasoning_effort="high"`}
++	if !reflect.DeepEqual(plan.LaunchVariants.Interactive.Argv[:len(wantPrefix)], wantPrefix) {
++		t.Fatalf("canonical argv prefix = %#v, want %#v", plan.LaunchVariants.Interactive.Argv, wantPrefix)
++	}
++	canonicalConfigPath, err := filepath.EvalSymlinks(configPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if plan.Target == nil || plan.Target.Source != canonicalConfigPath || plan.Provider != "codex" {
++		t.Fatalf("target plan = %#v", plan)
++	}
++	if plan.Resolved.Model.Value == nil || *plan.Resolved.Model.Value != "gpt-5.6-sol" || plan.Resolved.Model.Source != canonicalConfigPath {
++		t.Fatalf("resolved model = %#v", plan.Resolved.Model)
++	}
++	if plan.Resolved.Reasoning.Value == nil || *plan.Resolved.Reasoning.Value != "high" || plan.Resolved.Reasoning.Source != canonicalConfigPath {
++		t.Fatalf("resolved reasoning = %#v", plan.Resolved.Reasoning)
++	}
++	if !plan.Resolved.Yolo.Value || plan.Resolved.Yolo.Source != canonicalConfigPath {
++		t.Fatalf("unrelated legacy yolo policy was lost: %#v", plan.Resolved.Yolo)
++	}
++	if plan.Resolved.Profile.Source != "native" || plan.Resolved.Profile.Value != nil {
++		t.Fatalf("canonical Codex profile = %#v", plan.Resolved.Profile)
++	}
++	if plan.Resolved.ProfileProvider == nil || plan.Resolved.ProfileProvider.Source != "not_applicable" || plan.Resolved.Endpoint == nil || plan.Resolved.Endpoint.Source != "not_applicable" {
++		t.Fatalf("hosted target effective coordinates = %#v %#v", plan.Resolved.ProfileProvider, plan.Resolved.Endpoint)
++	}
++}
++
++func TestCanonicalCodexSelectorsAcceptExactAndRefuseEveryDivergentForm(t *testing.T) {
++	home := t.TempDir()
++	project := t.TempDir()
++	writeCanonicalConfig(t, project, canonicalHostedTargetsTOML())
++	if _, err := BuildCanonicalTargetLaunchPlan("openai-infra", project, home,
++		[]string{"exec", "--", "--model", "gpt-5.6-sol", "--model-reasoning-effort", "high"},
++		ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t)); err != nil {
++		t.Fatalf("exact Codex repeats after wrapper delimiter: %v", err)
++	}
++	if _, err := BuildCanonicalTargetLaunchPlan("openai-infra", project, home,
++		[]string{"exec", "--", "--", "--model", "operand-not-a-selector"},
++		ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t)); err != nil {
++		t.Fatalf("Codex provider operand boundary was over-locked: %v", err)
++	}
++	tests := []struct {
++		name string
++		args []string
++	}{
++		{name: "model flag", args: []string{"--model", "other"}},
++		{name: "reasoning flag", args: []string{"--model-reasoning-effort", "low"}},
++		{name: "config model", args: []string{"-c", `model="other"`}},
++		{name: "config reasoning", args: []string{"-c", `model_reasoning_effort="low"`}},
++		{name: "profile flag", args: []string{"--profile", "work"}},
++		{name: "profile config", args: []string{"-c", `profile="work"`}},
++	}
++	for _, testCase := range tests {
++		t.Run(testCase.name, func(t *testing.T) {
++			_, err := BuildCanonicalTargetLaunchPlan("openai-infra", project, home, testCase.args, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++			if canonicalErrorCode(t, err) != PrimarySessionErrorTargetIdentityConflict {
++				t.Fatalf("error = %v", err)
++			}
++		})
++	}
++}
++
++func TestCanonicalClaudeSelectorsLockStrictReasoningWhileLegacyFallbackRemains(t *testing.T) {
++	home := t.TempDir()
++	project := t.TempDir()
++	writeCanonicalConfig(t, project, canonicalHostedTargetsTOML())
++	if _, err := BuildCanonicalTargetLaunchPlan("anthropic-infra", project, home, []string{"--model=claude-opus-5", "--effort", "high"}, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t)); err != nil {
++		t.Fatalf("exact Claude repeats: %v", err)
++	}
++	if _, err := BuildCanonicalTargetLaunchPlan("anthropic-infra", project, home, []string{"--", "--model", "claude-opus-5", "--effort", "high"}, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t)); err != nil {
++		t.Fatalf("exact Claude repeats after wrapper delimiter: %v", err)
++	}
++	if _, err := BuildCanonicalTargetLaunchPlan("anthropic-infra", project, home, []string{"--", "--", "--model", "operand-not-a-selector"}, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t)); err != nil {
++		t.Fatalf("Claude provider operand boundary was over-locked: %v", err)
++	}
++	_, err := BuildCanonicalTargetLaunchPlan("anthropic-infra", project, home, []string{"--effort", "banana"}, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++	if canonicalErrorCode(t, err) != PrimarySessionErrorTargetIdentityConflict {
++		t.Fatalf("strict alias effort error = %v", err)
++	}
++	legacy, err := BuildPrimarySessionLaunchPlan("claude", project, home, []string{"--effort", "banana"}, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++	if err != nil || legacy.Resolved.Reasoning.Source != "native" || legacy.Resolved.Reasoning.Value != nil {
++		t.Fatalf("legacy Claude fallback changed: plan=%#v err=%v", legacy.Resolved.Reasoning, err)
++	}
++}
++
++func TestCanonicalUnreadableConfigHasSourceFieldRemediationAndNoRewrite(t *testing.T) {
++	home := t.TempDir()
++	project := t.TempDir()
++	configPath := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
++	mustMkdir(t, configPath)
++	_, err := ResolveCanonicalTarget("openai-infra", project, home)
++	if canonicalErrorCode(t, err) != PrimarySessionErrorInvalidProjectConfiguration {
++		t.Fatalf("error = %v", err)
++	}
++	var targetErr *CanonicalTargetError
++	errors.As(err, &targetErr)
++	if targetErr.Context.Source != configPath || targetErr.Context.Field != projectConfigParseField || targetErr.Remediation == "" {
++		t.Fatalf("actionable context = %#v", targetErr)
++	}
++	info, statErr := os.Stat(configPath)
++	if statErr != nil || !info.IsDir() {
++		t.Fatalf("read failure rewrote config path: %v %#v", statErr, info)
++	}
++}
++
++func TestLegacyPrimarySessionPlanOmitsAliasOnlyJSONFields(t *testing.T) {
++	plan, err := BuildPrimarySessionLaunchPlan("codex", t.TempDir(), t.TempDir(), nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if plan.Target != nil || plan.Resolved.ProfileProvider != nil || plan.Resolved.Endpoint != nil {
++		t.Fatalf("legacy plan gained alias-only fields: %#v", plan)
++	}
++}
++
++func TestCanonicalDeclarationsDoNotChangeDirectCodexOrClaudePrecedence(t *testing.T) {
++	project, home := t.TempDir(), t.TempDir()
++	writeCanonicalConfig(t, project, canonicalHostedTargetsTOML()+`
++[agents.codex.primary_session]
++model = "legacy-codex"
++reasoning_effort = "legacy-reasoning"
++[agents.claude.primary_session]
++model = "legacy-claude"
++`)
++
++	codex, err := BuildPrimarySessionLaunchPlan("codex", project, home, []string{"--model", "explicit-codex", "--model-reasoning-effort", "explicit-reasoning"}, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++	if err != nil {
++		t.Fatalf("direct Codex: %v", err)
++	}
++	if codex.Resolved.Model.Value == nil || *codex.Resolved.Model.Value != "explicit-codex" || codex.Resolved.Model.Source != "cli:--model" || codex.Target != nil || codex.Resolved.ProfileProvider != nil || codex.Resolved.Endpoint != nil {
++		t.Fatalf("direct Codex precedence changed: %#v", codex)
++	}
++
++	claude, err := BuildPrimarySessionLaunchPlan("claude", project, home, []string{"--model", "explicit-claude", "--effort", "xhigh"}, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++	if err != nil {
++		t.Fatalf("direct Claude: %v", err)
++	}
++	if claude.Resolved.Model.Value == nil || *claude.Resolved.Model.Value != "explicit-claude" || claude.Resolved.Model.Source != "cli:--model" || claude.Resolved.Reasoning.Value == nil || *claude.Resolved.Reasoning.Value != "xhigh" || claude.Target != nil || claude.Resolved.ProfileProvider != nil || claude.Resolved.Endpoint != nil {
++		t.Fatalf("direct Claude precedence changed: %#v", claude)
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/infra.go b/tools/agents-infra/internal/infra/infra.go
+index e587c57..cf2849e 100644
+--- a/tools/agents-infra/internal/infra/infra.go
++++ b/tools/agents-infra/internal/infra/infra.go
+@@ -66,6 +66,22 @@ type Report struct {
+ 	ClaudePrimarySession     ClaudePrimarySessionPolicy
+ 	HelpersLinked            bool
+ 	InfraSkillLink           bool
++	CanonicalTargets         []DoctorCanonicalTarget
++}
++
++type DoctorCanonicalTarget struct {
++	Entrypoint       string
++	EntrypointSource string
++	Name             string
++	TargetSource     string
++	Vendor           string
++	Environment      string
++	Model            string
++	Reasoning        string
++	Profile          string
++	ProfileSource    string
++	ProfileProvider  string
++	Endpoint         string
+ }
+ 
+ const generatedInstructionsMarker = "<!-- Generated by agents-infra; do not edit directly. -->"
+@@ -119,6 +135,11 @@ func Setup(opts Options) error {
+ 	if _, err := normalizeCodexConfigMode(opts.CodexConfigMode); err != nil {
+ 		return err
+ 	}
++	if opts.Layout.Mode == ModeLocal {
++		if err := ValidateCanonicalProjectConfiguration(opts.Layout.RootDir, ""); err != nil {
++			return err
++		}
++	}
+ 	preparedProjectConfig, err := preparePrimarySessionSetup(
+ 		opts.Layout,
+ 		opts.PrimarySessionSetup,
+@@ -212,7 +233,7 @@ func Doctor(layout Layout) (Report, error) {
+ 	report.CodexConfigLinked = isLinkTo(codexConfigPath, filepath.Join(layout.AgentsDir, ".configs", "codex-config.toml"))
+ 	report.CodexConfigGenerated = isGeneratedCodexConfigFile(codexConfigPath)
+ 	report.CodexConfigEffective = "global"
+-	report.HelpersLinked = isGeneratedAgentsAttachmentsLauncher(filepath.Join(layout.BinDir, agentsAttachmentsWrapperName(runtime.GOOS))) && len(piInfraLauncherFailures(layout)) == 0
++	report.HelpersLinked = isGeneratedAgentsAttachmentsLauncher(filepath.Join(layout.BinDir, agentsAttachmentsWrapperName(runtime.GOOS))) && len(piInfraLauncherFailures(layout)) == 0 && len(canonicalTargetLauncherFailures(layout)) == 0
+ 	report.InfraSkillLink = isLinkTo(
+ 		filepath.Join(layout.AgentsDir, "skills", repoSkillName),
+ 		filepath.Join(layout.AgentsDir, ".skills", repoSkillName),
+@@ -245,9 +266,30 @@ func Doctor(layout Layout) (Report, error) {
+ 			report.ClaudePrimaryConfigValid = false
+ 			return report, err
+ 		}
++		if err := validateComposedCanonicalTargets(composite); err != nil {
++			report.CodexPrimaryConfigValid = false
++			report.ClaudePrimaryConfigValid = false
++			return report, err
++		}
+ 		report.CodexMCPEnabled = composite.EnabledOrder
+ 		report.CodexPrimarySession = composite.PrimarySession
+ 		report.ClaudePrimarySession = composite.ClaudePrimarySession
++		for _, entrypoint := range canonicalTargetLauncherNames {
++			mapping, ok := composite.Entrypoints[entrypoint]
++			if !ok {
++				continue
++			}
++			target := composite.Targets[mapping.TargetName]
++			item := DoctorCanonicalTarget{Entrypoint: entrypoint, EntrypointSource: mapping.Source, Name: target.Name, TargetSource: target.Source, Vendor: target.Vendor, Environment: target.Environment, Model: target.Model, Reasoning: target.Reasoning}
++			if target.Profile != nil {
++				item.Profile = *target.Profile
++				profile := composite.PiProfiles[*target.Profile]
++				item.ProfileSource = profile.Source
++				item.ProfileProvider = profile.Provider
++				item.Endpoint = profile.BaseURL
++			}
++			report.CanonicalTargets = append(report.CanonicalTargets, item)
++		}
+ 	}
+ 	return report, nil
+ }
+@@ -1010,12 +1052,62 @@ func setupHelpers(layout Layout, out io.Writer) error {
+ 	if err := installPiInfraLauncher(layout, out); err != nil {
+ 		return err
+ 	}
++	if err := installCanonicalTargetLaunchers(layout, out); err != nil {
++		return err
++	}
+ 	if err := setupCodexLocalLauncher(layout, out); err != nil {
+ 		return err
+ 	}
+ 	return nil
+ }
+ 
++var canonicalTargetLauncherNames = []string{"openai-infra", "anthropic-infra", "qwen-infra"}
++
++func installCanonicalTargetLaunchers(layout Layout, out io.Writer) error {
++	for _, entrypoint := range canonicalTargetLauncherNames {
++		path := filepath.Join(layout.BinDir, canonicalTargetWrapperName(entrypoint, runtime.GOOS))
++		body := canonicalTargetWrapperBody(entrypoint, runtime.GOOS, piInfraTargetName(layout.Mode, runtime.GOOS))
++		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
++			modeMatches := runtime.GOOS == "windows" || info.Mode().Perm() == 0o755
++			if existing, readErr := os.ReadFile(path); readErr == nil && string(existing) == body && modeMatches {
++				logf(out, "Canonical target launcher already up to date: %s", path)
++				continue
++			}
++		}
++		if err := removeManagedPath(path, out); err != nil {
++			return err
++		}
++		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
++			return fmt.Errorf("write canonical target launcher %s: %w", entrypoint, err)
++		}
++		logf(out, "Installed canonical target launcher: %s", path)
++	}
++	return nil
++}
++
++func canonicalTargetWrapperName(entrypoint, goos string) string {
++	if strings.EqualFold(goos, "windows") {
++		return entrypoint + ".cmd"
++	}
++	return entrypoint
++}
++
++func canonicalTargetWrapperBody(entrypoint, goos, targetName string) string {
++	if strings.EqualFold(goos, "windows") {
++		return fmt.Sprintf("@echo off\r\nsetlocal\r\nset \"DIR=%%~dp0\"\r\nif not exist \"%%DIR%%%s\" (\r\n  echo %s: missing or non-regular sibling %%DIR%%%s 1^>^&2\r\n  exit /b 127\r\n)\r\n\"%%DIR%%%s\" target %s %%*\r\nexit /b %%ERRORLEVEL%%\r\n", targetName, entrypoint, targetName, targetName, entrypoint)
++	}
++	return fmt.Sprintf(`#!/usr/bin/env sh
++set -eu
++DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
++TARGET="$DIR/%s"
++if [ ! -f "$TARGET" ] || [ -L "$TARGET" ] || [ ! -x "$TARGET" ]; then
++  echo "%s: missing or non-regular sibling $TARGET" >&2
++  exit 127
++fi
++exec "$TARGET" target %s "$@"
++`, targetName, entrypoint, entrypoint)
++}
++
+ func installPiInfraLauncher(layout Layout, out io.Writer) error {
+ 	path := filepath.Join(layout.BinDir, piInfraWrapperName(runtime.GOOS))
+ 	body := piInfraWrapperBody(runtime.GOOS, piInfraTargetName(layout.Mode, runtime.GOOS))
+diff --git a/tools/agents-infra/internal/infra/infra_test.go b/tools/agents-infra/internal/infra/infra_test.go
+index 1a6c88d..beeb326 100644
+--- a/tools/agents-infra/internal/infra/infra_test.go
++++ b/tools/agents-infra/internal/infra/infra_test.go
+@@ -671,6 +671,9 @@ func TestSetupGlobalDoesNotInstallCLIWrapper(t *testing.T) {
+ 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "agents-infra"))
+ 	assertNoPath(t, filepath.Join(home, ".local", "bin", "agents-infra.cmd"))
+ 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "pi-infra"))
++	assertRegularFile(t, filepath.Join(home, ".local", "bin", "openai-infra"))
++	assertRegularFile(t, filepath.Join(home, ".local", "bin", "anthropic-infra"))
++	assertRegularFile(t, filepath.Join(home, ".local", "bin", "qwen-infra"))
+ 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture)
+ 	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), modelAvailabilityPolicyFixture)
+ 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture)
+diff --git a/tools/agents-infra/internal/infra/pi_test.go b/tools/agents-infra/internal/infra/pi_test.go
+index 2abc42e..42bc59c 100644
+--- a/tools/agents-infra/internal/infra/pi_test.go
++++ b/tools/agents-infra/internal/infra/pi_test.go
+@@ -1482,11 +1482,37 @@ func piErrorCode(err error) string {
+ }
+ func officialPiAsset(t *testing.T) string {
+ 	t.Helper()
+-	root, _ := filepath.Abs("../../../../.temp/TASK-260817-2h8hn4/pi-standalone-darwin-arm64-0.84.2/pi")
+-	if _, err := os.Stat(filepath.Join(root, "pi")); err != nil {
+-		t.Skipf("official Pi acceptance asset unavailable: %v", err)
++	repoRoot, _ := filepath.Abs("../../../..")
++	candidates := []string{filepath.Join(repoRoot, ".temp", "TASK-260817-2h8hn4", "pi-standalone-darwin-arm64-0.84.2", "pi")}
++	if primaryRoot := primaryCheckoutRootFromGitFile(filepath.Join(repoRoot, ".git")); primaryRoot != "" {
++		candidates = append(candidates, filepath.Join(primaryRoot, ".temp", "TASK-260817-2h8hn4", "pi-standalone-darwin-arm64-0.84.2", "pi"))
++	}
++	for _, root := range candidates {
++		if _, err := os.Stat(filepath.Join(root, "pi")); err == nil {
++			return root
++		}
++	}
++	t.Skipf("official Pi acceptance asset unavailable in %v", candidates)
++	return ""
++}
++
++func primaryCheckoutRootFromGitFile(path string) string {
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return ""
++	}
++	text := strings.TrimSpace(string(data))
++	if !strings.HasPrefix(text, "gitdir:") {
++		return ""
++	}
++	gitDir := strings.TrimSpace(strings.TrimPrefix(text, "gitdir:"))
++	if gitDir == "" {
++		return ""
++	}
++	if !filepath.IsAbs(gitDir) {
++		gitDir = filepath.Join(filepath.Dir(path), gitDir)
+ 	}
+-	return root
++	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Clean(gitDir))))
+ }
+ 
+ func cloneOfficialPiAsset(t *testing.T) string {
+diff --git a/tools/agents-infra/internal/infra/primary_session_launch_plan.go b/tools/agents-infra/internal/infra/primary_session_launch_plan.go
+index 693b001..02632f4 100644
+--- a/tools/agents-infra/internal/infra/primary_session_launch_plan.go
++++ b/tools/agents-infra/internal/infra/primary_session_launch_plan.go
+@@ -28,20 +28,40 @@ const (
+ // owns the resulting process; agents-infra performs no launch and stays
+ // board-agnostic.
+ type PrimarySessionLaunchPlan struct {
+-	Contract         string                         `json:"contract"`
+-	SchemaVersion    int                            `json:"schema_version"`
+-	Status           string                         `json:"status"`
+-	Producer         ChildLaunchCompositionProducer `json:"producer"`
+-	Provider         string                         `json:"provider"`
+-	ProjectDir       string                         `json:"project_dir"`
+-	Executable       string                         `json:"executable"`
+-	LaunchVariants   PrimarySessionLaunchVariants   `json:"launch_variants"`
+-	Resolved         PrimarySessionResolved         `json:"resolved"`
+-	RequiredEnvNames []string                       `json:"required_env_names"`
+-	Sources          []PrimarySessionSource         `json:"sources"`
+-	Pi               *PiLaunchPlanDetails           `json:"pi,omitempty"`
+-	Sidecars         *PrimarySessionSidecars        `json:"sidecars,omitempty"`
+-	Capabilities     *PiCapabilityPlan              `json:"capabilities,omitempty"`
++	Contract           string                         `json:"contract"`
++	SchemaVersion      int                            `json:"schema_version"`
++	Status             string                         `json:"status"`
++	Producer           ChildLaunchCompositionProducer `json:"producer"`
++	Provider           string                         `json:"provider"`
++	Target             *PrimarySessionTarget          `json:"target,omitempty"`
++	ProjectDir         string                         `json:"project_dir"`
++	Executable         string                         `json:"executable"`
++	LaunchVariants     PrimarySessionLaunchVariants   `json:"launch_variants"`
++	Resolved           PrimarySessionResolved         `json:"resolved"`
++	RequiredEnvNames   []string                       `json:"required_env_names"`
++	Sources            []PrimarySessionSource         `json:"sources"`
++	Pi                 *PiLaunchPlanDetails           `json:"pi,omitempty"`
++	Sidecars           *PrimarySessionSidecars        `json:"sidecars,omitempty"`
++	Capabilities       *PiCapabilityPlan              `json:"capabilities,omitempty"`
++	targetProviderArgs []string
++}
++
++func (p PrimarySessionLaunchPlan) TargetProviderArgs() []string {
++	return append([]string(nil), p.targetProviderArgs...)
++}
++
++type PrimarySessionTarget struct {
++	Entrypoint       string  `json:"entrypoint"`
++	EntrypointSource string  `json:"entrypoint_source"`
++	Name             string  `json:"name"`
++	Source           string  `json:"source"`
++	Vendor           string  `json:"vendor"`
++	Environment      string  `json:"environment"`
++	Model            string  `json:"model"`
++	Reasoning        string  `json:"reasoning"`
++	Profile          *string `json:"profile"`
++	ProfileProvider  *string `json:"profile_provider"`
++	Endpoint         *string `json:"endpoint"`
+ }
+ 
+ type PrimarySessionSidecars struct {
+@@ -95,14 +115,16 @@ type PrimarySessionManagedClientVariant struct {
+ }
+ 
+ type PrimarySessionResolved struct {
+-	Model           PrimarySessionResolvedString `json:"model"`
+-	Reasoning       PrimarySessionResolvedString `json:"reasoning"`
+-	Yolo            PrimarySessionResolvedBool   `json:"yolo"`
+-	Sandbox         PrimarySessionResolvedString `json:"sandbox"`
+-	Profile         PrimarySessionResolvedString `json:"profile"`
+-	Approval        PrimarySessionResolvedString `json:"approval"`
+-	MCP             PrimarySessionResolvedMCP    `json:"mcp"`
+-	PiCompatibility PrimarySessionResolvedString `json:"pi_compatibility,omitempty"`
++	Model           PrimarySessionResolvedString  `json:"model"`
++	Reasoning       PrimarySessionResolvedString  `json:"reasoning"`
++	Yolo            PrimarySessionResolvedBool    `json:"yolo"`
++	Sandbox         PrimarySessionResolvedString  `json:"sandbox"`
++	Profile         PrimarySessionResolvedString  `json:"profile"`
++	Approval        PrimarySessionResolvedString  `json:"approval"`
++	MCP             PrimarySessionResolvedMCP     `json:"mcp"`
++	PiCompatibility PrimarySessionResolvedString  `json:"pi_compatibility,omitempty"`
++	ProfileProvider *PrimarySessionResolvedString `json:"profile_provider,omitempty"`
++	Endpoint        *PrimarySessionResolvedString `json:"endpoint,omitempty"`
+ }
+ 
+ // PrimarySessionResolvedString reports one resolved policy field with
+@@ -143,7 +165,9 @@ type PrimarySessionLaunchPlanErrorEnvelope struct {
+ }
+ 
+ type PrimarySessionLaunchPlanError struct {
+-	Code string `json:"code"`
++	Code        string              `json:"code"`
++	Context     *TargetErrorContext `json:"context,omitempty"`
++	Remediation string              `json:"remediation,omitempty"`
+ }
+ 
+ func NewPrimarySessionLaunchPlanErrorEnvelope(provider, projectDir string, producer ChildLaunchCompositionProducer, code string) PrimarySessionLaunchPlanErrorEnvelope {
+@@ -158,6 +182,14 @@ func NewPrimarySessionLaunchPlanErrorEnvelope(provider, projectDir string, produ
+ 	}
+ }
+ 
++func NewCanonicalTargetLaunchPlanErrorEnvelope(provider, projectDir string, producer ChildLaunchCompositionProducer, targetErr *CanonicalTargetError) PrimarySessionLaunchPlanErrorEnvelope {
++	envelope := NewPrimarySessionLaunchPlanErrorEnvelope(provider, projectDir, producer, targetErr.Code)
++	context := targetErr.Context
++	envelope.Error.Context = &context
++	envelope.Error.Remediation = targetErr.Remediation
++	return envelope
++}
++
+ // PrimarySessionComposeError carries the machine error code for the JSON
+ // error envelope alongside the human diagnostic.
+ type PrimarySessionComposeError struct {
+diff --git a/tools/agents-infra/internal/infra/project_config.go b/tools/agents-infra/internal/infra/project_config.go
+index f047eec..2e5a6af 100644
+--- a/tools/agents-infra/internal/infra/project_config.go
++++ b/tools/agents-infra/internal/infra/project_config.go
+@@ -3,6 +3,7 @@ package infra
+ import (
+ 	"errors"
+ 	"fmt"
++	"net/url"
+ 	"os"
+ 	"path/filepath"
+ 	"sort"
+@@ -21,8 +22,37 @@ const (
+ 	claudePrimaryModelField          = claudePrimarySessionField + ".model"
+ 	claudePrimaryYoloModeField       = claudePrimarySessionField + ".yolo_mode"
+ 	piPrimarySessionField            = "agents.pi.primary_session"
++	targetsField                     = "agents.targets"
++	entrypointsField                 = "agents.entrypoints"
+ )
+ 
++var canonicalEntrypointVendors = map[string]string{
++	"openai-infra":    "openai",
++	"anthropic-infra": "anthropic",
++	"qwen-infra":      "qwen",
++}
++
++// ProjectTarget is one atomic canonical vendor/environment/model identity.
++// Source identifies the single project config that supplied the whole
++// definition; target fields never merge across ancestors.
++type ProjectTarget struct {
++	Name            string
++	Source          string
++	Vendor          string
++	Environment     string
++	Model           string
++	Reasoning       string
++	Profile         *string
++	ProfileProvider *string
++	Endpoint        *string
++}
++
++type ProjectEntrypoint struct {
++	Name       string
++	TargetName string
++	Source     string
++}
++
+ // CodexPrimarySessionPolicy is the root-to-leaf composition of all discovered
+ // [agents.codex.primary_session] tables. Present distinguishes an omitted field
+ // from an explicitly configured zero value, notably yolo_mode=false.
+@@ -87,6 +117,8 @@ type parsedProjectConfig struct {
+ 	ClaudePrimarySession ClaudePrimarySessionSource
+ 	PiPrimarySession     PiPrimarySessionSource
+ 	PiProfiles           map[string]PiProfile
++	Targets              map[string]ProjectTarget
++	Entrypoints          map[string]string
+ }
+ 
+ // ProjectConfigSource records all policy contributed by one project config.
+@@ -98,6 +130,8 @@ type ProjectConfigSource struct {
+ 	ClaudePrimarySession ClaudePrimarySessionSource
+ 	PiPrimarySession     PiPrimarySessionSource
+ 	PiProfiles           map[string]PiProfile
++	Targets              map[string]ProjectTarget
++	Entrypoints          map[string]string
+ }
+ 
+ type compositeProjectConfig struct {
+@@ -108,12 +142,16 @@ type compositeProjectConfig struct {
+ 	ClaudePrimarySession ClaudePrimarySessionPolicy
+ 	PiPrimarySession     PiPrimarySessionPolicy
+ 	PiProfiles           map[string]PiProfile
++	Targets              map[string]ProjectTarget
++	Entrypoints          map[string]ProjectEntrypoint
+ }
+ 
+ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath string) (compositeProjectConfig, error) {
+ 	composite := compositeProjectConfig{
+-		EnabledBy:  map[string][]string{},
+-		PiProfiles: map[string]PiProfile{},
++		EnabledBy:   map[string][]string{},
++		PiProfiles:  map[string]PiProfile{},
++		Targets:     map[string]ProjectTarget{},
++		Entrypoints: map[string]ProjectEntrypoint{},
+ 	}
+ 	enabledSeen := map[string]bool{}
+ 
+@@ -127,7 +165,7 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
+ 			continue
+ 		}
+ 		if err != nil {
+-			return compositeProjectConfig{}, fmt.Errorf("read project config %s: %w", path, err)
++			return compositeProjectConfig{}, projectConfigFieldError(path, projectConfigParseField, fmt.Errorf("read project config: %w", err))
+ 		}
+ 		config, err := parseProjectConfig(data, path)
+ 		if err != nil {
+@@ -141,6 +179,8 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
+ 			ClaudePrimarySession: cloneClaudePrimarySessionSource(config.ClaudePrimarySession),
+ 			PiPrimarySession:     clonePiPrimarySessionSource(config.PiPrimarySession),
+ 			PiProfiles:           clonePiProfiles(config.PiProfiles),
++			Targets:              cloneProjectTargets(config.Targets),
++			Entrypoints:          cloneStringMap(config.Entrypoints),
+ 		})
+ 		composeCodexPrimarySession(&composite.PrimarySession, config.PrimarySession, path)
+ 		composeClaudePrimarySession(&composite.ClaudePrimarySession, config.ClaudePrimarySession, path)
+@@ -149,6 +189,13 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
+ 			profile.Source = path
+ 			composite.PiProfiles[name] = profile
+ 		}
++		for name, target := range config.Targets {
++			target.Source = path
++			composite.Targets[name] = target
++		}
++		for name, targetName := range config.Entrypoints {
++			composite.Entrypoints[name] = ProjectEntrypoint{Name: name, TargetName: targetName, Source: path}
++		}
+ 
+ 		for _, name := range config.EnabledMCPServers {
+ 			if !isBareTOMLKey(name) {
+@@ -168,13 +215,7 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
+ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
+ 	var document map[string]any
+ 	if err := toml.Unmarshal(data, &document); err != nil {
+-		return parsedProjectConfig{}, fmt.Errorf(
+-			"%s: field %s (including %s): parse TOML: %w",
+-			path,
+-			projectConfigParseField,
+-			codexPrimarySessionField+" and "+claudePrimarySessionField,
+-			err,
+-		)
++		return parsedProjectConfig{}, projectConfigFieldError(path, projectConfigParseField, fmt.Errorf("parse TOML (including field %s and %s): %w", codexPrimarySessionField, claudePrimarySessionField, err))
+ 	}
+ 
+ 	var config parsedProjectConfig
+@@ -208,9 +249,173 @@ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
+ 	if err != nil {
+ 		return parsedProjectConfig{}, err
+ 	}
++	config.Targets, err = parseProjectTargets(agents, path)
++	if err != nil {
++		return parsedProjectConfig{}, err
++	}
++	config.Entrypoints, err = parseProjectEntrypoints(agents, path)
++	if err != nil {
++		return parsedProjectConfig{}, err
++	}
+ 	return config, nil
+ }
+ 
++func parseProjectTargets(agents map[string]any, path string) (map[string]ProjectTarget, error) {
++	targets := map[string]ProjectTarget{}
++	table, present, err := projectConfigTable(agents, "targets", targetsField)
++	if err != nil {
++		return nil, projectConfigFieldError(path, targetsField, err)
++	}
++	if !present {
++		return targets, nil
++	}
++	for name, raw := range table {
++		field := targetsField + "." + name
++		if name == "" {
++			return nil, projectConfigFieldError(path, targetsField, errors.New("target name must not be empty"))
++		}
++		definition, ok := raw.(map[string]any)
++		if !ok {
++			return nil, projectConfigFieldError(path, field, fmt.Errorf("expected table, got %T", raw))
++		}
++		if err := rejectUnknownFields(definition, field, "vendor", "environment", "model", "reasoning", "profile", "profile_provider", "endpoint"); err != nil {
++			return nil, projectConfigFieldError(path, errField(err), err)
++		}
++		target := ProjectTarget{Name: name}
++		if target.Vendor, err = requiredTargetString(definition, "vendor", false); err != nil {
++			return nil, projectConfigFieldError(path, field+".vendor", err)
++		}
++		if target.Environment, err = requiredTargetString(definition, "environment", false); err != nil {
++			return nil, projectConfigFieldError(path, field+".environment", err)
++		}
++		if target.Model, err = requiredTargetString(definition, "model", true); err != nil {
++			return nil, projectConfigFieldError(path, field+".model", err)
++		}
++		if target.Reasoning, err = requiredTargetString(definition, "reasoning", true); err != nil {
++			return nil, projectConfigFieldError(path, field+".reasoning", err)
++		}
++		if target.Profile, err = optionalExactNonEmptyString(definition, "profile"); err != nil {
++			return nil, projectConfigFieldError(path, field+".profile", err)
++		}
++		if target.ProfileProvider, err = optionalExactNonEmptyString(definition, "profile_provider"); err != nil {
++			return nil, projectConfigFieldError(path, field+".profile_provider", err)
++		}
++		if target.Endpoint, err = optionalExactNonEmptyString(definition, "endpoint"); err != nil {
++			return nil, projectConfigFieldError(path, field+".endpoint", err)
++		}
++		if err := validateProjectTarget(target); err != nil {
++			var fieldErr *piFieldError
++			if errors.As(err, &fieldErr) {
++				return nil, projectConfigFieldError(path, field+"."+fieldErr.field, fieldErr.err)
++			}
++			return nil, projectConfigFieldError(path, field, err)
++		}
++		targets[name] = target
++	}
++	return targets, nil
++}
++
++func parseProjectEntrypoints(agents map[string]any, path string) (map[string]string, error) {
++	entrypoints := map[string]string{}
++	table, present, err := projectConfigTable(agents, "entrypoints", entrypointsField)
++	if err != nil {
++		return nil, projectConfigFieldError(path, entrypointsField, err)
++	}
++	if !present {
++		return entrypoints, nil
++	}
++	for name, raw := range table {
++		field := entrypointsField + "." + name
++		if _, ok := canonicalEntrypointVendors[name]; !ok {
++			return nil, projectConfigFieldError(path, field, errors.New("unsupported entrypoint"))
++		}
++		value, ok := raw.(string)
++		if !ok {
++			return nil, projectConfigFieldError(path, field, fmt.Errorf("expected string, got %T", raw))
++		}
++		if value == "" {
++			return nil, projectConfigFieldError(path, field, errors.New("must not be empty"))
++		}
++		entrypoints[name] = value
++	}
++	return entrypoints, nil
++}
++
++func requiredTargetString(table map[string]any, key string, rejectWhitespaceOnly bool) (string, error) {
++	value, present := table[key]
++	if !present {
++		return "", errors.New("required field is absent")
++	}
++	stringValue, ok := value.(string)
++	if !ok {
++		return "", fmt.Errorf("expected string, got %T", value)
++	}
++	if stringValue == "" || (rejectWhitespaceOnly && strings.TrimSpace(stringValue) == "") {
++		return "", errors.New("must be a non-empty string")
++	}
++	return stringValue, nil
++}
++
++func optionalExactNonEmptyString(table map[string]any, key string) (*string, error) {
++	value, present := table[key]
++	if !present {
++		return nil, nil
++	}
++	stringValue, ok := value.(string)
++	if !ok {
++		return nil, fmt.Errorf("expected string, got %T", value)
++	}
++	if stringValue == "" {
++		return nil, errors.New("must not be empty")
++	}
++	return &stringValue, nil
++}
++
++func validateProjectTarget(target ProjectTarget) error {
++	if !containsString([]string{"openai", "anthropic", "qwen"}, target.Vendor) {
++		return fieldError("vendor", errors.New("must be one of openai, anthropic, qwen"))
++	}
++	if !containsString([]string{"codex", "claude-code", "pi"}, target.Environment) {
++		return fieldError("environment", errors.New("must be one of codex, claude-code, pi"))
++	}
++	profileForbidden := func() error {
++		switch {
++		case target.Profile != nil:
++			return fieldError("profile", errors.New("is forbidden for hosted targets"))
++		case target.ProfileProvider != nil:
++			return fieldError("profile_provider", errors.New("is forbidden for hosted targets"))
++		case target.Endpoint != nil:
++			return fieldError("endpoint", errors.New("is forbidden for hosted targets"))
++		}
++		return nil
++	}
++	switch {
++	case target.Vendor == "openai" && target.Environment == "codex":
++		return profileForbidden()
++	case target.Vendor == "anthropic" && target.Environment == "claude-code":
++		if !containsString(claudeEffortValues, target.Reasoning) {
++			return fieldError("reasoning", errors.New("must be one of low, medium, high, xhigh, max"))
++		}
++		return profileForbidden()
++	case target.Vendor == "qwen" && target.Environment == "pi":
++		if !piThinkingLevels[target.Reasoning] {
++			return fieldError("reasoning", errors.New("must be a documented Pi thinking level"))
++		}
++		if target.Profile == nil {
++			return fieldError("profile", errors.New("required field is absent"))
++		}
++		if target.Endpoint != nil {
++			parsed, err := url.Parse(*target.Endpoint)
++			if err != nil || !parsed.IsAbs() || parsed.Host == "" {
++				return fieldError("endpoint", errors.New("must be an absolute URL with a host"))
++			}
++		}
++		return nil
++	default:
++		return fieldError("environment", fmt.Errorf("vendor/environment pair %s/%s is not admitted", target.Vendor, target.Environment))
++	}
++}
++
+ func parseCodexPrimarySession(agents map[string]any, path string) (CodexPrimarySessionSource, error) {
+ 	codex, present, err := projectConfigTable(agents, "codex", "agents.codex")
+ 	if err != nil {
+@@ -377,8 +582,22 @@ func projectConfigBool(table map[string]any, key string) (*bool, error) {
+ 	return &boolValue, nil
+ }
+ 
++// ProjectConfigurationError keeps safe source/field provenance available to
++// alias diagnostics without exposing arbitrary TOML values.
++type ProjectConfigurationError struct {
++	Source string
++	Field  string
++	Err    error
++}
++
++func (e *ProjectConfigurationError) Error() string {
++	return fmt.Sprintf("%s: field %s: %v", e.Source, e.Field, e.Err)
++}
++
++func (e *ProjectConfigurationError) Unwrap() error { return e.Err }
++
+ func projectConfigFieldError(path, field string, err error) error {
+-	return fmt.Errorf("%s: field %s: %w", path, field, err)
++	return &ProjectConfigurationError{Source: path, Field: field, Err: err}
+ }
+ 
+ func composeCodexPrimarySession(policy *CodexPrimarySessionPolicy, source CodexPrimarySessionSource, path string) {
+@@ -437,6 +656,25 @@ func cloneClaudePrimarySessionSource(source ClaudePrimarySessionSource) ClaudePr
+ 	}
+ }
+ 
++func cloneProjectTargets(source map[string]ProjectTarget) map[string]ProjectTarget {
++	result := make(map[string]ProjectTarget, len(source))
++	for name, target := range source {
++		target.Profile = cloneStringPointer(target.Profile)
++		target.ProfileProvider = cloneStringPointer(target.ProfileProvider)
++		target.Endpoint = cloneStringPointer(target.Endpoint)
++		result[name] = target
++	}
++	return result
++}
++
++func cloneStringMap(source map[string]string) map[string]string {
++	result := make(map[string]string, len(source))
++	for key, value := range source {
++		result[key] = value
++	}
++	return result
++}
++
+ func cloneStringPointer(value *string) *string {
+ 	if value == nil {
+ 		return nil
+diff --git a/tools/agents-infra/internal/infra/runtime_receipt.go b/tools/agents-infra/internal/infra/runtime_receipt.go
+index efdd8d9..5ee5c23 100644
+--- a/tools/agents-infra/internal/infra/runtime_receipt.go
++++ b/tools/agents-infra/internal/infra/runtime_receipt.go
+@@ -109,6 +109,11 @@ func absOrSelf(path string) string {
+ // A receipt alone is not evidence — it is checked alongside the live artifacts
+ // precisely so a copied or hand-written receipt cannot stand in for them.
+ func VerifyInstalledRuntime(layout Layout) error {
++	if layout.Mode == ModeLocal {
++		if err := ValidateCanonicalProjectConfiguration(layout.RootDir, ""); err != nil {
++			return err
++		}
++	}
+ 	agentsDir := absOrSelf(layout.AgentsDir)
+ 	failures := verifyRuntimeReceipt(layout, agentsDir)
+ 	failures = append(failures, runtimeArtifactFailures(layout)...)
+@@ -171,9 +176,45 @@ func runtimeArtifactFailures(layout Layout) []string {
+ 	}
+ 	failures = append(failures, managedSkillLinkFailures(layout)...)
+ 	failures = append(failures, piInfraLauncherFailures(layout)...)
++	failures = append(failures, canonicalTargetLauncherFailures(layout)...)
+ 	return append(failures, launcherBackendFailures(layout)...)
+ }
+ 
++func canonicalTargetLauncherFailures(layout Layout) []string {
++	goos := runtime.GOOS
++	targetName := piInfraTargetName(layout.Mode, goos)
++	var failures []string
++	for _, entrypoint := range canonicalTargetLauncherNames {
++		aliasPath := filepath.Join(layout.BinDir, canonicalTargetWrapperName(entrypoint, goos))
++		wantBody := canonicalTargetWrapperBody(entrypoint, goos, targetName)
++		info, err := os.Lstat(aliasPath)
++		switch {
++		case os.IsNotExist(err):
++			failures = append(failures, fmt.Sprintf("no generated %s launcher at %s", entrypoint, aliasPath))
++			continue
++		case err != nil:
++			failures = append(failures, fmt.Sprintf("cannot inspect %s launcher %s: %v", entrypoint, aliasPath, err))
++			continue
++		case !info.Mode().IsRegular():
++			failures = append(failures, fmt.Sprintf("%s launcher %s is not a regular file", entrypoint, aliasPath))
++			continue
++		}
++		body, err := os.ReadFile(aliasPath)
++		switch {
++		case err != nil:
++			failures = append(failures, fmt.Sprintf("unreadable %s launcher %s: %v", entrypoint, aliasPath, err))
++			continue
++		case string(body) != wantBody:
++			failures = append(failures, fmt.Sprintf("%s launcher %s has drifted from canonical target dispatch", entrypoint, aliasPath))
++			continue
++		}
++		if goos != "windows" && info.Mode().Perm() != 0o755 {
++			failures = append(failures, fmt.Sprintf("%s launcher %s mode is %04o, want 0755", entrypoint, aliasPath, info.Mode().Perm()))
++		}
++	}
++	return failures
++}
++
+ func piInfraLauncherFailures(layout Layout) []string {
+ 	goos := runtime.GOOS
+ 	aliasPath := filepath.Join(layout.BinDir, piInfraWrapperName(goos))
+diff --git a/tools/agents-infra/internal/infra/runtime_receipt_test.go b/tools/agents-infra/internal/infra/runtime_receipt_test.go
+index 417a9c6..234d2ea 100644
+--- a/tools/agents-infra/internal/infra/runtime_receipt_test.go
++++ b/tools/agents-infra/internal/infra/runtime_receipt_test.go
+@@ -46,6 +46,110 @@ func TestSetupMintsReceiptAndVerifiesTheRuntimeItInstalled(t *testing.T) {
+ 	}
+ }
+ 
++func TestSetupRepairsAndVerifyNarrowsEveryCanonicalTargetAlias(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("POSIX alias file-kind and executable-mode contract")
++	}
++	source := seedSourceRepo(t)
++	project := t.TempDir()
++	layout, err := LocalLayout(source, project)
++	if err != nil {
++		t.Fatalf("LocalLayout: %v", err)
++	}
++	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
++		t.Fatalf("Setup: %v", err)
++	}
++
++	mutations := []struct {
++		entrypoint string
++		mutate     func(t *testing.T, path string)
++	}{
++		{
++			entrypoint: "openai-infra",
++			mutate: func(t *testing.T, path string) {
++				if err := os.Remove(path); err != nil {
++					t.Fatalf("Remove(%s): %v", path, err)
++				}
++			},
++		},
++		{
++			entrypoint: "anthropic-infra",
++			mutate: func(t *testing.T, path string) {
++				if err := os.Remove(path); err != nil {
++					t.Fatalf("Remove(%s): %v", path, err)
++				}
++				if err := os.Mkdir(path, 0o755); err != nil {
++					t.Fatalf("Mkdir(%s): %v", path, err)
++				}
++			},
++		},
++		{
++			entrypoint: "qwen-infra",
++			mutate: func(t *testing.T, path string) {
++				if err := os.Chmod(path, 0o644); err != nil {
++					t.Fatalf("Chmod(%s): %v", path, err)
++				}
++			},
++		},
++	}
++	for _, mutation := range mutations {
++		t.Run(mutation.entrypoint, func(t *testing.T) {
++			path := filepath.Join(layout.BinDir, canonicalTargetWrapperName(mutation.entrypoint, runtime.GOOS))
++			mutation.mutate(t, path)
++			err := VerifyInstalledRuntime(layout)
++			if err == nil || !strings.Contains(err.Error(), mutation.entrypoint) {
++				t.Fatalf("VerifyInstalledRuntime error = %v, want %s-specific refusal", err, mutation.entrypoint)
++			}
++			if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
++				t.Fatalf("Setup repair: %v", err)
++			}
++			if err := VerifyInstalledRuntime(layout); err != nil {
++				t.Fatalf("VerifyInstalledRuntime after %s repair: %v", mutation.entrypoint, err)
++			}
++		})
++	}
++}
++
++func TestCanonicalConfigurationFailurePreventsSetupAndVerifyMutation(t *testing.T) {
++	source := seedSourceRepo(t)
++	project := t.TempDir()
++	configPath := writeCanonicalConfig(t, project, "[agents.targets.openai]\nvendor=7\n")
++	before := mustReadRuntimeFile(t, configPath)
++	layout, err := LocalLayout(source, project)
++	if err != nil {
++		t.Fatalf("LocalLayout: %v", err)
++	}
++
++	err = Setup(Options{Layout: layout, Stdout: io.Discard})
++	if err == nil || !strings.Contains(err.Error(), PrimarySessionErrorInvalidProjectConfiguration) || !strings.Contains(err.Error(), "agents.targets.openai.vendor") || !strings.Contains(err.Error(), configPath) || !strings.Contains(err.Error(), "Remediation:") {
++		t.Fatalf("Setup error = %v", err)
++	}
++	if got := mustReadRuntimeFile(t, configPath); string(got) != string(before) {
++		t.Fatalf("Setup rewrote project config: before=%q after=%q", before, got)
++	}
++	for _, entrypoint := range canonicalTargetLauncherNames {
++		if _, statErr := os.Lstat(filepath.Join(layout.BinDir, canonicalTargetWrapperName(entrypoint, runtime.GOOS))); !os.IsNotExist(statErr) {
++			t.Fatalf("Setup created %s before rejecting config: %v", entrypoint, statErr)
++		}
++	}
++
++	if err := os.Remove(configPath); err != nil {
++		t.Fatalf("Remove(%s): %v", configPath, err)
++	}
++	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
++		t.Fatalf("baseline Setup: %v", err)
++	}
++	mustWrite(t, configPath, "[agents.targets.openai]\nvendor=7\n")
++	beforeVerify := mustReadRuntimeFile(t, configPath)
++	err = VerifyInstalledRuntime(layout)
++	if err == nil || !strings.Contains(err.Error(), "agents.targets.openai.vendor") || !strings.Contains(err.Error(), configPath) || !strings.Contains(err.Error(), "Remediation:") {
++		t.Fatalf("VerifyInstalledRuntime error = %v", err)
++	}
++	if got := mustReadRuntimeFile(t, configPath); string(got) != string(beforeVerify) {
++		t.Fatalf("VerifyInstalledRuntime rewrote project config: before=%q after=%q", beforeVerify, got)
++	}
++}
++
+ // Negative: the generated launcher builds its recorded source dir on every
+ // invocation. Once that source can no longer provide the backend, the runtime
+ // is broken and verification must say so, even though every installed file is
+diff --git a/tools/agents-infra/internal/infra/skill_link_validation.go b/tools/agents-infra/internal/infra/skill_link_validation.go
+index 8ce9f0a..a06f522 100644
+--- a/tools/agents-infra/internal/infra/skill_link_validation.go
++++ b/tools/agents-infra/internal/infra/skill_link_validation.go
+@@ -23,22 +23,19 @@ func validateSourceSkillLinks(layout Layout) error {
+ 	return fmt.Errorf("source skill links are not safe to materialize: %s", failures[0])
+ }
+ 
+-// managedSkillLinkFailures validates every surface setup owns. All provider
+-// links must ultimately resolve into AgentsDir; otherwise verify would attest a
+-// runtime that recursive tools can use to escape or re-enter an ancestor.
++// managedSkillLinkFailures validates every source-managed skill package across
++// the surfaces setup owns. Provider-owned top-level packages whose names are
++// absent from .agents/.skills remain outside this ownership boundary.
+ func managedSkillLinkFailures(layout Layout) []string {
+ 	hiddenSkills := filepath.Join(layout.AgentsDir, ".skills")
+ 	failures := inspectSkillLinks(hiddenSkills, layout.AgentsDir, false)
+-	managedNames := map[string]bool(nil)
+-	if layout.Mode == ModeGlobal {
+-		managedNames = make(map[string]bool)
+-		entries, err := os.ReadDir(hiddenSkills)
+-		if err != nil {
+-			return append(failures, fmt.Sprintf("cannot identify managed skill names in %s: %v", hiddenSkills, err))
+-		}
+-		for _, entry := range entries {
+-			managedNames[entry.Name()] = true
+-		}
++	managedNames := make(map[string]bool)
++	entries, err := os.ReadDir(hiddenSkills)
++	if err != nil {
++		return append(failures, fmt.Sprintf("cannot identify managed skill names in %s: %v", hiddenSkills, err))
++	}
++	for _, entry := range entries {
++		managedNames[entry.Name()] = true
+ 	}
+ 	for _, root := range []string{
+ 		filepath.Join(layout.AgentsDir, "skills"),
+diff --git a/tools/agents-infra/main.go b/tools/agents-infra/main.go
+index aa2a41b..f26907b 100644
+--- a/tools/agents-infra/main.go
++++ b/tools/agents-infra/main.go
+@@ -57,6 +57,8 @@ func run(args []string) error {
+ 		return runClaude(args[1:])
+ 	case "pi":
+ 		return runPi(args[1:])
++	case "target":
++		return runTarget(args[1:])
+ 	case "version", "--version":
+ 		return runVersion()
+ 	case "help", "-h", "--help":
+@@ -288,6 +290,22 @@ func runDoctor(args []string) error {
+ 			fmt.Fprintf(os.Stdout, "claude_primary_yolo_mode: %t\n", report.ClaudePrimarySession.YoloMode.Value)
+ 			fmt.Fprintf(os.Stdout, "claude_primary_yolo_mode_source: %s\n", claudePrimaryBoolSource(report.ClaudePrimarySession.YoloMode))
+ 		}
++		for _, target := range report.CanonicalTargets {
++			prefix := "canonical_" + strings.ReplaceAll(target.Entrypoint, "-", "_")
++			fmt.Fprintf(os.Stdout, "%s_target: %s\n", prefix, target.Name)
++			fmt.Fprintf(os.Stdout, "%s_entrypoint_source: %s\n", prefix, target.EntrypointSource)
++			fmt.Fprintf(os.Stdout, "%s_target_source: %s\n", prefix, target.TargetSource)
++			fmt.Fprintf(os.Stdout, "%s_vendor: %s\n", prefix, target.Vendor)
++			fmt.Fprintf(os.Stdout, "%s_environment: %s\n", prefix, target.Environment)
++			fmt.Fprintf(os.Stdout, "%s_model: %s\n", prefix, target.Model)
++			fmt.Fprintf(os.Stdout, "%s_reasoning: %s\n", prefix, target.Reasoning)
++			fmt.Fprintf(os.Stdout, "%s_profile: %s\n", prefix, target.Profile)
++			fmt.Fprintf(os.Stdout, "%s_profile_source: %s\n", prefix, target.ProfileSource)
++			fmt.Fprintf(os.Stdout, "%s_profile_provider: %s\n", prefix, target.ProfileProvider)
++			fmt.Fprintf(os.Stdout, "%s_profile_provider_source: %s\n", prefix, target.ProfileSource)
++			fmt.Fprintf(os.Stdout, "%s_endpoint: %s\n", prefix, target.Endpoint)
++			fmt.Fprintf(os.Stdout, "%s_endpoint_source: %s\n", prefix, target.ProfileSource)
++		}
+ 		if report.CodexConfigShadowsGlobal {
+ 			if report.CodexConfigGenerated {
+ 				fmt.Fprintf(os.Stdout, "codex_config_action: managed project-local .codex/config.toml is active; rendered from the installed Codex config without user-level profiles; use --codex-config=global to remove it if unintended\n")
+@@ -423,29 +441,88 @@ func runPi(args []string) error {
+ 	return infra.RunPi(infra.RunPiOptions{ProjectDir: startDir, Args: filtered, Environ: os.Environ(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+ }
+ 
++func runTarget(args []string) error {
++	if len(args) == 0 {
++		return errors.New("target requires an entrypoint name")
++	}
++	entrypoint := args[0]
++	fs := flag.NewFlagSet("target "+entrypoint, flag.ContinueOnError)
++	fs.SetOutput(os.Stderr)
++	printConfig := fs.Bool("print-config", false, "resolve and print the canonical target without launching")
++	if err := fs.Parse(args[1:]); err != nil {
++		return err
++	}
++	startDir := os.Getenv(callerCWDEnv)
++	if startDir == "" {
++		var err error
++		startDir, err = os.Getwd()
++		if err != nil {
++			return fmt.Errorf("resolve target caller cwd: %w", err)
++		}
++	}
++	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
++	plan, err := infra.BuildCanonicalTargetLaunchPlan(entrypoint, startDir, "", fs.Args(), producer, nil)
++	if err != nil {
++		return err
++	}
++	if *printConfig {
++		fmt.Fprint(os.Stdout, infra.RenderCanonicalTargetLaunchPlan(plan))
++		return nil
++	}
++	if plan.Provider == "pi" {
++		return infra.RunPi(infra.RunPiOptions{
++			ProjectDir: plan.ProjectDir,
++			Args:       plan.TargetProviderArgs(),
++			Environ:    os.Environ(),
++			Stdin:      os.Stdin,
++			Stdout:     os.Stdout,
++			Stderr:     os.Stderr,
++		})
++	}
++	if _, err := infra.PreparePrimarySession(plan.Provider, plan.ProjectDir, producer); err != nil {
++		return fmt.Errorf("prepare canonical %s target project surface: %w", plan.Provider, err)
++	}
++	cmd := exec.Command(plan.Executable, plan.LaunchVariants.Interactive.Argv...)
++	cmd.Dir = plan.ProjectDir
++	cmd.Stdin = os.Stdin
++	cmd.Stdout = os.Stdout
++	cmd.Stderr = os.Stderr
++	return cmd.Run()
++}
++
+ func runCompose(args []string) error {
+ 	fs := flag.NewFlagSet("compose", flag.ContinueOnError)
+ 	fs.SetOutput(os.Stderr)
+ 	mode := fs.String("mode", "child", "composition mode: child or primary-session")
+ 	agent := fs.String("agent", "", "agent provider: codex, claude, or pi")
++	entrypoint := fs.String("entrypoint", "", "canonical vendor entrypoint")
+ 	projectDir := fs.String("project", "", "project directory used for composition")
+ 	schemaVersion := fs.Int("schema-version", 0, "composition contract schema version")
+ 	jsonOutput := fs.Bool("json", false, "emit one JSON contract document")
+ 	if err := fs.Parse(args); err != nil {
+ 		return err
+ 	}
+-	if *agent != "codex" && *agent != "claude" && *agent != "pi" {
+-		return fmt.Errorf("compose requires --agent codex, claude, or pi")
+-	}
+ 	if !*jsonOutput {
+ 		return fmt.Errorf("compose requires --json")
+ 	}
+ 	switch *mode {
+ 	case "child":
+-		if *agent == "pi" {
++		if *entrypoint != "" {
++			return fmt.Errorf("child compose does not accept --entrypoint")
++		}
++		if *agent != "codex" && *agent != "claude" {
+ 			return fmt.Errorf("child compose requires --agent codex or claude")
+ 		}
+ 	case "primary-session":
++		if (*agent == "") == (*entrypoint == "") {
++			return fmt.Errorf("primary-session compose requires exactly one of --agent or --entrypoint")
++		}
++		if *entrypoint != "" {
++			return runComposeCanonicalTarget(*entrypoint, *projectDir, *schemaVersion, fs.Args())
++		}
++		if *agent != "codex" && *agent != "claude" && *agent != "pi" {
++			return fmt.Errorf("primary-session compose requires --agent codex, claude, or pi")
++		}
+ 		return runComposePrimarySession(*agent, *projectDir, *schemaVersion, fs.Args())
+ 	default:
+ 		return fmt.Errorf("compose requires --mode child or --mode primary-session")
+@@ -480,6 +557,45 @@ func runCompose(args []string) error {
+ 	return nil
+ }
+ 
++func runComposeCanonicalTarget(entrypoint, projectDir string, schemaVersion int, userArgs []string) error {
++	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
++	canonicalProjectDir, err := infra.CanonicalProjectDir(projectDir)
++	if err != nil {
++		return err
++	}
++	provider := infra.CanonicalProviderForEntrypoint(entrypoint)
++	if schemaVersion != infra.PrimarySessionLaunchPlanSchemaVersion {
++		envelope := infra.NewPrimarySessionLaunchPlanErrorEnvelope(provider, canonicalProjectDir, producer, infra.PrimarySessionErrorUnsupportedSchemaVersion)
++		if err := json.NewEncoder(os.Stdout).Encode(envelope); err != nil {
++			return fmt.Errorf("encode canonical target error envelope: %w", err)
++		}
++		return fmt.Errorf("unsupported primary-session launch plan schema version %d", schemaVersion)
++	}
++	plan, err := infra.BuildCanonicalTargetLaunchPlan(entrypoint, canonicalProjectDir, "", userArgs, producer, nil)
++	if err != nil {
++		var targetErr *infra.CanonicalTargetError
++		var envelope infra.PrimarySessionLaunchPlanErrorEnvelope
++		if errors.As(err, &targetErr) {
++			envelope = infra.NewCanonicalTargetLaunchPlanErrorEnvelope(provider, canonicalProjectDir, producer, targetErr)
++		} else {
++			code := infra.PrimarySessionErrorInvalidProjectConfiguration
++			var composeErr *infra.PrimarySessionComposeError
++			if errors.As(err, &composeErr) {
++				code = composeErr.Code
++			}
++			envelope = infra.NewPrimarySessionLaunchPlanErrorEnvelope(provider, canonicalProjectDir, producer, code)
++		}
++		if encodeErr := json.NewEncoder(os.Stdout).Encode(envelope); encodeErr != nil {
++			return fmt.Errorf("encode canonical target error envelope: %w", encodeErr)
++		}
++		return fmt.Errorf("compose canonical target launch plan: %w", err)
++	}
++	if err := json.NewEncoder(os.Stdout).Encode(plan); err != nil {
++		return fmt.Errorf("encode canonical target launch plan: %w", err)
++	}
++	return nil
++}
++
+ func runPrepare(args []string) error {
+ 	fs := flag.NewFlagSet("prepare", flag.ContinueOnError)
+ 	fs.SetOutput(os.Stderr)
+@@ -640,11 +756,13 @@ func usageText() string {
+   agents-infra verify local [PROJECT_DIR] [--project-dir DIR]
+   agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json
+   agents-infra compose --mode primary-session --agent codex|claude|pi --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]
++  agents-infra compose --mode primary-session --entrypoint openai-infra|anthropic-infra|qwen-infra --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]
+   agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json
+   agents-infra attachments list|show|path|materialize|stage-images [...]
+   agents-infra codex [--print-config] [-d|--danger|--yolo] [--] [CODEX_ARGS...]
+   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
+   agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
++  agents-infra target ENTRYPOINT [--print-config] [-- PROVIDER_ARGS...]
+ 
+ Source tree resolution for setup (first usable wins):
+   1. --source-dir DIR
+diff --git a/tools/agents-infra/main_test.go b/tools/agents-infra/main_test.go
+index 9c20441..6dea3bb 100644
+--- a/tools/agents-infra/main_test.go
++++ b/tools/agents-infra/main_test.go
+@@ -544,6 +544,33 @@ func captureStdout(t *testing.T, fn func()) string {
+ 	return buf.String()
+ }
+ 
++func captureStderr(t *testing.T, fn func()) string {
++	t.Helper()
++	original := os.Stderr
++	read, write, err := os.Pipe()
++	if err != nil {
++		t.Fatalf("Pipe: %v", err)
++	}
++	os.Stderr = write
++	defer func() {
++		os.Stderr = original
++	}()
++
++	fn()
++
++	if err := write.Close(); err != nil {
++		t.Fatalf("Close stderr pipe writer: %v", err)
++	}
++	var buf bytes.Buffer
++	if _, err := io.Copy(&buf, read); err != nil {
++		t.Fatalf("Copy stderr pipe: %v", err)
++	}
++	if err := read.Close(); err != nil {
++		t.Fatalf("Close stderr pipe reader: %v", err)
++	}
++	return buf.String()
++}
++
+ func decodeSingleJSONDocument(t *testing.T, output string, destination any) {
+ 	t.Helper()
+ 	decoder := json.NewDecoder(strings.NewReader(output))
+@@ -987,11 +1014,37 @@ shutdown_timeout_seconds = 2
+ 
+ func mainTestOfficialPiAsset(t *testing.T) string {
+ 	t.Helper()
+-	root, _ := filepath.Abs("../../.temp/TASK-260817-2h8hn4/pi-standalone-darwin-arm64-0.84.2/pi")
+-	if _, err := os.Stat(filepath.Join(root, "pi")); err != nil {
+-		t.Skipf("official Pi asset unavailable: %v", err)
++	repoRoot, _ := filepath.Abs("../..")
++	candidates := []string{filepath.Join(repoRoot, ".temp", "TASK-260817-2h8hn4", "pi-standalone-darwin-arm64-0.84.2", "pi")}
++	if primaryRoot := mainTestPrimaryCheckoutRootFromGitFile(filepath.Join(repoRoot, ".git")); primaryRoot != "" {
++		candidates = append(candidates, filepath.Join(primaryRoot, ".temp", "TASK-260817-2h8hn4", "pi-standalone-darwin-arm64-0.84.2", "pi"))
++	}
++	for _, root := range candidates {
++		if _, err := os.Stat(filepath.Join(root, "pi")); err == nil {
++			return root
++		}
++	}
++	t.Skipf("official Pi asset unavailable in %v", candidates)
++	return ""
++}
++
++func mainTestPrimaryCheckoutRootFromGitFile(path string) string {
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return ""
++	}
++	text := strings.TrimSpace(string(data))
++	if !strings.HasPrefix(text, "gitdir:") {
++		return ""
++	}
++	gitDir := strings.TrimSpace(strings.TrimPrefix(text, "gitdir:"))
++	if gitDir == "" {
++		return ""
++	}
++	if !filepath.IsAbs(gitDir) {
++		gitDir = filepath.Join(filepath.Dir(path), gitDir)
+ 	}
+-	return root
++	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Clean(gitDir))))
+ }
+ 
+ func TestRunPrepareEmitsOneV1Document(t *testing.T) {

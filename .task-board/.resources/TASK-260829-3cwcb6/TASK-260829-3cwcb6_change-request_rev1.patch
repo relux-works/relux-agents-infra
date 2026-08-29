@@ -1,0 +1,683 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index adc2a21..ca7b425 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,18 @@
+ 
+ ## 2026-08-29
+ 
++### 1443 — Cross-Runtime Clocks Need One Generated-Event Definition
++- ROOT CAUSE: `BenchmarkHTTPDriver.stream` recognized `content` and `reasoning` but not llama.cpp's `reasoning_content`, then ended decode on the response tail rather than the last generated event. Field naming moved only llama.cpp's start boundary; post-token framing moved both end boundaries by runtime-specific transport work.
++- FIX: `RuntimeStreamDelta.read` owns the event definition across all three fields; production records TTFT at the first and decode through the last such event. `scripts/benchmark-gate-smoke.sh` drives `reasoning` versus `reasoning_content` through `benchmark-run` and requires both to remain scored.
++- DIRECTION: the omitted llama.cpp field inflated TTFT, understated prefill, and overstated decode — mixed, not uniformly pro-llama.cpp. Response-tail time understated decode for whichever runtime delayed usage or `[DONE]`; direction not established.
++- SCOPE: `RuntimeStreamDelta.swift`, `BenchmarkHTTPDriver.swift`, `BenchmarkScenarios.swift`, `RuntimeStreamDeltaTests.swift`, `scripts/benchmark-gate-smoke.sh`.
++
++### 1443 — Mach Footprint Cannot Score mmap-Loaded GGUF Weights
++- ROOT CAUSE: `ri_phys_footprint` excludes llama.cpp's clean resident file-backed GGUF pages; the observed 1.41 GiB footprint versus 28.09 GiB RSS and 26.6 GiB clean mapped-file residency was a known underestimate, not model memory.
++- DECISION: do not substitute unstable RSS. Exact `llama-server` executables and `.gguf` artifacts use `unmeasurable-mmap-loaded-weights`; every process/scenario/soak/warm-up footprint is `nil`, the record states that the old reading favours that runtime, and decision scoring fails closed.
++- FIX: `RuntimeMemoryAccounting` classifies the reviewed executable/artifact; `BenchmarkFootprintSampler`, `BenchmarkPass`, and `BenchmarkRunCommand` keep every production memory entry on that source. Production-entry smoke requires the llama-shaped pair to exit rejected on unmeasured footprint rather than accepted on the old reading.
++- SCOPE: `RuntimeMemoryAccounting.swift`, `BenchmarkFootprintSampler.swift`, `BenchmarkPass.swift`, `BenchmarkRunCommand.swift`, `RuntimeStreamDeltaTests.swift`, `scripts/benchmark-gate-smoke.sh`.
++
+ ### 1402 — Decode Claim Withdrawn; Authoritative Streamed Usage Reverses The Single-Probe Delta
+ 
+ - REGRESSION: TASK-260828-2wcrph's first `probe-ttft.py` outputs carried `"usage": {}`. Its published paired decode values could only be reconstructed by substituting non-empty SSE frame counts for completion tokens; the claimed slower direction had no token-count evidence and is withdrawn from the report and README.
+diff --git a/README.md b/README.md
+index 3268dda..5746339 100644
+--- a/README.md
++++ b/README.md
+@@ -1467,7 +1467,7 @@ rg -n "Primary Parent Goal Actualization" \
+ | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra` and stopped as a process group on `SIGINT`/`SIGTERM`/`SIGHUP`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+ | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
+-| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, samples the Mach physical footprint of the pid it spawned, seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
++| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, clocks first-to-last generated deltas across `content`, `reasoning`, and `reasoning_content`, samples Mach physical footprint only for allocation shapes it measures, reports mmap-loaded GGUF memory unmeasurable rather than scoring a known underestimate, seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+ | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+diff --git a/tools/mlx-swift-runtime-prototype/README.md b/tools/mlx-swift-runtime-prototype/README.md
+index 83f09d2..b01e426 100644
+--- a/tools/mlx-swift-runtime-prototype/README.md
++++ b/tools/mlx-swift-runtime-prototype/README.md
+@@ -604,42 +604,40 @@ and one copy of this model is 28 GB, so overlapping runs would be measuring each
+ other's memory pressure. Both are launched through `model-harness run`, so
+ ownership, readiness polling and shutdown are the production ones.
+ 
+-### Two metric families this gate cannot yet compare across these runtimes
++### Cross-runtime metric corrections
+ 
+ Read this before taking a number out of a `records/*.json` for a llama.cpp pass.
+ Both were found by TASK-260828-2wcrph running the suite, and both are recorded
+ in full in `.research/260829_llamacpp-against-the-python-baseline.md`.
+ 
+-- **`decodeTokensPerSecond`, `prefillTokensPerSecond` and
+-  `timeToFirstTokenSeconds` are not comparable between `mlx_lm.server` and
+-  `llama-server`.** All three derive from the first frame carrying
+-  `delta.content` or `delta.reasoning`. `mlx_lm.server` publishes
+-  `delta.reasoning`; `llama-server` publishes `delta.reasoning_content`, which
+-  this driver does not read. So llama.cpp's clock starts *after* its whole
+-  think block: its TTFT is inflated, its prefill rate understated, and its
+-  decode rate divided by only the content tail. The direction is mixed, not a
+-  uniform bias in llama.cpp's favour. The historical 80.79 tok/s decode is
+-  excluded. A replacement paired probe requested streamed usage explicitly,
+-  verified 7,784 prompt and 106 completion tokens from each runtime, and
+-  measured Python/llama.cpp at 8.449/8.772 tok/s; SSE frame counts were retained
+-  only as diagnostics. That one 1.038x observation does not establish a general
+-  decode direction. On a scenario whose whole token budget is spent thinking
+-  no `content` frame arrives at all and TTFT is simply `nil`, which fails closed.
+-  The production fix and full rerun belong to TASK-260829-3cwcb6; until then all
+-  gate-recorded llama.cpp TTFT, prefill and decode values are excluded from
+-  decisions.
+-- **`peakPhysicalFootprintBytes` does not see `mmap`-loaded weights.** It is
++- **TTFT, prefill and decode now share one generated-event definition.** A
++  streamed delta counts when any of `content`, `reasoning`, or
++  `reasoning_content` carries a non-empty string. `mlx_lm.server` publishes the
++  first reasoning spelling and `llama-server` the second. TTFT ends at the first
++  such event; decode is `(completion_tokens - 1)` divided by the interval from
++  that same first event to the last such event. It no longer ends on `[DONE]`
++  or a usage frame. The historical llama.cpp gate readings remain excluded:
++  omitting `reasoning_content` inflated TTFT, understated prefill, and divided
++  decode by only the content tail. TASK-260829-3cwcb6's production-entry smoke
++  drives both spellings and refuses a build that leaves either side unmeasured.
++- **`peakPhysicalFootprintBytes` is explicitly unmeasurable for mmap-loaded
++  GGUF weights.** The normal source is
+   `proc_pid_rusage(...).ri_phys_footprint`, which counts dirty anonymous pages.
+   `llama-server` maps the GGUF, so those pages are resident and **clean**.
+   Sampled on one process at one moment while holding the 27B model:
+   footprint **1.41 GiB**, `ps` RSS **28.09 GiB**, `vmmap` mapped-file resident
+   **26.6 GiB with 0 dirty**. `maxPeakFootprintRatio` would have scored that
+   runtime at about 0.08x the MLX baseline and called it twelve times more
+-  frugal. MLX reads its weights into anonymous memory and is measured correctly.
++  frugal. The production driver classifies an exact `llama-server` executable or
++  any `.gguf` model artifact as `unmeasurable-mmap-loaded-weights`; process,
++  scenario, soak, and warm-up memory readings are all `nil`, the record states
++  that the old reading would favour that runtime, and the decision blocks on an
++  unmeasured scored metric. MLX reads its weights into anonymous memory and
++  continues to use Mach physical footprint.
+ 
+-Neither is a defect in what the gate *refuses*; both are defects in what it
+-*reports*, and a llama.cpp pair has so far always been refused before scoring
+-(see the KV note in `examples/model-harness.benchmark.toml`).
++The earlier paired probe's 8.449/8.772 tok/s Python/llama.cpp result remains one
++bounded observation, not a rate hardened into this gate. The withdrawn 8.88,
++9.85, and 80.79 figures remain excluded.
+ 
+ ### Why it is one invocation
+ 
+@@ -868,19 +866,23 @@ completed it, and the gate scored that 1.094x ratio as "within".
+ 
+ ### Measurement choices worth knowing
+ 
+-- **Size comes from the Mach physical footprint**, never from `ps` RSS. Three
+-  identical loads of this model reported 2 650 / 10 774 / 14 056 MiB resident
+-  while the physical footprint stayed within 16 MiB and MLX's active-bytes
+-  figure was byte-identical.
++- **Size comes from the Mach physical footprint only when that source measures
++  the runtime's allocation shape.** MLX anonymous weights use it. A
++  `llama-server` executable or `.gguf` artifact is reported unmeasurable and
++  cannot receive a footprint score, because Mach footprint omits its clean
++  resident mmap-loaded weights. `ps` RSS is not substituted: three identical
++  MLX loads reported 2 650 / 10 774 / 14 056 MiB RSS while physical footprint
++  stayed within 16 MiB and MLX active bytes were identical.
+ - **Readiness is "the pinned model answered a completion"**, not "`/v1/models`
+   returned 200". `mlx_lm.server` answers `/v1/models` about a second after
+   launch with no weights resident, and lists every MLX model in the local
+   Hugging Face cache with the configured one appended **last** — so a poller
+   that takes `data[0].id` gets a different model entirely.
+-- **Time to first token counts reasoning.** This model's chat template opens a
+-  `<think>` block, so the first thing generated for any prompt is reasoning.
+-  Waiting for the first *content* delta would report the length of the model's
+-  thinking as runtime latency.
++- **Time to first token counts both reasoning spellings.** This model's chat
++  template opens a `<think>` block, so the first thing generated for any prompt
++  is reasoning. Waiting for the first content delta would report the length of
++  the model's thinking as runtime latency; recognizing only one runtime's
++  reasoning field would move that error to just one side.
+ - **Sampler settings are sent explicitly** on every request. The two runtimes
+   disagree on defaults — `GenerateParameters` starts at `temperature = 0.6`,
+   `mlx_lm.server` at `1.0` — so omitting them would compare two samplers.
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeMemoryAccounting.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeMemoryAccounting.swift
+new file mode 100644
+index 0000000..d3a9008
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeMemoryAccounting.swift
+@@ -0,0 +1,44 @@
++import Foundation
++
++/// The memory quantity the benchmark can honestly report for a runtime.
++///
++/// Mach physical footprint is useful for the MLX runtimes, whose weights are
++/// anonymous allocations. It is not a process-resident-size measurement and
++/// excludes the clean file-backed pages `llama-server` uses for mmap-loaded
++/// GGUF weights. Reporting that number for llama.cpp would therefore score a
++/// known underestimate as if it described the model.
++public enum RuntimeMemoryAccounting: String, Codable, Equatable, Sendable {
++    case machPhysicalFootprint = "mach-physical-footprint"
++    case unmeasurableMMapLoadedWeights = "unmeasurable-mmap-loaded-weights"
++
++    /// Classify the executable the reviewed launcher profile names.
++    ///
++    /// Exact basename matching is deliberate. This closes the shipped
++    /// `/opt/homebrew/bin/llama-server` path without guessing that unrelated
++    /// executables with "llama" somewhere in their name share its allocator.
++    public static func forExecutable(
++        _ path: String, modelPath: String? = nil, launchArgv: [String] = []
++    ) -> RuntimeMemoryAccounting {
++        let isLlamaServer = URL(fileURLWithPath: path).lastPathComponent == "llama-server"
++        let modelIsGGUF =
++            modelPath.map {
++                URL(fileURLWithPath: $0).pathExtension.lowercased() == "gguf"
++            } ?? false
++        let launchCarriesGGUF = launchArgv.contains {
++            URL(fileURLWithPath: $0).pathExtension.lowercased() == "gguf"
++        }
++        return isLlamaServer || modelIsGGUF || launchCarriesGGUF
++            ? .unmeasurableMMapLoadedWeights : .machPhysicalFootprint
++    }
++
++    public var isMeasurable: Bool { self == .machPhysicalFootprint }
++
++    /// A record-level limitation with its directional consequence.
++    public func limitation(runtime: String) -> String? {
++        guard self == .unmeasurableMMapLoadedWeights else { return nil }
++        return
++            "memory for runtime \(runtime) is unmeasurable by Mach ri_phys_footprint: "
++            + "clean resident mmap-loaded weights are excluded; scoring the old reading would "
++            + "favour this runtime, so every footprint metric is reported unmeasured and refused"
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeStreamDelta.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeStreamDelta.swift
+new file mode 100644
+index 0000000..19d808d
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeStreamDelta.swift
+@@ -0,0 +1,23 @@
++import Foundation
++
++/// The generated text carried by one OpenAI-compatible streamed delta.
++///
++/// The two deployed runtimes spell reasoning differently: `mlx_lm.server`
++/// uses `reasoning`, while `llama-server` uses `reasoning_content`.  Timing
++/// code must use this reader for both the first and last generated event so a
++/// field-name difference cannot move only one side's clock boundary.
++public struct RuntimeStreamDelta: Equatable, Sendable {
++    public let content: String
++    public let reasoning: String
++
++    public var generatedText: String { content + reasoning }
++    public var carriesGeneratedText: Bool { !generatedText.isEmpty }
++
++    public static func read(_ delta: [String: Any]) -> RuntimeStreamDelta {
++        let content = (delta["content"] as? String) ?? ""
++        let reasoning =
++            ((delta["reasoning"] as? String) ?? "")
++            + ((delta["reasoning_content"] as? String) ?? "")
++        return RuntimeStreamDelta(content: content, reasoning: reasoning)
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift
+index a0277fc..b1fdd1e 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift
+@@ -1,5 +1,6 @@
+ import Darwin
+ import Foundation
++import MLXSwiftRuntimeContract
+ 
+ /// One other process's physical footprint, or `nil` when it could not be read.
+ ///
+@@ -34,6 +35,7 @@ func physicalFootprintBytes(pid: Int) -> Int? {
+ /// work, against 1.399x on the one scenario both runtimes finished.
+ final class BenchmarkFootprintSampler: @unchecked Sendable {
+     private let pid: Int
++    private let accounting: RuntimeMemoryAccounting
+     private let interval: TimeInterval
+     private let lock = NSLock()
+     private var stopped = false
+@@ -45,11 +47,20 @@ final class BenchmarkFootprintSampler: @unchecked Sendable {
+     private var passLoadMax: Double?
+     private var thread: Thread?
+ 
+-    init(pid: Int, interval: TimeInterval = 0.25) {
++    init(
++        pid: Int, accounting: RuntimeMemoryAccounting = .machPhysicalFootprint,
++        interval: TimeInterval = 0.25
++    ) {
+         self.pid = pid
++        self.accounting = accounting
+         self.interval = interval
+     }
+ 
++    func currentMemoryBytes() -> Int? {
++        guard accounting.isMeasurable else { return nil }
++        return physicalFootprintBytes(pid: pid)
++    }
++
+     func start() {
+         let thread = Thread { [weak self] in self?.loop() }
+         thread.name = "benchmark-footprint-\(pid)"
+@@ -63,7 +74,7 @@ final class BenchmarkFootprintSampler: @unchecked Sendable {
+             let done = stopped
+             lock.unlock()
+             if done { return }
+-            let value = physicalFootprintBytes(pid: pid)
++            let value = currentMemoryBytes()
+             // Sampled beside the footprint rather than once per pass: what
+             // matters is whether the machine was busy *while this scenario was
+             // being timed*, and a single reading taken at the end would miss a
+@@ -78,7 +89,7 @@ final class BenchmarkFootprintSampler: @unchecked Sendable {
+                 successfulSamples += 1
+                 if processPeak == nil || value > processPeak! { processPeak = value }
+                 if windowPeak == nil || value > windowPeak! { windowPeak = value }
+-            } else {
++            } else if accounting.isMeasurable {
+                 failedSamples += 1
+             }
+             lock.unlock()
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkHTTPDriver.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkHTTPDriver.swift
+index d628510..620cb90 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkHTTPDriver.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkHTTPDriver.swift
+@@ -25,6 +25,9 @@ enum BenchmarkHTTPDriver {
+         /// reasoning. Waiting for the first *content* delta would report the
+         /// length of the model's thinking as runtime latency.
+         var timeToFirstTokenSeconds: Double?
++        /// Seconds to the last frame carrying generated text, under the same
++        /// event definition as ``timeToFirstTokenSeconds``.
++        var timeToLastTokenSeconds: Double?
+         var totalSeconds: Double
+         var promptTokens: Int?
+         var completionTokens: Int?
+@@ -130,6 +133,7 @@ enum BenchmarkHTTPDriver {
+         var raw = Data()
+         var firstByteAt: Double?
+         var timeToFirstToken: Double?
++        var timeToLastToken: Double?
+         var promptTokens: Int?
+         var completionTokens: Int?
+         var content = ""
+@@ -145,7 +149,8 @@ enum BenchmarkHTTPDriver {
+                     responseDigest: digest(of: raw), responseByteCount: raw.count,
+                     sentAtUnixSeconds: sentAt, firstByteAtUnixSeconds: firstByteAt,
+                     lastByteAtUnixSeconds: lastByteAt),
+-                timeToFirstTokenSeconds: timeToFirstToken, totalSeconds: lastByteAt - sentAt,
++                timeToFirstTokenSeconds: timeToFirstToken,
++                timeToLastTokenSeconds: timeToLastToken, totalSeconds: lastByteAt - sentAt,
+                 promptTokens: promptTokens, completionTokens: completionTokens,
+                 content: content, finishReason: finishReason, failure: failure)
+         }
+@@ -181,13 +186,13 @@ enum BenchmarkHTTPDriver {
+                 }
+                 for choice in (frame["choices"] as? [[String: Any]]) ?? [] {
+                     let delta = (choice["delta"] as? [String: Any]) ?? [:]
+-                    let text =
+-                        ((delta["content"] as? String) ?? "")
+-                        + ((delta["reasoning"] as? String) ?? "")
+-                    if !text.isEmpty, timeToFirstToken == nil {
+-                        timeToFirstToken = Date().timeIntervalSince1970 - sentAt
++                    let generated = RuntimeStreamDelta.read(delta)
++                    if generated.carriesGeneratedText {
++                        let eventTime = Date().timeIntervalSince1970 - sentAt
++                        if timeToFirstToken == nil { timeToFirstToken = eventTime }
++                        timeToLastToken = eventTime
+                     }
+-                    content += (delta["content"] as? String) ?? ""
++                    content += generated.content
+                     if let reason = choice["finish_reason"] as? String { finishReason = reason }
+                 }
+             }
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkPass.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkPass.swift
+index 9a253ea..3f881ff 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkPass.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkPass.swift
+@@ -53,6 +53,10 @@ final class BenchmarkPass {
+ 
+     func beginScenarioWindow() { sampler.beginWindow() }
+ 
++    /// The same memory source the sampler uses. A runtime whose source is
++    /// declared unmeasurable cannot re-enter through the soak or warm-up path.
++    func currentMemoryBytes() -> Int? { sampler.currentMemoryBytes() }
++
+     func stream(body: Data) async -> BenchmarkHTTPDriver.StreamedCompletion {
+         await BenchmarkHTTPDriver.stream(
+             session: session, endpoint: endpoint.appendingPathComponent("chat/completions"),
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift
+index 060b5c6..80253d8 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift
+@@ -290,8 +290,21 @@ enum BenchmarkRunCommand {
+                 mandated.append(entry)
+             }
+         }
++        let fixedOrderLimitation =
++            "pass order is fixed baseline then candidate: residual heat or unreleased host "
++            + "pressure can disadvantage the candidate, while shared host cache state can "
++            + "favour it; direction is indeterminate and the per-pass host load is diagnostic, "
++            + "not an admission gate"
++        let parityPolicyDirection =
++            "parity policy is intentionally one-way: baseline success plus candidate failure "
++            + "blocks, while the reverse does not; direction favours the incumbent, and this is "
++            + "a migration acceptance policy rather than a measured performance metric"
+         func declared(_ caller: [String]) -> [String] {
+             var entries = mandated
++            for limitation in [fixedOrderLimitation, parityPolicyDirection]
++            where !entries.contains(limitation) {
++                entries.append(limitation)
++            }
+             for entry in caller where !entries.contains(entry) { entries.append(entry) }
+             return entries
+         }
+@@ -484,6 +497,8 @@ enum BenchmarkRunCommand {
+         let host = "127.0.0.1"
+         let profile = try BenchmarkLaunchConfig.profile(
+             named: profileName, in: configPath, host: host, port: port)
++        let memoryAccounting = RuntimeMemoryAccounting.forExecutable(
++            profile.executable, modelPath: model.path, launchArgv: profile.argv)
+         guard profile.argv.contains(model.path) else {
+             throw RunError.unusableInput(
+                 "profile \(profileName.debugDescription) does not pass "
+@@ -543,7 +558,8 @@ enum BenchmarkRunCommand {
+         }
+         let openedAt = Date().timeIntervalSince1970
+ 
+-        let sampler = BenchmarkFootprintSampler(pid: Int(runtimePID))
++        let sampler = BenchmarkFootprintSampler(
++            pid: Int(runtimePID), accounting: memoryAccounting)
+         sampler.start()
+         let session = BenchmarkHTTPDriver.session(requestTimeout: requestTimeout)
+         let pass = BenchmarkPass(
+@@ -632,6 +648,12 @@ enum BenchmarkRunCommand {
+             temperature: BenchmarkScenarios.temperature, topP: BenchmarkScenarios.topP,
+             seed: BenchmarkScenarios.seed)
+ 
++        var recordedAsymmetries = declaredAsymmetries
++        if let limitation = memoryAccounting.limitation(runtime: runtime),
++            !recordedAsymmetries.contains(limitation)
++        {
++            recordedAsymmetries.append(limitation)
++        }
+         let record = RuntimeBenchmark.RunRecord(
+             runtime: runtime, revisions: revisions, command: harnessCommand,
+             provenance: RuntimeBenchmark.LaunchProvenance(
+@@ -653,7 +675,7 @@ enum BenchmarkRunCommand {
+                 launchArgv: profile.argv, runtimeProcessID: Int(runtimePID)),
+             pins: pins, startedAtUnixSeconds: startedAt, finishedAtUnixSeconds: finishedAt,
+             peakPhysicalFootprintBytes: processPeak, scenarios: scenarios,
+-            declaredAsymmetries: declaredAsymmetries)
++            declaredAsymmetries: recordedAsymmetries)
+ 
+         // The seal, computed here and nowhere else, over the record this
+         // invocation has just built from the exchanges it performed. A pass the
+@@ -741,7 +763,7 @@ enum BenchmarkRunCommand {
+         pass.recordLifecycle("first_completion_seconds", Date().timeIntervalSince(started))
+         pass.recordLifecycle(
+             "footprint_after_warmup_bytes",
+-            physicalFootprintBytes(pid: pass.runtimeProcessID).map(Double.init))
++            pass.currentMemoryBytes().map(Double.init))
+     }
+ 
+     /// What one `GET /v1/models` against the live runtime said.
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkScenarios.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkScenarios.swift
+index bd61f6e..6bb4159 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkScenarios.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkScenarios.swift
+@@ -119,9 +119,10 @@ enum BenchmarkScenarios {
+             prefill = Double(prompt) / ttft
+         }
+         if let completion = stream.completionTokens, completion > 1,
+-            let ttft = stream.timeToFirstTokenSeconds, stream.totalSeconds > ttft
++            let first = stream.timeToFirstTokenSeconds,
++            let last = stream.timeToLastTokenSeconds, last > first
+         {
+-            decode = Double(completion - 1) / (stream.totalSeconds - ttft)
++            decode = Double(completion - 1) / (last - first)
+         }
+         return (prefill, decode)
+     }
+@@ -363,7 +364,7 @@ enum BenchmarkScenarios {
+             }
+             promptTokens += stream.promptTokens ?? 0
+             completionTokens += stream.completionTokens ?? 0
+-            if let value = physicalFootprintBytes(pid: pass.runtimeProcessID) {
++            if let value = pass.currentMemoryBytes() {
+                 footprints.append(value)
+             }
+         }
+diff --git a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeStreamDeltaTests.swift b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeStreamDeltaTests.swift
+new file mode 100644
+index 0000000..f6a3fd0
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeStreamDeltaTests.swift
+@@ -0,0 +1,78 @@
++import Foundation
++import Testing
++
++@testable import MLXSwiftRuntimeContract
++
++@Suite("Cross-runtime stream timing boundary")
++struct RuntimeStreamDeltaTests {
++    @Test(
++        "both deployed reasoning spellings carry generated text",
++        arguments: ["reasoning", "reasoning_content"])
++    func bothReasoningSpellingsCarryGeneratedText(field: String) {
++        let reading = RuntimeStreamDelta.read([field: "thinking"])
++        #expect(reading.content.isEmpty)
++        #expect(reading.reasoning == "thinking")
++        #expect(reading.generatedText == "thinking")
++        #expect(reading.carriesGeneratedText)
++    }
++
++    @Test("content and both reasoning spellings share one event definition")
++    func allGeneratedFieldsShareOneEventDefinition() {
++        let reading = RuntimeStreamDelta.read([
++            "content": "answer",
++            "reasoning": "first",
++            "reasoning_content": "second",
++        ])
++        #expect(reading.content == "answer")
++        #expect(reading.reasoning == "firstsecond")
++        #expect(reading.generatedText == "answerfirstsecond")
++    }
++
++    @Test("absent, empty, and malformed fields do not mint a timing event")
++    func noGeneratedTextMeansNoTimingEvent() {
++        for delta: [String: Any] in [
++            [:],
++            ["content": "", "reasoning": "", "reasoning_content": ""],
++            ["content": NSNull(), "reasoning": 7, "reasoning_content": false],
++        ] {
++            #expect(!RuntimeStreamDelta.read(delta).carriesGeneratedText)
++        }
++    }
++}
++
++@Suite("Runtime memory accounting")
++struct RuntimeMemoryAccountingTests {
++    @Test("the shipped llama-server path refuses Mach footprint scoring")
++    func llamaServerIsUnmeasurable() {
++        let reading = RuntimeMemoryAccounting.forExecutable(
++            "/opt/homebrew/bin/llama-server",
++            modelPath: "/models/qwen.gguf")
++        #expect(reading == .unmeasurableMMapLoadedWeights)
++        #expect(!reading.isMeasurable)
++        #expect(reading.limitation(runtime: "llama-cpp")?.contains("favour this runtime") == true)
++    }
++
++    @Test("a renamed runtime cannot score a GGUF through Mach footprint")
++    func ggufClassificationDoesNotDependOnTheExecutableName() {
++        #expect(
++            RuntimeMemoryAccounting.forExecutable(
++                "/tmp/runtime-wrapper", modelPath: "/models/mlx-weights",
++                launchArgv: ["--model", "/models/Qwen.Q8_0.GGUF"])
++                == .unmeasurableMMapLoadedWeights)
++    }
++
++    @Test("the classifier is not widened to unrelated names")
++    func lookalikesKeepTheirMeasuredSource() {
++        for path in [
++            "/opt/homebrew/bin/llama-server-next",
++            "/tmp/not-llama-server",
++            "/Users/test/bin/mlx_lm-relux.server",
++            "/Applications/mlx-swift-runtime-prototype",
++        ] {
++            #expect(
++                RuntimeMemoryAccounting.forExecutable(
++                    path, modelPath: "/models/mlx-weights") == .machPhysicalFootprint,
++                "unexpected classification for \(path)")
++        }
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/scripts/benchmark-gate-smoke.sh b/tools/mlx-swift-runtime-prototype/scripts/benchmark-gate-smoke.sh
+index 9b0c505..fe3ecf0 100755
+--- a/tools/mlx-swift-runtime-prototype/scripts/benchmark-gate-smoke.sh
++++ b/tools/mlx-swift-runtime-prototype/scripts/benchmark-gate-smoke.sh
+@@ -105,6 +105,13 @@ if "--slots" in sys.argv:
+ SLOTS_STATUS = None
+ if "--slots-status" in sys.argv:
+     SLOTS_STATUS = int(sys.argv[sys.argv.index("--slots-status") + 1])
++# The two field spellings this task has to put on one clock boundary. The
++# default remains ordinary content so every pre-existing smoke case keeps its
++# response shape.
++REASONING_FIELD = None
++if "--reasoning-field" in sys.argv:
++    REASONING_FIELD = sys.argv[sys.argv.index("--reasoning-field") + 1]
++    assert REASONING_FIELD in ("reasoning", "reasoning_content")
+ 
+ 
+ class Handler(BaseHTTPRequestHandler):
+@@ -193,8 +200,13 @@ class Handler(BaseHTTPRequestHandler):
+         time.sleep(0.35)
+         tokens = ["ok", " then", " more", " text"]
+         for index, token in enumerate(tokens):
++            # Three reasoning events and one content event. A reader that knows
++            # only the other runtime's spelling starts on the final event,
++            # leaving no first-to-last decode interval and making the real gate
++            # refuse the run below.
++            field = REASONING_FIELD if REASONING_FIELD and index < 3 else "content"
+             frame = {"id": "cmpl-fake", "object": "chat.completion.chunk", "model": MODEL,
+-                     "choices": [{"index": 0, "delta": {"content": token},
++                     "choices": [{"index": 0, "delta": {field: token},
+                                   "finish_reason": "stop" if index == len(tokens) - 1 else None}]}
+             self.wfile.write(f"data: {json.dumps(frame)}\n\n".encode())
+             self.wfile.flush()
+@@ -1671,6 +1683,121 @@ else
+     tail -15 "$OUT/f5-shipped.log"
+ fi
+ 
++# ============================================================================
++# 7. TASK-260829-3cwcb6: cross-runtime timing and mmap memory, through the
++#    production benchmark-run entry point.
++# ============================================================================
++
++info "reasoning and reasoning_content must start and end the same clock"
++cat > "$OUT/reasoning-fields.toml" <<TOML
++[profiles.gate-smoke-baseline]
++mode = "local"
++executable = "$BASELINE_PYTHON"
++argv = [
++    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
++    "--reasoning-field", "reasoning",
++    "--host", "{host}",
++    "--model", "$MODEL",
++    "--prefill-step-size", "2048",
++    "--reasoning-effort", "medium",
++]
++
++[profiles.gate-smoke-candidate]
++mode = "local"
++executable = "$CANDIDATE_PYTHON"
++argv = [
++    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
++    "--reasoning-field", "reasoning_content",
++    "--host", "{host}",
++    "--model", "$MODEL",
++    "--prefill-step-size", "2048",
++    "--reasoning-effort", "medium",
++]
++TOML
++expect_run "both reasoning spellings produce a scored production decision" \
++    0 '"accepted" : true' \
++    "$OUT/reasoning-fields.toml" "$OUT/session-reasoning-fields" \
++    "$OUT/reasoning-fields.log" "$((PORT + 24))"
++
++# The decision alone proves the fields were non-nil; inspect the records to
++# prove where the production clock actually landed. Under the old reader the
++# candidate starts on the fourth/final event, so TTFT differs by ~0.15s and
++# decode is unmeasured. The corrected reader starts on the first reasoning
++# event and ends on the final content event for both spellings.
++python3 - "$OUT/session-reasoning-fields" <<'REASONPY'
++import json, pathlib, sys
++records = pathlib.Path(sys.argv[1]) / "records"
++base = json.load(open(records / "gate-smoke-baseline.json"))["scenarios"]
++cand = json.load(open(records / "gate-smoke-candidate.json"))["scenarios"]
++base = next(s for s in base if s["name"] == "short_prompt")
++cand = next(s for s in cand if s["name"] == "short_prompt")
++assert base["timeToFirstTokenSeconds"] < 0.55, base
++assert cand["timeToFirstTokenSeconds"] < 0.55, cand
++assert abs(base["timeToFirstTokenSeconds"] - cand["timeToFirstTokenSeconds"]) < 0.10, (base, cand)
++assert base["decodeTokensPerSecond"] is not None, base
++assert cand["decodeTokensPerSecond"] is not None, cand
++ratio = cand["decodeTokensPerSecond"] / base["decodeTokensPerSecond"]
++assert 0.70 < ratio < 1.30, ratio
++print("OK")
++REASONPY
++REASON_STATUS=$?
++if [ "$REASON_STATUS" -eq 0 ]; then
++    pass "production records clock first-to-last generated events identically"
++else
++    fail "production timing retained the field-name asymmetry"
++fi
++
++info "a llama-server profile must not score Mach footprint as model memory"
++cat > "$OUT/mmap-memory.toml" <<TOML
++[profiles.gate-smoke-baseline]
++mode = "local"
++executable = "$BASELINE_PYTHON"
++argv = [
++    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
++    "--host", "{host}",
++    "--model", "$MODEL",
++    "--max-kv-size", "8192",
++    "--prefill-step-size", "2048",
++    "--reasoning-effort", "medium",
++]
++
++[profiles.gate-smoke-candidate]
++mode = "local"
++executable = "$CANDIDATE_PYTHON"
++argv = [
++    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
++    "--mmap-artifact", "$OUT/fake-weights.gguf",
++    "--n-ctx", "8192",
++    "--slots", "false",
++    "--host", "{host}",
++    "--model", "$MODEL",
++    "--ctx-size", "8192",
++    "--ubatch-size", "2048",
++    "--reasoning-effort", "medium",
++    "--spec-type", "none",
++]
++TOML
++expect_run "mmap-loaded llama.cpp memory is unmeasured and cannot be scored" \
++    3 "peak_physical_footprint_bytes was not measured" \
++    "$OUT/mmap-memory.toml" "$OUT/session-mmap-memory" "$OUT/mmap-memory.log" \
++    "$((PORT + 25))"
++
++python3 - "$OUT/session-mmap-memory" <<'MEMPY'
++import json, pathlib, sys
++record = json.load(open(pathlib.Path(sys.argv[1]) / "records" / "gate-smoke-candidate.json"))
++assert record.get("peakPhysicalFootprintBytes") is None, record.get("peakPhysicalFootprintBytes")
++assert all(s.get("peakPhysicalFootprintBytes") is None for s in record["scenarios"]), record["scenarios"]
++notes = record["declaredAsymmetries"]
++assert any("unmeasurable" in note and "favour this runtime" in note for note in notes), notes
++print("OK")
++MEMPY
++MEM_STATUS=$?
++if [ "$MEM_STATUS" -eq 0 ] && ! grep -qF '"accepted" : true' "$OUT/mmap-memory.log"; then
++    pass "the record declares the mmap limitation and carries no old footprint reading"
++else
++    fail "the mmap limitation was scored or was not carried into the production record"
++fi
++
+ printf '\n%s\n' "----------------------------------------"
+ if [ "$FAILURES" -eq 0 ]; then
+     printf 'BENCHMARK GATE SMOKE OK (0 failures)\n'
