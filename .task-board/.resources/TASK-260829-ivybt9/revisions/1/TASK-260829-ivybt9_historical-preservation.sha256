@@ -1,0 +1,142 @@
+6d051f54440d36e3ca3d132f8d9d1e78d46289de
+6d051f54440d36e3ca3d132f8d9d1e78d46289de
+ M LOGBOOK.md
+ M README.md
+ M SKILL.md
+ M tools/agents-infra/internal/infra/pi_config.go
+ M tools/agents-infra/internal/infra/pi_shared_attestation_test.go
+ M tools/agents-infra/internal/infra/pi_shared_broker_darwin.go
+ M tools/agents-infra/internal/infra/pi_shared_client_darwin.go
+ M tools/agents-infra/internal/infra/pi_shared_integration_test.go
+ M tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+ M tools/agents-infra/internal/infra/pi_shared_operator_darwin.go
+ M tools/agents-infra/internal/infra/pi_shared_protocol.go
+ M tools/agents-infra/internal/infra/pi_shared_shape_oracle_test.go
+ M tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go
+ M tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go
+ M tools/agents-infra/internal/infra/pi_standalone_shared_test.go
+ M tools/agents-infra/internal/infra/pi_standalone_test.go
+ M tools/agents-infra/internal/infra/pi_test.go
+ M tools/agents-infra/runtime_main_darwin_test.go
+?? tools/agents-infra/internal/infra/pi_shared_resources.go
+?? tools/agents-infra/internal/infra/pi_shared_resources_test.go
+?? tools/agents-infra/internal/infra/testdata/
+8c6802ec737f3ede9fdc502f11f420e844c33fcfb63ca93c85ee03bf22238a39  -
+e64155ca6bc42ae0ff733946a2945ee59f076190899146101fdb521686873bd3  tools/agents-infra/internal/infra/pi_shared_resources.go
+68774b2d0896a7b2a6d86d1e659378affe44d98ce8371d1fc2ce30d7f5d61a93  tools/agents-infra/internal/infra/pi_shared_resources_test.go
+782556ce65b2ebca26a289855a4c992e8b11c54d88c658e714cdfc3fa57d759e  tools/agents-infra/internal/infra/testdata/shared-runtime-resource-observation-v1.json
+2ebb0d5ebf5e5b37d5d72ab2db5ba65cb66c31a8add386143b355933342ac07f  tools/agents-infra/internal/infra/testdata/shared-runtime-resource-status-v1.json
+02339fc89391b31fcce27cf9fdf388dcd435711b7b7f76ed0ac85b6b5819dc00  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/4/TASK-260829-1qh0ud_reviewer-production-resource-race.log
+058fa868a866434368ae2b06053467df41221f59c6ed7838c2fba8fb2526dcd4  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/2/TASK-260829-1qh0ud_implementation-report.md
+0d3b6e9f09d9463a1c25247a14490e8e47b372992f8fb325a9fde31a81bb0bca  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/rev6-review-rework.md
+18d5bef804970ff0a86c34b6415c519b47716efbf751d9ffa9a338fcea457a79  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/review-verdict-rev1-precondition.md
+19ecd425f533b1463841964a334a423e505930533a507fbbb5bcbecdc4287221  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev2.patch
+1ce362adb54d612cd6c0a465fe105f878b3b70ca6db0583fccbd242b1db283ec  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/AGENTS.md
+1ce362adb54d612cd6c0a465fe105f878b3b70ca6db0583fccbd242b1db283ec  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS.md
+1ded16252ec6e837fdffd556b90aa8483e383d04be413a2121683f330e619175  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/3/TASK-260829-1qh0ud_go-test-infra-serial.log
+1dfc4f15665f4352ba46c81090857e227ce7d6fd6687936d3e65f0c8812f8a72  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/4/TASK-260829-1qh0ud_reviewer-threshold-narrowing-attack.log
+261475bf17cc210bac8b850efb458357a155d62d29291b00a94f7e3cbc014cd9  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_PLATFORM.md
+2828012d4a9a1e8f9343d5a8c8637f2a8de783440754fc87bbfae12642fbd7ef  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_go-test-all.log
+2c62acf4e0b21300aacc1c27a31d262a815640f688d748e8957e889cb958db6b  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-implementer--developer--codex-_RUN-260829-51db45.log
+2eb27eb8c21469e9bf6b649b0262c06b9b722dff2efbc2be7c28f60be8896ac1  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/3/TASK-260829-1qh0ud_go-test-root-relevant.log
+2ed31a47b113a1792ccf2f8ffce46923fd05aa948ee53953d51dc174b828f1d0  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-reviewer--reviewer--codex-_RUN-260829-9a35d8.log
+3113a4d0fb3f30e39c12ea057e2439413daa012dc60d4e5c1989b72c6c9a1722  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_initial-mutant-survivor.log
+32d2e0fac1891120902094e120e175654b0a52689a820a2d5d3538c4bc8fdba6  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev3-validation.log
+33526dc55edc8ac3cf14276149796f6d6802ff12da598d2e96e4c549309a4b9d  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-implementer--developer--codex-_RUN-260829-a9d514.log
+3469dedff5a2064048c854145a70fced32c72545e651ccad0fb9f567eee6baf6  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/5/TASK-260829-1qh0ud_implementation-report.md
+36e53e8933a62e4e0788c1a97aaf61b67eca3efd762669f201d688c73dd08100  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_reviewer-publication-narrowing-mutant.log
+3775f44bb9b88d83bd6f680b2ba1921f4a73bf5f3d50fbc1e1b0cf87277cafdf  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/6/TASK-260829-1qh0ud_reviewer-record-provenance-mutant.log
+3a40092a426b1d9ad430bfff9aec08b166e5d3a19eae619e42ff3eff6a73ea73  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/4/TASK-260829-1qh0ud_tool-readiness.log
+3b3ab578183ddc28b49fb137bdca6d0f97e34056913c35c35b4dd2d3f8d36443  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/EPIC-260713-259g2s_project-codex-session-profiles/STORY-260829-26nbbv_repair-resource-pressure-status-on-current-trunk/TASK-260829-1qh0ud_publish-shared-runtime-resource-pressure-status/README.md
+3e1070c16ecc41f6028690e08ffe3a322eb0b376f2a67a8fa6a9b727ca726668  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/2/TASK-260829-1qh0ud_status-bypass-mutant.log
+40b699b4d7d4a8bfc43998082e4373223f694fee4eaa4a1e8d3e53f2379d27f2  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/3/TASK-260829-1qh0ud_stale-observation-red.log
+42ba76342395b90d4d69798a8ff79cf3da68e77c21214591494e7f4a41dd6573  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/rev2-review-finding-stale-observation.md
+43fbb7514f03813e7d8e77b21e187fdbdec11634bccf61879a42906e12eac525  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev6.patch
+4657dc93e06b72375c514059e67c8a187dc33d4cf312b18b141668a6ffad3823  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_production-resource-race.log
+47e576be2af0f8b16d7043a3861d6373774a6d133d32e3fec2e2d5e26350f5aa  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/4/TASK-260829-1qh0ud_resource-production-race.log
+48527e4dc8a66c5a9670482054884038bbf1ddb95ff3be8a305e4038e94177a3  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_implementation-report.md
+493a8e9c32d60c68cd247d764c950f2fc8abb96e094e983c7a56a29ad4353efc  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev5-validation.log
+4adf55411e918049758a3e062863a504b5df52344f68f0d19c0016c6cf933dfa  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/6/TASK-260829-1qh0ud_review-verdict-rev6.md
+4f274ec705ab0d1be82b093bd5fcf32297bd26cc22bdfe6c135865a76ca5b460  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/4/TASK-260829-1qh0ud_review-verdict-rev4.md
+5190222b8d67dc4a16bac483c3af7b7a57d65709e8d5c3a3d0224bebf54a96f0  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-reviewer--reviewer--codex-_RUN-260829-fb657b.log
+51dcf084b51cc53e650c58ca1e29d5a3677b13adf44177f775320c59f3bc9db0  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_final-publication-mutant.log
+5d12cffc19dd0a9e938fe7729ffb5333a973b5c25770b7a3e59cd16bedf75cd2  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/4/TASK-260829-1qh0ud_current-trunk-replay-report.md
+5d3cd609ebe04e0b891b8079ece0e7c95fbc34359d358d729d6ddec3899c494c  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/4/TASK-260829-1qh0ud_reviewer-disabled-policy-attack.log
+5d76a4ba231ecc2d1a23e79ec5555405527f050fcff82f5cbb0b7c7ee7aca0a6  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_reviewer-policy-narrowing-mutant.log
+5e761719246648474b4ffba480c89afa24e342337b3d96090161065bee91a940  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-reviewer--reviewer--codex-_RUN-260829-a159a9.log
+6003c443821d54cb577567843fbf25c8d306aacf1471277d7c716dedd52a6607  /Users/alexis/src/relux-works/relux-agents-infra/LOGBOOK.md
+63aaed02f9e0cb058efc2f75090ba7f20b19034eff63dd4b1e73d3b521eb9a55  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/3/TASK-260829-1qh0ud_implementation-report.md
+655e2960311de5d31f96e1561f7d949ee1b4d0f8ec19fb99faf53872b523aa4c  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_SKILLS.md
+683443ed340f241b35884523f27d1ed1beb3104074b6c7db15208cad1fc1f2b7  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/2/TASK-260829-1qh0ud_host-load-snapshot.log
+6a2dd5d8e7678698653c59e35b0bdea48031a6827acf0bb0eeb82dc057e88654  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_reviewer-schedules-red-before-fix.log
+6a6a36343e793463b106969a903f4059fe7b00ac34cbb3d1370d9d49304873a1  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-reviewer--reviewer--codex-_RUN-260829-52e144.log
+6bd6def53361fa5d1b26bb8baced60a1f5b56db565f216efcf838a59cdb02378  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_STRUCTURE.md
+6c83024c8ac1c25f2f83eae58a0fef60d63edcc63e9c6140156dacf04037b37f  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev7-validation.log
+72291769699ede34d3975a60621e83440925105079a202e425ede260925b6757  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/3/TASK-260829-1qh0ud_adjacent-generation-mutant.log
+7310edf3cfb3054fe042b69cbe6f0e89f7ea51bf470d655d73a6cde571514473  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/3/TASK-260829-1qh0ud_tool-readiness.log
+73b434ec6aba775459c2f2c41766ef2b383af28c1fbf67719dde2461b9de80bb  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/2/TASK-260829-1qh0ud_go-test-all.log
+73ddf3882a7260393998da77d4502623bd81473d483de71e6e5418facda69077  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_ATTACHMENTS.md
+793a3f9f9173170b06e19818dde3cfeb8dbfd261ca4dd58af48e17a0754ceac1  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_TOOLS.md
+7a04fc65d18e4c600e5ec966dc23444b2fe61e76592860f5db404767d91bb162  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-reviewer--reviewer--codex-_RUN-260829-dad390.log
+7c17ffa77d1393969d8cece10c85ef4e95b4471f7af1227746b7e186fde2a26a  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_STYLE.md
+7d63b2e0bf3e7963a90a9ad6eef996a8e8cab087a8c0f1b771ae86eab9419aad  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/rev7-review-rework.md
+7e377be3bdbe65516820fcfa39cec620f0ca7afed60d1dcb72d8638410d475f5  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev7.patch
+810e7ce67941846bb16c89f34b9c878e8fb05b66923222a8e58069a7522c4148  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-reviewer--reviewer--codex-_RUN-260829-511483.log
+8274f1ffad0325307b589278971004d031c9343128987e26632172dace6b78bf  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev4.patch
+84fca5bbb19cb8ac33ed57e94e4a5f83b31dc9fe71bae65ec1e6c09866f7d0cb  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_WORKFLOW.md
+86a4823ec83ff2672f3747a659f949a674cf66ad3b4af0486f5084487be83541  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_REMOTE_AGENTS.md
+889319843a75f2060ec1d4941a8794c87738058172b08778402478bce524fafd  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-implementer--developer--codex-_RUN-260829-a837c2.log
+8c9845c14548339c2fb99e806533f7aaee4923087b97bb40087f0ee4aa0233d1  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_implementation-report.md
+8cf71678ab91da3a7be6628e29d911621498038b557e79329bd27b5b974199c5  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/6/TASK-260829-1qh0ud_implementation-report.md
+8f5ca10c9953680a7fa7548b42d0a3df4f3c26755fd19ac9bda883a1c8ed0a0d  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/6/TASK-260829-1qh0ud_reviewer-policy-narrowing-mutant.log
+8fa30da0d1e4cc0f3d815d21601e1aa02d89113b386ea4990c42048204088a2f  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-implementer--developer--codex-_RUN-260829-42b397.log
+970672b06b177eb3e86b721325681dc1531089ecdc13a372e9cce4ffd3074ceb  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev1-validation.log
+99331963b489eec2a907170be6045753d73567f96b2f9cf4ac8043027cc6c2e6  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-implementer--developer--codex-_RUN-260829-f81dca.log
+996201b57b8d2d500808dbc08487c438b8e903b722f186b10d185659e664ada9  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev2-validation.log
+9a3c74dfcba4ae15bcbced59f4770f8f377dfb8aa0a49b161b9d958b909fe339  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/3/TASK-260829-1qh0ud_lease-reservation-mutant.log
+9ab8ed47563f42c112a229a41bd937e4dc54be208f1895e7eb605f49c250cc1f  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/3/TASK-260829-1qh0ud_stale-generation-race-green.log
+9f7a9d8702f017154457e5664bbfad8bb5a0ed74de727e889cdf953e7ac65e6a  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_TESTING.md
+a0345309cac21f860d79334df9d8e13b25ca4143b94d9e02476fac49a92ce626  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/EPIC-260713-259g2s_project-codex-session-profiles/STORY-260829-26nbbv_repair-resource-pressure-status-on-current-trunk/progress.md
+a423a9d882b3d4cd0a55f65e70633f6bb205fff8398b74e58f013ca7af4ba6b8  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/rev2-independent-review-scope.md
+a6b5416f5e934c69ac4e5bf65378f0fa3e6dea189c5226917ec182094f84472c  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/5/TASK-260829-1qh0ud_tool-readiness.md
+aa0d7fa391e7dafd6f3b423af99eed0067d44a9957fa134d0cfc500208de05fc  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_tool-readiness-and-base.log
+ad4cbad42f4939f30da639a5cca7aeb63abcaa9ab9d5f34eccdb7ef6b9169d87  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/4/TASK-260829-1qh0ud_resource-production-focused.log
+b2ec329b1f9063c8e9bac8b15dbd627e417bdd95bd493b1196f04eb10270f014  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.element-move-journal.json
+b3b8eec38533d2bf595ea809d61c1b0ac011693f041c331a0dfa7a5672c7e399  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/EPIC-260713-259g2s_project-codex-session-profiles/STORY-260829-26nbbv_repair-resource-pressure-status-on-current-trunk/TASK-260829-1qh0ud_publish-shared-runtime-resource-pressure-status/progress.md
+b4966a1c6045b1ccdcea16a90ce287f25ee4b43aedb25a0c6f65948d2b935b62  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/6/TASK-260829-1qh0ud_post-observe-status-race.log
+b62c87ff0818fe6de33ceee8b9378055d5935a662ac08a4aec36ac19108d2824  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/4/TASK-260829-1qh0ud_go-test-all.log
+b6efa6694eb89cc8c7800f08ea6d6465bb42528b3c41b4e0956265356fd53c16  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/5/current-trunk-policy-rework.md
+b90c12dc336e48eece65c9925f5760b40ea9f19ded2f6548b4af01c1808a525a  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/2/TASK-260829-1qh0ud_resource-slice.log
+b995da10eacaf8d2c426e5b7a31bfe20237aa24329218ae2ca09ce4a29bf4e9c  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_m2-current-trunk-gap-audit.md
+b9cba5fc6818c4e157e507ba7b9f3c4d57c2927929a5170c9b1abb91d2761f02  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_DOCS.md
+ba5072d68fb1e7075df9bda5927f44ee8515113ef0fa2711afecec23c5852718  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev5.patch
+bb6e92f7d8b811ba6649446873775220aaa6e13d3822c3cfde88fec0613bb302  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/EPIC-260713-259g2s_project-codex-session-profiles/STORY-260829-26nbbv_repair-resource-pressure-status-on-current-trunk/README.md
+be152470a9744d047d1a8b198900a67fc0c8a9e1b01fb6151b54bc7c48103748  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_BROWSER_AUTOMATION.md
+bffda3ab2fbe926c9551c89f240baa57add3d1fc03bf238cbc64d6439bab021d  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/2/TASK-260829-1qh0ud_go-test-all-serial.log
+c6f5e5125ca669d5b98672149a112cc547a8d7bc4ee69ce1a169bfb44668281f  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev1.patch
+c6f5e5125ca669d5b98672149a112cc547a8d7bc4ee69ce1a169bfb44668281f  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/candidate-rev1-replay.patch
+c70ee4c376c1d82d596b4811b04c99e9a66a3ca60a8c8b3d5cd6db1730ce2a2a  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-reviewer--reviewer--codex-_RUN-260829-eaaa1b.log
+c7bbdfa5ca866983ade1a957273545c50d8ebae2acf726ffdfcfb8975e191639  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_reviewer-go-test-all.log
+cb3fe3a9d2b29784bd650d37d510cf0f2a900b5c114466ba6e44d95ba6d65643  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-implementer--developer--codex-_RUN-260829-0de6cc.log
+d1c2d9db0485b2a87397f19b20a663c6fbccbecfc3b0ecf8d6a2e0386d2d6625  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/5/TASK-260829-1qh0ud_policy-narrowing-mutant-rev5.log
+d21a50c67b5580b5b1864a92edac8afa1fb954281fab562bef157f0aab58d806  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/5/TASK-260829-1qh0ud_review-verdict-rev5.md
+d3eebd548f78f90622ee41ef73bc9ec8b0b644f6cecfea30759435bc56146531  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/4/TASK-260829-1qh0ud_reviewer-go-test-all.log
+d537c0ca51bb1942d345142a93e2f0d80633edbcc36b06e394d3134bd4194779  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-reviewer--reviewer--codex-_RUN-260829-fe7f83.log
+d651bb38b8bbf9c000371286fc7c34dd2bf664a51991b6ca29b01705bc5f4d24  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/rev7-independent-review.md
+d6b39a9c5aa8b4e4fe70f82aaf23bd190dcf5dacf3804444186ad541d22cf64f  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/2/TASK-260829-1qh0ud_go-test-infra-bounded.log
+dbb373fc1fc0b86e0277712cbbcaefd6a57e48cc455206b188102be0c8d2b08b  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_SKILL_TRIGGERS.md
+dc87e6fa9294dddd396ed6a37f82cc6eceaf5c2657c17a0f2987e36497a78e17  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_review-verdict.md
+dc87e6fa9294dddd396ed6a37f82cc6eceaf5c2657c17a0f2987e36497a78e17  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_review-verdict.md
+df76fa9a3aa40ff61272bf0970f9bcd5c48d0d4f5c83c35448f9b5947e8f34c5  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-reviewer--reviewer--codex-_RUN-260829-65233a.log
+e15d985cd195f16da1eeb86d50604aca33d883140c5831eb770d1cccdcc0f738  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_reviewer-status-recoupling-mutant.log
+e7061d6007edd6bc26fb3d51d7f99fa5c18a23b1afaf8e7b99858fddc41d151c  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev6-validation.log
+f0152b67d5a16ae6c14388a677301d04574145c3d842b91c7b43cfc07fd2850b  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/6/TASK-260829-1qh0ud_reviewer-status-starvation.log
+f0aa0357b19836655ed72976e6f6288cbddefba700100773af515e01c1c078be  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/5/TASK-260829-1qh0ud_record-status-attack-rev5.log
+f1ac80faa1ded2265b22c7025de5923795ba73571c104588f4ef374e2d66a717  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/2/TASK-260829-1qh0ud_resource-race.log
+f2d9bf0e08503b61785c47200567a7c10c4e6cc8593e34dc4b885ac51a3c17bb  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-implementer--developer--codex-_RUN-260829-5db2fa.log
+f55348fc64e7e7ef0782dc220ea78ffe21740bbb2bca190ca6b9a756a9da4c49  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev3.patch
+f68067cb5a57fdcc8b1302d707be684fbfcec75158aa5391682c20a56c1c3120  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_spawn-log_-reviewer--reviewer--codex-_RUN-260829-56d519.log
+fadf5c0609c3353fc5a946419dcb66f898dd7ff335e74bd67b9bcf4bf0c412dd  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_reviewer-production-race.log
+fb8a1f46be985b7fce4ea80977f60e88eb00336df26ed64084334876da5c7311  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/TASK-260829-1qh0ud_change-request_rev4-validation.log
+fd886fc68591d81922294216a6c633a73470ed624ba678a02fd6c1a57f673f9b  /Users/alexis/src/relux-works/relux-agents-infra/.task-board/.resources/TASK-260829-1qh0ud/revisions/7/TASK-260829-1qh0ud_status-admission-recoupling-mutant.log
+ffae7f515787fb8e141f39328c044808eec082bb1b88d3a53ec672ae4b0d793b  /Users/alexis/src/relux-works/relux-agents-infra/.instructions/INSTRUCTIONS_DIAGRAMS.md

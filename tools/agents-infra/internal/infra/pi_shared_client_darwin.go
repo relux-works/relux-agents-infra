@@ -307,7 +307,7 @@ func connectAndAcquireSharedRuntime(resolved sharedResolvedProfile, state PiStat
 		return nil, sharedRuntimeError("shared_runtime_unavailable", err)
 	}
 	if leaseResponse.Type == "refused" {
-		return nil, &SharedRuntimeError{Code: leaseResponse.Code, Reason: leaseResponse.Reason, Details: map[string]any{"effective_max_leases": leaseResponse.EffectiveMaxLeases, "configured_max_leases": leaseResponse.ConfiguredMaxLeases, "broker_pid": leaseResponse.BrokerPID, "broker_start_time": leaseResponse.BrokerStartTime}, Err: errors.New("broker refused lease")}
+		return nil, &SharedRuntimeError{Code: leaseResponse.Code, Reason: leaseResponse.Reason, MismatchField: leaseResponse.MismatchField, Details: map[string]any{"effective_max_leases": leaseResponse.EffectiveMaxLeases, "configured_max_leases": leaseResponse.ConfiguredMaxLeases, "broker_pid": leaseResponse.BrokerPID, "broker_start_time": leaseResponse.BrokerStartTime, "resources": leaseResponse.Resources, "configured_sharing": leaseResponse.ConfiguredSharing, "effective_sharing": leaseResponse.EffectiveSharing}, Err: errors.New("broker refused lease")}
 	}
 	if leaseResponse.Type != "lease" || leaseResponse.Lease == nil || leaseResponse.Runtime == nil {
 		return nil, sharedRuntimeError("protocol_violation", errors.New("lease response is incomplete"))

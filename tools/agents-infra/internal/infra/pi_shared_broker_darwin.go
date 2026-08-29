@@ -37,35 +37,37 @@ type SharedRuntimeBrokerOptions struct {
 }
 
 type sharedWireMessage struct {
-	Type                string                      `json:"type"`
-	Code                string                      `json:"code,omitempty"`
-	Reason              string                      `json:"reason,omitempty"`
-	ProtocolVersion     int                         `json:"protocol_version,omitempty"`
-	ClientPID           int                         `json:"client_pid,omitempty"`
-	ClientExec          FileIdentity                `json:"client_exec,omitempty"`
-	RuntimeKey          string                      `json:"runtime_key,omitempty"`
-	ProfileDigest       string                      `json:"profile_digest,omitempty"`
-	ProjectKey          string                      `json:"project_key,omitempty"`
-	ProfileKey          string                      `json:"profile_key,omitempty"`
-	RunID               string                      `json:"run_id,omitempty"`
-	ConfiguredSharing   *PiRuntimeSharing           `json:"sharing_configured,omitempty"`
-	EffectiveSharing    *PiRuntimeSharing           `json:"sharing_effective,omitempty"`
-	Broker              *SharedBrokerIdentity       `json:"broker,omitempty"`
-	Runtime             *SharedRuntimeProcessRecord `json:"runtime,omitempty"`
-	Lease               *SharedLeaseRecord          `json:"lease,omitempty"`
-	Leases              []SharedLeaseStatus         `json:"leases,omitempty"`
-	LeaseID             string                      `json:"lease_id,omitempty"`
-	LeaseCount          int                         `json:"lease_count,omitempty"`
-	ClientKey           string                      `json:"client_key,omitempty"`
-	RequestedAt         time.Time                   `json:"requested_at,omitempty"`
-	Force               bool                        `json:"force,omitempty"`
-	TimeoutSeconds      int                         `json:"timeout_seconds,omitempty"`
-	State               string                      `json:"state,omitempty"`
-	Stage               string                      `json:"stage,omitempty"`
-	EffectiveMaxLeases  int                         `json:"effective_max_leases,omitempty"`
-	ConfiguredMaxLeases int                         `json:"configured_max_leases,omitempty"`
-	BrokerPID           int                         `json:"broker_pid,omitempty"`
-	BrokerStartTime     *ProcessStartTime           `json:"broker_start_time,omitempty"`
+	Type                string                       `json:"type"`
+	Code                string                       `json:"code,omitempty"`
+	Reason              string                       `json:"reason,omitempty"`
+	MismatchField       string                       `json:"mismatch_field,omitempty"`
+	ProtocolVersion     int                          `json:"protocol_version,omitempty"`
+	ClientPID           int                          `json:"client_pid,omitempty"`
+	ClientExec          FileIdentity                 `json:"client_exec,omitempty"`
+	RuntimeKey          string                       `json:"runtime_key,omitempty"`
+	ProfileDigest       string                       `json:"profile_digest,omitempty"`
+	ProjectKey          string                       `json:"project_key,omitempty"`
+	ProfileKey          string                       `json:"profile_key,omitempty"`
+	RunID               string                       `json:"run_id,omitempty"`
+	ConfiguredSharing   *PiRuntimeSharing            `json:"sharing_configured,omitempty"`
+	EffectiveSharing    *PiRuntimeSharing            `json:"sharing_effective,omitempty"`
+	Broker              *SharedBrokerIdentity        `json:"broker,omitempty"`
+	Runtime             *SharedRuntimeProcessRecord  `json:"runtime,omitempty"`
+	Lease               *SharedLeaseRecord           `json:"lease,omitempty"`
+	Leases              []SharedLeaseStatus          `json:"leases,omitempty"`
+	LeaseID             string                       `json:"lease_id,omitempty"`
+	LeaseCount          int                          `json:"lease_count,omitempty"`
+	ClientKey           string                       `json:"client_key,omitempty"`
+	RequestedAt         time.Time                    `json:"requested_at,omitempty"`
+	Force               bool                         `json:"force,omitempty"`
+	TimeoutSeconds      int                          `json:"timeout_seconds,omitempty"`
+	State               string                       `json:"state,omitempty"`
+	Stage               string                       `json:"stage,omitempty"`
+	EffectiveMaxLeases  int                          `json:"effective_max_leases,omitempty"`
+	ConfiguredMaxLeases int                          `json:"configured_max_leases,omitempty"`
+	BrokerPID           int                          `json:"broker_pid,omitempty"`
+	BrokerStartTime     *ProcessStartTime            `json:"broker_start_time,omitempty"`
+	Resources           *SharedRuntimeResourceStatus `json:"resources,omitempty"`
 }
 
 type SharedLeaseStatus struct {
@@ -328,6 +330,7 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
 	}
 
 	server := newSharedBrokerServer(resolved, &record, &ledger, listener)
+	server.httpClient = options.HTTPClient
 	serveErr := server.serve(runtimeWait, options.Signals)
 	listener.Close()
 	if server.forcedStop() {
@@ -550,8 +553,14 @@ func cleanupSharedRuntimeState(paths SharedRuntimePaths) error {
 }
 
 type sharedBrokerEvent struct {
-	kind  string
-	force bool
+	kind               string
+	force              bool
+	resourceGeneration uint64
+}
+
+type sharedBrokerResourceDecision struct {
+	admissionGeneration uint64
+	statusGeneration    uint64
 }
 
 type sharedBrokerConnection struct {
@@ -573,6 +582,18 @@ type sharedBrokerAdmissionDependencies struct {
 	processExecIdentity func(sharedProcessObservation) (FileIdentity, error)
 }
 
+type sharedBrokerResourceDependencies struct {
+	observe                 func(context.Context, *http.Client, string, string, PiRuntimeResourcePressure) (sharedRuntimeProviderResourceObservation, error)
+	now                     func() time.Time
+	beforeLeaseReservation  func(uint64)
+	beforeStatusPublication func(sharedBrokerResourceDecision)
+}
+
+var sharedBrokerResourceSystem = sharedBrokerResourceDependencies{
+	observe: observeSharedRuntimeProviderResources,
+	now:     time.Now,
+}
+
 var sharedBrokerAdmissionSystem = sharedBrokerAdmissionDependencies{
 	peerIdentity:        sharedUnixPeerIdentity,
 	inspectProcess:      inspectSharedProcess,
@@ -580,19 +601,25 @@ var sharedBrokerAdmissionSystem = sharedBrokerAdmissionDependencies{
 }
 
 type sharedBrokerServer struct {
-	resolved    sharedResolvedProfile
-	record      *SharedBrokerRecord
-	ledger      *SharedRuntimeRestartLedger
-	listener    *net.UnixListener
-	mu          sync.Mutex
-	state       string
-	connections map[*sharedBrokerConnection]bool
-	leases      map[string]*SharedLeaseRecord
-	events      chan sharedBrokerEvent
-	hadLease    bool
-	forced      bool
-	readyAt     time.Time
-	admission   sharedBrokerAdmissionDependencies
+	resolved                    sharedResolvedProfile
+	record                      *SharedBrokerRecord
+	ledger                      *SharedRuntimeRestartLedger
+	listener                    *net.UnixListener
+	mu                          sync.Mutex
+	state                       string
+	connections                 map[*sharedBrokerConnection]bool
+	leases                      map[string]*SharedLeaseRecord
+	events                      chan sharedBrokerEvent
+	hadLease                    bool
+	forced                      bool
+	readyAt                     time.Time
+	admission                   sharedBrokerAdmissionDependencies
+	resources                   sharedBrokerResourceDependencies
+	httpClient                  *http.Client
+	pressureLatched             bool
+	resourceAdmissionGeneration uint64
+	resourceStatusGeneration    uint64
+	resourcePressureGeneration  uint64
 }
 
 var sharedFirstLeaseGraceDuration = func(sharing PiRuntimeSharing) time.Duration {
@@ -605,6 +632,7 @@ func newSharedBrokerServer(resolved sharedResolvedProfile, record *SharedBrokerR
 		connections: map[*sharedBrokerConnection]bool{}, leases: map[string]*SharedLeaseRecord{},
 		events: make(chan sharedBrokerEvent, 32), readyAt: dereferenceReadyAt(record.ReadyAt),
 		admission: sharedBrokerAdmissionSystem,
+		resources: sharedBrokerResourceSystem,
 	}
 }
 
@@ -650,6 +678,28 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
 	stableRunChannel := stableRun.C
 	var linger *time.Timer
 	var lingerChannel <-chan time.Time
+	var pressureEviction *time.Timer
+	var pressureEvictionChannel <-chan time.Time
+	stopPressureEviction := func() {
+		if pressureEviction != nil && !pressureEviction.Stop() {
+			select {
+			case <-pressureEviction.C:
+			default:
+			}
+		}
+		pressureEvictionChannel = nil
+	}
+	startPressureEviction := func() {
+		stopPressureEviction()
+		policy := server.resolved.Sharing.ResourcePressure
+		if policy == nil {
+			return
+		}
+		server.setState("pressured")
+		pressureEviction = time.NewTimer(time.Duration(policy.EvictionGraceSeconds) * time.Second)
+		pressureEvictionChannel = pressureEviction.C
+	}
+	defer stopPressureEviction()
 	for {
 		select {
 		case connection := <-accepts:
@@ -696,6 +746,7 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
 			case "lease-change":
 				leaseCount, hadLease := server.leaseFacts()
 				if leaseCount > 0 {
+					stopPressureEviction()
 					if linger != nil {
 						if !linger.Stop() {
 							select {
@@ -706,6 +757,8 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
 					}
 					lingerChannel = nil
 					server.setState("serving")
+				} else if server.resourcePressureLatched() {
+					startPressureEviction()
 				} else if hadLease {
 					server.setState("lingering")
 					if server.resolved.Sharing.LingerSeconds == 0 {
@@ -714,6 +767,25 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
 					}
 					linger = time.NewTimer(time.Duration(server.resolved.Sharing.LingerSeconds) * time.Second)
 					lingerChannel = linger.C
+				}
+			case "resource-pressure":
+				if !server.resourceTransitionCurrent(event) {
+					break
+				}
+				leaseCount, _ := server.leaseFacts()
+				if leaseCount == 0 {
+					startPressureEviction()
+				}
+			case "resource-recovered":
+				if !server.resourceTransitionCurrent(event) {
+					break
+				}
+				stopPressureEviction()
+				leaseCount, hadLease := server.leaseFacts()
+				if leaseCount > 0 || !hadLease {
+					server.setState("serving")
+				} else {
+					server.setState("lingering")
 				}
 			}
 		case <-firstLeaseGrace.C:
@@ -725,6 +797,13 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
 		case <-lingerChannel:
 			server.setDraining()
 			return nil
+		case <-pressureEvictionChannel:
+			pressureEvictionChannel = nil
+			leaseCount, _ := server.leaseFacts()
+			if server.resourcePressureLatched() && leaseCount == 0 {
+				server.setDraining()
+				return nil
+			}
 		}
 	}
 }
@@ -753,6 +832,25 @@ func (server *sharedBrokerServer) leaseFacts() (int, bool) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	return len(server.leases), server.hadLease
+}
+
+func (server *sharedBrokerServer) resourcePressureLatched() bool {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	return server.pressureLatched
+}
+
+func (server *sharedBrokerServer) resourceTransitionCurrent(event sharedBrokerEvent) bool {
+	if event.resourceGeneration == 0 {
+		return true
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if event.resourceGeneration != server.resourcePressureGeneration {
+		return false
+	}
+	return event.kind == "resource-pressure" && server.pressureLatched ||
+		event.kind == "resource-recovered" && !server.pressureLatched
 }
 
 func (server *sharedBrokerServer) forcedStop() bool {
@@ -823,11 +921,7 @@ func (server *sharedBrokerServer) handleConnection(connection *sharedBrokerConne
 				return
 			}
 			connection.leaseID = lease.LeaseID
-			server.mu.Lock()
-			server.leases[lease.LeaseID] = lease
-			server.hadLease = true
-			leaseCount := len(server.leases)
-			server.mu.Unlock()
+			leaseCount, _ := server.leaseFacts()
 			if err := writeSharedJSONAtomic(filepath.Join(server.resolved.Paths.LeasesDir, lease.LeaseID+".json"), lease); err != nil {
 				server.releaseConnectionLease(connection)
 				_ = sendSharedRefusal(connection, err)
@@ -864,8 +958,12 @@ func (server *sharedBrokerServer) handleConnection(connection *sharedBrokerConne
 			_ = connection.send(sharedWireMessage{Type: "released", LeaseID: message.LeaseID})
 			return
 		case "status":
-			state, leases := server.statusSnapshot()
-			if err := connection.send(sharedWireMessage{Type: "status", State: state, Stage: server.record.Stage, Leases: leases, LeaseCount: len(leases), Runtime: server.record.Runtime, Broker: &server.record.Broker, EffectiveSharing: server.record.Sharing}); err != nil {
+			resources, _, decision := server.observeResourceStatus(false)
+			if server.resources.beforeStatusPublication != nil {
+				server.resources.beforeStatusPublication(decision)
+			}
+			state, leases, resources := server.resourceStatusSnapshot(resources, decision)
+			if err := connection.send(sharedWireMessage{Type: "status", State: state, Stage: server.record.Stage, Leases: leases, LeaseCount: len(leases), Runtime: server.record.Runtime, Broker: &server.record.Broker, EffectiveSharing: server.record.Sharing, Resources: &resources}); err != nil {
 				return
 			}
 		case "stop":
@@ -924,9 +1022,42 @@ func (server *sharedBrokerServer) attestClient(connection *net.UnixConn, hello s
 }
 
 func (server *sharedBrokerServer) acquireLease(message, hello sharedWireMessage, client sharedProcessObservation) (*SharedLeaseRecord, error) {
+	if !sharedRuntimeResourcePolicyMatches(hello.ConfiguredSharing, server.resolved.Sharing) {
+		details := map[string]any{"effective_sharing": server.resolved.Sharing}
+		if hello.ConfiguredSharing != nil {
+			details["configured_sharing"] = *hello.ConfiguredSharing
+		}
+		return nil, &SharedRuntimeError{
+			Code:          "shared_runtime_resource_policy_mismatch",
+			Reason:        "configured_resource_pressure_policy_differs",
+			MismatchField: "sharing.resource_pressure",
+			Details:       details,
+			Err:           errors.New("configured resource-pressure policy differs from the live broker policy"),
+		}
+	}
+	resources, transition, decision := server.observeResourceStatus(true)
+	resourceGeneration := decision.admissionGeneration
+	if resources.Admission == "refused" && resources.State != "draining" {
+		server.notifyResourceTransition(transition, resourceGeneration)
+		code := "shared_runtime_resource_unknown"
+		if resources.State == "pressured" {
+			code = "shared_runtime_resource_pressure"
+		}
+		return nil, &SharedRuntimeError{Code: code, Details: map[string]any{"resources": resources}, Err: errors.New("resource policy refused a new lease")}
+	}
+	if server.resources.beforeLeaseReservation != nil {
+		server.resources.beforeLeaseReservation(resourceGeneration)
+	}
 	server.mu.Lock()
-	defer server.mu.Unlock()
+	if resourceGeneration != 0 && resourceGeneration != server.resourceAdmissionGeneration {
+		brokerState := server.state
+		policy := *server.resolved.Sharing.ResourcePressure
+		server.mu.Unlock()
+		status := failedSharedRuntimeResourceStatus(policy, brokerState, "resource_observation_stale")
+		return nil, &SharedRuntimeError{Code: "shared_runtime_resource_unknown", Details: map[string]any{"resources": status}, Err: errors.New("resource observation was superseded before lease grant")}
+	}
 	if server.state == "draining" {
+		server.mu.Unlock()
 		return nil, sharedRuntimeError("shared_runtime_shutting_down", errors.New("broker is draining"))
 	}
 	if len(server.leases) >= server.resolved.Sharing.MaxLeases {
@@ -934,6 +1065,7 @@ func (server *sharedBrokerServer) acquireLease(message, hello sharedWireMessage,
 		if hello.ConfiguredSharing != nil {
 			configured = hello.ConfiguredSharing.MaxLeases
 		}
+		server.mu.Unlock()
 		return nil, &SharedRuntimeError{Code: "shared_runtime_lease_limit", Details: map[string]any{
 			"effective_max_leases":  server.resolved.Sharing.MaxLeases,
 			"configured_max_leases": configured,
@@ -943,16 +1075,89 @@ func (server *sharedBrokerServer) acquireLease(message, hello sharedWireMessage,
 	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
+		server.mu.Unlock()
 		return nil, sharedRuntimeError("shared_runtime_state_path_invalid", err)
 	}
 	now := time.Now().UTC()
-	return &SharedLeaseRecord{
+	lease := &SharedLeaseRecord{
 		LeaseID: hex.EncodeToString(nonce[:]), RunID: hello.RunID, ClientKey: message.ClientKey,
 		ClientPID: client.PID, ClientStartTime: client.StartTime,
 		RuntimeKey: server.resolved.RuntimeKey, ProfileDigest: server.resolved.ProfileDigest,
 		Endpoint: server.resolved.Profile.BaseURL, RuntimePID: server.record.Runtime.PID,
 		GrantedAt: now, LastHeartbeatAt: now,
-	}, nil
+	}
+	server.leases[lease.LeaseID] = lease
+	server.hadLease = true
+	server.mu.Unlock()
+	server.notifyResourceTransition(transition, resourceGeneration)
+	return lease, nil
+}
+
+func (server *sharedBrokerServer) observeResourceStatus(commitAdmissionState bool) (SharedRuntimeResourceStatus, string, sharedBrokerResourceDecision) {
+	sharing := server.resolved.Sharing
+	server.mu.Lock()
+	brokerState := server.state
+	if sharing.ResourcePressureMode != "provider" || sharing.ResourcePressure == nil {
+		server.mu.Unlock()
+		return disabledSharedRuntimeResourceStatus(sharing, brokerState, "broker-config"), "", sharedBrokerResourceDecision{}
+	}
+	decision := sharedBrokerResourceDecision{}
+	if commitAdmissionState {
+		server.resourceAdmissionGeneration++
+		decision.admissionGeneration = server.resourceAdmissionGeneration
+	} else {
+		server.resourceStatusGeneration++
+		decision.statusGeneration = server.resourceStatusGeneration
+		decision.admissionGeneration = server.resourceAdmissionGeneration
+	}
+	server.mu.Unlock()
+	policy := *sharing.ResourcePressure
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(policy.ObservationTimeoutMilliseconds)*time.Millisecond)
+	defer cancel()
+	observation, err := server.resources.observe(ctx, server.httpClient, server.resolved.Profile.BaseURL, server.resolved.Profile.Model, policy)
+	server.mu.Lock()
+	brokerState = server.state
+	if err != nil {
+		server.mu.Unlock()
+		return failedSharedRuntimeResourceStatus(policy, brokerState, "provider_observation_failed"), "", decision
+	}
+	admissionStale := commitAdmissionState && decision.admissionGeneration != server.resourceAdmissionGeneration
+	statusStale := !commitAdmissionState && (decision.statusGeneration != server.resourceStatusGeneration || decision.admissionGeneration != server.resourceAdmissionGeneration)
+	if admissionStale || statusStale {
+		server.mu.Unlock()
+		return failedSharedRuntimeResourceStatus(policy, brokerState, "resource_observation_stale"), "", decision
+	}
+	previousPressure := server.pressureLatched
+	status, pressure := classifySharedRuntimeResources(observation, policy, brokerState, previousPressure, server.resources.now())
+	if commitAdmissionState {
+		server.pressureLatched = pressure
+		if previousPressure != pressure {
+			server.resourcePressureGeneration = decision.admissionGeneration
+		}
+	} else if pressure {
+		// A diagnostic poll does not own the pressure latch or eviction timer,
+		// but direct pressure evidence must invalidate any healthy admission
+		// observation that has not reserved its lease yet.
+		server.resourceAdmissionGeneration++
+		decision.admissionGeneration = server.resourceAdmissionGeneration
+	}
+	if !commitAdmissionState && previousPressure && !pressure {
+		// Status is a read-only diagnostic path. It must report the pressure
+		// admission state the broker still enforces until acquireLease owns and
+		// applies recovery, including cancellation of the eviction sequence.
+		status = enforceSharedRuntimeResourceState(status, brokerState, true)
+	}
+	server.mu.Unlock()
+	if !commitAdmissionState {
+		return status, "", decision
+	}
+	transition := ""
+	if !previousPressure && pressure {
+		transition = "pressured"
+	} else if previousPressure && !pressure {
+		transition = "recovered"
+	}
+	return status, transition, decision
 }
 
 func (server *sharedBrokerServer) releaseConnectionLease(connection *sharedBrokerConnection) {
@@ -972,17 +1177,63 @@ func (server *sharedBrokerServer) releaseConnectionLease(connection *sharedBroke
 }
 
 func (server *sharedBrokerServer) notify(kind string, force bool) {
+	server.notifyEvent(sharedBrokerEvent{kind: kind, force: force})
+}
+
+func (server *sharedBrokerServer) notifyResourceTransition(kind string, generation uint64) {
+	if kind == "" {
+		return
+	}
+	server.notifyEvent(sharedBrokerEvent{kind: "resource-" + kind, resourceGeneration: generation})
+}
+
+func (server *sharedBrokerServer) notifyEvent(event sharedBrokerEvent) {
 	select {
-	case server.events <- sharedBrokerEvent{kind: kind, force: force}:
+	case server.events <- event:
 	default:
-		go func() { server.events <- sharedBrokerEvent{kind: kind, force: force} }()
+		go func() { server.events <- event }()
 	}
 }
 
 func (server *sharedBrokerServer) statusSnapshot() (string, []SharedLeaseStatus) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
-	now := time.Now()
+	return server.statusSnapshotLocked(time.Now())
+}
+
+func (server *sharedBrokerServer) resourceStatusSnapshot(resources SharedRuntimeResourceStatus, decision sharedBrokerResourceDecision) (string, []SharedLeaseStatus, SharedRuntimeResourceStatus) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	brokerState := server.state
+	stale := decision.statusGeneration != 0 && (decision.statusGeneration != server.resourceStatusGeneration || decision.admissionGeneration != server.resourceAdmissionGeneration)
+	if stale {
+		resources = failedSharedRuntimeResourceStatus(*server.resolved.Sharing.ResourcePressure, brokerState, "resource_observation_stale")
+		resources = enforceSharedRuntimeResourceState(resources, brokerState, false)
+	} else {
+		resources = enforceSharedRuntimeResourceState(resources, brokerState, server.pressureLatched)
+	}
+	state, leases := server.statusSnapshotLocked(time.Now())
+	return state, leases, resources
+}
+
+func enforceSharedRuntimeResourceState(status SharedRuntimeResourceStatus, brokerState string, pressureLatched bool) SharedRuntimeResourceStatus {
+	if brokerState == "draining" {
+		status.State = SharedRuntimeResourceDraining
+		status.Admission = SharedRuntimeAdmissionRefused
+		status.Reason = "broker_draining"
+		return status
+	}
+	if pressureLatched {
+		status.LoadedModelMemory.State = SharedRuntimeMemoryPressured
+		status.LoadedModelMemory.Reason = "loaded_model_memory_pressure"
+		status.State = SharedRuntimeResourcePressured
+		status.Admission = SharedRuntimeAdmissionRefused
+		status.Reason = "loaded_model_memory_pressure"
+	}
+	return status
+}
+
+func (server *sharedBrokerServer) statusSnapshotLocked(now time.Time) (string, []SharedLeaseStatus) {
 	leases := make([]SharedLeaseStatus, 0, len(server.leases))
 	for _, lease := range server.leases {
 		state := "held"
@@ -1001,7 +1252,14 @@ func sendSharedRefusal(connection *sharedBrokerConnection, err error) error {
 	if errors.As(err, &shared) {
 		message.Code = shared.Code
 		message.Reason = shared.Reason
+		message.MismatchField = shared.MismatchField
 		if shared.Details != nil {
+			if value, ok := shared.Details["configured_sharing"].(PiRuntimeSharing); ok {
+				message.ConfiguredSharing = &value
+			}
+			if value, ok := shared.Details["effective_sharing"].(PiRuntimeSharing); ok {
+				message.EffectiveSharing = &value
+			}
 			if value, ok := shared.Details["effective_max_leases"].(int); ok {
 				message.EffectiveMaxLeases = value
 			}
@@ -1013,6 +1271,9 @@ func sendSharedRefusal(connection *sharedBrokerConnection, err error) error {
 			}
 			if value, ok := shared.Details["broker_start_time"].(ProcessStartTime); ok {
 				message.BrokerStartTime = &value
+			}
+			if value, ok := shared.Details["resources"].(SharedRuntimeResourceStatus); ok {
+				message.Resources = &value
 			}
 		}
 	}

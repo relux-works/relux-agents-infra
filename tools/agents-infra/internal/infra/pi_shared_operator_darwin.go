@@ -77,6 +77,7 @@ type SharedRuntimeStatus struct {
 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
 	ManualQuarantine   bool                        `json:"manual_quarantine"`
 	HalfOpen           bool                        `json:"half_open"`
+	Resources          SharedRuntimeResourceStatus `json:"resources"`
 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
 	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
@@ -120,6 +121,10 @@ func SharedRuntimeStatusReport(options SharedRuntimeOperatorOptions) (SharedRunt
 		report.Broker = sharedBrokerStatus(message.State, message.Stage, "attested", *message.Broker)
 		report.Runtime = sharedRuntimeProcessStatus(message.Runtime, "attested")
 		report.Leases = append([]SharedLeaseStatus(nil), message.Leases...)
+		if message.Resources == nil {
+			return SharedRuntimeStatus{}, sharedRuntimeError("protocol_violation", errors.New("broker status response lacks resource facts"))
+		}
+		report.Resources = *message.Resources
 		report.Attestation = append([]SharedRuntimeGateOutcome(nil), attested.gates...)
 		report.Sharing.Effective = message.EffectiveSharing
 		report.Sharing.FixedByPID = message.Broker.PID
@@ -236,9 +241,10 @@ func newSharedRuntimeStatus(resolved sharedResolvedProfile) SharedRuntimeStatus 
 	return SharedRuntimeStatus{
 		RuntimeKey: resolved.RuntimeKey, ProfileDigest: resolved.ProfileDigest,
 		Endpoint: resolved.Profile.BaseURL, Paths: resolved.Paths,
-		Sharing: SharedRuntimeSharingStatus{Mode: resolved.Sharing.Mode, Configured: resolved.Sharing},
-		Broker:  SharedRuntimeBrokerStatus{State: "absent", Source: "determined"},
-		Leases:  []SharedLeaseStatus{}, Attestation: []SharedRuntimeGateOutcome{},
+		Sharing:   SharedRuntimeSharingStatus{Mode: resolved.Sharing.Mode, Configured: resolved.Sharing},
+		Broker:    SharedRuntimeBrokerStatus{State: "absent", Source: "determined"},
+		Resources: unavailableSharedRuntimeResourceStatus(resolved.Sharing, "absent", "broker-absent"),
+		Leases:    []SharedLeaseStatus{}, Attestation: []SharedRuntimeGateOutcome{},
 	}
 }
 
@@ -280,6 +286,9 @@ func sharedRuntimeRecordStatus(resolved sharedResolvedProfile, report SharedRunt
 		report.Sharing.Effective = &effective
 		report.Sharing.FixedByPID = record.Broker.PID
 		report.Sharing.FixedAt = &record.Broker.StartTime
+		report.Resources = unavailableSharedRuntimeResourceStatus(effective, state, "record-derived-unverified")
+	} else {
+		report.Resources = unknownSharedRuntimeResourcePolicyStatus(state, "record-derived-unverified")
 	}
 	leasing, err := readSharedLeaseMirrors(resolved.Paths.LeasesDir)
 	if err != nil {

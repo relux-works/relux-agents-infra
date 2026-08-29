@@ -1,0 +1,11 @@
+{
+  "schema": "agents-infra.pi.shared-runtime.resource-observation.v1",
+  "model": "Qwen-test",
+  "loaded_model_memory": {
+    "state": "observed",
+    "bytes": 900
+  },
+  "inference": {
+    "state": "busy"
+  }
+}

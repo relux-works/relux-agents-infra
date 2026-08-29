@@ -107,19 +107,32 @@ type PiRuntime struct {
 }
 
 type PiRuntimeSharing struct {
-	Mode                         string `json:"mode"`
-	LingerSeconds                int    `json:"linger_seconds"`
-	MaxLeases                    int    `json:"max_leases"`
-	MaxSegmentBytes              int    `json:"max_segment_bytes"`
-	MaxSegments                  int    `json:"max_segments"`
-	HeartbeatIntervalSeconds     int    `json:"heartbeat_interval_seconds"`
-	LeaseStaleSeconds            int    `json:"lease_stale_seconds"`
-	BrokerStartTimeoutSeconds    int    `json:"broker_start_timeout_seconds"`
-	RestartLimit                 int    `json:"restart_limit"`
-	RestartInitialBackoffSeconds int    `json:"restart_initial_backoff_seconds"`
-	RestartMaxBackoffSeconds     int    `json:"restart_max_backoff_seconds"`
-	StableRunSeconds             int    `json:"stable_run_seconds"`
-	QuarantineSeconds            int    `json:"quarantine_seconds"`
+	Mode                         string                     `json:"mode"`
+	LingerSeconds                int                        `json:"linger_seconds"`
+	MaxLeases                    int                        `json:"max_leases"`
+	MaxSegmentBytes              int                        `json:"max_segment_bytes"`
+	MaxSegments                  int                        `json:"max_segments"`
+	HeartbeatIntervalSeconds     int                        `json:"heartbeat_interval_seconds"`
+	LeaseStaleSeconds            int                        `json:"lease_stale_seconds"`
+	BrokerStartTimeoutSeconds    int                        `json:"broker_start_timeout_seconds"`
+	RestartLimit                 int                        `json:"restart_limit"`
+	RestartInitialBackoffSeconds int                        `json:"restart_initial_backoff_seconds"`
+	RestartMaxBackoffSeconds     int                        `json:"restart_max_backoff_seconds"`
+	StableRunSeconds             int                        `json:"stable_run_seconds"`
+	QuarantineSeconds            int                        `json:"quarantine_seconds"`
+	ResourcePressureMode         string                     `json:"resource_pressure_mode"`
+	ResourcePressure             *PiRuntimeResourcePressure `json:"resource_pressure,omitempty"`
+}
+
+type PiRuntimeResourcePressure struct {
+	ObservationPath                string `json:"observation_path"`
+	ObservationTimeoutMilliseconds int    `json:"observation_timeout_milliseconds"`
+	PressureThresholdBytes         int    `json:"pressure_threshold_bytes"`
+	RecoveryThresholdBytes         int    `json:"recovery_threshold_bytes"`
+	EvictionGraceSeconds           int    `json:"eviction_grace_seconds"`
+	PressureAction                 string `json:"pressure_action"`
+	UnknownAction                  string `json:"unknown_action"`
+	BusyAction                     string `json:"busy_action"`
 }
 
 type PiDFlash struct {
@@ -455,7 +468,7 @@ func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
 }
 
 func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime) (PiRuntimeSharing, error) {
-	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "max_segment_bytes", "max_segments", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds", "restart_limit", "restart_initial_backoff_seconds", "restart_max_backoff_seconds", "stable_run_seconds", "quarantine_seconds"); err != nil {
+	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "max_segment_bytes", "max_segments", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds", "restart_limit", "restart_initial_backoff_seconds", "restart_max_backoff_seconds", "stable_run_seconds", "quarantine_seconds", "resource_pressure_mode", "resource_pressure"); err != nil {
 		return PiRuntimeSharing{}, err
 	}
 	var sharing PiRuntimeSharing
@@ -522,7 +535,82 @@ func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime
 	if sharing.QuarantineSeconds, err = requiredPositiveDurationSeconds(table, "quarantine_seconds", maxTimeDurationSeconds); err != nil {
 		return sharing, fieldError(field+".quarantine_seconds", err)
 	}
+	if sharing.ResourcePressureMode, err = requiredString(table, "resource_pressure_mode"); err != nil {
+		return sharing, fieldError(field+".resource_pressure_mode", err)
+	}
+	resourceTable, resourcePresent, err := projectConfigTable(table, "resource_pressure", field+".resource_pressure")
+	if err != nil {
+		return sharing, err
+	}
+	switch sharing.ResourcePressureMode {
+	case "disabled":
+		if resourcePresent {
+			return sharing, fieldError(field+".resource_pressure", errors.New("must be absent when resource_pressure_mode is disabled"))
+		}
+	case "provider":
+		if !resourcePresent {
+			return sharing, fieldError(field+".resource_pressure", errors.New("required when resource_pressure_mode is provider"))
+		}
+		resource, parseErr := parsePiRuntimeResourcePressure(resourceTable, field+".resource_pressure")
+		if parseErr != nil {
+			return sharing, parseErr
+		}
+		sharing.ResourcePressure = &resource
+	default:
+		return sharing, fieldError(field+".resource_pressure_mode", errors.New("must equal disabled or provider"))
+	}
 	return sharing, nil
+}
+
+func parsePiRuntimeResourcePressure(table map[string]any, field string) (PiRuntimeResourcePressure, error) {
+	if err := rejectUnknownFields(table, field, "observation_path", "observation_timeout_milliseconds", "pressure_threshold_bytes", "recovery_threshold_bytes", "eviction_grace_seconds", "pressure_action", "unknown_action", "busy_action"); err != nil {
+		return PiRuntimeResourcePressure{}, err
+	}
+	var policy PiRuntimeResourcePressure
+	var err error
+	if policy.ObservationPath, err = requiredString(table, "observation_path"); err != nil {
+		return policy, fieldError(field+".observation_path", err)
+	}
+	if !strings.HasPrefix(policy.ObservationPath, "/") || strings.ContainsAny(policy.ObservationPath, "?#") || filepath.Clean(policy.ObservationPath) != policy.ObservationPath {
+		return policy, fieldError(field+".observation_path", errors.New("must be a clean absolute HTTP path without query or fragment"))
+	}
+	if policy.ObservationTimeoutMilliseconds, err = requiredPositiveInt(table, "observation_timeout_milliseconds"); err != nil {
+		return policy, fieldError(field+".observation_timeout_milliseconds", err)
+	}
+	if policy.ObservationTimeoutMilliseconds > sharedRuntimeResourceObservationMaxTimeoutMilliseconds {
+		return policy, fieldError(field+".observation_timeout_milliseconds", fmt.Errorf("must be at most %d", sharedRuntimeResourceObservationMaxTimeoutMilliseconds))
+	}
+	if policy.PressureThresholdBytes, err = requiredPositiveInt(table, "pressure_threshold_bytes"); err != nil {
+		return policy, fieldError(field+".pressure_threshold_bytes", err)
+	}
+	if policy.RecoveryThresholdBytes, err = requiredPositiveInt(table, "recovery_threshold_bytes"); err != nil {
+		return policy, fieldError(field+".recovery_threshold_bytes", err)
+	}
+	if policy.RecoveryThresholdBytes >= policy.PressureThresholdBytes {
+		return policy, fieldError(field+".recovery_threshold_bytes", errors.New("must be less than pressure_threshold_bytes"))
+	}
+	if policy.EvictionGraceSeconds, err = requiredNonNegativeDurationSeconds(table, "eviction_grace_seconds", maxTimeDurationSeconds); err != nil {
+		return policy, fieldError(field+".eviction_grace_seconds", err)
+	}
+	if policy.PressureAction, err = requiredString(table, "pressure_action"); err != nil {
+		return policy, fieldError(field+".pressure_action", err)
+	}
+	if policy.PressureAction != "refuse-new-drain-idle" {
+		return policy, fieldError(field+".pressure_action", errors.New("must equal refuse-new-drain-idle"))
+	}
+	if policy.UnknownAction, err = requiredString(table, "unknown_action"); err != nil {
+		return policy, fieldError(field+".unknown_action", err)
+	}
+	if policy.UnknownAction != "refuse-new" {
+		return policy, fieldError(field+".unknown_action", errors.New("must equal refuse-new"))
+	}
+	if policy.BusyAction, err = requiredString(table, "busy_action"); err != nil {
+		return policy, fieldError(field+".busy_action", err)
+	}
+	if policy.BusyAction != "observe" {
+		return policy, fieldError(field+".busy_action", errors.New("must equal observe"))
+	}
+	return policy, nil
 }
 
 func parsePiDFlash(table map[string]any, field string, runtimeArgv []string) (PiDFlash, error) {

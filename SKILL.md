@@ -398,6 +398,40 @@ Consumers must distinguish a pre-extension missing key from post-extension
 `last_failure_at` remain explicitly absent until a separately reviewed ledger
 event persists their reason and time; do not synthesize them from counters.
 
+Shared profiles must explicitly select `resource_pressure_mode = "disabled"`
+or `"provider"`; there is no implicit mode. Provider mode requires the complete
+strict `runtime.sharing.resource_pressure` table documented in the README,
+including bounded observation timeout, pressure and lower recovery thresholds,
+eviction grace, and the exact actions `refuse-new-drain-idle`, `refuse-new`, and
+`observe`. Its absolute observation path returns the versioned provider facts;
+the broker accepts at most 16 KiB, requires exact schema/model identity, and
+reports failed, malformed, partial, or provider-declared unavailable facts as
+`unknown`, never healthy or absent. Pressure refuses only new leases, preserves
+connection-bound owners, and drains after final release plus configured grace;
+unknown refuses without eviction, while inference busy remains independently
+observed rather than inferred from leases. Protocol v7 status publishes the
+versioned aggregate `healthy|busy|pressured|draining|unknown` handoff plus the
+independent facts and effective policy. Admission and diagnostic provider reads
+use separate monotonic generations: healthy or busy status polling cannot stale
+a pending healthy lease, while direct pressure observed by status invalidates
+unsafe admission before reservation without taking ownership of the latch or
+eviction timer. Immediately before status publication, revalidate both
+generations and snapshot the latch, broker state, and leases under one lock;
+supersession is explicit `unknown/refused` with
+`resource_observation_stale`, never stale availability. Lease reservation is
+atomic with the admission generation check, and pressure/recovery events are
+bound to the generation that changed the latch. A caller connecting to an
+existing broker may observe different sharing configuration in status. An
+unreachable broker's readable record keeps `record-derived-unverified` and
+binds `sharing.effective` plus `resources.policy` to the same recorded sharing
+value; provider facts stay unknown/refused. A pre-extension record without
+sharing reports policy mode `unknown` and never substitutes caller config as
+effective enforcement. Lease acquisition requires exact resource-pressure
+mode/table equality across observation path/timeout, both thresholds, grace,
+and all actions, and returns `shared_runtime_resource_policy_mismatch` before
+provider I/O or lease reservation on any single-field difference; never narrow
+the caller policy to the broker.
+
 Before raising a local profile's context window, configure every member of its
 `[profiles.<name>.stress]` table in the separate model-harness config and run:
 

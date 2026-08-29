@@ -743,7 +743,7 @@ func TestSharedRuntimeAuthorizationMutantCalibrationAndHarnessNegatives(t *testi
 		}
 	})
 
-	if SharedRuntimeProtocolVersion != 6 {
+	if SharedRuntimeProtocolVersion != 7 {
 		t.Fatalf("revision 9 protocol version=%d want=6", SharedRuntimeProtocolVersion)
 	}
 	checked := 0
