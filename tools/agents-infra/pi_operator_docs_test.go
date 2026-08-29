@@ -13,6 +13,10 @@ func TestPiOperatorContractDocumentsCycle10Boundary(t *testing.T) {
 	for _, want := range []string{
 		"### Managed Pi local-model operator contract",
 		`profile = "qwen-3.8-27b"`,
+		`yolo_mode = false`,
+		`reasoning = true`,
+		`thinking = "medium"`,
+		`thinking_format = "qwen-chat-template"`,
 		`pi_compatibility = "github-release:earendil-works/pi@v0.84.2:darwin-arm64#sha256-c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65"`,
 		`requested_capabilities = ["dflash", "text", "tools"]`,
 		`target_argv = ["--model", "Muse-Glimmer-30B"]`,
@@ -35,6 +39,8 @@ func TestPiOperatorContractDocumentsCycle10Boundary(t *testing.T) {
 		"`HF_TOKEN`, cache-location variables, and unrelated environment names remain admitted",
 		"`LLAMA_API_KEY` values are never reported",
 		"pi-infra --print-config",
+		"`yolo_mode = true` fails before executable lookup or launch with `pi_yolo_mode_unsupported`",
+		"Never map Pi yolo to `--approve`",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("README.md missing Pi operator contract fragment %q", want)
@@ -57,6 +63,9 @@ func TestReluxAgentsInfraSkillRoutesSafePiWorkflowToSource(t *testing.T) {
 		"Other `GGML_*` names remain outside this exact-name policy",
 		"Exact `LLAMA_API_KEY` is refused before managed state or runtime spawn",
 		"Keep `HF_TOKEN`, cache-location variables, `LLAMA_API_KEY` lookalikes",
+		"Non-`off` reasoning additionally requires profile `reasoning = true`",
+		"Explicit `yolo_mode = true` fails before executable lookup or launch with `pi_yolo_mode_unsupported`",
+		"`--approve`/`-a` controls only one-run trust for project-local files",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Fatalf("SKILL.md missing managed Pi guidance %q", want)

@@ -3,6 +3,140 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-08-25
+
+### 2022 — Qwen Thinking Is Native, Pi Yolo Is Not
+- MILESTONE: Canonical Qwen non-`off` reasoning now requires a reasoning-capable Pi profile with `qwen-chat-template`; source-backed `medium` composes to native `--thinking medium`.
+- FIX: `agents.pi.primary_session.yolo_mode` composes with nearest-field precedence, defaults safely to false, and rejects true before executable lookup or launch with `pi_yolo_mode_unsupported` because pinned Pi exposes no unattended tool policy.
+- EVIDENCE: Full Go tests, vet, Darwin and Windows builds, and non-launching compose/print checks exit 0; narrowing the yolo gate and Qwen thinking-format gate makes their production-entrypoint tests fail with exit 1 before exact restoration.
+- SCOPE: `TASK-260825-kpky8f`; no Pi runtime launch or external model execution.
+
+### 2009 — Pi Approve Is Project Trust, Not Yolo
+- FINDING: Pinned Pi `0.84.2` parses `--approve` into `projectTrustOverride`; its docs define the flag only as one-run trust for project-local files and expose no native unattended tool-execution policy.
+- FINDING: Qwen thinking is native when the generated model has `reasoning=true`, `compat.thinkingFormat=qwen-chat-template`, and launch argv selects `--thinking medium`; Pi then sends `chat_template_kwargs.enable_thinking=true` with `preserve_thinking=true`.
+- DECISION: `agents.pi.primary_session.yolo_mode=true` must fail before executable lookup or launch; it must never map to `--approve`. Omitted/false remains the compatible safe policy.
+- SCOPE: `TASK-260825-kpky8f`; Pi config parsing, primary-session compose/launch gates, Qwen target validation, tests, README, and `SKILL.md`.
+
+### 1449 — Model-check Operator Contract Is Executably Pinned
+- REGRESSION: The bounded model-check README and skill sections could be deleted while the full uncached Go suite remained green, so unattended `--approve`, evidence, timeout, cleanup, and exit semantics had no drift guard.
+- FIX: Dedicated doc-contract tests pin both sections, derive deadline and exit fragments from production constants, and cover exact artifacts, modes, overwrite refusal, read-evidence limits, cleanup, and exit-5 precedence.
+- EVIDENCE: Narrowing the README precedence clause and the skill's failed-read-versus-absence rule made their named uncached tests fail with exit 1; byte-for-byte restoration and the unmutated tests then passed.
+- SCOPE: `TASK-260825-39ycg2`; no model-check runtime behavior changed.
+
+### 1409 — Qwen Skill Read Proved Before Deadline
+- FINDING: Installed `agents-infra model-check` observed a completed non-error `read` of `$HOME/.agents/skills/relux-agents-infra/SKILL.md` through the real `qwen-infra` target.
+- ANOMALY: The `5m` smoke timed out with exit `2` after `300192ms`; the response marker was unmet and the valid event stream remained incomplete.
+- EVIDENCE: Both owned process-group cleanup states are `confirmed`; sanitized outcome belongs to `TASK-260825-39ycg2`, while raw JSONL/stderr remain local mode-`0600` evidence.
+- DECISION: Skill discovery/read is proven; final-response behavior is not. Do not treat the absent marker as no skill read or the successful read as an overall passing check.
+
+### 1340 — Load Fixtures Must Own Their Process Cleanup
+- ANOMALY: Reviewer cycle 2 left eight busy-loop load-fixture processes in one process group after timing-flake diagnosis.
+- EVIDENCE: Orchestrator terminated the exact fixture PIDs and verified the process group empty before rework continued.
+- DECISION: Do not reproduce the unbounded load loop; cold-start stability uses an early PID marker, 2s deadline headroom, and six uncached production-entrypoint repetitions.
+- SCOPE: Review fixture only; no production process leak observed.
+
+### 1338 — Exit-Code Interfaces Need Nominal Ownership
+- REGRESSION: `main` matched any `ExitCode() int`, so provider `*exec.ExitError` values changed established Codex, Claude, and target CLI exits outside model-check scope.
+- FIX: `tools/agents-infra/main.go` recognizes only `*infra.ModelCheckFailure`; a production-binary Codex child exiting 42 must leave the wrapper at legacy exit 1.
+- EVIDENCE: Reintroducing the structural interface makes `TestMainKeepsProviderChildFailuresAtLegacyExitOne` fail with observed exit 42.
+- SCOPE: `TASK-260825-rtmcsw`; model-check retains its documented exits 1–5.
+
+### 1338 — Cleanup Attestation Must Observe Live OS State
+- ROOT CAUSE: Synthetic pending/failed report tests proved only the evaluator; a constant `processGroupCleanupState = confirmed` producer survived the suite.
+- FIX: `tools/agents-infra/internal/infra/pi_test.go` probes a live process group as failed and the same reaped group as confirmed; the cold-start fixture writes its PID before heavy imports.
+- EVIDENCE: The constant-confirmed mutant fails the named producer test; the readiness deadline case passes 6/6 uncached runs.
+- SCOPE: `TASK-260825-rtmcsw`; no external model or runtime download.
+
+### 1300 — Model Check Gates Need Boundary Proof
+- REGRESSION: A fixed prompt and universally true cleanup attestation both survived the original positive production suite.
+- FIX: `tools/agents-infra/model_check_main_test.go` captures the provider request body; `internal/infra/model_check_test.go` pins pending/failed cleanup to exit 1.
+- EVIDENCE: Narrowed prompt, cleanup, deadline, raw-overwrite, and non-managed-target mutants each fail a named production or lifecycle test.
+- SCOPE: `TASK-260825-rtmcsw`; no external model download.
+
+### 1210 — Bounded Checks Need Process-Group Evidence
+- ROOT CAUSE: Managed `RunPi` bounded only signal and runtime cleanup; normal Pi completion waited for the leader and exposed no machine-readable proof that either owned process group was gone.
+- FIX: `tools/agents-infra/internal/infra/pi_launch_posix.go:239` routes Pi and runtime through bounded TERM-to-SIGKILL group cleanup; `internal/infra/model_check.go:144` records sanitized cleanup state with every behavior-check outcome.
+- EVIDENCE: Production-binary timeout fixture leaves both an ignore-TERM `bash` descendant and runtime descendant; the command exits with the timeout code, reports cleanup confirmed, and direct PID probes return `ESRCH` for every recorded process.
+- SCOPE: `TASK-260825-rtmcsw`; no duplicate shell launcher or external model download.
+
+## 2026-08-24
+
+### 2152 — Local Setup Honors Provider-Owned Skill Links
+- ROOT CAUSE: `managedSkillLinkFailures` filtered provider surfaces by source-managed names only in global mode, so local setup contradicted the documented ownership boundary and rejected preserved external packages such as `mac-infra`.
+- FIX: `tools/agents-infra/internal/infra/skill_link_validation.go` now derives managed names from `.agents/.skills` for both modes; production CLI tests preserve unmanaged links while still refusing a narrowed managed-name gate.
+- EVIDENCE: Full Go suite, vet, build, source/global/local setup, and both verifies exit 0; the observed `casual-talks` external links remain unchanged.
+- SCOPE: `TASK-260824-2a4gk3`; no relaxation inside source-managed skill packages.
+
+### 2151 — Casual Talks Qwen Target Runs Text And Tools
+- MILESTONE: Installed `openai-infra`, `anthropic-infra`, and `qwen-infra` resolve the configured target tuples in `/Users/alexis/src/casual-talks`; print/compose remain non-launching and preserve config bytes.
+- EVIDENCE: Real Qwen/Pi run on mlx-lm 0.31.3 emits `TEXT_RESPONSE_OK`, completes successful `write` and `read` tool results on a task-scoped 39-byte file, emits `TOOL_ROUNDTRIP_OK`, and exits 0.
+- FINDING: Runtime bound only `127.0.0.1:18011`; post-run listener, runtime process, and profile-lock holder checks all return expected absence.
+- SCOPE: `TASK-260824-2a4gk3`; no secrets or arbitrary environment values persisted.
+
+### 2109 — Absolute MLX Identity Unblocks Project Target Rollout
+- DECISION: Operator selected `/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit` as the exact Qwen target/profile identity because real `mlx_lm.server` uses that resolved path for load, requests, and `/v1/models` readiness.
+- MILESTONE: `TASK-260824-1jjze0` atomically rewrote all 121 in-scope project configs after a real-server exact-ID plus completion gate; 363 post-apply production alias composes and rollback-readiness verification exit 0.
+- FINDING: Per-file backup/current/candidate hashes and raw MCP comparisons pass for all 121 configs; unrelated status lines across 116 Git worktrees remain unchanged.
+- SCOPE: Task-only script and evidence under `.temp/TASK-260824-1jjze0`; no runtime migration path added.
+
+### 2051 — Canonical Qwen Selector Is Not An MLX Runtime Identity
+- ROOT CAUSE: Real `mlx_lm.server --model Qwen3.8-27B-MLX-8bit` treats the required canonical model ID as a Hugging Face repo, receives `RepositoryNotFound`, and keeps an empty HTTP shell alive; the local weights live at a differently named absolute path.
+- FINDING: MLX reports a local model at `/v1/models` by resolved absolute path; managed Pi correctly reaches that route as `base_url + readiness_path`, but `waitPiRuntimeReady` requires the inventory ID to equal the canonical profile model exactly.
+- EVIDENCE: `TASK-260824-1jjze0` full dry-run validates 121 candidates through 363 production alias compose calls; real apply gate exits 3 before writes, records zero writes, and post-refusal hashes match all 121 sources.
+- BLOCKED: Recursive rollout requires an architecture decision that separates public target model identity from the MLX load selector/readiness identity, or changes the canonical target/runtime; proxy/symlink hacks would violate the managed-Pi boundary.
+
+### 2013 — Hosted Identity Locks Cross The Wrapper Delimiter
+- FIX: `lockCodexTargetArguments` and `lockClaudeTargetArguments` now scan identity selectors through the first wrapper `--` and stop only at the second provider operand boundary; Pi keeps its first-`--` message boundary.
+- FIX: Ordinary hosted alias launches no longer dump the resolved launch plan to stderr; diagnostics remain explicit `--print-config` behavior.
+- EVIDENCE: Production `runTarget` negatives reject eight post-delimiter model/reasoning/profile selector classes before provider execution or config mutation; narrowing both locks back to first-delimiter termination reddens every case with `-count=1`.
+- SCOPE: `TASK-260824-2o4zq8` reviewer rework in `tools/agents-infra/internal/infra/canonical_target.go`, `tools/agents-infra/main.go`, and focused tests.
+
+### 2002 — A Wrapper `--` Is Not An Operand Boundary
+- ROOT CAUSE: `lockCodexTargetArguments`/`lockClaudeTargetArguments` in `tools/agents-infra/internal/infra/canonical_target.go` return the remaining argv raw on a literal `--`, treating it as an operand boundary; `parseCodexWrapperArgs` (`internal/infra/codex_launch.go:563`) and `parseClaudeWrapperArgs` (`internal/infra/claude_launch.go:414`) instead consume that `--` as a wrapper delimiter and keep parsing every following token as a provider flag.
+- FINDING: The canonical identity lock is bypassable at the production `runTarget` entrypoint. With a recording fake provider and `err=nil`: `openai-infra -- exec -- --profile work` launches Codex with `--profile work`, which contract Section 3.6 says must always fail `target_identity_conflict`, while `--print-config` still reports `effective_profile_source: native`; `anthropic-infra -- -- --model other` launches Claude with `--model claude-opus-5 --effort high --model other`, and last-wins means `other` is what runs while the plan reports `claude-opus-5`. Same shape for Claude `--effort` and Codex `--model-reasoning-effort`.
+- FINDING: Pi is unaffected — its `--` is a real message-operand boundary and the Pi composer refuses flag-like operands (`unsafe Pi message operand "--model"`).
+- FINDING: No test passes `--` through any of the three lock functions, so that branch is entirely uncovered; the suite is green around a live bypass path.
+- SCOPE: `TASK-260824-2o4zq8` review verdict, routed to `to-dev`.
+
+### 1941 — Worktree Pi Fixtures Must Resolve The Common Checkout
+- ROOT CAUSE: `officialPiAsset` looked only under the active Story worktree `.temp`, while the reviewed Pi asset lived under the primary checkout; required Qwen acceptance tests reported package success by skipping.
+- FIX: `tools/agents-infra/main_test.go` and `internal/infra/pi_test.go` now derive a primary-checkout fallback from the worktree `.git` gitdir; production Qwen compose and all canonical Qwen tests report `PASS`, not `SKIP`.
+- FINDING: Package-level `go test` success is insufficient evidence for external-asset acceptance tests unless their named verbose result is checked.
+- SCOPE: `TASK-260824-2o4zq8` test infrastructure and Qwen target evidence.
+
+### 1842 — Hosted Alias Profile Provenance Stays Provider-Specific
+- DECISION: Hosted alias model/reasoning provenance comes from the target, but `resolved.profile` retains provider semantics: Claude is `not_applicable`; a Codex alias is `native` because explicit `--profile` and `-c profile=` are identity conflicts.
+- DECISION: Codex `-c model=` and `-c model_reasoning_effort=` are identity selectors alongside their dedicated flags; exact repeats pass and divergences fail.
+- FINDING: Contract evidence now creates clause-removal mutants and requires the actual validator to reject them; absent markers fail before mutation.
+- SCOPE: `TASK-260824-3rl3ws` revision-3 rework for reviewer findings G1-G2.
+
+### 1824 — Vendor Config Migration Is Operator-Only
+- DECISION: Parse, compose, setup, verify, target dispatch, and launch never rewrite project config; invalid canonical targets fail before side effects with source/field identity and corrective action.
+- DECISION: The recursive all-project rewrite is a separate task-scoped operator rollout, never installed product behavior or a startup fallback.
+- SCOPE: Contract Sections 5-7 and `TASK-260824-1jjze0`, per owner rollout clarification.
+
+### 1823 — Vendor Targets Separate Canonical And Pi Namespaces
+- DECISION: Codex target reasoning remains a non-empty provider-owned string; Claude targets admit only efforts the composer can prove effective; Pi targets retain the owned thinking enum.
+- DECISION: Pi profile `provider` is an operator namespace, not Qwen vendor evidence. Optional `profile_provider` asserts the existing label without forcing legacy profile mutation.
+- FINDING: Pi `resolved.model` remains provider-qualified; target model stays unqualified, with explicit profile-provider/model and endpoint invariants in alias plans.
+- SCOPE: `TASK-260824-3rl3ws` contract rework after reviewer findings F1-F5.
+
+### 1815 — Managed Codex Sync Preserves User State
+- ROOT CAUSE: `tools/agents-infra/internal/infra/infra.go:274` copied global Codex config wholesale and skipped the local copy wholesale; repeat setup therefore either erased user trust/TUI state or retained withdrawn managed defaults.
+- FIX: `Setup -> syncRepo -> syncManagedCodexConfig` now refreshes source-owned defaults, merges installed `projects`/`notice` and non-fast custom profiles, removes `profiles.fast`, and refuses malformed installed TOML without replacement.
+- EVIDENCE: Production-path global/local resync tests preserve trust, notice, and primary-session state while installing `service_tier = "default"`; malformed-existing-config coverage attacks the fallback boundary.
+
+### 1753 — Fast-Profile Removal Meets Runtime Preservation Boundary
+- FINDING: Source `.configs/codex-config.toml` and both installed managed copies retain `[profiles.fast]`; the source-repository local copy also retains the withdrawn `service_tier = "fast"` state.
+- FINDING: Global installed config contains user-added trust entries and model selection absent from source; `setup global` would replace them from source, while `setup local` intentionally preserves existing `.agents/.configs/codex-config.toml` bytes.
+- DECISION: Remove the source profile and its README advertisement with production `Setup` regression coverage; validate supported installs on isolated destinations and defer live runtime synchronization until accepted source integration can preserve user-owned state explicitly.
+
+### 1751 — Vendor Targets Stay Additive And Identity-Locked
+- DECISION: Canonical `[agents.targets]` plus `[agents.entrypoints]` is a strict alias-only launch path; declaring it does not alter direct `agents-infra codex|claude|pi` precedence.
+- DECISION: Hosted target identity overrides matching legacy model policy; Qwen/Pi reuses an atomic `[agents.pi.profiles]` definition and validates target model/reasoning/endpoint as exact assertions over that profile.
+- FINDING: This avoids both unsafe legacy fallback after target resolution fails and duplicated Pi runtime/endpoint policy while keeping existing project configs valid.
+- SCOPE: `STORY-260824-1yr6m0`, contract outcome `TASK-260824-3rl3ws_vendor-target-contract.md`.
+
 ## 2026-08-18
 
 ### 0504 — 503 Retry Accepted; Configured-Timeout Magnitude Still Unbound

@@ -15,15 +15,23 @@ import (
 type PiPrimarySessionSource struct {
 	Profile         *string
 	PiCompatibility *string
+	YoloMode        *bool
 }
 
 type PiPrimarySessionPolicy struct {
 	Profile         PiPolicyStringValue
 	PiCompatibility PiPolicyStringValue
+	YoloMode        PiPolicyBoolValue
 }
 
 type PiPolicyStringValue struct {
 	Value   string
+	Source  string
+	Present bool
+}
+
+type PiPolicyBoolValue struct {
+	Value   bool
 	Source  string
 	Present bool
 }
@@ -87,7 +95,7 @@ func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, 
 		return primary, nil, projectConfigFieldError(path, piPrimarySessionField, err)
 	}
 	if primaryPresent {
-		if err := rejectUnknownFields(primaryTable, piPrimarySessionField, "profile", "pi_compatibility"); err != nil {
+		if err := rejectUnknownFields(primaryTable, piPrimarySessionField, "profile", "pi_compatibility", "yolo_mode"); err != nil {
 			return primary, nil, projectConfigFieldError(path, errField(err), err)
 		}
 		primary.Profile, err = optionalNonEmptyString(primaryTable, "profile")
@@ -98,7 +106,11 @@ func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, 
 		if err != nil {
 			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".pi_compatibility", err)
 		}
-		if primary.Profile == nil && primary.PiCompatibility == nil {
+		primary.YoloMode, err = optionalBool(primaryTable, "yolo_mode")
+		if err != nil {
+			return primary, nil, projectConfigFieldError(path, piPrimarySessionField+".yolo_mode", err)
+		}
+		if primary.Profile == nil && primary.PiCompatibility == nil && primary.YoloMode == nil {
 			return primary, nil, projectConfigFieldError(path, piPrimarySessionField, errors.New("table must contain at least one supported field"))
 		}
 	}
@@ -180,6 +192,9 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 	}
 	if !piThinkingLevels[p.Thinking] {
 		return p, projectConfigFieldError(path, field+".thinking", errors.New("must be a documented Pi thinking level"))
+	}
+	if !p.Reasoning && p.Thinking != "off" {
+		return p, projectConfigFieldError(path, field+".reasoning", errors.New("must be true when thinking is not off"))
 	}
 	if p.RequestedCapabilities, err = requiredStringArray(table, "requested_capabilities"); err != nil {
 		return p, projectConfigFieldError(path, field+".requested_capabilities", err)
@@ -550,9 +565,12 @@ func composePiPrimarySession(policy *PiPrimarySessionPolicy, source PiPrimarySes
 	if source.PiCompatibility != nil {
 		policy.PiCompatibility = PiPolicyStringValue{Value: *source.PiCompatibility, Source: path, Present: true}
 	}
+	if source.YoloMode != nil {
+		policy.YoloMode = PiPolicyBoolValue{Value: *source.YoloMode, Source: path, Present: true}
+	}
 }
 func clonePiPrimarySessionSource(s PiPrimarySessionSource) PiPrimarySessionSource {
-	return PiPrimarySessionSource{Profile: cloneStringPointer(s.Profile), PiCompatibility: cloneStringPointer(s.PiCompatibility)}
+	return PiPrimarySessionSource{Profile: cloneStringPointer(s.Profile), PiCompatibility: cloneStringPointer(s.PiCompatibility), YoloMode: cloneBoolPointer(s.YoloMode)}
 }
 func clonePiProfiles(in map[string]PiProfile) map[string]PiProfile {
 	out := map[string]PiProfile{}
@@ -560,4 +578,25 @@ func clonePiProfiles(in map[string]PiProfile) map[string]PiProfile {
 		out[k] = v
 	}
 	return out
+}
+
+func validatePiPrimarySessionYolo(policy PiPrimarySessionPolicy) error {
+	if !policy.YoloMode.Present || !policy.YoloMode.Value {
+		return nil
+	}
+	return piError(
+		"pi_yolo_mode_unsupported",
+		fmt.Errorf(
+			"%s.yolo_mode=true from %s is unsupported by pinned Pi v0.84.2: --approve controls project-local input trust, not unattended tool execution; omit yolo_mode or set it to false",
+			piPrimarySessionField,
+			policy.YoloMode.Source,
+		),
+	)
+}
+
+func resolvedPiYolo(policy PiPrimarySessionPolicy) PrimarySessionResolvedBool {
+	if policy.YoloMode.Present {
+		return PrimarySessionResolvedBool{Value: policy.YoloMode.Value, Source: policy.YoloMode.Source}
+	}
+	return PrimarySessionResolvedBool{Value: false, Source: "default"}
 }

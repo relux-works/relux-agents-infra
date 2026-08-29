@@ -4,6 +4,7 @@ package infra
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -72,6 +73,14 @@ shutdown_timeout_seconds = 2
 %s`, name, PiCompatibilityV0842DarwinARM64, name, port, extraCaps, name, name, runtime, argv, dflashBlock)
 }
 
+func reasoningPiProfileTOML(name, runtime string, port int) string {
+	body := validPiProfileTOML(name, runtime, port, false)
+	body = strings.Replace(body, `reasoning = false`, `reasoning = true`, 1)
+	body = strings.Replace(body, `thinking = "off"`, `thinking = "medium"`, 1)
+	body = strings.Replace(body, `max_tokens_field = "max_tokens"`, "max_tokens_field = \"max_tokens\"\nthinking_format = \"qwen-chat-template\"", 1)
+	return body
+}
+
 func TestParsePiPolicyExactSchemaAndMuseDFlash(t *testing.T) {
 	for _, dflash := range []bool{false, true} {
 		cfg, err := parseProjectConfig([]byte(validPiProfileTOML("profile", "/bin/echo", 18011, dflash)), "/project/config.toml")
@@ -113,6 +122,8 @@ func TestParsePiPolicyRejectsMalformedUnsafeUnknownAndNarrowedInputs(t *testing.
 		"empty runtime argv":     strings.Replace(base, `argv = ["serve", "--model", "Model", "--host", "127.0.0.1", "--port", "18011"]`, `argv = []`, 1),
 		"NUL runtime argv":       strings.Replace(base, `argv = ["serve", "--model", "Model", "--host", "127.0.0.1", "--port", "18011"]`, `argv = ["\u0000"]`, 1),
 		"wrong api":              strings.Replace(base, `api = "openai-completions"`, `api = "openai-responses"`, 1),
+		"non-reasoning medium":   strings.Replace(base, `thinking = "off"`, `thinking = "medium"`, 1),
+		"wrong yolo type":        strings.Replace(base, "pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64), "pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64)+"\nyolo_mode = \"true\"", 1),
 		"capability overclaim":   strings.Replace(base, `["text", "tools"]`, `["dflash", "text", "tools"]`, 1),
 		"provider unicode slash": strings.Replace(base, "local-provider", "local∕provider", 1),
 	}
@@ -123,6 +134,86 @@ func TestParsePiPolicyRejectsMalformedUnsafeUnknownAndNarrowedInputs(t *testing.
 			}
 		})
 	}
+}
+
+func TestPiPrimaryYoloSafeDefaultAndNearestFalseMask(t *testing.T) {
+	piRoot := officialPiAsset(t)
+	home, parent := t.TempDir(), t.TempDir()
+	child := filepath.Join(parent, "child")
+	mustMkdir(t, child)
+	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+	t.Setenv("HOME", home)
+	lookPath := func(string) (string, error) { return filepath.Join(piRoot, "pi"), nil }
+
+	plan, err := BuildPrimarySessionLaunchPlan("pi", child, home, []string{"--version"}, ChildLaunchCompositionProducer{}, lookPath)
+	if err != nil {
+		t.Fatalf("safe default compose: %v", err)
+	}
+	if plan.Resolved.Yolo.Value || plan.Resolved.Yolo.Source != "default" || !reflect.DeepEqual(plan.LaunchVariants.Interactive.Argv, []string{"--version"}) {
+		t.Fatalf("safe default changed direct Pi behavior: yolo=%#v argv=%#v", plan.Resolved.Yolo, plan.LaunchVariants.Interactive.Argv)
+	}
+
+	parentBody := strings.Replace(
+		validPiProfileTOML("profile", "/bin/echo", 18011, false),
+		"pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64),
+		"pi_compatibility = "+strconv.Quote(PiCompatibilityV0842DarwinARM64)+"\nyolo_mode = true",
+		1,
+	)
+	writePiProjectConfig(t, parent, parentBody)
+	childConfig := filepath.Join(child, ".agents", ".configs", projectConfigFileName)
+	mustMkdir(t, filepath.Dir(childConfig))
+	mustWrite(t, childConfig, "[agents.pi.primary_session]\nyolo_mode = false\n")
+	plan, err = BuildPrimarySessionLaunchPlan("pi", child, home, nil, ChildLaunchCompositionProducer{}, lookPath)
+	if err != nil {
+		t.Fatalf("nearest false mask: %v", err)
+	}
+	canonicalChildConfig, err := filepath.EvalSymlinks(childConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Resolved.Yolo.Value || !samePath(plan.Resolved.Yolo.Source, canonicalChildConfig) {
+		t.Fatalf("nearest false did not mask ancestor true: %#v", plan.Resolved.Yolo)
+	}
+}
+
+// Production call sites: BuildPrimarySessionLaunchPlan (non-launching compose)
+// and RunPi (direct launch). Both must reject before executable lookup so the
+// unsupported policy cannot fall through to native Pi or be mis-mapped to
+// Pi's unrelated --approve project-trust flag.
+func TestPiYoloTrueFailsClosedBeforeComposeOrLaunchLookup(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	config := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
+	mustMkdir(t, filepath.Dir(config))
+	mustWrite(t, config, "[agents.pi.primary_session]\nyolo_mode = true\n")
+	lookedUp := false
+	lookPath := func(string) (string, error) {
+		lookedUp = true
+		return "/must/not/run", nil
+	}
+
+	assertUnsupported := func(t *testing.T, err error) {
+		t.Helper()
+		if piErrorCode(err) != "pi_yolo_mode_unsupported" {
+			t.Fatalf("error = %v, want pi_yolo_mode_unsupported", err)
+		}
+		for _, want := range []string{piPrimarySessionField + ".yolo_mode=true", config, "--approve", "project-local input trust"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %q, want precise unsupported-capability detail %q", err, want)
+			}
+		}
+		if lookedUp {
+			t.Fatal("unsupported Pi yolo reached executable lookup")
+		}
+	}
+
+	t.Run("compose", func(t *testing.T) {
+		_, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, lookPath)
+		assertUnsupported(t, err)
+	})
+	t.Run("launch", func(t *testing.T) {
+		err := RunPi(RunPiOptions{ProjectDir: project, HomeDir: home, Environ: []string{"HOME=" + home}, LookPath: lookPath})
+		assertUnsupported(t, err)
+	})
 }
 
 func TestParsePiMuseRequiresExactUniqueNonOverlappingArgvSubsequences(t *testing.T) {
@@ -1285,7 +1376,7 @@ func TestPiRuntimeReadinessDoesNotFollowRedirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	childWait := &piProcessWait{done: make(chan struct{})}
-	if err := waitPiRuntimeReady(nil, redirect.URL, "Model", child, childWait, time.Second); piErrorCode(err) != "runtime_readiness_invalid" {
+	if err := waitPiRuntimeReady(context.Background(), nil, redirect.URL, "Model", child, childWait, time.Second); piErrorCode(err) != "runtime_readiness_invalid" {
 		t.Fatalf("readiness followed redirect away from exact configured URL: %v", err)
 	}
 }
@@ -1482,11 +1573,37 @@ func piErrorCode(err error) string {
 }
 func officialPiAsset(t *testing.T) string {
 	t.Helper()
-	root, _ := filepath.Abs("../../../../.temp/TASK-260817-2h8hn4/pi-standalone-darwin-arm64-0.84.2/pi")
-	if _, err := os.Stat(filepath.Join(root, "pi")); err != nil {
-		t.Skipf("official Pi acceptance asset unavailable: %v", err)
+	repoRoot, _ := filepath.Abs("../../../..")
+	candidates := []string{filepath.Join(repoRoot, ".temp", "TASK-260817-2h8hn4", "pi-standalone-darwin-arm64-0.84.2", "pi")}
+	if primaryRoot := primaryCheckoutRootFromGitFile(filepath.Join(repoRoot, ".git")); primaryRoot != "" {
+		candidates = append(candidates, filepath.Join(primaryRoot, ".temp", "TASK-260817-2h8hn4", "pi-standalone-darwin-arm64-0.84.2", "pi"))
 	}
-	return root
+	for _, root := range candidates {
+		if _, err := os.Stat(filepath.Join(root, "pi")); err == nil {
+			return root
+		}
+	}
+	t.Skipf("official Pi acceptance asset unavailable in %v", candidates)
+	return ""
+}
+
+func primaryCheckoutRootFromGitFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(text, "gitdir:") {
+		return ""
+	}
+	gitDir := strings.TrimSpace(strings.TrimPrefix(text, "gitdir:"))
+	if gitDir == "" {
+		return ""
+	}
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(filepath.Dir(path), gitDir)
+	}
+	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Clean(gitDir))))
 }
 
 func cloneOfficialPiAsset(t *testing.T) string {
@@ -1690,6 +1807,41 @@ func assertPiLockReleased(t *testing.T, project, cache, profile string) {
 	}
 	if err := lock.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProcessGroupCleanupStateReflectsLiveAndReapedGroups(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "exec /bin/sleep 60")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	reaped := false
+	t.Cleanup(func() {
+		if reaped {
+			return
+		}
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
+
+	if got := processGroupCleanupState(pid, nil); got != "failed" {
+		t.Fatalf("live process group cleanup state = %q, want failed", got)
+	}
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill process group: %v", err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("SIGKILLed process unexpectedly exited successfully")
+	}
+	reaped = true
+
+	if got := processGroupCleanupState(pid, nil); got != "confirmed" {
+		t.Fatalf("reaped process group cleanup state = %q, want confirmed", got)
+	}
+	if got := processGroupCleanupState(pid, errors.New("SIGKILL escalation")); got != "confirmed_after_sigkill" {
+		t.Fatalf("reaped escalated process group cleanup state = %q, want confirmed_after_sigkill", got)
 	}
 }
 

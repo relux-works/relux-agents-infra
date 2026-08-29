@@ -3,6 +3,7 @@
 package infra
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -68,9 +69,15 @@ type RunPiOptions struct {
 	LookPath   func(string) (string, error)
 	HTTPClient *http.Client
 	Signals    <-chan os.Signal
+	Context    context.Context
+	Report     *PiRunReport
 }
 
 func RunPi(opts RunPiOptions) error {
+	if opts.Report != nil {
+		*opts.Report = newPiRunReport()
+		defer finishPiRunReport(opts.Report)
+	}
 	project, err := CanonicalProjectDir(opts.ProjectDir)
 	if err != nil {
 		return err
@@ -91,12 +98,18 @@ func RunPi(opts RunPiOptions) error {
 	if err != nil {
 		return piError("invalid_project_configuration", err)
 	}
+	if err := validatePiPrimarySessionYolo(composite.PiPrimarySession); err != nil {
+		return err
+	}
 	override, err := ExtractPiProfileOverride(opts.Args)
 	if err != nil {
 		return err
 	}
 	managed := override != nil || composite.PiPrimarySession.Profile.Present
 	if managed {
+		if opts.Report != nil {
+			opts.Report.Managed = true
+		}
 		return piError("pi_compatibility_unsupported", errors.New("managed Pi profiles are supported only on darwin/arm64"))
 	}
 	path, err := opts.LookPath("pi")

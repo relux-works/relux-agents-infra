@@ -23,22 +23,19 @@ func validateSourceSkillLinks(layout Layout) error {
 	return fmt.Errorf("source skill links are not safe to materialize: %s", failures[0])
 }
 
-// managedSkillLinkFailures validates every surface setup owns. All provider
-// links must ultimately resolve into AgentsDir; otherwise verify would attest a
-// runtime that recursive tools can use to escape or re-enter an ancestor.
+// managedSkillLinkFailures validates every source-managed skill package across
+// the surfaces setup owns. Provider-owned top-level packages whose names are
+// absent from .agents/.skills remain outside this ownership boundary.
 func managedSkillLinkFailures(layout Layout) []string {
 	hiddenSkills := filepath.Join(layout.AgentsDir, ".skills")
 	failures := inspectSkillLinks(hiddenSkills, layout.AgentsDir, false)
-	managedNames := map[string]bool(nil)
-	if layout.Mode == ModeGlobal {
-		managedNames = make(map[string]bool)
-		entries, err := os.ReadDir(hiddenSkills)
-		if err != nil {
-			return append(failures, fmt.Sprintf("cannot identify managed skill names in %s: %v", hiddenSkills, err))
-		}
-		for _, entry := range entries {
-			managedNames[entry.Name()] = true
-		}
+	managedNames := make(map[string]bool)
+	entries, err := os.ReadDir(hiddenSkills)
+	if err != nil {
+		return append(failures, fmt.Sprintf("cannot identify managed skill names in %s: %v", hiddenSkills, err))
+	}
+	for _, entry := range entries {
+		managedNames[entry.Name()] = true
 	}
 	for _, root := range []string{
 		filepath.Join(layout.AgentsDir, "skills"),

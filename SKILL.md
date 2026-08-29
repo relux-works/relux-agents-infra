@@ -1,21 +1,6 @@
 ---
 name: relux-agents-infra
 description: Shared agent infrastructure repo for Claude Code and Codex CLI. Use when updating global agent instructions, skills, symlink setup, tool configs, rules, or the generic agents attachments manifest contract and helper tooling.
-triggers:
-  - relux-agents-infra
-  - agents infra
-  - agent infrastructure
-  - shared agent config
-  - global agent instructions
-  - codex config
-  - claude settings
-  - setup symlinks
-  - agents attachments manifest
-  - attachments manifest
-  - агентская инфра
-  - конфиг агентов
-  - настройки codex
-  - настройки claude
 ---
 
 # relux-agents-infra
@@ -106,6 +91,13 @@ Project-local instructions are an overlay, not a copy of global policy:
 ## Codex config modes
 
 Keep local agent runtime setup separate from Codex model/reasoning config.
+
+Every global or local source sync refreshes the managed
+`.agents/.configs/codex-config.toml` defaults while merging existing project
+trust decisions, TUI notice acknowledgements, and custom profiles other than
+the withdrawn `fast` profile. Source remains authoritative for model,
+reasoning, and service tier. Malformed installed TOML refuses synchronization
+without replacing that config.
 
 Default project-local setup should not create `.codex/config.toml`:
 
@@ -234,6 +226,74 @@ yolo is `false` from `default`. For complete troubleshooting and
 `.codex/config.toml` coexistence, see
 [README.md](README.md#project-primary-codex-session-policy).
 
+## Canonical vendor targets
+
+Use canonical targets when a project needs an explicit vendor/environment/model
+identity behind an installed vendor alias. Define complete atomic targets and
+exact mappings in contributing project configs:
+
+```toml
+[agents.targets.openai]
+vendor = "openai"
+environment = "codex"
+model = "gpt-5.6-sol"
+reasoning = "high"
+
+[agents.targets.anthropic]
+vendor = "anthropic"
+environment = "claude-code"
+model = "claude-opus-5"
+reasoning = "high"
+
+[agents.targets.qwen]
+vendor = "qwen"
+environment = "pi"
+model = "Qwen3.8-27B-MLX-8bit"
+reasoning = "medium"
+profile = "qwen-3.8-27b-mlx-8bit"
+profile_provider = "local-qwen"
+endpoint = "http://127.0.0.1:18011/v1"
+
+[agents.entrypoints]
+openai-infra = "openai"
+anthropic-infra = "anthropic"
+qwen-infra = "qwen"
+```
+
+Only `openai/codex`, `anthropic/claude-code`, and `qwen/pi` are admitted.
+Qwen reuses an existing complete managed Pi profile: model and thinking must
+match it. Non-`off` reasoning additionally requires profile `reasoning = true`
+and `compat.thinking_format = "qwen-chat-template"`, so pinned Pi carries the
+level through `--thinking` and enables Qwen chat-template thinking. Optional
+provider/endpoint values are assertions, and effective
+provider/endpoint provenance remains the profile definition. A nearer target
+replaces the same name atomically; a nearer mapping replaces only that alias.
+
+Inspect without launching:
+
+```bash
+openai-infra --print-config
+anthropic-infra --print-config
+qwen-infra --print-config
+agents-infra compose --mode primary-session --entrypoint qwen-infra \
+  --project "$PWD" --schema-version 1 --json
+```
+
+Missing/malformed mappings, invalid tuples/profiles, and conflicting explicit
+identity selectors fail before provider/runtime side effects and carry source,
+field/identity, and remediation. Exact repeats are accepted. Pi model tokens
+are decoded as `model`, `provider/model`, `model:thinking`, or
+`provider/model:thinking`; divergent suffix/provider coordinates conflict.
+Codex aliases also lock `-c model=...` and `-c
+model_reasoning_effort=...` and always reject profile selectors.
+
+Canonical declarations never rewrite config and never become defaults for
+direct `agents-infra codex|claude|pi` or `pi-infra`; those commands retain
+legacy precedence. Alias schema-v1 plans add `target` and Qwen effective
+provider/endpoint fields, while legacy `--agent` plans keep their existing
+shape. See [README.md](README.md#canonical-vendor-target-entrypoints) for full
+field domains and diagnostics.
+
 Task-board spawn ceilings are documented by the separate
 [task-board spawn-ceiling contract](https://github.com/relux-works/skill-project-management/blob/main/.specs/project-agent-selection-policy.md#task-board-spawn-ceiling-contract).
 Do not add spawn ceilings, model ranks, or task-board resolver policy to
@@ -259,7 +319,9 @@ The alias preserves caller cwd and argv order/bytes and delegates only as
 drift, while setup's postcondition and `verify` reject missing/changed alias
 bytes or mode and a missing, wrong, or unusable sibling target. Both paths must
 themselves be regular files; a symlink is drift even when it resolves to
-byte-identical content. They also
+byte-identical content. Setup also installs and repairs the exact sibling-only
+`openai-infra`, `anthropic-infra`, and `qwen-infra` aliases, each delegating as
+`agents-infra target <exact-entrypoint>` with no embedded target policy. They also
 validate the authoritative source/installed manifest at
 `tools/agents-infra/internal/infra/pi-v0.84.2-darwin-arm64-tree-manifest.txt`
 with SHA-256
@@ -312,6 +374,13 @@ standalone Pi tree check both initially and immediately before Pi spawn. It
 never attaches or silently falls back to another runtime, port, profile, model,
 listener, or Muse target-only decoding.
 
+Pinned Pi `0.84.2` has no native unattended tool-execution policy.
+`--approve`/`-a` controls only one-run trust for project-local files and must
+never be used as a yolo translation. In `[agents.pi.primary_session]`, omitted
+or explicit `yolo_mode = false` preserves Pi behavior; nearest false masks an
+inherited true. Explicit `yolo_mode = true` fails before executable lookup or
+launch with `pi_yolo_mode_unsupported`.
+
 Managed launch refuses the exact llama.cpp model-origin environment names
 `HF_ENDPOINT` and `MODEL_ENDPOINT` before runtime spawn and reports only the
 name, never the value. Treat tokens and cache-location variables separately
@@ -353,6 +422,61 @@ The exact TOML, compatibility catalog, state-key rules, lifecycle, operator
 smoke procedure, full error list, and security limitations are authoritative in
 [README.md](README.md#managed-pi-local-model-operator-contract). Start every Pi
 incident with `pi-infra --print-config`, then `agents-infra verify local "$PWD"`.
+
+### Bounded model checker
+
+Use the installed checker when a managed local-model claim must be reproduced
+through the production canonical-target and managed Pi entrypoint: deployment
+smokes, tool-use checks, and skill-discovery checks. It complements static
+`--print-config` and `verify`; it is not a unit-test substitute, capability
+attestation, or proof derived from a model's unsupported self-report.
+
+Run setup and static compatibility checks first, then execute the checker from
+the project the model should inspect. Always choose a fresh task-scoped output
+directory because existing evidence is never overwritten:
+
+```bash
+agents-infra setup global --source-dir /path/to/relux-agents-infra
+agents-infra verify global
+
+cd /abs/path/to/project
+qwen-infra --print-config
+
+agents-infra model-check \
+  --target qwen-infra \
+  --prompt 'Discover the applicable installed skill for updating shared agent infrastructure. Use the read tool to read its SKILL.md. Reply with RELUX_SKILL_READ_CONFIRMED and one source-of-truth rule learned from that file.' \
+  --output-dir .temp/model-check/qwen-skill-discovery-01 \
+  --deadline 5m \
+  --expect-tool read \
+  --expect-text RELUX_SKILL_READ_CONFIRMED
+```
+
+`--target` must be a canonical entrypoint resolving to a managed local Pi
+profile. `--expect-tool` and `--expect-text` are repeatable; tool names match
+exactly, while text matches only the final assistant response. The checker
+forces JSON print/no-session mode and Pi `--approve` so reviewed project-local
+inputs are loaded. Pi has no separate native tool-execution approval policy, so
+`--approve` is not a yolo control. Use a reviewed target, a controlled project,
+and a bounded prompt.
+
+The default deadline is `5m`, with an accepted Go duration range of
+`1ms..30m`. Timeout cancels the run and performs bounded cleanup of the owned
+Pi/runtime process groups before return; it is exit `2`. Inspect
+`cleanup_confirmed` and both cleanup states rather than assuming success. Other
+exits are `0` pass, `1` execution/validation/cleanup failure, `3`
+malformed/incomplete JSONL, `4` unmet expectations, and `5` failed tool
+execution. See the README's
+[bounded-check contract](README.md#bounded-model-behavior-checks) for exact
+precedence and artifact semantics.
+
+Treat `events.jsonl` and `stderr.log` as sensitive raw mode-`0600` evidence.
+Use the bounded, sanitized `summary.json` and `summary.txt` for normal handoff
+after inspecting them. A `read` expectation proves only that a read tool ran;
+claim skill discovery only when the raw event stream shows a completed,
+non-error read whose argument resolves to the installed
+`relux-agents-infra/SKILL.md`. Preserve a sanitized projection of that event,
+not the raw stream. A response marker alone is self-reported evidence, and a
+failed/partial read is failure or unknown, never absence.
 
 ## MCP server policy
 

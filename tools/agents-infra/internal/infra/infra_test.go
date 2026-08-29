@@ -671,6 +671,9 @@ func TestSetupGlobalDoesNotInstallCLIWrapper(t *testing.T) {
 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "agents-infra"))
 	assertNoPath(t, filepath.Join(home, ".local", "bin", "agents-infra.cmd"))
 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "pi-infra"))
+	assertRegularFile(t, filepath.Join(home, ".local", "bin", "openai-infra"))
+	assertRegularFile(t, filepath.Join(home, ".local", "bin", "anthropic-infra"))
+	assertRegularFile(t, filepath.Join(home, ".local", "bin", "qwen-infra"))
 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture)
 	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), modelAvailabilityPolicyFixture)
 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture)
@@ -791,10 +794,35 @@ func TestSetupLocalPreservesExistingNativeAgentConfigsOnResync(t *testing.T) {
 
 	codexConfig := filepath.Join(project, ".agents", ".configs", "codex-config.toml")
 	claudeSettings := filepath.Join(project, ".agents", ".configs", "claude-settings.json")
-	mustWrite(t, codexConfig, "model = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"xhigh\"\n")
-	mustWrite(t, claudeSettings, "{\n  \"model\": \"claude-sonnet-5\",\n  \"permissions\": {\"defaultMode\": \"bypassPermissions\"}\n}\n")
+	mustWrite(t, codexConfig, `model = "user-overrides-managed-model"
+service_tier = "fast"
 
-	mustWrite(t, filepath.Join(source, ".configs", "codex-config.toml"), "model = \"source-default-overwrite\"\n")
+[profiles.fast]
+model = "gpt-5.5"
+
+[profiles.custom]
+model = "custom-model"
+
+[projects."/user/trusted"]
+trust_level = "trusted"
+
+[notice]
+hide_full_access_warning = true
+`)
+	mustWrite(t, claudeSettings, "{\n  \"model\": \"claude-sonnet-5\",\n  \"permissions\": {\"defaultMode\": \"bypassPermissions\"}\n}\n")
+	projectConfig := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
+	projectConfigState := "[agents.codex.primary_session]\nmodel = \"primary-model\"\nyolo_mode = false\n"
+	mustWrite(t, projectConfig, projectConfigState)
+
+	mustWrite(t, filepath.Join(source, ".configs", "codex-config.toml"), `model = "source-default-overwrite"
+service_tier = "default"
+
+[projects."/source/trusted"]
+trust_level = "trusted"
+
+[notice]
+hide_rate_limit_model_nudge = true
+`)
 	mustWrite(t, filepath.Join(source, ".configs", "claude-settings.json"), "{\"model\":\"source-default-overwrite\"}\n")
 	mustWrite(t, filepath.Join(source, ".configs", "codex-mcp-servers.toml"), `[servers.updated]
 url = "https://example.test/mcp"
@@ -804,15 +832,34 @@ url = "https://example.test/mcp"
 		t.Fatalf("second Setup: %v", err)
 	}
 
-	assertFileContains(t, codexConfig, "gpt-5.6-terra")
-	assertFileNotContains(t, codexConfig, "source-default-overwrite")
+	assertFileContains(t, codexConfig, "source-default-overwrite")
+	assertFileContains(t, codexConfig, "service_tier = 'default'")
+	assertFileNotContains(t, codexConfig, "user-overrides-managed-model")
+	assertFileNotContains(t, codexConfig, "[profiles.fast]")
+	assertFileContains(t, codexConfig, "[profiles.custom]")
+	assertFileContains(t, codexConfig, "[projects.'/user/trusted']")
+	assertFileContains(t, codexConfig, "[projects.'/source/trusted']")
+	assertFileContains(t, codexConfig, "hide_full_access_warning = true")
+	assertFileContains(t, codexConfig, "hide_rate_limit_model_nudge = true")
 	assertFileContains(t, claudeSettings, "claude-sonnet-5")
 	assertFileContains(t, claudeSettings, "bypassPermissions")
 	assertFileNotContains(t, claudeSettings, "source-default-overwrite")
 	assertFileContains(t, filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.updated]")
-	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "gpt-5.6-terra")
-	assertFileNotContains(t, filepath.Join(project, ".codex", "config.toml"), "source-default-overwrite")
+	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "source-default-overwrite")
+	assertFileNotContains(t, filepath.Join(project, ".codex", "config.toml"), "[profiles.custom]")
 	assertSymlink(t, filepath.Join(project, ".claude", "settings.json"), claudeSettings)
+	report := mustDoctor(t, layout)
+	if !report.CodexConfigPresent || !report.CodexConfigGenerated || !report.CodexPrimarySession.Model.Present || report.CodexPrimarySession.Model.Value != "primary-model" || !report.CodexPrimarySession.YoloMode.Present || report.CodexPrimarySession.YoloMode.Value {
+		t.Fatalf("unexpected local doctor report after managed config migration: %+v", report)
+	}
+	if err := VerifyInstalledRuntime(layout); err != nil {
+		t.Fatalf("VerifyInstalledRuntime: %v", err)
+	}
+	if got, err := os.ReadFile(projectConfig); err != nil {
+		t.Fatalf("ReadFile(%s): %v", projectConfig, err)
+	} else if string(got) != projectConfigState {
+		t.Fatalf("primary-session policy changed during resync:\ngot:  %q\nwant: %q", string(got), projectConfigState)
+	}
 }
 
 func TestSetupLocalProjectMCPOptInInstallsCodexLocalLauncher(t *testing.T) {
@@ -1111,12 +1158,92 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
 
 	assertSymlink(t, filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".agents", ".configs", "codex-config.toml"))
 	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "hide_rate_limit_model_nudge = true")
-	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "[profiles.fast]")
+	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "service_tier = \"default\"")
+	assertFileNotContains(t, filepath.Join(home, ".codex", "config.toml"), "[profiles.fast]")
 	report := mustDoctor(t, layout)
 	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
 		t.Fatalf("unexpected global Codex config doctor report: %+v", report)
 	}
 	assertFileNotContains(t, filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.figma]")
+}
+
+func TestSetupGlobalMigratesManagedCodexConfigPreservingUserState(t *testing.T) {
+	source := seedSourceRepo(t)
+	home := t.TempDir()
+	layout, err := GlobalLayout(source, home)
+	if err != nil {
+		t.Fatalf("GlobalLayout: %v", err)
+	}
+	seedGlobalAgentsInfraTarget(t, layout)
+	existingConfigPath := filepath.Join(home, ".agents", managedCodexConfigRelativePath)
+	mustMkdir(t, filepath.Dir(existingConfigPath))
+	mustWrite(t, existingConfigPath, `model = "old-managed-model"
+service_tier = "fast"
+
+[profiles.fast]
+model = "gpt-5.5"
+
+[profiles.custom]
+model = "custom-model"
+
+[projects."/user/trusted"]
+trust_level = "trusted"
+
+[notice]
+hide_rate_limit_model_nudge = false
+hide_full_access_warning = true
+`)
+
+	if err := Setup(Options{Layout: layout}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	assertSymlink(t, configPath, existingConfigPath)
+	assertFileContains(t, configPath, "model = 'gpt-5.5'")
+	assertFileContains(t, configPath, "service_tier = 'default'")
+	assertFileNotContains(t, configPath, "old-managed-model")
+	assertFileNotContains(t, configPath, "[profiles.fast]")
+	assertFileContains(t, configPath, "[profiles.custom]")
+	assertFileContains(t, configPath, "[projects.'/user/trusted']")
+	assertFileContains(t, configPath, "hide_rate_limit_model_nudge = false")
+	assertFileContains(t, configPath, "hide_full_access_warning = true")
+	report := mustDoctor(t, layout)
+	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigEffective != "global" {
+		t.Fatalf("unexpected global doctor report after managed config migration: %+v", report)
+	}
+	if err := VerifyInstalledRuntime(layout); err != nil {
+		t.Fatalf("VerifyInstalledRuntime: %v", err)
+	}
+}
+
+func TestSetupGlobalRejectsMalformedExistingCodexConfigWithoutReplacingIt(t *testing.T) {
+	source := seedSourceRepo(t)
+	home := t.TempDir()
+	layout, err := GlobalLayout(source, home)
+	if err != nil {
+		t.Fatalf("GlobalLayout: %v", err)
+	}
+	seedGlobalAgentsInfraTarget(t, layout)
+	existingConfigPath := filepath.Join(home, ".agents", managedCodexConfigRelativePath)
+	mustMkdir(t, filepath.Dir(existingConfigPath))
+	existingConfig := []byte("model = \"user-model\"\n[projects.\"/user\"\ntrust_level = \"trusted\"\n")
+	mustWrite(t, existingConfigPath, string(existingConfig))
+
+	err = Setup(Options{Layout: layout})
+	if err == nil {
+		t.Fatal("Setup succeeded with malformed existing managed Codex config")
+	}
+	if !strings.Contains(err.Error(), "parse existing managed Codex config") || !strings.Contains(err.Error(), existingConfigPath) {
+		t.Fatalf("unexpected malformed existing config error: %v", err)
+	}
+	after, readErr := os.ReadFile(existingConfigPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%s): %v", existingConfigPath, readErr)
+	}
+	if !bytes.Equal(after, existingConfig) {
+		t.Fatalf("failed migration replaced malformed existing config:\nbefore: %q\nafter:  %q", existingConfig, after)
+	}
 }
 
 func TestSetupPreservesExistingPublicSkillsRegistryEntries(t *testing.T) {
@@ -1216,7 +1343,7 @@ func seedSourceRepo(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n")
 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
-	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\n\n[profiles.fast]\nmodel = \"gpt-5.5\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
+	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
 url = "https://mcp.figma.com/mcp"
 

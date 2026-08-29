@@ -25,7 +25,9 @@ agents-infra setup local /path/to/project
 agents-infra doctor global
 agents-infra doctor local /path/to/project
 agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json
+openai-infra --print-config
 pi-infra --print-config
+agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check
 agents-infra version
 ```
 
@@ -45,12 +47,27 @@ The canonical interface after bootstrap is:
 - `agents-infra doctor global|local`
 - `agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json`
 - `agents-infra compose --mode primary-session --agent codex|claude|pi --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
+- `agents-infra compose --mode primary-session --entrypoint openai-infra|anthropic-infra|qwen-infra --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
+- `agents-infra target openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
 - `agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json`
 - `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
 - `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
 - `agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
 - `pi-infra [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+- `openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
+- `agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]`
 - `agents-infra version`
+
+`model-check` exits `0` when the managed check and all expectations pass, `1`
+for launch, validation, or cleanup failure, `2` on deadline expiry, `3` for a
+malformed or incomplete JSONL stream, `4` for unmet tool/text expectations,
+and `5` when the model reports a failed tool execution. Raw provider output is
+kept in mode-`0600` files inside the mode-`0700` evidence directory; terminal
+output is sanitized. The command passes Pi `--approve` so reviewed
+project-local inputs are loaded for that run. Pi has no separate native
+tool-execution approval policy, so this flag is not a yolo control; use only a
+reviewed target and a controlled prompt. See [Bounded model behavior checks](#bounded-model-behavior-checks)
+for the full evidence, timeout, and cleanup contract.
 
 Setup syncs the repo into `.agents`, treats `.skills/` as the authoritative
 source-managed skill tree, refreshes the managed links it owns inside `skills/`,
@@ -130,9 +147,11 @@ Two consequences worth knowing:
 `~/.local/bin/agents-infra` — so it makes no claim about a build and does not
 run one.
 
-Both setup modes install a sibling-only `pi-infra` launcher: global setup writes
+Both setup modes install sibling-only `pi-infra`, `openai-infra`,
+`anthropic-infra`, and `qwen-infra` launchers: global setup writes
 it beside the bootstrap-owned `agents-infra`, and local setup writes it beside
-the generated project launcher. It delegates as `agents-infra pi` without
+the generated project launcher. `pi-infra` delegates as `agents-infra pi`; the
+three vendor aliases delegate as `agents-infra target <exact-alias>` without
 changing the caller's working directory or argument bytes/order, including a
 literal wrapper delimiter and its following operands. It never searches `PATH`
 for a substitute target. Setup repairs a drifted managed alias; setup's
@@ -198,6 +217,7 @@ That creates a local runtime layout under the project root:
 - `.codex/`: thin Codex shim that points into `.agents`
 - `.local/bin/`: helper CLIs for the local setup, including `agents-infra`
 - `.local/bin/pi-infra`: managed sibling alias for `agents-infra pi`
+- `.local/bin/openai-infra`, `.local/bin/anthropic-infra`, `.local/bin/qwen-infra`: canonical target aliases
 
 Local setup reproduces the global runtime topology, not the global instruction
 content. It does not copy source `.instructions/` modules into the project.
@@ -211,6 +231,13 @@ Project-local setup intentionally does not create `.codex/config.toml`. Codex
 model, reasoning effort, service tier, trusted projects, and TUI notices are
 owned by the global `~/.codex/config.toml` link by default. This prevents stale
 project-local configs from silently overriding the current global model.
+
+Both global and local source sync refresh the managed
+`.agents/.configs/codex-config.toml` defaults while merging existing Codex
+user state: project trust decisions, TUI notice acknowledgements, and custom
+profiles other than the withdrawn `fast` profile. Source remains authoritative
+for model, reasoning, and `service_tier = "default"`. A malformed installed
+Codex config refuses synchronization without replacing that config.
 
 During local setup in the default `preserve` mode, agents-infra removes managed
 project-local Codex config artifacts it created: either the legacy symlink or a
@@ -394,17 +421,18 @@ The cycle-10 reference policy is exactly:
 [agents.pi.primary_session]
 profile = "qwen-3.8-27b"
 pi_compatibility = "github-release:earendil-works/pi@v0.84.2:darwin-arm64#sha256-c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65"
+yolo_mode = false
 
 [agents.pi.profiles."qwen-3.8-27b"]
 provider = "local-qwen"
 model = "Qwen-3.8-27B"
 base_url = "http://127.0.0.1:18011/v1"
 api = "openai-completions"
-reasoning = false
+reasoning = true
 input = ["text"]
 context_window = 131072
 max_tokens = 16384
-thinking = "off"
+thinking = "medium"
 requested_capabilities = ["text", "tools"]
 
 [agents.pi.profiles."qwen-3.8-27b".compat]
@@ -464,12 +492,21 @@ not automate benchmarks.
 
 Configs compose from filesystem root to cwd. The nearest explicit
 `primary_session.profile` wins unless wrapper `--profile NAME` selects a
-profile; `pi_compatibility` has nearest-field precedence and no CLI override.
+profile; `pi_compatibility` and `yolo_mode` have nearest-field precedence and
+no CLI override. An explicit child `yolo_mode = false` masks an inherited
+`true`.
 One child definition of the same exact decoded profile name atomically replaces
 the ancestor definition—profile fields never merge—while a child may select a
 complete ancestor profile. Unreadable, malformed, partial, or unknown-field
 policy is a failure, not policy absence; only genuine absence enables native Pi
 passthrough.
+
+Pinned Pi `0.84.2` exposes no native unattended tool-execution policy.
+Its `--approve`/`-a` flag controls only one-run trust for project-local files;
+it is not a permission bypass. Therefore omitted or explicit
+`yolo_mode = false` preserves Pi behavior, while `yolo_mode = true` fails
+before executable lookup or launch with `pi_yolo_mode_unsupported`. Never map
+Pi yolo to `--approve`.
 
 Profile-name identity is its exact post-TOML-decoding UTF-8 bytes. There is no
 normalization, case folding, trimming, path cleaning, or lossy sanitization.
@@ -643,6 +680,90 @@ Operator acceptance must therefore record runtime/version/environment and run:
 That evidence verifies the deployment; benchmark automation and interpretation
 remain operator work and do not authorize later launches.
 
+#### Bounded model behavior checks
+
+Use `model-check` after setup/verification and `qwen-infra --print-config` to
+exercise a configured canonical target through the real managed Pi lifecycle:
+
+```text
+agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR \
+  [--deadline DURATION] [--expect-tool NAME]... [--expect-text TEXT]...
+```
+
+Run it from the project whose config and files the model should see; the caller
+working directory is the project directory. `--target` is a configured
+canonical entrypoint such as `qwen-infra`, not a provider executable or model
+name, and it must resolve to a managed local Pi profile. `--expect-tool` matches
+an exact tool name. `--expect-text` matches a substring of the final assistant
+response only. Both flags are repeatable. With no expectations, exit `0` proves
+only a clean, complete managed lifecycle, not a particular model behavior.
+
+For a skill-discovery smoke, use a fresh output directory for every run:
+
+```bash
+agents-infra setup global --source-dir /path/to/relux-agents-infra
+agents-infra verify global
+
+cd /abs/path/to/project
+qwen-infra --print-config
+
+agents-infra model-check \
+  --target qwen-infra \
+  --prompt 'Discover the applicable installed skill for updating shared agent infrastructure. Use the read tool to read its SKILL.md. Reply with RELUX_SKILL_READ_CONFIRMED and one source-of-truth rule learned from that file.' \
+  --output-dir .temp/model-check/qwen-skill-discovery-01 \
+  --deadline 5m \
+  --expect-tool read \
+  --expect-text RELUX_SKILL_READ_CONFIRMED
+```
+
+The checker creates or secures `DIR` as `0700` and writes four new regular
+files as `0600`. It refuses to overwrite any of these names, so reuse requires
+a different directory:
+
+| Artifact | Contents | Handling |
+| --- | --- | --- |
+| `events.jsonl` | Raw Pi JSONL provider/tool event stream | Sensitive raw evidence; may contain prompts, tool arguments, tool results, or secrets. |
+| `stderr.log` | Raw managed runtime and Pi stderr | Sensitive raw diagnostics; do not publish without review and redaction. |
+| `summary.json` | Schema-1 machine-readable outcome, expectations, event/tool counts, target identity, timing, and cleanup report | Sanitized; the final response is capped at 4096 bytes and its full SHA-256 is recorded. |
+| `summary.txt` | Deterministic human-readable rendering of the same bounded summary | Sanitized; also printed to stdout when a summary is produced. |
+
+`--expect-tool read` proves that an exact-name `read` tool event occurred; it
+does not prove which file was read. To claim that the skill was discovered and
+read, inspect `events.jsonl` for a completed, non-error `read` of the installed
+`relux-agents-infra/SKILL.md`, then persist only a sanitized projection plus
+`summary.json`/`summary.txt`. A response marker alone is self-reported evidence,
+not proof of the tool target. A failed, partial, or malformed read is not
+legitimate absence; report the result as failed or unknown.
+
+The default managed-execution deadline is `5m`; accepted Go duration values are
+`1ms` through `30m`. It covers managed runtime readiness and the Pi agent run
+after static target resolution and output preparation. On expiry, the checker
+cancels the managed lifecycle and runs bounded TERM-to-SIGKILL cleanup for its
+owned Pi and runtime process groups, using the profile's
+`shutdown_timeout_seconds`, before releasing the profile lock and returning.
+Evidence files remain for the operator; the checker does not delete them.
+`summary.json` reports
+`deadline_ms`, `duration_ms`, `timed_out`, both process-group cleanup states,
+and `cleanup_confirmed`.
+
+Exit semantics are stable and ordered:
+
+| Exit | Meaning |
+| ---: | --- |
+| `0` | Complete valid stream, managed cleanup confirmed, no failed tools, and every supplied expectation met. |
+| `1` | Target/launch/validation/assistant/managed-cleanup failure. Early option validation may fail before summary artifacts exist. |
+| `2` | Managed-execution deadline expired. The summary separately reports whether cleanup was confirmed. |
+| `3` | Provider JSONL is malformed or an otherwise successful process produced an incomplete agent lifecycle. |
+| `4` | One or more `--expect-tool` or `--expect-text` assertions were not observed. |
+| `5` | A tool execution completed with `isError=true`; this takes precedence over unmet expectations. |
+
+Provider stdout/stderr is never mirrored to the terminal. Sanitized summaries
+redact recognized secret shapes, but an operator must still inspect them before
+attaching or publishing evidence. The checker supplies Pi `--approve` only to
+load reviewed project-local inputs. Pi tools have no separate native approval
+policy, so this is not a yolo selection; keep prompts bounded and run only
+reviewed targets in controlled projects.
+
 #### Security boundary, diagnostics, and failures
 
 The reproducible guarantees are exact config provenance, standalone Pi closure
@@ -722,6 +843,88 @@ model/effort pair is compatible.
 remains provider-native. Codex fields never configure `agents-infra claude`,
 and Claude fields never configure `agents-infra codex`; `[mcp]` remains the one
 intentional provider-shared project section.
+
+### Canonical vendor target entrypoints
+
+Canonical targets are an additive, strict launch path for installed vendor
+aliases. They separate vendor identity from the provider harness and map each
+public entrypoint explicitly:
+
+```toml
+[agents.targets."openai-sol-high"]
+vendor = "openai"
+environment = "codex"
+model = "gpt-5.6-sol"
+reasoning = "high"
+
+[agents.targets."anthropic-opus-high"]
+vendor = "anthropic"
+environment = "claude-code"
+model = "claude-opus-5"
+reasoning = "high"
+
+[agents.targets."qwen-mlx-8bit"]
+vendor = "qwen"
+environment = "pi"
+model = "Qwen3.8-27B-MLX-8bit"
+reasoning = "medium"
+profile = "qwen-3.8-27b-mlx-8bit"
+profile_provider = "local-qwen" # optional assertion
+endpoint = "http://127.0.0.1:18011/v1" # optional assertion
+
+[agents.entrypoints]
+openai-infra = "openai-sol-high"
+anthropic-infra = "anthropic-opus-high"
+qwen-infra = "qwen-mlx-8bit"
+```
+
+Only `openai/codex`, `anthropic/claude-code`, and `qwen/pi` are admitted.
+Claude reasoning is limited to `low`, `medium`, `high`, `xhigh`, and `max`;
+Pi uses its documented thinking levels; Codex accepts any non-empty reasoning
+token and leaves model/effort compatibility to Codex. A Qwen target must name
+an existing complete managed Pi profile with `api = "openai-completions"`.
+Its model and thinking must match the profile. A non-`off` Qwen target also
+requires profile `reasoning = true` and
+`compat.thinking_format = "qwen-chat-template"`; pinned Pi then carries the
+selected native level as `--thinking medium` and enables the Qwen chat-template
+thinking path. Optional provider and endpoint
+fields are exact assertions; the effective qualified model, provider, and
+endpoint always come from the selected profile definition.
+
+Target definitions compose atomically from filesystem root to current working
+directory: a nearer complete target replaces the same exact name, and a nearer
+entrypoint mapping replaces that alias mapping. Missing mappings, unknown
+targets, malformed fields, alias/vendor disagreement, invalid Pi profiles, or
+conflicting identity selectors fail before provider/runtime side effects. No
+alias infers a target from legacy tables and no setup, verify, compose, print,
+or launch operation rewrites project configuration.
+
+Alias invocations identity-lock model and reasoning. Exact repeats are
+accepted; divergent repeats fail with `target_identity_conflict`. Codex also
+locks `-c model=...` and `-c model_reasoning_effort=...` and refuses profile
+selectors. Pi decodes `model`, `provider/model`, `model:thinking`, and
+`provider/model:thinking`, refusing a divergent provider or thinking suffix
+before the legacy Pi composer can normalize it.
+
+Inspect or compose the selected target without launching it:
+
+```bash
+openai-infra --print-config
+anthropic-infra --print-config
+qwen-infra --print-config
+
+agents-infra compose --mode primary-session \
+  --entrypoint qwen-infra --project "$PWD" --schema-version 1 --json \
+  -- --model 'local-qwen/Qwen3.8-27B-MLX-8bit:off'
+```
+
+Alias JSON plans retain schema version 1 and add `target`, plus Pi-only
+`resolved.profile_provider` and `resolved.endpoint` provenance. Legacy
+`compose --agent ...` plans omit those fields byte-for-byte. Direct
+`agents-infra codex`, `agents-infra claude`, `agents-infra pi`, and `pi-infra`
+keep their existing CLI/project/provider precedence; merely declaring targets
+does not change them. `doctor local` reports configured mappings and their
+resolved coordinates with sources.
 
 When launched from a project directory, `agents-infra codex` walks from the
 filesystem root to the current directory and reads each
@@ -811,7 +1014,6 @@ Inspect either provider invocation without launching an agent:
 ```bash
 cd /abs/path/to/project
 agents-infra codex --print-config
-agents-infra codex --print-config --profile fast
 agents-infra codex --print-config --model gpt-5.6-terra -c 'model_reasoning_effort="xhigh"'
 
 agents-infra claude --print-config
@@ -923,8 +1125,9 @@ rg -n "Primary Parent Goal Actualization" \
 | Tool | Purpose | Command | Outputs |
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
-| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi state under the user cache directory, attachment manifests/staged images, or printed diagnostics on stdout |
+| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
 | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+| `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
 | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
 | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
@@ -1105,7 +1308,7 @@ Reference config with:
 
 - Model: `gpt-5.5`
 - Reasoning effort: `xhigh`
-- Service tier: `default` (Standard). The named `fast` profile remains available for explicit model/reasoning selection; use `/fast on` for interactive Fast opt-in, and persistent Fast requires `service_tier = "fast"` with `[features].fast_mode = true`.
+- Service tier: `default` (Standard).
 - Project docs byte limit: `131072`
 - The approaching-rate-limit model switch reminder is suppressed with `[notice].hide_rate_limit_model_nudge = true` so Codex does not ask to move to a lower-credit model.
 - As of the audited Codex CLI `0.144.1`, the separate safety-buffering chooser (`Retry with a faster model` / `Keep waiting`) has no supported `config.toml` setting for suppression, a default choice, or automatic waiting. It is runtime UI shown before agent instructions can act; terminal key automation or a patched Codex binary is intentionally out of scope.
@@ -1441,8 +1644,9 @@ Before mutation, setup recursively validates every source-managed skill link it
 can materialize. Setup's postcondition and `verify` repeat that check across the
 managed installed surfaces. Links must remain contained, resolve successfully,
 and form an acyclic directory graph; multiple contained links may share a target
-when they form a DAG. Global provider-owned top-level skill packages remain
-outside this ownership boundary unless setup manages their name.
+when they form a DAG. Provider-owned top-level skill packages remain outside
+this ownership boundary unless setup manages their name, in both global and
+project-local runtimes.
 
 Project-local install example:
 

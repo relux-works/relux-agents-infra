@@ -378,6 +378,7 @@ func TestInstalledBinaryVerifyLocalRefusesContainedTransitiveManagedSkillCycle(t
 
 func TestInstalledBinaryVerifyLocalInspectsEveryManagedSkillSurface(t *testing.T) {
 	binary := buildInstalledBinary(t)
+	const managedRepoSkillName = "relux-agents-infra"
 	home := t.TempDir()
 	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
 	configDir := filepath.Join(home, "config")
@@ -388,22 +389,73 @@ func TestInstalledBinaryVerifyLocalInspectsEveryManagedSkillSurface(t *testing.T
 	}
 	outside := filepath.Join(t.TempDir(), "outside-runtime")
 	mustMkdir(t, outside)
-	for _, surface := range []string{
-		filepath.Join(project, ".agents", ".skills"),
-		filepath.Join(project, ".agents", "skills"),
-		filepath.Join(project, ".claude", "skills"),
-		filepath.Join(project, ".codex", "skills"),
+	for _, surface := range []struct {
+		root string
+		name string
+	}{
+		{root: filepath.Join(project, ".agents", ".skills"), name: "surface-escape-probe"},
+		{root: filepath.Join(project, ".agents", "skills"), name: managedRepoSkillName},
+		{root: filepath.Join(project, ".claude", "skills"), name: managedRepoSkillName},
+		{root: filepath.Join(project, ".codex", "skills"), name: managedRepoSkillName},
 	} {
-		probe := filepath.Join(surface, "surface-escape-probe")
+		probe := filepath.Join(surface.root, surface.name)
+		if err := os.Remove(probe); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove existing managed skill link %s: %v", probe, err)
+		}
 		if err := os.Symlink(outside, probe); err != nil {
 			t.Skipf("cannot create installed skill symlink: %v", err)
 		}
 		output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
 		if err == nil || !strings.Contains(output, probe) || !strings.Contains(output, "escapes runtime containment") {
-			t.Fatalf("verify local did not inspect managed surface %s: %v\n%s", surface, err, output)
+			t.Fatalf("verify local did not inspect managed surface %s: %v\n%s", surface.root, err, output)
 		}
 		if err := os.Remove(probe); err != nil {
 			t.Fatalf("remove surface probe %s: %v", probe, err)
+		}
+		if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+			t.Fatalf("setup local did not restore managed skill surface %s: %v\n%s", surface.root, err, output)
+		}
+	}
+}
+
+func TestInstalledBinarySetupAndVerifyLocalPreserveUnmanagedProviderSkillLinks(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, source)
+	project := t.TempDir()
+	externalSkill := filepath.Join(t.TempDir(), "mac-infra")
+	mustMkdir(t, externalSkill)
+	mustWrite(t, filepath.Join(externalSkill, "SKILL.md"), "external provider-owned skill\n")
+
+	for _, providerSkills := range []string{
+		filepath.Join(project, ".claude", "skills"),
+		filepath.Join(project, ".codex", "skills"),
+	} {
+		mustMkdir(t, providerSkills)
+		if err := os.Symlink(externalSkill, filepath.Join(providerSkills, "mac-infra")); err != nil {
+			t.Skipf("cannot create provider-owned skill symlink: %v", err)
+		}
+	}
+
+	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("setup local refused provider-owned skill links: %v\n%s", err, output)
+	}
+	if output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project); err != nil {
+		t.Fatalf("verify local refused provider-owned skill links: %v\n%s", err, output)
+	}
+	for _, providerSkills := range []string{
+		filepath.Join(project, ".claude", "skills"),
+		filepath.Join(project, ".codex", "skills"),
+	} {
+		link := filepath.Join(providerSkills, "mac-infra")
+		target, err := os.Readlink(link)
+		if err != nil {
+			t.Fatalf("Readlink(%s): %v", link, err)
+		}
+		if target != externalSkill {
+			t.Fatalf("provider-owned skill link %s changed: got %q, want %q", link, target, externalSkill)
 		}
 	}
 }
