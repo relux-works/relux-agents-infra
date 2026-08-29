@@ -646,9 +646,11 @@ func printSharedRuntimeStatus(report infra.SharedRuntimeStatus) {
 	fmt.Fprintf(os.Stdout, "runtime_key: %s\n", report.RuntimeKey)
 	fmt.Fprintf(os.Stdout, "profile_digest: %s\n", report.ProfileDigest)
 	fmt.Fprintf(os.Stdout, "restart_count: %d\n", report.RestartCount)
+	fmt.Fprintf(os.Stdout, "restart_not_before: %v\n", report.RestartNotBefore)
 	fmt.Fprintf(os.Stdout, "quarantined_until: %v\n", report.QuarantinedUntil)
 	fmt.Fprintf(os.Stdout, "last_readiness_match: %v\n", report.LastReadinessMatch)
 	fmt.Fprintf(os.Stdout, "manual_quarantine: %t\n", report.ManualQuarantine)
+	fmt.Fprintf(os.Stdout, "half_open: %t\n", report.HalfOpen)
 	fmt.Fprintf(os.Stdout, "broker.state: %s\n", report.Broker.State)
 	if report.Broker.PID != 0 {
 		fmt.Fprintf(os.Stdout, "broker.pid: %d\n", report.Broker.PID)

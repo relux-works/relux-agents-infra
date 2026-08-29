@@ -54,7 +54,10 @@ broker_start_timeout_seconds = 40
 	if err := json.Unmarshal([]byte(output), &fields); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"restart_count", "quarantined_until", "last_readiness_match"} {
+	for _, name := range []string{
+		"restart_count", "restart_not_before", "quarantined_until",
+		"last_readiness_match", "half_open",
+	} {
 		if _, present := fields[name]; !present {
 			t.Fatalf("runtime status JSON omitted %q: %s", name, output)
 		}

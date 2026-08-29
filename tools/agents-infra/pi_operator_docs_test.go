@@ -43,6 +43,10 @@ func TestPiOperatorContractDocumentsCycle10Boundary(t *testing.T) {
 		"Explicit `--no-approve`/`-na` conflicts with effective yolo",
 		"logs/<UTC-start>-<random>.jsonl",
 		"foreground-terminal ownership",
+		"`restart_not_before` is the ledger's exact RFC3339 deadline or JSON `null`",
+		"agents-infra runtime status --json.restart_not_before",
+		"vendorplugin.LimitedUntil",
+		"`last_failure` and `last_failure_at` are explicitly deferred",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("README.md missing Pi operator contract fragment %q", want)
@@ -70,6 +74,9 @@ func TestReluxAgentsInfraSkillRoutesSafePiWorkflowToSource(t *testing.T) {
 		"`--approve`/`-a` controls one-run trust for project-local files",
 		"mode-`0600` lifecycle JSONL",
 		"foreground-terminal ownership",
+		"`restart_not_before` is always present as the ledger's RFC3339 deadline or JSON `null`",
+		"vendorplugin.LimitedUntil",
+		"`last_failure` and `last_failure_at` remain explicitly absent",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Fatalf("SKILL.md missing managed Pi guidance %q", want)

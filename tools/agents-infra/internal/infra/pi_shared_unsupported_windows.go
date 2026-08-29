@@ -93,9 +93,11 @@ type SharedRuntimeStatus struct {
 	RuntimeKey         string                      `json:"runtime_key"`
 	ProfileDigest      string                      `json:"profile_digest"`
 	RestartCount       int                         `json:"restart_count"`
+	RestartNotBefore   *time.Time                  `json:"restart_not_before"`
 	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
 	ManualQuarantine   bool                        `json:"manual_quarantine"`
+	HalfOpen           bool                        `json:"half_open"`
 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
 	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`

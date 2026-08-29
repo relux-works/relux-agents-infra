@@ -5,6 +5,12 @@
 
 ## 2026-08-29
 
+### 1756 — Backoff Status Publishes Only Persisted Facts
+- DECISION: `SharedRuntimeStatus` publishes ledger-derived `restart_not_before` and `half_open`; `restart_count` never implies active backoff, and `half_open` never gates a runtime that may already be serving.
+- DECISION: `last_failure` and `last_failure_at` remain absent until a reviewed ledger event persists reason/time; placeholders or counter-derived provenance are refused by contract.
+- EVIDENCE: `SharedRuntimeStatusReport` pre/post fixtures copy the exact deadline, malformed lifecycle timestamps refuse, and a narrowed production mapping that drops the persisted deadline makes `TestSharedRuntimeStatusReportPublishesPersistedDeadlineWithoutInference` exit 1.
+- SCOPE: `tools/agents-infra/internal/infra/pi_shared_operator_darwin.go`, platform stubs, CLI output, `README.md`, and `SKILL.md`.
+
 ### 1646 — Supervision Seconds Duration Overflow Refused
 - REGRESSION: `tools/agents-infra/internal/infra/pi_config.go:424` admitted seconds above 9223372036; later `time.Duration(seconds) * time.Second` overflowed and could make backoff, stable-run, and quarantine timing negative or immediate.
 - FIX: Runtime and shared-supervision seconds now have explicit overflow-safe bounds; doubled lease-stale and handoff sums have effective-duration bounds, broker ordering uses `int64`, and exponential backoff clamps before doubling.
