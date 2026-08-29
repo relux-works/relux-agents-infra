@@ -39,18 +39,82 @@
 
 ## Version Control
 
-For task-board-tracked work, commit acknowledgement and timing come from the
-project's `task-board.config.json -> version_control` policy and the board
-workflow. This global module adds no separate commit, push, message, or
-attribution policy. Repository-specific contribution rules still apply.
+### Automatic signed delivery
+
+* A repository-changing task is not complete at an uncommitted worktree. Unless
+  the user or repository explicitly narrows the requested outcome, the owning
+  agent must automatically stage only the reviewed task scope, create signed
+  commits, publish a feature branch, open or update a pull request, wait for the
+  required review and checks, and land the accepted head in the default branch.
+  Do not stop merely to ask whether the already-authorized task should be
+  committed, pushed, or landed.
+* Every agent-created commit and tag must retain the configured human author
+  name and email and must be cryptographically signed with that author's
+  configured signing key. Use explicit signing (`git commit -S`, signed rebases,
+  and `git tag -s`) and verify the resulting objects before publication. Never
+  silently substitute an agent identity as the commit author or publish an
+  unsigned rewritten commit.
+* Agent co-authorship is allowed. Add an explicit `Co-authored-by` trailer when
+  the user, repository policy, or task requests attribution and a real,
+  intentionally configured agent name and email are available. Do not invent
+  an identity or a verification address merely to obtain an avatar or badge.
+* Project `task-board.config.json -> version_control` rules and stricter
+  repository contribution gates still apply. An explicit request to leave work
+  uncommitted, stop at a PR, or avoid publication narrows the automatic delivery
+  boundary for that task.
+
+### Start every task from current main
+
+* Before creating a task branch or worktree, fetch `origin`, switch to the local
+  default branch (normally `main`), and fast-forward it to the exact current
+  remote default branch. Create the new branch or worktree only after verifying
+  the two refs are equal.
+* Never branch from a stale local default branch. If unrelated dirty work makes
+  the synchronization unsafe, preserve it and use an isolated clean worktree
+  rooted at the current remote default branch; never reset or absorb somebody
+  else's changes to satisfy this rule.
+
+```bash
+DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^origin/##')
+git fetch origin "$DEFAULT_BRANCH"
+git switch "$DEFAULT_BRANCH"
+git merge --ff-only "origin/$DEFAULT_BRANCH"
+test "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$DEFAULT_BRANCH")"
+git switch -c <task-branch>
+```
 
 ### Canonical pull-request delivery
 
-* When a hosted repository supports pull requests or merge requests, use a non-default branch and the canonical **branch → PR/MR → review → green checks → merge** flow by default. Do not push directly to the default branch merely because it is faster.
-* When publication and merge are within the current authorization, the agent that owns the change owns the complete delivery lifecycle: push the branch, open the PR/MR, inspect the complete remote diff and current checks, submit a real review verdict through the hosting platform, and merge only after that review accepts the change and all required checks pass.
+* When a hosted repository supports pull requests or merge requests, use a
+  non-default branch and the canonical **branch → PR/MR → review → green checks
+  → exact-head landing** flow. Do not bypass review by pushing an unreviewed
+  feature head directly to the default branch.
+* When publication and landing are within the current authorization, the agent
+  that owns the change owns the complete delivery lifecycle: push the branch,
+  open the PR/MR, inspect the complete remote diff and current checks, submit a
+  real review verdict through the hosting platform, and automatically land only
+  after that review accepts the exact head and all required checks pass.
 * Use the platform's actual review mechanism so repository history accurately represents the pull-request and code-review work. GitHub does not allow an author to approve their own pull request; in that case submit a comment review containing the verdict, and never invent another identity or misrepresent approval.
-* A direct default-branch push is an exception only when the user or repository workflow explicitly requires it, or when the remote has no review workflow. A stricter repository-local PR/MR-only rule always wins. If the canonical flow is required but authentication, policy, or hosting constraints prevent it, report the exact blocker instead of silently falling back to a direct push.
-* This section governs the shape of remote publication. It does not grant commit, push, review, or merge authority, and it does not replace task-board commit confirmation or repository-specific acceptance gates.
+* Preserve the reviewed author-signed commit objects. Prefer the repository's
+  approved non-rewriting fast-forward landing mechanism. Where policy permits,
+  a plain push of the exact reviewed PR head to the default branch is valid and
+  lets GitHub record the PR as indirectly merged. Do not use a platform rebase,
+  squash, or merge action that replaces the reviewed signed commits with
+  different unsigned objects.
+* Immediately before landing, fetch again, verify every introduced commit
+  signature, verify that the remote feature head and PR head equal the reviewed
+  local head, and require the current remote default branch to be its ancestor.
+  A plain push must fail closed if the default branch advanced. Never force the
+  default branch.
+* If the default branch advanced, rebase locally with signing enabled, update
+  only the feature branch with `--force-with-lease`, and repeat review and
+  checks for the new exact head before another landing attempt. If repository
+  policy cannot land without rewriting or cannot accept the signed head, report
+  that concrete blocker instead of silently weakening signature or review
+  requirements.
+* This section authorizes automatic commit and publication only for an otherwise
+  authorized repository-changing task. It does not broaden the task's product,
+  data, deployment, or external-system scope.
 
 ## Worktrees
 

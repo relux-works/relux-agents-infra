@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 23,
+  "expected_previous_revision": 4,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 4
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Complete the existing agents-infra local-setup, instruction-materialization, and Pi primary-launcher work while preserving global setup/provider rendering and exact Codex config semantics; additionally replace the global no-commit policy with automatic author-signed commit and pull-request landing rules, require fresh origin/main before every task branch, allow explicit agent co-authorship, regenerate and install the global instruction surface, validate the change, and land it as exact signed commits in main.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 5
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "The repository owner added a global version-control policy change without cancelling the active infra objective.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "iv"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-29T23:12:03.673112Z",
+  "created_by": "iv",
+  "reason": "The repository owner added a global version-control policy change without cancelling the active infra objective."
+}

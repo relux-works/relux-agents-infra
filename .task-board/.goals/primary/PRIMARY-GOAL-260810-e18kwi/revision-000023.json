@@ -1,0 +1,21 @@
+{
+  "contract": "primary-goal-v1",
+  "id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 23,
+  "previous_revision": 4,
+  "state": "active",
+  "scope": {
+    "kind": "board"
+  },
+  "objective": "Complete the existing agents-infra local-setup, instruction-materialization, and Pi primary-launcher work while preserving global setup/provider rendering and exact Codex config semantics; additionally replace the global no-commit policy with automatic author-signed commit and pull-request landing rules, require fresh origin/main before every task branch, allow explicit agent co-authorship, regenerate and install the global instruction surface, validate the change, and land it as exact signed commits in main.",
+  "mutation": {
+    "kind": "objective_realigned",
+    "reason": "The repository owner added a global version-control policy change without cancelling the active infra objective.",
+    "actor": {
+      "kind": "primary_parent",
+      "actor_id": "iv"
+    }
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-29T23:12:03.673112Z"
+}
