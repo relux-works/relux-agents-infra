@@ -41,13 +41,12 @@
 
 ### Automatic signed delivery
 
-* A repository-changing task is not complete at an uncommitted worktree. Unless
-  the user or repository explicitly narrows the requested outcome, the owning
-  agent must automatically stage only the reviewed task scope, create signed
-  commits, publish a feature branch, open or update a pull request, wait for the
-  required review and checks, and land the accepted head in the default branch.
-  Do not stop merely to ask whether the already-authorized task should be
-  committed, pushed, or landed.
+* For every authorized repository-changing task, the owning agent must
+  automatically stage only the reviewed task scope, create signed commits,
+  publish a feature branch, open or update a pull request, wait for the required
+  review and checks, and land the accepted head in the default branch. Do not
+  stop merely to ask whether the already-authorized task should be committed,
+  pushed, or landed.
 * Every agent-created commit and tag must retain the configured human author
   name and email and must be cryptographically signed with that author's
   configured signing key. Use explicit signing (`git commit -S`, signed rebases,
@@ -59,9 +58,7 @@
   intentionally configured agent name and email are available. Do not invent
   an identity or a verification address merely to obtain an avatar or badge.
 * Project `task-board.config.json -> version_control` rules and stricter
-  repository contribution gates still apply. An explicit request to leave work
-  uncommitted, stop at a PR, or avoid publication narrows the automatic delivery
-  boundary for that task.
+  repository contribution gates still apply.
 
 ### Start every task from current main
 

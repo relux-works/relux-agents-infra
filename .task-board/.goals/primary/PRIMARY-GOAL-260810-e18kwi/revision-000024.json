@@ -1,0 +1,21 @@
+{
+  "contract": "primary-goal-v1",
+  "id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 24,
+  "previous_revision": 23,
+  "state": "active",
+  "scope": {
+    "kind": "board"
+  },
+  "objective": "Complete the existing agents-infra local-setup, instruction-materialization, and Pi primary-launcher work while preserving global setup/provider rendering and exact Codex config semantics; keep automatic author-signed PR delivery, fresh-main task starts, and explicit agent co-authorship, remove residual uncommitted-handoff directives from the global instruction surface, install the revised policy locally, publish it through a signed PR and exact-head landing, and track the pre-existing task-board missing-resource integrity debt in a dedicated GitHub issue.",
+  "mutation": {
+    "kind": "objective_realigned",
+    "reason": "The repository owner requested a follow-up PR and an issue for the 480 historical missing resource payloads.",
+    "actor": {
+      "kind": "primary_parent",
+      "actor_id": "iv"
+    }
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-29T23:25:35.455596Z"
+}

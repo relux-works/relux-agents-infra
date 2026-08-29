@@ -98,13 +98,17 @@ ssh "$REMOTE_SSH" "
   cd '$REMOTE_PROJECT' &&
   git init -q &&
   git add -A &&
-  git commit -q -m baseline
+  git commit -q -m baseline &&
+  git update-ref refs/agents-infra/remote-baseline HEAD
 "
 ```
 
 For repositories the remote can access directly, `git clone` plus checkout of
-the exact branch/commit is fine. The important part is preserving a baseline so
-the remote can produce a clean diff.
+the exact branch/commit is fine. Before the worker starts, create
+`refs/agents-infra/remote-baseline` at that exact commit as well. The private
+baseline ref, together with intent-to-add marking during export, makes the
+returned patch include committed, tracked working-tree, and non-ignored
+untracked changes without imposing a commit-timing rule on the worker.
 
 ## Prompt Contract
 
@@ -114,8 +118,8 @@ Write the prompt to a file and transfer it as an artifact. Include:
 - exact files or directories in scope
 - commands the remote agent should run
 - "do not read or modify files outside this project copy"
-- expected handoff: summary, tests run, known failures, and no commit unless
-  explicitly requested
+- expected handoff: summary, tests run, known failures, and a reviewable change
+  artifact
 
 Example:
 
@@ -128,7 +132,8 @@ Task:
 - Implement the requested change with minimal scope.
 - Preserve existing behavior unless the task says otherwise.
 - Run the relevant tests or build checks.
-- Leave changes uncommitted.
+- Return the completed scoped change to the parent as a reviewable artifact.
+- Do not publish or land from this disposable worker; the parent owns delivery.
 
 Handoff:
 - Summarize files changed.
@@ -175,7 +180,8 @@ Never trust only the remote agent's summary. Export and inspect the actual diff:
 ssh "$REMOTE_SSH" "
   cd '$REMOTE_PROJECT' &&
   git status --short &&
-  git diff --binary > '$REMOTE_RUN_ROOT/$RUN_ID/remote.patch'
+  git add -N -- . &&
+  git diff --binary refs/agents-infra/remote-baseline > '$REMOTE_RUN_ROOT/$RUN_ID/remote.patch'
 "
 
 scp "$REMOTE_SSH:$REMOTE_RUN_ROOT/$RUN_ID/remote.patch" "$LOCAL_PATCH"

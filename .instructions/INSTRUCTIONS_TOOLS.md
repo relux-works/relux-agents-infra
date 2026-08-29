@@ -16,7 +16,7 @@ Agent may use these tools freely.
 
 * Inspect diffs, config, repo state.
 * Agent may check git config to detect default branch and repo location.
-* **Never run a repo-wide destructive git command.** `git checkout -- .`, `git restore .`, `git reset --hard`, `git clean -fd` and their equivalents discard uncommitted work that is not yours and cannot be recovered — in a shared checkout that is somebody else's unfinished task. Name single paths instead, and prefer a worktree when you need a clean tree.
+* **Never run a repo-wide destructive git command.** `git checkout -- .`, `git restore .`, `git reset --hard`, `git clean -fd` and their equivalents discard working-tree state that is not yours and cannot be recovered — in a shared checkout that is somebody else's unfinished task. Name single paths instead, and prefer a worktree when you need a clean tree.
 
 ### python / perl / make
 
