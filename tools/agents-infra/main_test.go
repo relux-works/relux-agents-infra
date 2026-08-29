@@ -517,58 +517,146 @@ func TestRunDoctorLocalFailsClosedOnMalformedProjectTOML(t *testing.T) {
 	}
 }
 
+func TestCaptureStdoutDrainsLargeOutputConcurrently(t *testing.T) {
+	original := os.Stdout
+	want := bytes.Repeat([]byte("stdout-capture-pattern\x00\xff"), 3*1024*1024/24+1)
+	want = want[:3*1024*1024+17]
+
+	got := captureStdout(t, func() {
+		written, err := os.Stdout.Write(want)
+		if err != nil {
+			t.Fatalf("Write stdout payload: %v", err)
+		}
+		if written != len(want) {
+			t.Fatalf("Write stdout payload = %d bytes, want %d", written, len(want))
+		}
+	})
+
+	if !bytes.Equal([]byte(got), want) {
+		t.Fatalf("captured stdout differs: got %d bytes, want %d", len(got), len(want))
+	}
+	if os.Stdout != original {
+		t.Fatal("captureStdout did not restore os.Stdout")
+	}
+}
+
+func TestCaptureStderrDrainsLargeOutputConcurrently(t *testing.T) {
+	original := os.Stderr
+	want := bytes.Repeat([]byte("stderr-capture-pattern\x00\xff"), 3*1024*1024/24+1)
+	want = want[:3*1024*1024+17]
+
+	got := captureStderr(t, func() {
+		written, err := os.Stderr.Write(want)
+		if err != nil {
+			t.Fatalf("Write stderr payload: %v", err)
+		}
+		if written != len(want) {
+			t.Fatalf("Write stderr payload = %d bytes, want %d", written, len(want))
+		}
+	})
+
+	if !bytes.Equal([]byte(got), want) {
+		t.Fatalf("captured stderr differs: got %d bytes, want %d", len(got), len(want))
+	}
+	if os.Stderr != original {
+		t.Fatal("captureStderr did not restore os.Stderr")
+	}
+}
+
+func TestCaptureStdoutAndStderrRestoreDescriptorsAfterPanic(t *testing.T) {
+	testCases := []struct {
+		name    string
+		stream  **os.File
+		capture func(*testing.T, func()) string
+	}{
+		{name: "stdout", stream: &os.Stdout, capture: captureStdout},
+		{name: "stderr", stream: &os.Stderr, capture: captureStderr},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			original := *testCase.stream
+			panicValue := errors.New("capture producer panic")
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != panicValue {
+						t.Fatalf("recovered panic = %v, want %v", recovered, panicValue)
+					}
+				}()
+				testCase.capture(t, func() {
+					panic(panicValue)
+				})
+			}()
+			if *testCase.stream != original {
+				t.Fatalf("capture%s did not restore descriptor after panic", strings.ToUpper(testCase.name[:1])+testCase.name[1:])
+			}
+		})
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
-	original := os.Stdout
-	read, write, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("Pipe: %v", err)
-	}
-	os.Stdout = write
-	defer func() {
-		os.Stdout = original
-	}()
-
-	fn()
-
-	if err := write.Close(); err != nil {
-		t.Fatalf("Close stdout pipe writer: %v", err)
-	}
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, read); err != nil {
-		t.Fatalf("Copy stdout pipe: %v", err)
-	}
-	if err := read.Close(); err != nil {
-		t.Fatalf("Close stdout pipe reader: %v", err)
-	}
-	return buf.String()
+	return capturePipe(t, &os.Stdout, "stdout", fn)
 }
 
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
-	original := os.Stderr
+	return capturePipe(t, &os.Stderr, "stderr", fn)
+}
+
+type capturePipeResult struct {
+	output string
+	err    error
+}
+
+func capturePipe(t *testing.T, stream **os.File, name string, fn func()) string {
+	t.Helper()
+	original := *stream
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("Pipe: %v", err)
 	}
-	os.Stderr = write
-	defer func() {
-		os.Stderr = original
+
+	drainStarted := make(chan struct{})
+	drainResult := make(chan capturePipeResult, 1)
+	go func() {
+		close(drainStarted)
+		var buf bytes.Buffer
+		_, copyErr := io.Copy(&buf, read)
+		drainResult <- capturePipeResult{output: buf.String(), err: copyErr}
 	}()
+	<-drainStarted
+	*stream = write
+
+	var result capturePipeResult
+	var writeCloseErr error
+	var readCloseErr error
+	cleaned := false
+	cleanup := func() {
+		if cleaned {
+			return
+		}
+		*stream = original
+		writeCloseErr = write.Close()
+		result = <-drainResult
+		readCloseErr = read.Close()
+		cleaned = true
+	}
+	defer cleanup()
 
 	fn()
+	cleanup()
 
-	if err := write.Close(); err != nil {
-		t.Fatalf("Close stderr pipe writer: %v", err)
+	if writeCloseErr != nil {
+		t.Fatalf("Close %s pipe writer: %v", name, writeCloseErr)
 	}
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, read); err != nil {
-		t.Fatalf("Copy stderr pipe: %v", err)
+	if result.err != nil {
+		t.Fatalf("Copy %s pipe: %v", name, result.err)
 	}
-	if err := read.Close(); err != nil {
-		t.Fatalf("Close stderr pipe reader: %v", err)
+	if readCloseErr != nil {
+		t.Fatalf("Close %s pipe reader: %v", name, readCloseErr)
 	}
-	return buf.String()
+	return result.output
 }
 
 func decodeSingleJSONDocument(t *testing.T, output string, destination any) {
