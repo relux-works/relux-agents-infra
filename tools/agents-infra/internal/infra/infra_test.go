@@ -1201,8 +1201,8 @@ hide_full_access_warning = true
 	configPath := filepath.Join(home, ".codex", "config.toml")
 	assertSymlink(t, configPath, existingConfigPath)
 	assertFileContains(t, configPath, "model = 'gpt-5.6-sol'")
-	assertFileContains(t, configPath, "model_context_window = 1000000")
-	assertFileContains(t, configPath, "model_auto_compact_token_limit = 900000")
+	assertFileContains(t, configPath, "model_context_window = 272000")
+	assertFileContains(t, configPath, "model_auto_compact_token_limit = 245000")
 	assertFileContains(t, configPath, "service_tier = 'default'")
 	assertFileNotContains(t, configPath, "old-managed-model")
 	assertFileNotContains(t, configPath, "[profiles.fast]")
@@ -1345,7 +1345,7 @@ func seedSourceRepo(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n")
 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
-	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.6-sol\"\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = 900000\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
+	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.6-sol\"\nmodel_context_window = 272000\nmodel_auto_compact_token_limit = 245000\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
 url = "https://mcp.figma.com/mcp"
 

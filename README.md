@@ -1738,8 +1738,8 @@ Reference config with:
 ### Codex CLI (`codex-config.toml`)
 
 - Model: `gpt-5.6-sol`
-- Context window override: `1000000`
-- Auto-compaction token limit: `900000`
+- Context window override: `272000`
+- Auto-compaction token limit: `245000` (about 90% of the configured window, leaving headroom below the long-context pricing threshold)
 - Reasoning effort: `xhigh`
 - Service tier: `default` (Standard).
 - Project docs byte limit: `131072`

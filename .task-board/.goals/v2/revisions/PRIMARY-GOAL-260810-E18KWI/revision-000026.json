@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 26,
+  "expected_previous_revision": 25,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 25
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Complete the existing agents-infra local-setup, instruction-materialization, and Pi primary-launcher work while preserving global setup/provider rendering and exact Codex config semantics; keep automatic author-signed PR delivery, fresh-main task starts, and explicit agent co-authorship, remove residual uncommitted-handoff directives from the global instruction surface, install the revised policy locally, publish it through a signed PR and exact-head landing, track the pre-existing task-board missing-resource integrity debt in a dedicated GitHub issue, and update the global Codex CLI default config to use gpt-5.6-sol with a 272,000 token context window and a 245,000 token auto-compaction limit to stay below the long-context pricing threshold with headroom.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 26
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "User requested reducing the Codex Sol context override from 1M to the 272K pricing threshold with corresponding compaction.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "iv"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-29T23:56:19.042899Z",
+  "created_by": "iv",
+  "reason": "User requested reducing the Codex Sol context override from 1M to the 272K pricing threshold with corresponding compaction."
+}
