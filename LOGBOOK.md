@@ -523,6 +523,27 @@
 - FIX: `readAllPiLifecycleNames` reopens `.` descriptor-relatively with `openat(O_DIRECTORY|O_NOFOLLOW)` so every scan has an independent cursor while retaining the already-proven directory authority.
 - EVIDENCE: `TestPiLifecycleOddAppendRecoversExactCommittedBoundary` reproduced the false refusal before the fix and passes after it; the focused lifecycle/race slice and uncached `internal/infra` suite exit 0.
 - DECISION: The profile-wide `lifecycle-logs` aggregate is first-class and generation-fenced; exclusive, standalone, and shared launches keep only agent/session/client-lock state below their per-run roots.
+### 0319 — Production Binary Owns Launcher Origin Regression
+- FIX: `tools/agents-infra/runtime_main_darwin_test.go` builds the real CLI, passes caller-owned fd 3, mints a valid PID/runtime-key/exec-plan frame, and drives `runtime runtime-launch` through `tools/agents-infra/main.go:628`.
+- EVIDENCE: Clean environment execs the configured target; exact `HF_ENDPOINT` and `MODEL_ENDPOINT` each refuse before target exec without value leakage. HF-only and MODEL-only gate mutants each make the production test exit 1.
+- STATUS: Restored source passes the production/internal negatives, installed global/local launcher and docs gates, full uncached module suite, vet, build, formatting, and diff checks.
+
+### 0255 — Shared Runtime Launcher Enforces Model Origin At Exec Boundary
+- FIX: `tools/agents-infra/internal/infra/pi_shared_launcher_darwin.go` validates the launcher's actual environment immediately before `sharedRuntimeExecve`; independently callable `runtime runtime-launch` can no longer bypass the managed Pi model-origin gate.
+- EVIDENCE: A valid caller-minted authorization frame plus each exact denied name refuses without target exec or value leakage; HF-only and MODEL-only narrowing mutants each make the production-entry test exit 1.
+- FINDING: `sharedRuntimeExecve` has one production call site. `RunSharedRuntimeLauncher` is reached by the CLI runtime entry and the broker child path; unsupported-platform definitions never spawn a runtime.
+- STATUS: `BUG-260817-2bh9nk` rework validated by installed global/local launcher gates, docs gates, full serial tests, vet, build, formatting, and diff checks.
+
+### 0218 — Shared Runtime Launcher Bypasses Model-Origin Environment Gate
+- REGRESSION: `tools/agents-infra/internal/infra/pi_shared_launcher_darwin.go:93` execs the managed runtime with `options.Environ` without `ValidatePiExecutionEnvironment`; a valid self-minted authorization frame carries both `HF_ENDPOINT` and `MODEL_ENDPOINT` into the runtime target.
+- ROOT CAUSE: The later shared-runtime broker scrubs its child environment, but the independently callable `runtime runtime-launch` boundary relies on argv-only authorization and does not enforce the model-origin environment policy itself.
+- EVIDENCE: Disposable production child-exec test `TestReviewerSharedRuntimeLauncherCarriesDeniedModelOriginEnvironment` observed each canary in the target after the launcher accepted the frame; both cases passed, proving the forbidden state is reachable.
+- STATUS: `BUG-260817-2bh9nk` review requests rework: fail closed at `RunSharedRuntimeLauncher` before `execve`, add both-name production negatives and a narrowing mutant.
+
+### 0207 — Readiness Bound Flaked Under Full-Suite Load
+- ANOMALY: `go test ./... -count=1` for `BUG-260817-161m6u` review failed only `TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry`: one case never created its polling counter and the child-exit case timed out instead of reporting early exit.
+- EVIDENCE: Immediate isolated `-count=3` rerun passed both production subtests 3/3; the LLAMA environment helper/production gates and their narrowing mutant were independently green/red as expected.
+- STATUS: Non-reproducing load-sensitive signal, not attributed to the LLAMA gate; full-run failure remains recorded as exit 1 rather than relabelled green.
 
 ## 2026-08-29
 
