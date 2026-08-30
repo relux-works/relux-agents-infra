@@ -39,7 +39,6 @@ type PiExecutionIdentity struct {
 func VerifyPiExecutionIdentity(string, string) (PiExecutionIdentity, error) {
 	return PiExecutionIdentity{}, piError("pi_compatibility_unsupported", errors.New("managed Pi profiles are supported only on darwin/arm64"))
 }
-func ValidatePiExecutionEnvironment([]string) error { return nil }
 
 type PiStatePaths struct {
 	CanonicalCacheRoot string `json:"canonical_cache_root"`

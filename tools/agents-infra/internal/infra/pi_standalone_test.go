@@ -64,6 +64,7 @@ func TestBuildStandalonePiArgumentsOwnsExactAuthorizationAndMediumReasoning(t *t
 		"--mode", "json",
 		"--no-session",
 		"--print",
+		"--",
 		"write the requested sentinel",
 	}
 	if !reflect.DeepEqual(plan.Argv, want) {
@@ -163,13 +164,19 @@ func TestRunPiStandaloneMalformedPolicyFailsClosedBeforeExecutableLookup(t *test
 	}
 }
 
-func TestStandalonePiPromptCannotBecomeAFlagOrFileOperand(t *testing.T) {
+func TestStandalonePiNamedPromptAllowsLeadingFlagAndFileMarkers(t *testing.T) {
 	profile := PiProfile{Provider: "local-provider", Model: "Model", Thinking: "medium"}
 	policy := PiStandaloneSessionPolicy{
 		YoloMode:      PiPolicyBoolValue{Value: true, Present: true},
 		ToolAllowlist: PiPolicyStringListValue{Value: []string{"read"}, Present: true},
 	}
-	for _, prompt := range []string{"--approve", "@/tmp/injected-prompt", "safe\x00suffix", "   "} {
+	for _, prompt := range []string{"--approve", "@/tmp/injected-prompt"} {
+		plan, err := BuildStandalonePiArguments(nil, profile, policy, prompt)
+		if err != nil || plan.Argv[len(plan.Argv)-1] != prompt || plan.Argv[len(plan.Argv)-2] != "--" {
+			t.Fatalf("named prompt %q was not preserved behind --: plan=%#v err=%v", prompt, plan, err)
+		}
+	}
+	for _, prompt := range []string{"safe\x00suffix", "   "} {
 		if _, err := BuildStandalonePiArguments(nil, profile, policy, prompt); piErrorCode(err) != "pi_standalone_prompt_invalid" {
 			t.Fatalf("prompt %q was admitted: %v", prompt, err)
 		}

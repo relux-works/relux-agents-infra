@@ -32,9 +32,10 @@ var piStandaloneAllowedTools = map[string]bool{
 // effective primary managed Pi profile for the direct pi-infra command.
 // ClientRunID is an internal test/lifecycle seam and is never caller CLI input.
 type PiStandaloneRequest struct {
-	Prompt      string
-	Entrypoint  string
-	ClientRunID string
+	Prompt          string
+	Entrypoint      string
+	ExpectedProfile string
+	ClientRunID     string
 }
 
 type PiStandaloneToolAuthorization struct {
@@ -145,8 +146,8 @@ func validatePiStandaloneRequest(request PiStandaloneRequest, callerArgs []strin
 	if strings.TrimSpace(request.Prompt) == "" {
 		return piError("pi_standalone_prompt_invalid", errors.New("standalone Pi prompt must not be empty"))
 	}
-	if strings.IndexByte(request.Prompt, 0) >= 0 || strings.HasPrefix(request.Prompt, "-") || strings.HasPrefix(request.Prompt, "@") {
-		return piError("pi_standalone_prompt_invalid", errors.New("standalone Pi prompt cannot be represented as a safe pinned Pi operand"))
+	if strings.IndexByte(request.Prompt, 0) >= 0 {
+		return piError("pi_standalone_prompt_invalid", errors.New("standalone Pi prompt cannot contain NUL"))
 	}
 	if request.Entrypoint != "" && request.Entrypoint != "qwen-infra" {
 		return piError("pi_standalone_entrypoint_invalid", errors.New("standalone Pi admits only the qwen-infra canonical entrypoint"))
@@ -162,6 +163,7 @@ func BuildStandalonePiArguments(callerArgs []string, profile PiProfile, policy P
 	if err := validatePiStandalonePolicy(policy); err != nil {
 		return PiArgumentPlan{}, err
 	}
+	const promptSlot = "agents-infra-standalone-prompt-slot"
 	managed := []string{
 		"--no-approve",
 		"--no-extensions",
@@ -169,15 +171,16 @@ func BuildStandalonePiArguments(callerArgs []string, profile PiProfile, policy P
 		"--mode", "json",
 		"--no-session",
 		"--print",
-		"--", prompt,
+		"--", promptSlot,
 	}
 	plan, err := BuildManagedPiArguments(managed, "", profile)
 	if err != nil {
 		return PiArgumentPlan{}, err
 	}
-	if len(plan.DiagnosticArgv) == 0 || plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] != prompt {
+	if len(plan.Argv) == 0 || len(plan.DiagnosticArgv) == 0 || plan.Argv[len(plan.Argv)-1] != promptSlot || plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] != promptSlot {
 		return PiArgumentPlan{}, piError("pi_standalone_argument_invariant_failed", errors.New("standalone Pi prompt operand was not composed canonically"))
 	}
+	plan.Argv = append(plan.Argv[:len(plan.Argv)-1], "--", prompt)
 	plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] = "<prompt>"
 	return plan, nil
 }
@@ -218,12 +221,20 @@ func resolvePiStandaloneSelection(composite compositeProjectConfig, request PiSt
 				Err:         errors.New("standalone Pi requires a canonical Pi target"),
 			}
 		}
-		return *resolved.Target.Profile, resolved.Target.Source, primarySessionTargetFromResolution(resolved), nil
+		selected := *resolved.Target.Profile
+		if request.ExpectedProfile != "" && request.ExpectedProfile != selected {
+			return "", "", nil, piError("pi_profile_mismatch", errors.New("standalone Pi profile assertion does not match the resolved profile"))
+		}
+		return selected, resolved.Target.Source, primarySessionTargetFromResolution(resolved), nil
 	}
 	if !composite.PiPrimarySession.Profile.Present {
 		return "", "", nil, piError("unknown_pi_profile", errors.New("standalone pi-infra requires an effective managed primary Pi profile"))
 	}
-	return composite.PiPrimarySession.Profile.Value, composite.PiPrimarySession.Profile.Source, nil, nil
+	selected := composite.PiPrimarySession.Profile.Value
+	if request.ExpectedProfile != "" && request.ExpectedProfile != selected {
+		return "", "", nil, piError("pi_profile_mismatch", errors.New("standalone Pi profile assertion does not match the resolved profile"))
+	}
+	return selected, composite.PiPrimarySession.Profile.Source, nil, nil
 }
 
 func BuildPiStandaloneLaunchPlan(projectDir, homeDir string, request PiStandaloneRequest, producer ChildLaunchCompositionProducer, lookPath func(string) (string, error)) (PiStandaloneLaunchPlan, error) {

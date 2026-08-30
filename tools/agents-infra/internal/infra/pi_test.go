@@ -1052,7 +1052,10 @@ func TestPiMuseDiagnosticsRemainConfiguredUnverified(t *testing.T) {
 }
 
 func TestPiExecutionEnvironmentRejectsLoaderNamesAndDuplicates(t *testing.T) {
-	for _, env := range [][]string{{"PATH=/bin", "PATH=/usr/bin"}, {"DYLD_INSERT_LIBRARIES=x"}, {"NODE_OPTIONS=x"}, {"BUN_CONFIG=x"}, {"LD_PRELOAD=x"}} {
+	if err := ValidatePiExecutionEnvironment([]string{"PATH=/bin", "PATH=/usr/bin"}); piErrorCode(err) != "pi_execution_environment_malformed" {
+		t.Fatalf("duplicate environment err=%v", err)
+	}
+	for _, env := range [][]string{{"DYLD_INSERT_LIBRARIES=x"}, {"NODE_OPTIONS=x"}, {"BUN_CONFIG=x"}, {"LD_PRELOAD=x"}} {
 		if err := ValidatePiExecutionEnvironment(env); piErrorCode(err) != "pi_execution_environment_invalid" {
 			t.Fatalf("env=%q err=%v", env, err)
 		}
@@ -1178,7 +1181,11 @@ func TestPiLaunchRejectsLoaderAndInboundPiEnvironmentBeforeState(t *testing.T) {
 			project, home, cache := t.TempDir(), t.TempDir(), t.TempDir()
 			writePiProjectConfig(t, project, validPiProfileTOML("profile", "/bin/echo", 18030, false))
 			err := RunPi(RunPiOptions{ProjectDir: project, HomeDir: home, CacheRoot: cache, Environ: env, LookPath: func(string) (string, error) { return filepath.Join(piRoot, "pi"), nil }})
-			if piErrorCode(err) != "pi_execution_environment_invalid" {
+			wantCode := "pi_execution_environment_invalid"
+			if name == "duplicate" {
+				wantCode = "pi_execution_environment_malformed"
+			}
+			if piErrorCode(err) != wantCode {
 				t.Fatalf("production environment shape=%s err=%v", name, err)
 			}
 			if strings.Contains(err.Error(), "secret-model-path") || strings.Contains(err.Error(), "secret-context-size") || strings.Contains(err.Error(), "secret-hf-origin") || strings.Contains(err.Error(), "secret-model-origin") || strings.Contains(err.Error(), "secret/backend/path") || strings.Contains(err.Error(), "secret-llama-api-key") {

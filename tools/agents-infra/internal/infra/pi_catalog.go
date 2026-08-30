@@ -281,30 +281,6 @@ func classifyPiTreeError(err error) error {
 	return piError("pi_execution_identity_mismatch", err)
 }
 
-func ValidatePiExecutionEnvironment(environ []string) error {
-	seen := map[string]bool{}
-	for _, item := range environ {
-		name, _, ok := strings.Cut(item, "=")
-		if !ok || name == "" {
-			return piError("pi_execution_environment_invalid", errors.New("malformed environment entry"))
-		}
-		if seen[name] {
-			return piError("pi_execution_environment_invalid", fmt.Errorf("duplicate environment name %q", name))
-		}
-		seen[name] = true
-		if name == "HF_ENDPOINT" || name == "MODEL_ENDPOINT" || name == "GGML_BACKEND_PATH" || name == "LLAMA_API_KEY" {
-			return piError("pi_execution_environment_invalid", fmt.Errorf("runtime-affecting environment name %q is denied", name))
-		}
-		upper := strings.ToUpper(name)
-		for _, prefix := range []string{"DYLD_", "LD_", "NODE_", "BUN_", "LLAMA_ARG_"} {
-			if strings.HasPrefix(upper, prefix) {
-				return piError("pi_execution_environment_invalid", fmt.Errorf("runtime-affecting environment name %q is denied", name))
-			}
-		}
-	}
-	return nil
-}
-
 func piIdentityEqual(a, b PiExecutionIdentity) bool {
 	return a.Compatibility == b.Compatibility && a.AssetSHA256 == b.AssetSHA256 && a.Host == b.Host && a.ReleaseRoot == b.ReleaseRoot && a.Entrypoint == b.Entrypoint && a.ManifestSHA256 == b.ManifestSHA256 && a.EntrypointSHA256 == b.EntrypointSHA256 && a.FileCount == b.FileCount && a.ObservedState == b.ObservedState && a.PointOfUseRecheck == b.PointOfUseRecheck
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/attachments"
 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
+	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
 )
 
 var (
@@ -37,6 +39,10 @@ func main() {
 		var modelCheckFailure *infra.ModelCheckFailure
 		if errors.As(err, &modelCheckFailure) {
 			code = modelCheckFailure.ExitCode()
+		}
+		var piTurnFailure *infra.PiTurnProcessAError
+		if errors.As(err, &piTurnFailure) {
+			code = piTurnFailure.ExitCode()
 		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(code)
@@ -476,6 +482,9 @@ func runPi(args []string) error {
 	if len(args) > 0 && args[0] == "spawn" {
 		return runPiStandaloneCLI("", args[1:])
 	}
+	if len(args) > 0 && args[0] == "turn" {
+		return runPiTurnCLI(args[1:])
+	}
 	startDir := os.Getenv(callerCWDEnv)
 	if startDir == "" {
 		var err error
@@ -510,9 +519,13 @@ func runPi(args []string) error {
 }
 
 func runPiStandaloneCLI(entrypoint string, args []string) error {
+	if selectsPiTurnResultSchema1(args) {
+		return runPiTurnSchema1CLI(entrypoint, args)
+	}
 	fs := flag.NewFlagSet("pi spawn", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	prompt := fs.String("prompt", "", "single unattended worker prompt")
+	profile := fs.String("profile", "", "exact resolved managed Pi profile assertion")
 	printConfig := fs.Bool("print-config", false, "resolve and print the standalone launch plan without launching")
 	deadline := fs.Duration("deadline", 30*time.Minute, "total standalone worker deadline (maximum 30m)")
 	if err := fs.Parse(args); err != nil {
@@ -525,7 +538,7 @@ func runPiStandaloneCLI(entrypoint string, args []string) error {
 		return &infra.PiStandaloneFailure{Code: "pi_standalone_deadline_invalid", Err: errors.New("standalone Pi deadline must be within (0, 30m]")}
 	}
 	startDir := callerProjectDir()
-	request := infra.PiStandaloneRequest{Prompt: *prompt, Entrypoint: entrypoint}
+	request := infra.PiStandaloneRequest{Prompt: *prompt, Entrypoint: entrypoint, ExpectedProfile: *profile}
 	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
 	if *printConfig {
 		plan, err := infra.BuildPiStandaloneLaunchPlan(startDir, "", request, producer, nil)
@@ -548,6 +561,105 @@ func runPiStandaloneCLI(entrypoint string, args []string) error {
 		Standalone: &request,
 	})
 	return infra.WrapPiStandaloneFailure(err)
+}
+
+func selectsPiTurnResultSchema1(args []string) bool {
+	for index, arg := range args {
+		if arg == "--result-schema=1" {
+			return true
+		}
+		if arg == "--result-schema" && index+1 < len(args) && args[index+1] == "1" {
+			return true
+		}
+	}
+	return false
+}
+
+func runPiTurnSchema1CLI(entrypoint string, args []string) error {
+	fs := flag.NewFlagSet("pi spawn", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	prompt := fs.String("prompt", "", "single unattended worker prompt")
+	profile := fs.String("profile", "", "exact resolved managed Pi profile")
+	deadline := fs.Duration("deadline", 30*time.Minute, "total standalone worker deadline")
+	resultSchema := fs.Int("result-schema", 0, "versioned Process-A result schema")
+	if err := fs.Parse(args); err != nil || len(fs.Args()) != 0 || repeatedPiTurnFlags(args) {
+		return infra.WritePiTurnRefusal(os.Stdout, managementpi.TurnCodeRequestInvalid)
+	}
+	if *resultSchema != managementpi.TurnResultSchemaVersion || *deadline <= 0 || *deadline > 30*time.Minute {
+		return infra.WritePiTurnRefusal(os.Stdout, managementpi.TurnCodeRequestInvalid)
+	}
+	if *profile == "" {
+		return infra.WritePiTurnRefusal(os.Stdout, managementpi.TurnCodeProfileMissing)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *deadline)
+	defer cancel()
+	request := infra.PiStandaloneRequest{Prompt: *prompt, Entrypoint: entrypoint, ExpectedProfile: *profile}
+	return infra.RunPiTurnProcessA(infra.RunPiOptions{
+		ProjectDir: callerProjectDir(),
+		Environ:    os.Environ(),
+		Context:    ctx,
+		Standalone: &request,
+	}, os.Stdout)
+}
+
+func repeatedPiTurnFlags(args []string) bool {
+	counts := map[string]int{}
+	for _, arg := range args {
+		name := arg
+		if before, _, ok := strings.Cut(arg, "="); ok {
+			name = before
+		}
+		switch name {
+		case "--prompt", "--profile", "--deadline", "--result-schema":
+			counts[name]++
+			if counts[name] > 1 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// runPiTurnCLI is the real production consumer/parent entry point: it
+// resolves the trusted Pi plugin graph (real preflight status reader, real
+// sanitized engine observation reader) and drives the exact Process-A plan
+// through vendorplugin.BuildLaunch and the sole pi.ValidateTurnResult
+// classifier. It never itself owns Process-B lifecycle; that stays with the
+// broker/runtime status surfaces the observation reader reads from.
+func runPiTurnCLI(args []string) error {
+	fs := flag.NewFlagSet("pi turn", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	prompt := fs.String("prompt", "", "single unattended worker prompt")
+	deadline := fs.Duration("deadline", 30*time.Minute, "total turn deadline (maximum 30m)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) != 0 {
+		return errors.New("pi turn does not accept positional arguments")
+	}
+	if *deadline <= 0 || *deadline > 30*time.Minute {
+		return errors.New("pi turn deadline must be within (0, 30m]")
+	}
+	startDir := callerProjectDir()
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	graph, err := infra.ResolvePiPluginGraph(startDir, homeDir, "", nil, nil)
+	if err != nil {
+		return err
+	}
+	request := graph.SpawnRequest([]byte(*prompt), startDir, os.Environ())
+	ctx, cancel := context.WithTimeout(context.Background(), *deadline)
+	defer cancel()
+	result, runErr := infra.BuildAndRunPiTurn(ctx, graph.Registry, request, infra.OSProcessATurnRunner{})
+	if result.Class == "" {
+		return runErr
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+		return err
+	}
+	return runErr
 }
 
 func runRuntime(args []string) error {

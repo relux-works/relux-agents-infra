@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
+	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
 )
 
 func mainStandaloneQwenProject(t *testing.T) (project, home string) {
@@ -39,6 +41,44 @@ qwen-infra = "qwen"
 `
 	writeMainCanonicalConfig(t, project, body)
 	return project, home
+}
+
+func TestSchemaOneWriterPrecedesProfileAndRequestRefusals(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		code managementpi.TurnResultCode
+	}{
+		{"missing profile", []string{"spawn", "--prompt", "secret", "--deadline", "30m", "--result-schema", "1"}, managementpi.TurnCodeProfileMissing},
+		{"duplicate profile", []string{"spawn", "--profile", "a", "--profile", "b", "--prompt", "secret", "--deadline", "30m", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var runErr error
+			output := captureStdout(t, func() { runErr = runPi(test.args) })
+			var failure *infra.PiTurnProcessAError
+			if !errors.As(runErr, &failure) {
+				t.Fatalf("runPi error = %#v", runErr)
+			}
+			var document struct {
+				Contract      string `json:"contract"`
+				SchemaVersion int    `json:"schema_version"`
+				Status        string `json:"status"`
+				Error         struct {
+					Code managementpi.TurnResultCode `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(output), &document); err != nil {
+				t.Fatalf("schema-1 output = %q: %v", output, err)
+			}
+			if document.Contract != managementpi.TurnResultContract || document.SchemaVersion != 1 || document.Status != "error" || document.Error.Code != test.code {
+				t.Fatalf("schema-1 refusal = %#v", document)
+			}
+			if strings.Contains(output, "secret") || strings.Count(strings.TrimSpace(output), "\n") != 0 {
+				t.Fatalf("schema-1 refusal leaked or emitted multiple documents: %q", output)
+			}
+		})
+	}
 }
 
 // Production call site: runTarget -> runPiStandaloneCLI ->

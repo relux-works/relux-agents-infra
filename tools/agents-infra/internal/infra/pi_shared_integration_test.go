@@ -1044,6 +1044,15 @@ func main() {
     writer.Header().Set("Content-Type", "application/json")
     _ = json.NewEncoder(writer).Encode(map[string]any{"object":"list", "data":[]map[string]string{{"id":*model}}})
   })
+  http.HandleFunc("/agents-infra/resources", func(writer http.ResponseWriter, request *http.Request) {
+    writer.Header().Set("Content-Type", "application/json")
+    _ = json.NewEncoder(writer).Encode(map[string]any{
+      "schema": "agents-infra.pi.shared-runtime.resource-observation.v1",
+      "model": *model,
+      "loaded_model_memory": map[string]any{"state": "observed", "bytes": 123456789},
+      "inference": map[string]any{"state": "idle"},
+    })
+  })
   if err := http.ListenAndServe(*host+":"+strconv.Itoa(*port), nil); err != nil { panic(err) }
 }
 `

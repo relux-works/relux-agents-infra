@@ -5,6 +5,39 @@
 
 ## 2026-08-31
 
+### 1808 — Revision 3 Mutation Prose Overcounts The Published Harness By One
+- ANOMALY: `TASK-260830-y6infr_mutants.sh` and its published rev3 log contain 17 `run_mutant` attacks, all killed with exit 1, plus one discovery-narrowing control admitted with exit 0; producer and reviewer prose claim 18 killed plus that control.
+- DECISION: Fresh-trunk replay reports the executable evidence as 17 killed + 1 admitted control. No unreviewed eighteenth mutant was invented to make the prose count pass.
+- STATUS: Product Go files were byte-identical before and after the full harness; no mutant survived.
+
+### 1804 — Accepted Pi Adapter Replayed On Fresh Trunk With One Lossless Composition Conflict
+- MILESTONE: Patch SHA-256 `2a89bafb752b5103f33329d4e77a386255c696d1f13a732397f3f1a71d651702` reconstructed accepted tree `16fc3dc61ba89edbc88dbf5cc236bd011ab0c151` from base `4270549dd17c010599e2083bf3ec7672af60ea29`; replay base and freshly fetched `origin/main` both resolved to `0d1641a0ab8fe47a98d6a54a81524a37e1cc6ead`.
+- SCOPE: All 30 reviewed paths composed. Only `LOGBOOK.md` conflicted; the resolution preserves every nonblank line from both current trunk and accepted revision 3. Generic adapter code and the immutable `skill-agents-management` pseudo-version were unchanged from the accepted candidate.
+
+### 1735 — CR-2 Revision 3 Closed The Turn/Message Lifecycle Bypass And The Self-Minted-Evidence Seam
+- FINDING (F1, review of CR-TASK-260830-y6infr-2 rev 2): `parsePiTurnJSONL` tracked only the outer `agent_start`/`agent_end` lifecycle plus "some assistant `message_end` exists". It had no state for an open turn or an open message, so missing `turn_start`, missing `message_start`, and duplicate `turn_start` were all admitted as success.
+- FIX: added `turnOpen`/`messageOpen` booleans enforced on every turn/message-scoped event case in `pi_turn_result.go`, plus a trailing EOF backstop requiring both false at stream end. `TestPiTurnTranslatorRefusesTurnAndMessageLifecycleViolations` reproduces the three reviewer attacks plus four more (turn_end without an open turn, turn_end/agent_end firing with a still-open message/turn, duplicate message_start).
+- FINDING (F2): the darwin integration test drove the real Process-B reader to a genuine refusal, then switched to `recordingSanitizedObservationReader` (a self-minted, always-succeeding fake) right before calling `BuildAndRunPiTurn` — the production launch decision never actually consumed the real broker-backed observation.
+- FIX: added an `/agents-infra/resources` handler to the shared fake-runtime test helper so a `resource_pressure_mode = "provider"` profile lets the real `SharedRuntimeSanitizedEngineObservationReader` succeed against the real (fake-backed) broker; `BuildPiPluginGraph`/`BuildAndRunPiTurn` are now driven with that exact real reader. Added a second, independent, real shared-runtime lease (via the same `acquireSharedRuntimeLease` client `RunPi` uses) representing Process A's own lease lifecycle, proving it and the pre-existing Process-B peer lease/runtime survive Process-A's fake success and cancellation runs unchanged.
+- ANOMALY: the previously-published `mutants-rev2.log` printed `exit=0` for every mutant regardless of real outcome. Root cause not in the current script — `.temp/TASK-260830-y6infr/mutants.sh`'s `run_mutant` captures `local code=$?` correctly; verified by injecting both a real test failure and a real Go build failure and observing correct exit codes (1 and 1) in both cases. The buggy log must have come from an earlier/differently-formatted script version. No `run_mutant` code change was needed; republished a freshly regenerated, verified log.
+- FINDING: the new lifecycle guards have deliberate defense-in-depth (multiple independent events re-check `turnOpen`/`messageOpen`, plus the EOF backstop), so several F1 narrowing mutants had to be compound (2-4 line edits) — a single-line narrowing left the attack caught by a neighboring redundant check and falsely looked like "guard doesn't matter". 18/18 mutants killed with real exit codes (`mutants-rev3.log`).
+
+### 1600 — CR-1 Revision 2 Closed Production Wiring, Real Process-B Evidence, And The Parser Bypass
+- FINDING (F1, review of CR-TASK-260830-y6infr-1 rev 1): `BuildAndRunPiTurn`, `BuildPiPluginGraph`, `ResolvePiPluginGraph`, and `NewSanitizedEngineObservationAdapter` had no non-test caller, and the only `SanitizedEngineObservationReader` was a test closure that self-minted "good" facts in memory.
+- FIX: Added `SharedRuntimeSanitizedEngineObservationReader` (`agents_management_engine_reader.go`), a real, non-test adapter that performs one bounded `SharedRuntimeStatusReport` read (the same read-only entry point `agents-infra runtime status` uses) against agents-infra's own Process-B broker, then derives the closed 17-fact set from that live status plus the already-resolved `PiProfile`. It refuses (returns an error, invents nothing) for any fact it cannot back with real data — e.g. `resource_pressure_mode=disabled` genuinely cannot measure loaded-model memory, so MemoryAccounting refuses rather than fabricating a byte count. `ResolvePiPluginGraph` now fills a nil status/observations reader with this reader plus `localruntime.NewCLIStatusReader()`. Wired a real, non-test production call site: `agents-infra pi turn --prompt TEXT [--deadline D]` in `main.go` resolves the graph and drives `BuildAndRunPiTurn`.
+- FINDING (F2): the claimed "fake Process-B lifecycle" evidence was only a marker file `FAKE_PROCESS_B_MARKER` written by the fake Process-A shell script itself — no broker, lease, or runtime child ever participated.
+- FIX: `pi_shared_engine_observation_darwin_test.go` reuses the repo's existing real broker/lease integration harness (`startSharedLeaseHelper`, `buildSharedFakeRuntime`, `SharedRuntimeStatusReport`) to start a genuine broker holding a genuine lease over a genuine (test-built, non-live-model) runtime child, drives the new real reader against it, then runs `BuildAndRunPiTurn` (success and cancellation) through the real production consumer and asserts the independently-held broker/lease/runtime PID are byte-for-byte unchanged afterward — proving Process-A cleanup never reaches Process B, with real reproduction instead of a stand-in marker.
+- FINDING (F3): `parsePiTurnJSONL` accepted a stream with no authoritative `message_end` (empty `finalText` treated as success) and admitted `tool_execution_*` events after `agent_end` (only `message_*`/`turn_*` events carried the `!sawAgentStart || sawAgentEnd` lifecycle guard).
+- FIX: added `sawFinalAssistantMessage` (required at EOF) and the same lifecycle guard on all three tool-execution event cases. Two narrowing mutants killed (evidence: `.temp/TASK-260830-y6infr/mutants-rev2.log`), plus two mutants against the new engine-reader refusal/attestation gates.
+- STATUS: development still pins the immutable pseudo-version `v0.5.1-0.20260830114459-046baef11790`; `pi turn` is a real CLI verb now, but full end-to-end activation still needs the stable upstream tag the dedicated delivery task owns.
+
+### 1100 — Guards Renamed The Adapter And Split Refusal From Dispatch
+- FINDING: Fail-closed plane discovery caught the concrete adapter carrying an `MLX` identity literal on the generic launch path even though it never branched on one; `MLXEngineObservationAdapter` is now `SanitizedEngineObservationAdapter` and engine identity arrives only as injected data from the trusted assembly.
+- DECISION: The concrete assembly may declare and refuse an identity but never dispatch on one. `agents_management_registry.go` is guarded by AST: an identity conditional must be a plain fail-closed refusal, and any identity `switch`/case is rejected.
+- FINDING: `--profile` was reachable only on the schema-1 surface. The exact assertion now applies to the legacy standalone surface too, so `agents-infra pi spawn --profile X ...` is not a CLI parse error.
+- EVIDENCE: 11 narrowing mutants killed plus one no-live mutant; the fixed-filename discovery mutant admits the called-helper live read, proving package-complete discovery — not the import denial list — is what closes that bypass. Log: `.temp/TASK-260830-y6infr/mutants.log`.
+- STATUS: Development still pins the immutable pseudo-version `v0.5.1-0.20260830114459-046baef11790` of commit `046baef11790e93a7967230eec760c4563432270`. The consumer boundary `infra.BuildAndRunPiTurn` ships as a library seam; no CLI verb activates it before the stable upstream tag and final pin.
+
 ### 1410 — CR Rev6: A Stale Change Request Is A Base-Move Problem, Not A Content Problem, And The Two Must Not Be Conflated
 
 - The `TASK-260720-3gcfd1` Change Request went `stale` (rev5, `state=stale`) purely because `origin/main` advanced past its pinned `base_oid` (`5feebbb`) while the ADR itself, accepted after five review rounds, needed no further change. Republishing was scoped to verification-plus-identity-pinning only: confirm the ADR is byte-identical to the accepted commit (`e7a7212`), confirm the `LOGBOOK.md` merge at the trunk-catch-up commit lost no line from either side, then pin a new candidate identity against the new base.
@@ -159,6 +192,16 @@
 - FULL CAMPAIGN: `articles/260831_local-qwen-runtime-comparison-study/artifacts/analysis/mutant-campaign.md`.
 
 ## 2026-08-30
+
+### 1527 — Pi Process-A Contract Exposed Two Boundary Regressions
+- REGRESSION: A generic `ExitCode()` handler admitted ordinary `exec.ExitError` and changed legacy provider-child exit 1 to its raw child code; `main.go` now recognizes only `PiTurnProcessAError`.
+- FINDING: Windows returned success from `ValidatePiExecutionEnvironment` without validating malformed, duplicate, loader, endpoint, or model-control entries.
+- FIX: `tools/agents-infra/internal/infra/pi_environment.go` applies the closed environment contract on every platform and distinguishes malformed input from denied names.
+
+### 1527 — Accepted Agents-Management Candidate Integrated
+- DECISION: The trusted assembly registers real Pi, local-models, MLX engine, sanitized observation adapter, and runtime declarations through `vendorplugin.Registry`; launch callers cannot supply evidence.
+- DECISION: Pi thinking remains profile configuration while the system declares `EffortTransportNone`; `qwen-infra` remains a product label and cannot alias shipped qwen-code/Alibaba.
+- STATUS: Development pins immutable commit `046baef11790e93a7967230eec760c4563432270` as pseudo-version `v0.5.1-0.20260830114459-046baef11790`; the required stable immutable release tag is not yet published upstream.
 
 ### 2113 — The Fixed Pin Term Traded Places With A Broken One
 - FINDING: The corrected llama.cpp pair ran in full (six scenarios, both runtimes, sequential, MTP off, 58m55s, exit **4**). `contextPolicy` refused again, but not on KV: `kv=76800` now agrees on both sides because STORY-260830-2vrhg1 gave the pinned `mlx-lm` fork `--max-kv-size`. The refusal moved to the pin's other two terms — `prefill-step=not-reported;reasoning=not-reported` on the candidate.
