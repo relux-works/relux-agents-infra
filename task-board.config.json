@@ -17,8 +17,7 @@
           }
         ],
         "resolution_model": "gpt-5.6-sol",
-        "adjustment_confirmation": "none",
-        "fast_mode": true
+        "adjustment_confirmation": "none"
       }
     },
     "preferred_agentic_system": {
