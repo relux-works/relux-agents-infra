@@ -1,0 +1,3737 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 1410a73..7e5a09d 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,8 +3,44 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-31
++
++### 1735 — CR-2 Revision 3 Closed The Turn/Message Lifecycle Bypass And The Self-Minted-Evidence Seam
++- FINDING (F1, review of CR-TASK-260830-y6infr-2 rev 2): `parsePiTurnJSONL` tracked only the outer `agent_start`/`agent_end` lifecycle plus "some assistant `message_end` exists". It had no state for an open turn or an open message, so missing `turn_start`, missing `message_start`, and duplicate `turn_start` were all admitted as success.
++- FIX: added `turnOpen`/`messageOpen` booleans enforced on every turn/message-scoped event case in `pi_turn_result.go`, plus a trailing EOF backstop requiring both false at stream end. `TestPiTurnTranslatorRefusesTurnAndMessageLifecycleViolations` reproduces the three reviewer attacks plus four more (turn_end without an open turn, turn_end/agent_end firing with a still-open message/turn, duplicate message_start).
++- FINDING (F2): the darwin integration test drove the real Process-B reader to a genuine refusal, then switched to `recordingSanitizedObservationReader` (a self-minted, always-succeeding fake) right before calling `BuildAndRunPiTurn` — the production launch decision never actually consumed the real broker-backed observation.
++- FIX: added an `/agents-infra/resources` handler to the shared fake-runtime test helper so a `resource_pressure_mode = "provider"` profile lets the real `SharedRuntimeSanitizedEngineObservationReader` succeed against the real (fake-backed) broker; `BuildPiPluginGraph`/`BuildAndRunPiTurn` are now driven with that exact real reader. Added a second, independent, real shared-runtime lease (via the same `acquireSharedRuntimeLease` client `RunPi` uses) representing Process A's own lease lifecycle, proving it and the pre-existing Process-B peer lease/runtime survive Process-A's fake success and cancellation runs unchanged.
++- ANOMALY: the previously-published `mutants-rev2.log` printed `exit=0` for every mutant regardless of real outcome. Root cause not in the current script — `.temp/TASK-260830-y6infr/mutants.sh`'s `run_mutant` captures `local code=$?` correctly; verified by injecting both a real test failure and a real Go build failure and observing correct exit codes (1 and 1) in both cases. The buggy log must have come from an earlier/differently-formatted script version. No `run_mutant` code change was needed; republished a freshly regenerated, verified log.
++- FINDING: the new lifecycle guards have deliberate defense-in-depth (multiple independent events re-check `turnOpen`/`messageOpen`, plus the EOF backstop), so several F1 narrowing mutants had to be compound (2-4 line edits) — a single-line narrowing left the attack caught by a neighboring redundant check and falsely looked like "guard doesn't matter". 18/18 mutants killed with real exit codes (`mutants-rev3.log`).
++
++### 1600 — CR-1 Revision 2 Closed Production Wiring, Real Process-B Evidence, And The Parser Bypass
++- FINDING (F1, review of CR-TASK-260830-y6infr-1 rev 1): `BuildAndRunPiTurn`, `BuildPiPluginGraph`, `ResolvePiPluginGraph`, and `NewSanitizedEngineObservationAdapter` had no non-test caller, and the only `SanitizedEngineObservationReader` was a test closure that self-minted "good" facts in memory.
++- FIX: Added `SharedRuntimeSanitizedEngineObservationReader` (`agents_management_engine_reader.go`), a real, non-test adapter that performs one bounded `SharedRuntimeStatusReport` read (the same read-only entry point `agents-infra runtime status` uses) against agents-infra's own Process-B broker, then derives the closed 17-fact set from that live status plus the already-resolved `PiProfile`. It refuses (returns an error, invents nothing) for any fact it cannot back with real data — e.g. `resource_pressure_mode=disabled` genuinely cannot measure loaded-model memory, so MemoryAccounting refuses rather than fabricating a byte count. `ResolvePiPluginGraph` now fills a nil status/observations reader with this reader plus `localruntime.NewCLIStatusReader()`. Wired a real, non-test production call site: `agents-infra pi turn --prompt TEXT [--deadline D]` in `main.go` resolves the graph and drives `BuildAndRunPiTurn`.
++- FINDING (F2): the claimed "fake Process-B lifecycle" evidence was only a marker file `FAKE_PROCESS_B_MARKER` written by the fake Process-A shell script itself — no broker, lease, or runtime child ever participated.
++- FIX: `pi_shared_engine_observation_darwin_test.go` reuses the repo's existing real broker/lease integration harness (`startSharedLeaseHelper`, `buildSharedFakeRuntime`, `SharedRuntimeStatusReport`) to start a genuine broker holding a genuine lease over a genuine (test-built, non-live-model) runtime child, drives the new real reader against it, then runs `BuildAndRunPiTurn` (success and cancellation) through the real production consumer and asserts the independently-held broker/lease/runtime PID are byte-for-byte unchanged afterward — proving Process-A cleanup never reaches Process B, with real reproduction instead of a stand-in marker.
++- FINDING (F3): `parsePiTurnJSONL` accepted a stream with no authoritative `message_end` (empty `finalText` treated as success) and admitted `tool_execution_*` events after `agent_end` (only `message_*`/`turn_*` events carried the `!sawAgentStart || sawAgentEnd` lifecycle guard).
++- FIX: added `sawFinalAssistantMessage` (required at EOF) and the same lifecycle guard on all three tool-execution event cases. Two narrowing mutants killed (evidence: `.temp/TASK-260830-y6infr/mutants-rev2.log`), plus two mutants against the new engine-reader refusal/attestation gates.
++- STATUS: development still pins the immutable pseudo-version `v0.5.1-0.20260830114459-046baef11790`; `pi turn` is a real CLI verb now, but full end-to-end activation still needs the stable upstream tag the dedicated delivery task owns.
++
++### 1100 — Guards Renamed The Adapter And Split Refusal From Dispatch
++- FINDING: Fail-closed plane discovery caught the concrete adapter carrying an `MLX` identity literal on the generic launch path even though it never branched on one; `MLXEngineObservationAdapter` is now `SanitizedEngineObservationAdapter` and engine identity arrives only as injected data from the trusted assembly.
++- DECISION: The concrete assembly may declare and refuse an identity but never dispatch on one. `agents_management_registry.go` is guarded by AST: an identity conditional must be a plain fail-closed refusal, and any identity `switch`/case is rejected.
++- FINDING: `--profile` was reachable only on the schema-1 surface. The exact assertion now applies to the legacy standalone surface too, so `agents-infra pi spawn --profile X ...` is not a CLI parse error.
++- EVIDENCE: 11 narrowing mutants killed plus one no-live mutant; the fixed-filename discovery mutant admits the called-helper live read, proving package-complete discovery — not the import denial list — is what closes that bypass. Log: `.temp/TASK-260830-y6infr/mutants.log`.
++- STATUS: Development still pins the immutable pseudo-version `v0.5.1-0.20260830114459-046baef11790` of commit `046baef11790e93a7967230eec760c4563432270`. The consumer boundary `infra.BuildAndRunPiTurn` ships as a library seam; no CLI verb activates it before the stable upstream tag and final pin.
++
+ ## 2026-08-30
+ 
++### 1527 — Pi Process-A Contract Exposed Two Boundary Regressions
++- REGRESSION: A generic `ExitCode()` handler admitted ordinary `exec.ExitError` and changed legacy provider-child exit 1 to its raw child code; `main.go` now recognizes only `PiTurnProcessAError`.
++- FINDING: Windows returned success from `ValidatePiExecutionEnvironment` without validating malformed, duplicate, loader, endpoint, or model-control entries.
++- FIX: `tools/agents-infra/internal/infra/pi_environment.go` applies the closed environment contract on every platform and distinguishes malformed input from denied names.
++
++### 1527 — Accepted Agents-Management Candidate Integrated
++- DECISION: The trusted assembly registers real Pi, local-models, MLX engine, sanitized observation adapter, and runtime declarations through `vendorplugin.Registry`; launch callers cannot supply evidence.
++- DECISION: Pi thinking remains profile configuration while the system declares `EffortTransportNone`; `qwen-infra` remains a product label and cannot alias shipped qwen-code/Alibaba.
++- STATUS: Development pins immutable commit `046baef11790e93a7967230eec760c4563432270` as pseudo-version `v0.5.1-0.20260830114459-046baef11790`; the required stable immutable release tag is not yet published upstream.
++
+ ### 1220 — Current Main Invalidates Fast-Mode Preservation Premise
+ - BLOCKED: A final fresh fetch advanced `main`, `origin/main`, and `FETCH_HEAD` to `d69a435945758ea1cd5dfa62395ca32498e712c7`; the managed workspace, Story branch, selected base, and CR base remain `fe3818209c9861fcafa1f2e68efe078cc0f96f30`.
+ - CONFLICT: Upstream commit `d69a435` removes Codex `fast_mode` from `task-board.config.json`, while this task requires exact current main, preservation of the landed fast-mode configuration, and a four-path scope that excludes that config.
+diff --git a/README.md b/README.md
+index dde8a3b..7c12e12 100644
+--- a/README.md
++++ b/README.md
+@@ -55,7 +55,8 @@ The canonical interface after bootstrap is:
+ - `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
+ - `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
+ - `agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+-- `agents-infra pi spawn --prompt TEXT [--deadline DURATION] [--print-config]`
++- `agents-infra pi spawn --profile EXACT --prompt TEXT --deadline DURATION --result-schema 1`
++- `agents-infra pi spawn --prompt TEXT [--profile EXACT] [--deadline DURATION] [--print-config]` (legacy raw JSONL/operator surface)
+ - `agents-infra runtime status [--project DIR] [--profile NAME] [--json]`
+ - `agents-infra runtime stop [--project DIR] [--profile NAME] [--force] [--timeout SECONDS]`
+ - `agents-infra runtime quarantine [--project DIR] [--profile NAME]`
+@@ -902,6 +903,48 @@ reaps the runtime. The command is deliberately board-agnostic: no task-board
+ runtime adapter, registration, run identity, or lifecycle dependency is
+ implemented here. A board adapter may later consume this stable primitive.
+ 
++Machine consumers use the exact Process-A command
++`agents-infra pi spawn --profile EXACT --prompt TEXT --deadline 30m --result-schema 1`.
++`--profile` is a byte-exact assertion over the runtime-resolved profile on both
++the schema-1 and the legacy surface: no aliasing, case folding, trimming, or
++fallback is admitted, and a mismatch refuses before any Pi child, lease, state,
++or runtime effect. Only the literal value `1` positively selects schema 1; any
++other value stays on the unchanged legacy operator surface rather than
++producing a versioned document nobody requested.
++
++Once schema 1 is selected the result writer is installed before request,
++profile, environment, configuration, authorization, identity, and runtime
++validation, so stdout is exactly one bounded `agents-infra.pi-turn-result`
++object for success or for every pre-child refusal. Raw Pi JSONL stays private
++to agents-infra and is translated here against content-addressed Pi v0.84.2
++grammar evidence.
++
++The generic consumer boundary is `infra.BuildAndRunPiTurn`. It builds this
++command through the pinned `skill-agents-management` Registry/BuildLaunch
++graph, injects exactly one versioned sanitized engine observation before
++planning, and passes bounded stdout, the actual waited Process-A exit, the
++recorded intervention, and the bounded cleanup outcome exactly once to
++`pi.ValidateTurnResult`. It owns no schema-1 parser of its own. Process-B
++election, lease, restart, quarantine, rotation, and cleanup remain owned by
++agents-infra; Process-A cleanup signals only its own process group.
++
++`agents-infra pi turn --prompt TEXT [--deadline DURATION]` is the real
++production consumer/parent entry point: it resolves the trusted Pi plugin
++graph — `localruntime.CLIStatusReader` for preflight and the concrete
++`SharedRuntimeSanitizedEngineObservationReader` for the sanitized engine
++observation, both reading agents-infra's own Process-B broker status and
++never becoming the broker — then drives `infra.BuildAndRunPiTurn`. Full
++end-to-end activation for the local Qwen path is still gated on the stable
++`skill-agents-management` release tag and its final pin, which a dedicated
++delivery task owns; this checkpoint pins the exact independently reviewed
++pseudo-version instead.
++
++The plugin-plane vendor for this local path is `local-models`. The
++`qwen-infra` name and its configured `vendor = "qwen"` value are product/config
++labels only: they never select the shipped `qwen` system (`qwen-code` by
++Alibaba). Pi's configured `thinking` is likewise not vendor reasoning effort;
++the Pi system declares `EffortTransportNone`.
++
+ Profile-name identity is its exact post-TOML-decoding UTF-8 bytes. There is no
+ normalization, case folding, trimming, path cleaning, or lossy sanitization.
+ Explicit `--provider`, `--model`, and `--thinking` must resolve to the exact
+@@ -1575,12 +1618,12 @@ established. The benchmark-only profiles pin both runtimes to a live-reported
+ | Tool | Purpose | Command | Outputs |
+ |------|---------|---------|---------|
+ | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
+-| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect, stop, quarantine, or unquarantine shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30`, `agents-infra runtime quarantine --profile NAME`, `agents-infra runtime unquarantine --profile NAME` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
++| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect, stop, quarantine, or unquarantine shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra pi spawn --profile NAME --prompt "Complete the bounded task" --deadline 30m --result-schema 1`, `agents-infra pi turn --prompt "Complete the bounded task" --deadline 30m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30`, `agents-infra runtime quarantine --profile NAME`, `agents-infra runtime unquarantine --profile NAME` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, one bounded schema-1 Pi turn result for machine consumers (or legacy raw JSONL for the operator surface), hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+ | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
+ | `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, samples the Mach physical footprint of the pid it spawned, seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+-| `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
++| `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use the exact schema-1 `agents-infra pi spawn` command emitted by the generic BuildLaunch graph | Alias launch, legacy standalone Pi JSONL for operators, bounded schema-1 turn results for generic consumers, or a non-launching plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+ | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
+ | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
+diff --git a/tools/agents-infra/go.mod b/tools/agents-infra/go.mod
+index 4c1fe5d..72f65ee 100644
+--- a/tools/agents-infra/go.mod
++++ b/tools/agents-infra/go.mod
+@@ -1,9 +1,11 @@
+ module github.com/relux-works/relux-agents-infra/tools/agents-infra
+ 
+-go 1.21.0
++go 1.25.5
+ 
+ require (
+ 	github.com/natefinch/atomic v1.0.1
+ 	github.com/pelletier/go-toml/v2 v2.4.3
+ 	golang.org/x/sys v0.30.0
+ )
++
++require github.com/relux-works/skill-agents-management v0.5.1-0.20260830114459-046baef11790
+diff --git a/tools/agents-infra/go.sum b/tools/agents-infra/go.sum
+index 86b907c..bab4713 100644
+--- a/tools/agents-infra/go.sum
++++ b/tools/agents-infra/go.sum
+@@ -2,5 +2,7 @@ github.com/natefinch/atomic v1.0.1 h1:ZPYKxkqQOx3KZ+RsbnP/YsgvxWQPGxjC0oBt2AhwV0
+ github.com/natefinch/atomic v1.0.1/go.mod h1:N/D/ELrljoqDyT3rZrsUmtsuzvHkeB/wWjHV22AZRbM=
+ github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
+ github.com/pelletier/go-toml/v2 v2.4.3/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
++github.com/relux-works/skill-agents-management v0.5.1-0.20260830114459-046baef11790 h1:ratYrpVGVjX32Xl0FckiWO3RYbahLAJaMp4Ogs51OHU=
++github.com/relux-works/skill-agents-management v0.5.1-0.20260830114459-046baef11790/go.mod h1:wi+oH6fVUBF0bBOPs2bU7iyUhJveSAFh369CQB91ryk=
+ golang.org/x/sys v0.30.0 h1:QjkSwP/36a20jFYWkSue1YwXzLmsV5Gfq7Eiy72C1uc=
+ golang.org/x/sys v0.30.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
+diff --git a/tools/agents-infra/internal/infra/agents_management_boundary_test.go b/tools/agents-infra/internal/infra/agents_management_boundary_test.go
+new file mode 100644
+index 0000000..f291a45
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_boundary_test.go
+@@ -0,0 +1,485 @@
++package infra
++
++import (
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"os"
++	"path/filepath"
++	"sort"
++	"strconv"
++	"strings"
++	"testing"
++)
++
++// The guards in this file answer three questions that a passing launch test
++// cannot: can the agents-infra observation adapter reach a live runtime, can
++// the production consumer classify a Pi turn without the sole upstream
++// classifier, and does either plane branch on a Pi/Qwen/MLX/model identity.
++//
++// Each guard discovers its plane instead of trusting a fixed filename list, so
++// a helper moved into a new same-package file is scanned rather than skipped.
++// The exact bypass shape covered is the one that a filename list admits: a
++// production declaration in a *different* file, reached from the plane's entry
++// declaration by a package-level call or by a method on the plane's own type.
++
++const (
++	observerAssemblyFile = "agents_management_registry.go"
++	observerPlaneFile    = "agents_management_observer.go"
++	consumerPlaneFile    = "agents_management_process_a.go"
++)
++
++// observationPlaneSeeds are the exact declarations agents-management calls
++// through vendorplugin.EngineObservationAdapter. Everything they can reach in
++// this package is part of the observation plane.
++var observationPlaneSeeds = []string{
++	"NewSanitizedEngineObservationAdapter",
++	"ObserveEngine",
++	"EngineObservationAdapterDeclaration",
++}
++
++// consumerPlaneSeeds are the exact declarations that build the Pi launch, run
++// Process A, and hand the capture to the sole classifier.
++var consumerPlaneSeeds = []string{
++	"BuildAndRunPiTurn",
++	"RunProcessATurn",
++	"waitForProcessA",
++	"stopProcessA",
++	"processAExit",
++	"configureProcessACommand",
++}
++
++type packageIndex struct {
++	dir      string
++	fset     *token.FileSet
++	files    map[string]*ast.File
++	funcs    map[string][]string // bare function name -> files declaring it
++	methods  map[string][]string // "Recv.Method" -> files declaring it
++	byRecv   map[string][]string // receiver type -> method names
++	packages map[string]bool     // imported package aliases seen anywhere
++}
++
++// indexProductionPackage parses every non-test Go source in the package,
++// including files behind a foreign build constraint, so a bypass cannot hide on
++// another platform.
++func indexProductionPackage(t *testing.T, dir string) *packageIndex {
++	t.Helper()
++	entries, err := os.ReadDir(dir)
++	if err != nil {
++		t.Fatalf("read package dir: %v", err)
++	}
++	index := &packageIndex{
++		dir:      dir,
++		fset:     token.NewFileSet(),
++		files:    map[string]*ast.File{},
++		funcs:    map[string][]string{},
++		methods:  map[string][]string{},
++		byRecv:   map[string][]string{},
++		packages: map[string]bool{},
++	}
++	for _, entry := range entries {
++		name := entry.Name()
++		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
++			continue
++		}
++		file, err := parser.ParseFile(index.fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
++		if err != nil {
++			t.Fatalf("parse %s: %v", name, err)
++		}
++		index.files[name] = file
++		for _, decl := range file.Decls {
++			function, ok := decl.(*ast.FuncDecl)
++			if !ok {
++				continue
++			}
++			if function.Recv == nil || len(function.Recv.List) == 0 {
++				index.funcs[function.Name.Name] = append(index.funcs[function.Name.Name], name)
++				continue
++			}
++			recv := receiverTypeName(function.Recv.List[0].Type)
++			index.methods[recv+"."+function.Name.Name] = append(index.methods[recv+"."+function.Name.Name], name)
++			index.byRecv[recv] = append(index.byRecv[recv], function.Name.Name)
++		}
++	}
++	if len(index.files) == 0 {
++		t.Fatal("plane discovery found no production sources; the guard would pass vacuously")
++	}
++	return index
++}
++
++func receiverTypeName(expr ast.Expr) string {
++	switch typed := expr.(type) {
++	case *ast.StarExpr:
++		return receiverTypeName(typed.X)
++	case *ast.Ident:
++		return typed.Name
++	case *ast.IndexExpr:
++		return receiverTypeName(typed.X)
++	}
++	return ""
++}
++
++// plane returns every production file reachable from the seed declarations.
++// Reachability follows package-level calls by bare identifier and methods
++// declared on any receiver type the plane already owns, which is exactly how a
++// "called helper in another file" bypass has to be written.
++func (index *packageIndex) plane(t *testing.T, seeds []string, ownedReceivers []string) []string {
++	t.Helper()
++	reached := map[string]bool{}
++	files := map[string]bool{}
++	receivers := map[string]bool{}
++	for _, recv := range ownedReceivers {
++		receivers[recv] = true
++	}
++
++	var visitDecl func(decl *ast.FuncDecl, file string)
++	queue := []*ast.FuncDecl{}
++	enqueue := func(name string) {
++		for _, file := range index.funcs[name] {
++			key := "func:" + name + ":" + file
++			if reached[key] {
++				continue
++			}
++			reached[key] = true
++			files[file] = true
++			queue = append(queue, index.declIn(file, "", name))
++		}
++		for recv := range receivers {
++			for _, file := range index.methods[recv+"."+name] {
++				key := "method:" + recv + "." + name + ":" + file
++				if reached[key] {
++					continue
++				}
++				reached[key] = true
++				files[file] = true
++				queue = append(queue, index.declIn(file, recv, name))
++			}
++		}
++	}
++	visitDecl = func(decl *ast.FuncDecl, _ string) {
++		if decl == nil || decl.Body == nil {
++			return
++		}
++		ast.Inspect(decl.Body, func(node ast.Node) bool {
++			switch typed := node.(type) {
++			case *ast.Ident:
++				if len(index.funcs[typed.Name]) > 0 {
++					enqueue(typed.Name)
++				}
++			case *ast.SelectorExpr:
++				for recv := range receivers {
++					if len(index.methods[recv+"."+typed.Sel.Name]) > 0 {
++						enqueue(typed.Sel.Name)
++					}
++				}
++			}
++			return true
++		})
++	}
++
++	for _, seed := range seeds {
++		enqueue(seed)
++	}
++	if len(files) == 0 {
++		t.Fatalf("plane seeds %v matched no production declaration", seeds)
++	}
++	for len(queue) > 0 {
++		decl := queue[0]
++		queue = queue[1:]
++		visitDecl(decl, "")
++	}
++
++	discovered := make([]string, 0, len(files))
++	for file := range files {
++		discovered = append(discovered, file)
++	}
++	sort.Strings(discovered)
++	return discovered
++}
++
++func (index *packageIndex) declIn(file, recv, name string) *ast.FuncDecl {
++	parsed := index.files[file]
++	if parsed == nil {
++		return nil
++	}
++	for _, decl := range parsed.Decls {
++		function, ok := decl.(*ast.FuncDecl)
++		if !ok || function.Name.Name != name {
++			continue
++		}
++		if recv == "" {
++			if function.Recv == nil {
++				return function
++			}
++			continue
++		}
++		if function.Recv != nil && len(function.Recv.List) > 0 && receiverTypeName(function.Recv.List[0].Type) == recv {
++			return function
++		}
++	}
++	return nil
++}
++
++func (index *packageIndex) imports(file string) []string {
++	parsed := index.files[file]
++	if parsed == nil {
++		return nil
++	}
++	paths := make([]string, 0, len(parsed.Imports))
++	for _, spec := range parsed.Imports {
++		path, err := strconv.Unquote(spec.Path.Value)
++		if err != nil {
++			continue
++		}
++		paths = append(paths, path)
++	}
++	return paths
++}
++
++// Production call site: vendorplugin.BuildLaunch calls
++// (*SanitizedEngineObservationAdapter).ObserveEngine, which may only ask the injected
++// SanitizedEngineObservationReader. Nothing it reaches in this package may open
++// a process, socket, environment, or user configuration itself.
++func TestObservationPlaneCannotReachLiveRuntime(t *testing.T) {
++	index := indexProductionPackage(t, ".")
++	plane := index.plane(t, observationPlaneSeeds, []string{"SanitizedEngineObservationAdapter"})
++	if !containsFile(plane, observerPlaneFile) {
++		t.Fatalf("plane %v lost its own entry file; discovery is not fail-closed", plane)
++	}
++	forbidden := []string{"os", "os/exec", "os/user", "net", "net/http", "net/url", "syscall", "golang.org/x/sys/unix", "os/signal"}
++	for _, file := range plane {
++		for _, path := range index.imports(file) {
++			for _, denied := range forbidden {
++				if path == denied {
++					t.Fatalf("observation plane file %s imports %s; a live read cannot originate inside the adapter", file, denied)
++				}
++			}
++		}
++	}
++}
++
++// Production call site: BuildAndRunPiTurn. Everything it reaches must hand the
++// bounded capture to pi.ValidateTurnResult exactly once and must own no
++// schema-1 parser of its own.
++func TestConsumerPlaneCannotParseAroundSoleClassifier(t *testing.T) {
++	index := indexProductionPackage(t, ".")
++	plane := index.plane(t, consumerPlaneSeeds, []string{"OSProcessATurnRunner", "boundedProcessAStdout"})
++	if !containsFile(plane, consumerPlaneFile) {
++		t.Fatalf("plane %v lost its own entry file; discovery is not fail-closed", plane)
++	}
++	calls := 0
++	for _, file := range plane {
++		source, err := os.ReadFile(filepath.Join(".", file))
++		if err != nil {
++			t.Fatal(err)
++		}
++		text := string(source)
++		calls += strings.Count(text, "managementpi.ValidateTurnResult(")
++		for _, forbidden := range []string{"encoding/json", "json.Unmarshal", "json.NewDecoder", "json.Decoder"} {
++			if strings.Contains(text, forbidden) {
++				t.Fatalf("consumer plane file %s contains permissive schema-1 parser %q", file, forbidden)
++			}
++		}
++	}
++	if calls != 1 {
++		t.Fatalf("consumer plane calls the sole classifier %d times, want exactly 1 (plane=%v)", calls, plane)
++	}
++}
++
++// AC6. Neither plane may condition on a Pi, Qwen, MLX, vendor, or model
++// identity. Dispatch is carried by the registry declaration data assembled in
++// agents_management_registry.go, never by a literal in the launch path.
++func TestGenericPlanesContainNoIdentityBranch(t *testing.T) {
++	index := indexProductionPackage(t, ".")
++	planes := map[string][]string{
++		"observation": index.plane(t, observationPlaneSeeds, []string{"SanitizedEngineObservationAdapter"}),
++		"consumer":    index.plane(t, consumerPlaneSeeds, []string{"OSProcessATurnRunner", "boundedProcessAStdout"}),
++	}
++	forbidden := []string{"qwen", "mlx", "alibaba", "llama", "gguf", "safetensors", "local-models", "qwen-infra"}
++	for name, plane := range planes {
++		for _, file := range plane {
++			if file == observerAssemblyFile {
++				t.Fatalf("%s plane reached the concrete assembly file; identity data must not be on the launch path", name)
++			}
++			source, err := os.ReadFile(filepath.Join(".", file))
++			if err != nil {
++				t.Fatal(err)
++			}
++			lowered := strings.ToLower(string(source))
++			for _, literal := range forbidden {
++				if strings.Contains(lowered, literal) {
++					t.Fatalf("%s plane file %s mentions identity literal %q", name, file, literal)
++				}
++			}
++		}
++	}
++}
++
++// The concrete assembly is allowed to *declare* and to *refuse* a Pi/MLX
++// identity. It is not allowed to *dispatch* on one: a conditional that selects
++// between two launch behaviours by identity literal is the shape a second
++// dispatch authority takes, so only a plain fail-closed refusal is admitted.
++func TestConcreteAssemblyDeclaresIdentityWithoutDispatchingOnIt(t *testing.T) {
++	index := indexProductionPackage(t, ".")
++	file := index.files[observerAssemblyFile]
++	if file == nil {
++		t.Fatalf("%s is missing; the assembly guard would pass vacuously", observerAssemblyFile)
++	}
++	inspected := 0
++	ast.Inspect(file, func(node ast.Node) bool {
++		switch typed := node.(type) {
++		case *ast.SwitchStmt:
++			if typed.Tag != nil && conditionHasStringLiteral(typed.Tag) {
++				t.Errorf("%s switches on an identity literal at %s", observerAssemblyFile, index.fset.Position(typed.Pos()))
++			}
++			for _, clause := range typed.Body.List {
++				caseClause, ok := clause.(*ast.CaseClause)
++				if !ok {
++					continue
++				}
++				for _, expr := range caseClause.List {
++					if conditionHasStringLiteral(expr) {
++						t.Errorf("%s dispatches on identity case at %s", observerAssemblyFile, index.fset.Position(expr.Pos()))
++					}
++				}
++			}
++		case *ast.IfStmt:
++			if !conditionHasStringLiteral(typed.Cond) {
++				return true
++			}
++			inspected++
++			if typed.Else != nil || !isPlainRefusal(typed.Body) {
++				t.Errorf("%s selects behaviour on an identity literal at %s; only a plain fail-closed refusal is admitted",
++					observerAssemblyFile, index.fset.Position(typed.Pos()))
++			}
++		}
++		return true
++	})
++	if inspected == 0 {
++		t.Fatalf("%s declared no identity refusal; the assembly guard would pass vacuously", observerAssemblyFile)
++	}
++}
++
++func conditionHasStringLiteral(expr ast.Expr) bool {
++	found := false
++	ast.Inspect(expr, func(node ast.Node) bool {
++		literal, ok := node.(*ast.BasicLit)
++		if ok && literal.Kind == token.STRING && literal.Value != `""` {
++			found = true
++		}
++		return !found
++	})
++	return found
++}
++
++// isPlainRefusal reports whether a block is exactly one return statement, which
++// is the only body an identity conditional may carry in the assembly.
++func isPlainRefusal(body *ast.BlockStmt) bool {
++	if body == nil || len(body.List) != 1 {
++		return false
++	}
++	_, ok := body.List[0].(*ast.ReturnStmt)
++	return ok
++}
++
++// AC4. Process-B election, lease, restart, quarantine, and rotation stay owned
++// by agents-infra, and the generic observation/consumer planes may not reach
++// any of them: the adapter reads sanitized values and Process-A cleanup signals
++// only its own process group.
++func TestProcessBLifecycleStaysOwnedByAgentsInfraAndOffTheGenericPlanes(t *testing.T) {
++	index := indexProductionPackage(t, ".")
++	owned := []string{"RunSharedRuntimeBroker", "SetSharedRuntimeManualQuarantine", "SharedRuntimeStatusReport"}
++	for _, name := range owned {
++		if len(index.funcs[name]) == 0 {
++			t.Fatalf("Process-B lifecycle entry point %s left agents-infra; ownership moved or the guard is stale", name)
++		}
++	}
++	lifecycle := map[string]bool{}
++	for name := range index.funcs {
++		lowered := strings.ToLower(name)
++		for _, marker := range []string{"sharedruntime", "broker", "quarantine", "lease", "rotat"} {
++			if strings.Contains(lowered, marker) {
++				lifecycle[name] = true
++			}
++		}
++	}
++	if len(lifecycle) == 0 {
++		t.Fatal("no Process-B lifecycle declaration discovered; the ownership guard would pass vacuously")
++	}
++	planes := map[string][]string{
++		"observation": index.plane(t, observationPlaneSeeds, []string{"SanitizedEngineObservationAdapter"}),
++		"consumer":    index.plane(t, consumerPlaneSeeds, []string{"OSProcessATurnRunner", "boundedProcessAStdout"}),
++	}
++	for name, plane := range planes {
++		for _, file := range plane {
++			source, err := os.ReadFile(filepath.Join(".", file))
++			if err != nil {
++				t.Fatal(err)
++			}
++			for symbol := range lifecycle {
++				if strings.Contains(string(source), symbol) {
++					t.Fatalf("%s plane file %s reaches Process-B lifecycle symbol %s; the generic plane must not become the broker", name, file, symbol)
++				}
++			}
++		}
++	}
++}
++
++// The acceptance evidence for this contract is static and fake by
++// construction. This guard discovers the contract's own test sources instead of
++// listing them, so a case added later cannot quietly reach a live runtime,
++// model, socket, network endpoint, broker, or the user's real configuration.
++func TestContractTestsContactNoLiveRuntime(t *testing.T) {
++	entries, err := os.ReadDir(".")
++	if err != nil {
++		t.Fatal(err)
++	}
++	discovered := 0
++	for _, entry := range entries {
++		name := entry.Name()
++		if !strings.HasSuffix(name, "_test.go") {
++			continue
++		}
++		if !strings.HasPrefix(name, "agents_management_") && !strings.HasPrefix(name, "pi_turn_result") {
++			continue
++		}
++		discovered++
++		// Compare parsed imports and identifiers, not raw text: a substring
++		// scan would match this guard's own denial list.
++		fset := token.NewFileSet()
++		parsed, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
++		if err != nil {
++			t.Fatalf("parse %s: %v", name, err)
++		}
++		forbiddenImports := map[string]bool{"net": true, "net/http": true, "net/url": true, "os/user": true, "os/signal": true}
++		for _, path := range (&packageIndex{files: map[string]*ast.File{name: parsed}}).imports(name) {
++			if forbiddenImports[path] {
++				t.Fatalf("contract test %s imports %s; the acceptance evidence must stay static and fake", name, path)
++			}
++		}
++		forbiddenSymbols := map[string]bool{
++			"RunSharedRuntimeBroker": true, "StopSharedRuntime": true,
++			"SetSharedRuntimeManualQuarantine": true, "SharedRuntimeStatusReport": true,
++			"UserHomeDir": true, "UserCacheDir": true, "Dial": true,
++		}
++		ast.Inspect(parsed, func(node ast.Node) bool {
++			ident, ok := node.(*ast.Ident)
++			if ok && forbiddenSymbols[ident.Name] {
++				t.Errorf("contract test %s reaches live state through %s at %s", name, ident.Name, fset.Position(ident.Pos()))
++			}
++			return true
++		})
++	}
++	if discovered < 3 {
++		t.Fatalf("no-live discovery found only %d contract test files; the guard would pass vacuously", discovered)
++	}
++}
++
++func containsFile(files []string, want string) bool {
++	for _, file := range files {
++		if file == want {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/tools/agents-infra/internal/infra/agents_management_consumer_test.go b/tools/agents-infra/internal/infra/agents_management_consumer_test.go
+new file mode 100644
+index 0000000..6fc3c47
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_consumer_test.go
+@@ -0,0 +1,265 @@
++package infra
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/relux-works/skill-agents-management/pkg/agentic"
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++	qwensystem "github.com/relux-works/skill-agents-management/pkg/agentic/systems/qwen"
++	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
++	localmodels "github.com/relux-works/skill-agents-management/pkg/vendorplugin/vendors/local-models"
++)
++
++// fakeProcessA writes an executable that stands in for the real
++// `agents-infra pi spawn ... --result-schema 1` Process A. Nothing here starts
++// a live runtime, model, socket, or broker.
++func fakeProcessA(t *testing.T, body string) (dir string, env []string) {
++	t.Helper()
++	dir = t.TempDir()
++	path := filepath.Join(dir, "agents-infra")
++	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	return dir, []string{"PATH=" + dir}
++}
++
++func consumerFixture(t *testing.T, body string) (PiPluginGraph, vendorplugin.SpawnRequest, *recordingSanitizedObservationReader) {
++	t.Helper()
++	dir, env := fakeProcessA(t, body)
++	observations := &recordingSanitizedObservationReader{}
++	graph, _ := managementGraphFixture(t, observations, "")
++	return graph, graph.SpawnRequest([]byte("prompt"), dir, env), observations
++}
++
++const okTurnDocument = `{"contract":"agents-infra.pi-turn-result","schema_version":1,"status":"ok","final_text":"accepted"}`
++
++func refusalTurnDocument(code managementpi.TurnResultCode) string {
++	return fmt.Sprintf(`{"contract":"agents-infra.pi-turn-result","schema_version":1,"status":"error","error":{"code":%q}}`, code)
++}
++
++// Production call site: BuildAndRunPiTurn -> OSProcessATurnRunner ->
++// pi.ValidateTurnResult. Every exact pre-child refusal that agents-infra's real
++// standalone entry can emit must reach the consumer as ProcessARefused with the
++// exact closed code, never as a child, tool, invalid, or success class.
++func TestConsumerClassifiesEveryExactPreChildRefusalThroughSoleClassifier(t *testing.T) {
++	codes := []managementpi.TurnResultCode{
++		managementpi.TurnCodeRequestInvalid,
++		managementpi.TurnCodeProfileMissing,
++		managementpi.TurnCodeProfileUnknown,
++		managementpi.TurnCodeProfileMismatch,
++		managementpi.TurnCodeEnvironmentMalformed,
++		managementpi.TurnCodeEnvironmentDenied,
++		managementpi.TurnCodeConfigurationInvalid,
++		managementpi.TurnCodeAuthorizationDenied,
++		managementpi.TurnCodeIdentityInvalid,
++		managementpi.TurnCodeRuntimeRefused,
++	}
++	for _, code := range codes {
++		t.Run(string(code), func(t *testing.T) {
++			graph, request, _ := consumerFixture(t, "printf '%s' '"+refusalTurnDocument(code)+"'\nexit 1\n")
++			result, err := BuildAndRunPiTurn(context.Background(), graph.Registry, request, OSProcessATurnRunner{})
++			if result.Class != managementpi.TurnResultProcessARefused || result.Code != code {
++				t.Fatalf("result = %#v, want process-a-refused/%s", result, code)
++			}
++			if !errors.Is(err, managementpi.ErrTurnProcessARefused) {
++				t.Fatalf("error = %v, want ErrTurnProcessARefused", err)
++			}
++			if result.FinalText != "" {
++				t.Fatalf("refusal carried final text %q", result.FinalText)
++			}
++		})
++	}
++}
++
++// Negative: the consumer must not launder an exit/document disagreement into a
++// success, a previous result, or a preflight class. Each case narrows one
++// admitted shape rather than deleting the classifier call.
++func TestConsumerRefusesExitDocumentDisagreementInsteadOfLaundering(t *testing.T) {
++	oversize := strings.Repeat("a", managementpi.TurnResultMaxStdoutBytes+16)
++	tests := []struct {
++		name string
++		body string
++	}{
++		{"zero exit without document", "exit 0\n"},
++		{"zero exit with error document", "printf '%s' '" + refusalTurnDocument(managementpi.TurnCodeChildFailed) + "'\nexit 0\n"},
++		{"error exit with ok document", "printf '%s' '" + okTurnDocument + "'\nexit 1\n"},
++		{"duplicate document", "printf '%s%s' '" + okTurnDocument + "' '" + okTurnDocument + "'\nexit 0\n"},
++		{"trailing non-whitespace bytes", "printf '%s' '" + okTurnDocument + "trailing'\nexit 0\n"},
++		{"unknown error code", "printf '%s' '" + refusalTurnDocument("pi_turn_invented_code") + "'\nexit 1\n"},
++		{"unknown schema version", `printf '%s' '{"contract":"agents-infra.pi-turn-result","schema_version":2,"status":"ok","final_text":"x"}'` + "\nexit 0\n"},
++		{"exit outside closed table", "printf '%s' '" + okTurnDocument + "'\nexit 7\n"},
++		{"over the bounded capture", "printf '%s' '" + oversize + "'\nexit 0\n"},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			graph, request, _ := consumerFixture(t, test.body)
++			result, err := BuildAndRunPiTurn(context.Background(), graph.Registry, request, OSProcessATurnRunner{})
++			if result.Class != managementpi.TurnResultInvalid || result.Code != managementpi.TurnCodeResultInvalid {
++				t.Fatalf("result = %#v, want result-invalid", result)
++			}
++			if !errors.Is(err, managementpi.ErrTurnResultInvalid) {
++				t.Fatalf("error = %v, want ErrTurnResultInvalid", err)
++			}
++		})
++	}
++}
++
++// Cancellation after the child exists must reach the classifier as a recorded
++// consumer intervention with a bounded cleanup outcome, and must survive the
++// induced signal exit that carries no schema-1 document.
++func TestConsumerRecordsCancellationAfterChildStartAndKeepsItAuthoritative(t *testing.T) {
++	graph, request, _ := consumerFixture(t, "sleep 30\n")
++	ctx, cancel := context.WithCancel(context.Background())
++	go func() {
++		time.Sleep(250 * time.Millisecond)
++		cancel()
++	}()
++	result, err := BuildAndRunPiTurn(ctx, graph.Registry, request, OSProcessATurnRunner{})
++	if result.Class != managementpi.TurnResultCancelled || result.Code != managementpi.TurnCodeCancelled {
++		t.Fatalf("result = %#v, want cancelled", result)
++	}
++	if !errors.Is(err, context.Canceled) {
++		t.Fatalf("error = %v, want context.Canceled", err)
++	}
++	if strings.Contains(err.Error(), request.Profile) || strings.Contains(err.Error(), "sleep") {
++		t.Fatalf("cancellation error leaked launch detail: %v", err)
++	}
++}
++
++// A pre-cancelled caller must never reach the child at all, and must never be
++// laundered into a schema-1 protocol failure.
++func TestConsumerRefusesPreCancelledCallerBeforeAnyChildEffect(t *testing.T) {
++	dir, env := fakeProcessA(t, ": > \"$FAKE_PROCESS_A_MARKER\"\nexit 0\n")
++	marker := filepath.Join(dir, "started")
++	observations := &recordingSanitizedObservationReader{}
++	graph, status := managementGraphFixture(t, observations, "")
++	request := graph.SpawnRequest([]byte("prompt"), dir, append(env, "FAKE_PROCESS_A_MARKER="+marker))
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	_, err := BuildAndRunPiTurn(ctx, graph.Registry, request, OSProcessATurnRunner{})
++	if !errors.Is(err, context.Canceled) {
++		t.Fatalf("error = %v, want context.Canceled", err)
++	}
++	if _, statErr := os.Stat(marker); statErr == nil {
++		t.Fatal("pre-cancelled call started Process A")
++	}
++	if observations.calls != 0 || status.calls != 0 {
++		t.Fatalf("pre-cancelled call observed=%d preflight=%d, want 0/0", observations.calls, status.calls)
++	}
++}
++
++// Dry run plans the exact same outer grammar with the literal prompt
++// placeholder and must perform no observation, preflight, or prompt read.
++func TestDryRunPlanIsObservationAndPreflightFree(t *testing.T) {
++	dir, env := fakeProcessA(t, "exit 0\n")
++	observations := &recordingSanitizedObservationReader{}
++	graph, status := managementGraphFixture(t, observations, "")
++	plan, err := vendorplugin.BuildLaunch(context.Background(), graph.Registry, graph.SpawnRequest([]byte("prompt"), dir, env), agentic.LaunchModeDryRun)
++	if err != nil {
++		t.Fatalf("dry-run BuildLaunch: %v", err)
++	}
++	want := []string{"pi", "spawn", "--profile", graph.Profile, "--prompt", "<prompt>", "--deadline", "30m", "--result-schema", "1"}
++	if !reflect.DeepEqual(plan.Argv, want) {
++		t.Fatalf("dry-run argv = %#v, want %#v", plan.Argv, want)
++	}
++	if observations.calls != 0 || status.calls != 0 {
++		t.Fatalf("dry run observed=%d preflight=%d, want 0/0", observations.calls, status.calls)
++	}
++}
++
++// AC5. qwen-infra is an agents-infra product label. It must resolve to the Pi
++// agentic system over the local-models plugin-plane vendor and must never
++// select the shipped qwen system, which is qwen-code by Alibaba.
++func TestQwenInfraResolvesToPiAndLocalModelsNeverShippedQwen(t *testing.T) {
++	dir, env := fakeProcessA(t, "exit 0\n")
++	observations := &recordingSanitizedObservationReader{}
++	graph, _ := managementGraphFixture(t, observations, "")
++	plan, err := vendorplugin.BuildLaunch(context.Background(), graph.Registry, graph.SpawnRequest([]byte("prompt"), dir, env), agentic.LaunchModeExec)
++	if err != nil {
++		t.Fatalf("BuildLaunch: %v", err)
++	}
++	shipped := qwensystem.New().ID()
++	if shipped != "qwen-code" {
++		t.Fatalf("shipped qwen system identity drifted: %q", shipped)
++	}
++	if plan.System == shipped {
++		t.Fatalf("qwen-infra aliased the shipped qwen system %q", shipped)
++	}
++	if plan.System != managementpi.New(&fakeManagementStatusReader{}).ID() {
++		t.Fatalf("plan.System = %q, want the Pi system", plan.System)
++	}
++	if localmodels.VendorID == "qwen" || localmodels.VendorID == "alibaba" {
++		t.Fatalf("plugin-plane vendor identity drifted to %q", localmodels.VendorID)
++	}
++	if filepath.Base(plan.Binary) == string(shipped) || filepath.Base(plan.Binary) == "qwen" {
++		t.Fatalf("qwen-infra resolved the qwen executable: %q", plan.Binary)
++	}
++}
++
++// AC6, behavioural half. Renaming every identity the canonical target carries
++// must change the plan only in the renamed positions. A literal branch on any
++// Pi/Qwen/MLX/model identity would break this equivalence.
++func TestPlanIsMetamorphicUnderIdentityRenaming(t *testing.T) {
++	build := func(t *testing.T, runtime, model, profileName string) (agentic.Plan, vendorplugin.EngineObservationQuery) {
++		t.Helper()
++		dir, env := fakeProcessA(t, "exit 0\n")
++		var seen vendorplugin.EngineObservationQuery
++		reader := SanitizedEngineObservationReaderFunc(func(_ context.Context, query vendorplugin.EngineObservationQuery) (SanitizedEngineObservation, error) {
++			seen = query
++			now := time.Now()
++			return SanitizedEngineObservation{
++				Contract: SanitizedEngineObservationContract, SchemaVersion: SanitizedEngineObservationSchemaVersion,
++				Engine: query.Engine, Runtime: query.Runtime, Model: query.Model, Profile: query.Profile,
++				ObservedAt: now.Add(-time.Second), ValidUntil: now.Add(time.Minute), Facts: goodSanitizedEngineFacts(),
++			}, nil
++		})
++		resolved := ResolvedCanonicalTarget{
++			Target:  ProjectTarget{Name: runtime, Vendor: "product-label", Environment: "pi", Model: model, Profile: &profileName},
++			Profile: &PiProfile{Provider: "local", Model: model, ContextWindow: 4096},
++		}
++		graph, err := BuildPiPluginGraph("/repo", resolved, &fakeManagementStatusReader{}, reader)
++		if err != nil {
++			t.Fatalf("BuildPiPluginGraph(%s): %v", runtime, err)
++		}
++		plan, err := vendorplugin.BuildLaunch(context.Background(), graph.Registry, graph.SpawnRequest([]byte("prompt"), dir, env), agentic.LaunchModeExec)
++		if err != nil {
++			t.Fatalf("BuildLaunch(%s): %v", runtime, err)
++		}
++		return plan, seen
++	}
++
++	original, originalQuery := build(t, "qwen-infra", "qwen-3.8-27b-mlx-8bit", "local-qwen")
++	renamed, renamedQuery := build(t, "neutral-infra", "neutral-model-42", "neutral-profile")
++
++	if len(original.Argv) != len(renamed.Argv) {
++		t.Fatalf("argv shape changed under renaming: %#v vs %#v", original.Argv, renamed.Argv)
++	}
++	for index := range original.Argv {
++		if index == 3 {
++			if original.Argv[index] != "local-qwen" || renamed.Argv[index] != "neutral-profile" {
++				t.Fatalf("profile slot = %q/%q", original.Argv[index], renamed.Argv[index])
++			}
++			continue
++		}
++		if original.Argv[index] != renamed.Argv[index] {
++			t.Fatalf("argv[%d] differs under renaming: %q vs %q", index, original.Argv[index], renamed.Argv[index])
++		}
++	}
++	if original.System != renamed.System {
++		t.Fatalf("system dispatch changed under renaming: %q vs %q", original.System, renamed.System)
++	}
++	if originalQuery.Engine != renamedQuery.Engine {
++		t.Fatalf("engine selection changed under renaming: %#v vs %#v", originalQuery.Engine, renamedQuery.Engine)
++	}
++	if string(renamedQuery.Runtime) != "neutral-infra" || string(renamedQuery.Model) != "neutral-model-42" || renamedQuery.Profile != "neutral-profile" {
++		t.Fatalf("observation query did not carry the renamed identity: %#v", renamedQuery)
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/agents_management_contract_test.go b/tools/agents-infra/internal/infra/agents_management_contract_test.go
+new file mode 100644
+index 0000000..4443ec8
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_contract_test.go
+@@ -0,0 +1,231 @@
++package infra
++
++import (
++	"context"
++	"errors"
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/relux-works/skill-agents-management/pkg/agentic"
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
++	"github.com/relux-works/skill-agents-management/pkg/localruntime"
++	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
++	localmodels "github.com/relux-works/skill-agents-management/pkg/vendorplugin/vendors/local-models"
++)
++
++type fakeManagementStatusReader struct {
++	calls int
++}
++
++func (r *fakeManagementStatusReader) Status(context.Context, localruntime.StatusQuery) (localruntime.Status, error) {
++	r.calls++
++	return localruntime.Status{BrokerState: "absent", BrokerSource: localruntime.SourceDetermined}, nil
++}
++
++type recordingSanitizedObservationReader struct {
++	calls  int
++	mutate func(*SanitizedEngineObservation)
++	err    error
++}
++
++func (r *recordingSanitizedObservationReader) ReadSanitizedEngineObservation(_ context.Context, query vendorplugin.EngineObservationQuery) (SanitizedEngineObservation, error) {
++	r.calls++
++	if r.err != nil {
++		return SanitizedEngineObservation{}, r.err
++	}
++	now := time.Now()
++	observation := SanitizedEngineObservation{
++		Contract: SanitizedEngineObservationContract, SchemaVersion: SanitizedEngineObservationSchemaVersion,
++		Engine: query.Engine, Runtime: query.Runtime, Model: query.Model, Profile: query.Profile,
++		ObservedAt: now.Add(-time.Second), ValidUntil: now.Add(time.Minute), Facts: goodSanitizedEngineFacts(),
++	}
++	if r.mutate != nil {
++		r.mutate(&observation)
++	}
++	return observation, nil
++}
++
++func goodSanitizedEngineFacts() []SanitizedEngineFact {
++	values := map[inferenceengine.Fact]string{
++		inferenceengine.FactContextArgv:              `["--ctx-size","4096"]`,
++		inferenceengine.FactPrefillArgv:              `["--ubatch-size","512"]`,
++		inferenceengine.FactReasoningStreamField:     "delta.reasoning_content",
++		inferenceengine.FactHealth:                   `{"endpoint":"/health","healthy":true}`,
++		inferenceengine.FactReadiness:                `{"weights_resident":true}`,
++		inferenceengine.FactWeightArtifact:           `{"format":"safetensors","model_path":"/models/weights.safetensors","config_path":"/models/config.json"}`,
++		inferenceengine.FactMemoryAccounting:         `{"method":"resident-bytes","bytes":4096,"includes_mapped_weights":true}`,
++		inferenceengine.FactSpeculativeDecoding:      `{"capable":true,"active":false}`,
++		inferenceengine.FactLoadState:                `{"state":"loaded","weights_resident":true}`,
++		inferenceengine.FactUnloadState:              `{"state":"unloaded","weights_resident":false}`,
++		inferenceengine.FactInferenceBusy:            `{"busy":false}`,
++		inferenceengine.FactMemoryPressureSequence:   `{"pressure":"normal","consulted":["load-state","unload-state","inference-busy"],"action":"none"}`,
++		inferenceengine.FactLocalExecutable:          "/opt/agents-infra/bin/mlx-server",
++		inferenceengine.FactLocalArgv:                `["--port","8080"]`,
++		inferenceengine.FactStressPolicy:             `{"enabled":true,"max_concurrency":2}`,
++		inferenceengine.FactRestartSupervisionPolicy: `{"max_attempts":3,"initial_backoff_ms":100,"max_backoff_ms":1000}`,
++	}
++	facts := make([]SanitizedEngineFact, 0, len(inferenceengine.MeasuredFacts()))
++	for _, definition := range inferenceengine.MeasuredFacts() {
++		if definition.Fact == inferenceengine.FactSSHForwarding {
++			facts = append(facts, SanitizedEngineFact{Fact: definition.Fact, Outcome: inferenceengine.OutcomeObservedAbsent})
++			continue
++		}
++		facts = append(facts, SanitizedEngineFact{Fact: definition.Fact, Outcome: inferenceengine.OutcomeObservedValue, Value: values[definition.Fact]})
++	}
++	return facts
++}
++
++func managementGraphFixture(t *testing.T, observation *recordingSanitizedObservationReader, processA string) (PiPluginGraph, *fakeManagementStatusReader) {
++	t.Helper()
++	profile := "local-qwen"
++	status := &fakeManagementStatusReader{}
++	resolved := ResolvedCanonicalTarget{
++		Target:  ProjectTarget{Name: "qwen-infra", Vendor: "qwen", Environment: "pi", Model: "qwen-3.8-27b-mlx-8bit", Profile: &profile},
++		Profile: &PiProfile{Provider: "local", Model: "qwen-3.8-27b-mlx-8bit", ContextWindow: 4096},
++	}
++	graph, err := BuildPiPluginGraph("/repo", resolved, status, observation)
++	if err != nil {
++		t.Fatalf("BuildPiPluginGraph: %v", err)
++	}
++	if processA == "" {
++		processA = filepath.Join(t.TempDir(), "agents-infra")
++		if err := os.WriteFile(processA, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
++			t.Fatal(err)
++		}
++	}
++	return graph, status
++}
++
++// Production call site: vendorplugin.BuildLaunch over the real Pi and
++// local-models plugins assembled by BuildPiPluginGraph.
++func TestPiPluginGraphBuildLaunchMatchesAcceptedSurfaceAndIdentity(t *testing.T) {
++	observations := &recordingSanitizedObservationReader{}
++	graph, status := managementGraphFixture(t, observations, "")
++	processA := filepath.Join(t.TempDir(), "agents-infra")
++	if err := os.WriteFile(processA, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	request := graph.SpawnRequest([]byte("inspect the repository"), "/repo", []string{"PATH=" + filepath.Dir(processA)})
++	plan, err := vendorplugin.BuildLaunch(context.Background(), graph.Registry, request, agentic.LaunchModeExec)
++	if err != nil {
++		t.Fatalf("BuildLaunch: %v", err)
++	}
++	want := []string{"pi", "spawn", "--profile", graph.Profile, "--prompt", "inspect the repository", "--deadline", "30m", "--result-schema", "1"}
++	if !reflect.DeepEqual(plan.Argv, want) || plan.Stdin.Attached || len(plan.Stdin.Bytes) != 0 {
++		t.Fatalf("plan = argv %#v stdin %#v, want exact Process-A argv and EOF stdin", plan.Argv, plan.Stdin)
++	}
++	if filepath.Base(plan.Binary) != "agents-infra" || observations.calls != 1 || status.calls != 1 {
++		t.Fatalf("binary=%q observation calls=%d status calls=%d", plan.Binary, observations.calls, status.calls)
++	}
++	if graph.Runtime == "qwen" || graph.Runtime == "qwen-code" {
++		t.Fatalf("qwen-infra aliased shipped qwen runtime: %q", graph.Runtime)
++	}
++	if caps := managementpi.New(status).Capabilities(); caps.EffortTransport != agentic.EffortTransportNone {
++		t.Fatalf("Pi thinking was equated with vendor effort: %q", caps.EffortTransport)
++	}
++}
++
++func TestPiPluginGraphBuildLaunchRefusesForgedObservationBeforePreflight(t *testing.T) {
++	tests := []struct {
++		name   string
++		mutate func(*SanitizedEngineObservation)
++		want   error
++	}{
++		{"wrong contract", func(o *SanitizedEngineObservation) { o.Contract = "forged" }, vendorplugin.ErrEngineObservationVersion},
++		{"stale", func(o *SanitizedEngineObservation) { o.ValidUntil = time.Now().Add(-time.Second) }, vendorplugin.ErrEngineObservationStale},
++		{"identity drift", func(o *SanitizedEngineObservation) { o.Profile = "other" }, vendorplugin.ErrEngineObservationIdentity},
++		{"wrong engine", func(o *SanitizedEngineObservation) { o.Engine.ID = "other" }, vendorplugin.ErrEngineObservationIdentity},
++		{"malformed missing fact", func(o *SanitizedEngineObservation) { o.Facts = o.Facts[1:] }, inferenceengine.ErrObservationMalformed},
++		{"unsupported fact", func(o *SanitizedEngineObservation) {
++			o.Facts[0].Outcome = inferenceengine.OutcomeNotObserved
++			o.Facts[0].Cause = inferenceengine.NotObservedUnsupported
++		}, inferenceengine.ErrObservationUnsupported},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			observations := &recordingSanitizedObservationReader{mutate: test.mutate}
++			graph, status := managementGraphFixture(t, observations, "")
++			pathDir := t.TempDir()
++			if err := os.WriteFile(filepath.Join(pathDir, "agents-infra"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
++				t.Fatal(err)
++			}
++			_, err := vendorplugin.BuildLaunch(context.Background(), graph.Registry, graph.SpawnRequest([]byte("prompt"), "/repo", []string{"PATH=" + pathDir}), agentic.LaunchModeExec)
++			if !errors.Is(err, test.want) {
++				t.Fatalf("BuildLaunch error = %v, want %v", err, test.want)
++			}
++			if observations.calls != 1 || status.calls != 0 {
++				t.Fatalf("observation calls=%d preflight calls=%d, want 1/0", observations.calls, status.calls)
++			}
++		})
++	}
++}
++
++func TestPiPluginGraphRefusesMissingEvidenceAndCallerProfileConflict(t *testing.T) {
++	profile := "local-qwen"
++	resolved := ResolvedCanonicalTarget{
++		Target:  ProjectTarget{Name: "qwen-infra", Vendor: "qwen", Environment: "pi", Model: "model", Profile: &profile},
++		Profile: &PiProfile{Provider: "local", Model: "model", ContextWindow: 4096},
++	}
++	if _, err := BuildPiPluginGraph("/repo", resolved, &fakeManagementStatusReader{}, nil); err == nil {
++		t.Fatal("missing sanitized observation source was admitted")
++	}
++	observations := &recordingSanitizedObservationReader{}
++	graph, status := managementGraphFixture(t, observations, "")
++	dir := t.TempDir()
++	if err := os.WriteFile(filepath.Join(dir, "agents-infra"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	request := graph.SpawnRequest([]byte("prompt"), "/repo", []string{"PATH=" + dir})
++	request.Profile = "caller-forged-profile"
++	_, err := vendorplugin.BuildLaunch(context.Background(), graph.Registry, request, agentic.LaunchModeExec)
++	if !errors.Is(err, localmodels.ErrProfileConflict) || observations.calls != 0 || status.calls != 0 {
++		t.Fatalf("profile conflict err=%v observation=%d preflight=%d", err, observations.calls, status.calls)
++	}
++}
++
++func TestProcessAConsumerUsesSoleClassifierAtRealChildLaunch(t *testing.T) {
++	dir := t.TempDir()
++	marker := filepath.Join(dir, "fake-process-b-observed")
++	processA := filepath.Join(dir, "agents-infra")
++	script := `#!/bin/sh
++: > "$FAKE_PROCESS_B_MARKER"
++printf '%s\n' '{"contract":"agents-infra.pi-turn-result","schema_version":1,"status":"ok","final_text":"accepted"}'
++`
++	if err := os.WriteFile(processA, []byte(script), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	observations := &recordingSanitizedObservationReader{}
++	graph, _ := managementGraphFixture(t, observations, processA)
++	request := graph.SpawnRequest([]byte("prompt"), dir, []string{"PATH=" + dir, "FAKE_PROCESS_B_MARKER=" + marker})
++	result, err := BuildAndRunPiTurn(context.Background(), graph.Registry, request, OSProcessATurnRunner{})
++	if err != nil {
++		t.Fatalf("BuildAndRunPiTurn: %v", err)
++	}
++	if result.Class != managementpi.TurnResultOK || result.FinalText != "accepted" {
++		t.Fatalf("result = %#v", result)
++	}
++	if _, err := os.Stat(marker); err != nil {
++		t.Fatalf("fake Process-B lifecycle was not composed through Process A: %v", err)
++	}
++}
++
++func TestProcessAConsumerCannotParseAroundSoleClassifier(t *testing.T) {
++	source, err := os.ReadFile("agents_management_process_a.go")
++	if err != nil {
++		t.Fatal(err)
++	}
++	text := string(source)
++	if strings.Count(text, "managementpi.ValidateTurnResult(input)") != 1 {
++		t.Fatalf("production consumer must call the sole classifier exactly once")
++	}
++	for _, forbidden := range []string{"encoding/json", "json.Unmarshal", "json.NewDecoder"} {
++		if strings.Contains(text, forbidden) {
++			t.Fatalf("production consumer contains permissive parser %q", forbidden)
++		}
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/agents_management_engine_reader.go b/tools/agents-infra/internal/infra/agents_management_engine_reader.go
+new file mode 100644
+index 0000000..0e2cc34
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_engine_reader.go
+@@ -0,0 +1,325 @@
++package infra
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"net/http"
++	"os"
++	"path/filepath"
++	"strings"
++	"time"
++
++	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
++	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
++)
++
++// sharedRuntimeObservationTTL bounds how long a single Process-B status read
++// may back a launch decision. It is deliberately short: a stale attestation
++// must never authorize a later, unrelated launch.
++const sharedRuntimeObservationTTL = 30 * time.Second
++
++// SharedRuntimeSanitizedEngineObservationReader is agents-infra's concrete,
++// bounded observation source for the registry-installed engine adapter. It
++// performs one real status read of the agents-infra-owned Process-B broker,
++// then derives the closed sanitized fact set from that live status plus the
++// already-resolved profile configuration. It never starts, stops, signals,
++// or otherwise mutates Process B; SharedRuntimeStatusReport is the same
++// read-only production entry point `agents-infra runtime status` uses.
++type SharedRuntimeSanitizedEngineObservationReader struct {
++	ProjectDir string
++	HomeDir    string
++	CacheRoot  string
++	HTTPClient *http.Client
++	Profile    PiProfile
++}
++
++// NewSharedRuntimeSanitizedEngineObservationReader builds the reader for one
++// already-resolved Pi profile. The profile is captured once at trusted
++// assembly time; ReadSanitizedEngineObservation never re-resolves it from
++// caller-supplied input.
++func NewSharedRuntimeSanitizedEngineObservationReader(projectDir, homeDir, cacheRoot string, profile PiProfile) *SharedRuntimeSanitizedEngineObservationReader {
++	return &SharedRuntimeSanitizedEngineObservationReader{ProjectDir: projectDir, HomeDir: homeDir, CacheRoot: cacheRoot, Profile: profile}
++}
++
++func (r *SharedRuntimeSanitizedEngineObservationReader) ReadSanitizedEngineObservation(ctx context.Context, query vendorplugin.EngineObservationQuery) (SanitizedEngineObservation, error) {
++	if err := ctx.Err(); err != nil {
++		return SanitizedEngineObservation{}, err
++	}
++	report, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{
++		ProjectDir: r.ProjectDir, Profile: string(query.Profile), HomeDir: r.HomeDir, CacheRoot: r.CacheRoot, HTTPClient: r.HTTPClient,
++	})
++	if err != nil {
++		return SanitizedEngineObservation{}, fmt.Errorf("agents-infra: read shared Pi runtime status: %w", err)
++	}
++	if err := ctx.Err(); err != nil {
++		return SanitizedEngineObservation{}, err
++	}
++	if !sharedRuntimeAttestedAndReady(report) {
++		return SanitizedEngineObservation{}, fmt.Errorf("agents-infra: shared Pi runtime engine is not attested and ready (broker_state=%s)", report.Broker.State)
++	}
++	facts, err := sanitizedEngineFactsFromSharedRuntimeStatus(report, r.Profile)
++	if err != nil {
++		return SanitizedEngineObservation{}, err
++	}
++	now := time.Now()
++	return SanitizedEngineObservation{
++		Contract: SanitizedEngineObservationContract, SchemaVersion: SanitizedEngineObservationSchemaVersion,
++		Engine: query.Engine, Runtime: query.Runtime, Model: query.Model, Profile: query.Profile,
++		ObservedAt: now, ValidUntil: now.Add(sharedRuntimeObservationTTL), Facts: facts,
++	}, nil
++}
++
++// sharedRuntimeAttestedAndReady reports whether a live Process-B status read
++// is trustworthy enough to derive sanitized facts from: the broker must be
++// actively serving, and readiness must have been positively matched at least
++// once.
++func sharedRuntimeAttestedAndReady(report SharedRuntimeStatus) bool {
++	return report.Broker.State == "serving" && report.LastReadinessMatch != nil
++}
++
++// sanitizedEngineFactsFromSharedRuntimeStatus derives the closed 17-fact set
++// from a real attested Process-B status plus the already-resolved profile.
++// It refuses (returns an error, deriving nothing) rather than inventing a
++// value it cannot back with real data.
++func sanitizedEngineFactsFromSharedRuntimeStatus(report SharedRuntimeStatus, profile PiProfile) ([]SanitizedEngineFact, error) {
++	weightArtifact, weightFormat, err := sharedRuntimeWeightArtifactFact(profile.Runtime.Argv)
++	if err != nil {
++		return nil, err
++	}
++	memoryAccounting, err := sharedRuntimeMemoryAccountingFact(report, weightFormat)
++	if err != nil {
++		return nil, err
++	}
++	inferenceBusy, busy, err := sharedRuntimeInferenceBusyFact(report)
++	if err != nil {
++		return nil, err
++	}
++	pressureSequence, err := sharedRuntimeMemoryPressureSequenceFact(report)
++	if err != nil {
++		return nil, err
++	}
++
++	facts := make([]SanitizedEngineFact, 0, len(inferenceengine.MeasuredFacts()))
++	for _, definition := range inferenceengine.MeasuredFacts() {
++		switch definition.Fact {
++		case inferenceengine.FactContextArgv:
++			facts = append(facts, observedValueFact(definition.Fact, mustEncodeJSON(profile.Runtime.Argv)))
++		case inferenceengine.FactPrefillArgv:
++			facts = append(facts, observedValueFact(definition.Fact, mustEncodeJSON(profile.Runtime.Argv)))
++		case inferenceengine.FactReasoningStreamField:
++			if profile.Reasoning {
++				facts = append(facts, observedValueFact(definition.Fact, sharedRuntimeReasoningStreamField))
++			} else {
++				facts = append(facts, absentFact(definition.Fact))
++			}
++		case inferenceengine.FactHealth:
++			facts = append(facts, observedValueFact(definition.Fact, mustEncodeJSON(struct {
++				Endpoint string `json:"endpoint"`
++				Healthy  bool   `json:"healthy"`
++			}{Endpoint: profile.Runtime.ReadinessPath, Healthy: true})))
++		case inferenceengine.FactReadiness:
++			facts = append(facts, observedValueFact(definition.Fact, mustEncodeJSON(struct {
++				WeightsResident bool `json:"weights_resident"`
++			}{WeightsResident: true})))
++		case inferenceengine.FactWeightArtifact:
++			facts = append(facts, observedValueFact(definition.Fact, weightArtifact))
++		case inferenceengine.FactMemoryAccounting:
++			facts = append(facts, observedValueFact(definition.Fact, memoryAccounting))
++		case inferenceengine.FactSpeculativeDecoding:
++			capable := profile.Runtime.DFlash != nil
++			facts = append(facts, observedValueFact(definition.Fact, mustEncodeJSON(struct {
++				Capable bool `json:"capable"`
++				Active  bool `json:"active"`
++			}{Capable: capable, Active: capable && busy})))
++		case inferenceengine.FactLoadState:
++			facts = append(facts, observedValueFact(definition.Fact, mustEncodeJSON(struct {
++				State           string `json:"state"`
++				WeightsResident bool   `json:"weights_resident"`
++			}{State: "loaded", WeightsResident: true})))
++		case inferenceengine.FactUnloadState:
++			facts = append(facts, observedValueFact(definition.Fact, mustEncodeJSON(struct {
++				State           string `json:"state"`
++				WeightsResident bool   `json:"weights_resident"`
++			}{State: "unloaded", WeightsResident: false})))
++		case inferenceengine.FactInferenceBusy:
++			facts = append(facts, observedValueFact(definition.Fact, inferenceBusy))
++		case inferenceengine.FactMemoryPressureSequence:
++			facts = append(facts, observedValueFact(definition.Fact, pressureSequence))
++		case inferenceengine.FactLocalExecutable:
++			facts = append(facts, observedValueFact(definition.Fact, profile.Runtime.Executable))
++		case inferenceengine.FactLocalArgv:
++			facts = append(facts, observedValueFact(definition.Fact, mustEncodeJSON(profile.Runtime.Argv)))
++		case inferenceengine.FactSSHForwarding:
++			facts = append(facts, absentFact(definition.Fact))
++		case inferenceengine.FactStressPolicy:
++			facts = append(facts, observedValueFact(definition.Fact, mustEncodeJSON(sharedRuntimeStressPolicy(profile.Runtime.Sharing))))
++		case inferenceengine.FactRestartSupervisionPolicy:
++			facts = append(facts, observedValueFact(definition.Fact, mustEncodeJSON(sharedRuntimeRestartPolicy(profile.Runtime.Sharing))))
++		default:
++			return nil, fmt.Errorf("agents-infra: unknown measured fact %q", definition.Fact)
++		}
++	}
++	return facts, nil
++}
++
++// sharedRuntimeReasoningStreamField is the field path agents-infra's
++// OpenAI-compatible local runtimes use to stream reasoning deltas.
++const sharedRuntimeReasoningStreamField = "delta.reasoning_content"
++
++func observedValueFact(fact inferenceengine.Fact, value string) SanitizedEngineFact {
++	return SanitizedEngineFact{Fact: fact, Outcome: inferenceengine.OutcomeObservedValue, Value: value}
++}
++
++func absentFact(fact inferenceengine.Fact) SanitizedEngineFact {
++	return SanitizedEngineFact{Fact: fact, Outcome: inferenceengine.OutcomeObservedAbsent}
++}
++
++func mustEncodeJSON(value any) string {
++	encoded, err := json.Marshal(value)
++	if err != nil {
++		panic(fmt.Sprintf("agents-infra: encode sanitized engine fact: %v", err))
++	}
++	return string(encoded)
++}
++
++func sharedRuntimeWeightArtifactFact(argv []string) (value, format string, err error) {
++	modelPath := ""
++	for index, token := range argv {
++		if (token == "--model" || token == "-m") && index+1 < len(argv) {
++			modelPath = argv[index+1]
++			break
++		}
++		if after, ok := strings.CutPrefix(token, "--model="); ok {
++			modelPath = after
++			break
++		}
++	}
++	if modelPath == "" || !filepath.IsAbs(modelPath) {
++		return "", "", errors.New("agents-infra: profile runtime argv does not name an absolute --model path")
++	}
++	modelPath = filepath.Clean(modelPath)
++	if strings.EqualFold(filepath.Ext(modelPath), ".gguf") {
++		return mustEncodeJSON(struct {
++			Format    string `json:"format"`
++			ModelPath string `json:"model_path"`
++		}{Format: "gguf", ModelPath: modelPath}), "gguf", nil
++	}
++	directory := modelPath
++	if info, statErr := os.Stat(modelPath); statErr == nil && !info.IsDir() {
++		directory = filepath.Dir(modelPath)
++	}
++	return mustEncodeJSON(struct {
++		Format     string `json:"format"`
++		ModelPath  string `json:"model_path"`
++		ConfigPath string `json:"config_path"`
++	}{Format: "safetensors", ModelPath: modelPath, ConfigPath: filepath.Join(directory, "config.json")}), "safetensors", nil
++}
++
++func sharedRuntimeMemoryAccountingFact(report SharedRuntimeStatus, weightFormat string) (string, error) {
++	if report.Resources.LoadedModelMemory.State != SharedRuntimeMemoryHealthy && report.Resources.LoadedModelMemory.State != SharedRuntimeMemoryPressured {
++		return "", fmt.Errorf("agents-infra: loaded-model memory is not observed (state=%s); configure resource_pressure_mode=provider to observe it", report.Resources.LoadedModelMemory.State)
++	}
++	if report.Resources.LoadedModelMemory.Bytes == nil {
++		return "", errors.New("agents-infra: loaded-model memory state is observed without a byte count")
++	}
++	method := "resident-bytes"
++	includesMapped := false
++	if weightFormat == "gguf" {
++		method, includesMapped = "mmap-aware", true
++	}
++	return mustEncodeJSON(struct {
++		Method                string `json:"method"`
++		Bytes                 uint64 `json:"bytes"`
++		IncludesMappedWeights bool   `json:"includes_mapped_weights"`
++	}{Method: method, Bytes: *report.Resources.LoadedModelMemory.Bytes, IncludesMappedWeights: includesMapped}), nil
++}
++
++func sharedRuntimeInferenceBusyFact(report SharedRuntimeStatus) (string, bool, error) {
++	switch report.Resources.Inference.State {
++	case SharedRuntimeInferenceIdle:
++		return mustEncodeJSON(struct {
++			Busy bool `json:"busy"`
++		}{Busy: false}), false, nil
++	case SharedRuntimeInferenceBusy:
++		return mustEncodeJSON(struct {
++			Busy bool `json:"busy"`
++		}{Busy: true}), true, nil
++	default:
++		return "", false, fmt.Errorf("agents-infra: inference activity is not observed (state=%s)", report.Resources.Inference.State)
++	}
++}
++
++func sharedRuntimeMemoryPressureSequenceFact(report SharedRuntimeStatus) (string, error) {
++	pressure := "normal"
++	action := "none"
++	switch report.Resources.State {
++	case SharedRuntimeResourceHealthy, SharedRuntimeResourceBusy:
++		pressure, action = "normal", "none"
++	case SharedRuntimeResourcePressured:
++		pressure, action = "critical", "unload-idle"
++	case SharedRuntimeResourceDraining:
++		pressure, action = "critical", "refuse"
++	default:
++		return "", fmt.Errorf("agents-infra: memory pressure sequence is not observed (state=%s)", report.Resources.State)
++	}
++	return mustEncodeJSON(struct {
++		Pressure  string                 `json:"pressure"`
++		Consulted []inferenceengine.Fact `json:"consulted"`
++		Action    string                 `json:"action"`
++	}{
++		Pressure: pressure,
++		Consulted: []inferenceengine.Fact{
++			inferenceengine.FactLoadState, inferenceengine.FactUnloadState, inferenceengine.FactInferenceBusy,
++		},
++		Action: action,
++	}), nil
++}
++
++func sharedRuntimeStressPolicy(sharing *PiRuntimeSharing) struct {
++	Enabled        bool `json:"enabled"`
++	MaxConcurrency int  `json:"max_concurrency"`
++} {
++	if sharing == nil || sharing.Mode != "shared" {
++		return struct {
++			Enabled        bool `json:"enabled"`
++			MaxConcurrency int  `json:"max_concurrency"`
++		}{Enabled: false, MaxConcurrency: 1}
++	}
++	concurrency := sharing.MaxLeases
++	if concurrency < 1 {
++		concurrency = 1
++	}
++	return struct {
++		Enabled        bool `json:"enabled"`
++		MaxConcurrency int  `json:"max_concurrency"`
++	}{Enabled: true, MaxConcurrency: concurrency}
++}
++
++func sharedRuntimeRestartPolicy(sharing *PiRuntimeSharing) struct {
++	MaxAttempts      int `json:"max_attempts"`
++	InitialBackoffMS int `json:"initial_backoff_ms"`
++	MaxBackoffMS     int `json:"max_backoff_ms"`
++} {
++	if sharing == nil {
++		return struct {
++			MaxAttempts      int `json:"max_attempts"`
++			InitialBackoffMS int `json:"initial_backoff_ms"`
++			MaxBackoffMS     int `json:"max_backoff_ms"`
++		}{MaxAttempts: 0, InitialBackoffMS: 1000, MaxBackoffMS: 1000}
++	}
++	initial := sharing.RestartInitialBackoffSeconds * 1000
++	if initial < 1 {
++		initial = 1
++	}
++	max := sharing.RestartMaxBackoffSeconds * 1000
++	if max < initial {
++		max = initial
++	}
++	return struct {
++		MaxAttempts      int `json:"max_attempts"`
++		InitialBackoffMS int `json:"initial_backoff_ms"`
++		MaxBackoffMS     int `json:"max_backoff_ms"`
++	}{MaxAttempts: sharing.RestartLimit, InitialBackoffMS: initial, MaxBackoffMS: max}
++}
+diff --git a/tools/agents-infra/internal/infra/agents_management_engine_reader_test.go b/tools/agents-infra/internal/infra/agents_management_engine_reader_test.go
+new file mode 100644
+index 0000000..e2ed2d9
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_engine_reader_test.go
+@@ -0,0 +1,167 @@
++package infra
++
++import (
++	"testing"
++	"time"
++
++	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
++)
++
++func goodSharedRuntimeStatusFixture() SharedRuntimeStatus {
++	bytesValue := uint64(4096)
++	return SharedRuntimeStatus{
++		Broker: SharedRuntimeBrokerStatus{State: "serving"},
++		Resources: SharedRuntimeResourceStatus{
++			State:             SharedRuntimeResourceHealthy,
++			LoadedModelMemory: SharedRuntimeLoadedModelMemoryStatus{State: SharedRuntimeMemoryHealthy, Bytes: &bytesValue},
++			Inference:         SharedRuntimeInferenceStatus{State: SharedRuntimeInferenceIdle},
++		},
++	}
++}
++
++func goodSharedRuntimeProfileFixture() PiProfile {
++	return PiProfile{
++		Reasoning: true,
++		Runtime: PiRuntime{
++			Executable:    "/opt/agents-infra/bin/mlx-server",
++			Argv:          []string{"--model", "/models/weights", "--ctx-size", "4096"},
++			ReadinessPath: "/models",
++			Sharing: &PiRuntimeSharing{
++				Mode: "shared", MaxLeases: 4,
++				RestartLimit: 3, RestartInitialBackoffSeconds: 1, RestartMaxBackoffSeconds: 4,
++			},
++		},
++	}
++}
++
++// sanitizedEngineFactsFromSharedRuntimeStatus is the pure mapping the real
++// SharedRuntimeSanitizedEngineObservationReader delegates to after a live
++// status read. This proves the mapping itself satisfies the exact upstream
++// contract, independent of transport.
++func TestSharedRuntimeEngineFactsSatisfyUpstreamContract(t *testing.T) {
++	facts, err := sanitizedEngineFactsFromSharedRuntimeStatus(goodSharedRuntimeStatusFixture(), goodSharedRuntimeProfileFixture())
++	if err != nil {
++		t.Fatalf("sanitizedEngineFactsFromSharedRuntimeStatus: %v", err)
++	}
++	if len(facts) != len(inferenceengine.MeasuredFacts()) {
++		t.Fatalf("fact count = %d, want %d", len(facts), len(inferenceengine.MeasuredFacts()))
++	}
++	readings := make([]inferenceengine.Reading, 0, len(facts))
++	for _, fact := range facts {
++		var outcome inferenceengine.ReadOutcome
++		switch fact.Outcome {
++		case inferenceengine.OutcomeObservedValue:
++			outcome = inferenceengine.ReadValue(fact.Value)
++		case inferenceengine.OutcomeObservedAbsent:
++			outcome = inferenceengine.ReadAbsent()
++		default:
++			outcome = inferenceengine.ReadFailure(fact.Cause, fact.Detail)
++		}
++		readings = append(readings, inferenceengine.NewReading(fact.Fact, outcome))
++	}
++	if _, err := inferenceengine.ValidateReadings("mlx", inferenceengine.EngineKindNativeTransformer, readings); err != nil {
++		t.Fatalf("ValidateReadings rejected the real mapping: %v", err)
++	}
++}
++
++// Negative: a profile that never requests reasoning must not fabricate a
++// reasoning-stream-field value.
++func TestSharedRuntimeEngineFactsReportReasoningStreamFieldAbsentWhenNotRequested(t *testing.T) {
++	profile := goodSharedRuntimeProfileFixture()
++	profile.Reasoning = false
++	facts, err := sanitizedEngineFactsFromSharedRuntimeStatus(goodSharedRuntimeStatusFixture(), profile)
++	if err != nil {
++		t.Fatalf("sanitizedEngineFactsFromSharedRuntimeStatus: %v", err)
++	}
++	for _, fact := range facts {
++		if fact.Fact == inferenceengine.FactReasoningStreamField {
++			if fact.Outcome != inferenceengine.OutcomeObservedAbsent {
++				t.Fatalf("reasoning-stream-field = %#v, want observed-absent", fact)
++			}
++			return
++		}
++	}
++	t.Fatal("reasoning-stream-field fact missing")
++}
++
++// Negative: memory accounting can only be an ObservedValue when the live
++// broker actually measured resident bytes. A disabled/unknown resource
++// policy must refuse the whole observation rather than invent a byte count.
++func TestSharedRuntimeEngineFactsRefuseWhenMemoryIsNotMeasured(t *testing.T) {
++	report := goodSharedRuntimeStatusFixture()
++	report.Resources.LoadedModelMemory = SharedRuntimeLoadedModelMemoryStatus{State: SharedRuntimeMemoryUnknown, Reason: "resource_pressure_disabled"}
++	if _, err := sanitizedEngineFactsFromSharedRuntimeStatus(report, goodSharedRuntimeProfileFixture()); err == nil {
++		t.Fatal("unmeasured loaded-model memory was admitted as an observed fact")
++	}
++}
++
++// Negative: unknown inference activity must refuse rather than guess busy or
++// idle.
++func TestSharedRuntimeEngineFactsRefuseWhenInferenceActivityIsNotMeasured(t *testing.T) {
++	report := goodSharedRuntimeStatusFixture()
++	report.Resources.Inference = SharedRuntimeInferenceStatus{State: SharedRuntimeInferenceUnknown, Reason: "unavailable"}
++	if _, err := sanitizedEngineFactsFromSharedRuntimeStatus(report, goodSharedRuntimeProfileFixture()); err == nil {
++		t.Fatal("unmeasured inference activity was admitted as an observed fact")
++	}
++}
++
++// Negative: a profile whose runtime argv never names an absolute --model
++// path must refuse the weight-artifact fact rather than invent one.
++func TestSharedRuntimeEngineFactsRefuseWhenNoAbsoluteModelPathIsConfigured(t *testing.T) {
++	profile := goodSharedRuntimeProfileFixture()
++	profile.Runtime.Argv = []string{"--ctx-size", "4096"}
++	if _, err := sanitizedEngineFactsFromSharedRuntimeStatus(goodSharedRuntimeStatusFixture(), profile); err == nil {
++		t.Fatal("missing --model argv was admitted as a weight artifact")
++	}
++}
++
++// A GGUF weight path must select mmap-aware memory accounting to satisfy the
++// upstream cross-fact invariant, never resident-bytes.
++func TestSharedRuntimeEngineFactsSelectMMapAwareAccountingForGGUF(t *testing.T) {
++	profile := goodSharedRuntimeProfileFixture()
++	profile.Runtime.Argv = []string{"--model", "/models/weights.gguf"}
++	facts, err := sanitizedEngineFactsFromSharedRuntimeStatus(goodSharedRuntimeStatusFixture(), profile)
++	if err != nil {
++		t.Fatalf("sanitizedEngineFactsFromSharedRuntimeStatus: %v", err)
++	}
++	readings := make([]inferenceengine.Reading, 0, len(facts))
++	for _, fact := range facts {
++		if fact.Fact == inferenceengine.FactWeightArtifact && fact.Outcome != inferenceengine.OutcomeObservedValue {
++			t.Fatalf("weight artifact = %#v", fact)
++		}
++		var outcome inferenceengine.ReadOutcome
++		if fact.Outcome == inferenceengine.OutcomeObservedAbsent {
++			outcome = inferenceengine.ReadAbsent()
++		} else {
++			outcome = inferenceengine.ReadValue(fact.Value)
++		}
++		readings = append(readings, inferenceengine.NewReading(fact.Fact, outcome))
++	}
++	if _, err := inferenceengine.ValidateReadings("mlx", inferenceengine.EngineKindNativeTransformer, readings); err != nil {
++		t.Fatalf("ValidateReadings rejected the GGUF mapping: %v", err)
++	}
++}
++
++// The reader must refuse before ever deriving facts when Process B has not
++// been attested as serving and ready, rather than deriving facts from a
++// broker report it cannot trust.
++func TestSharedRuntimeAttestedAndReadyRefusesEveryUntrustedShape(t *testing.T) {
++	now := time.Now()
++	tests := []struct {
++		name   string
++		report SharedRuntimeStatus
++		want   bool
++	}{
++		{"broker absent", SharedRuntimeStatus{Broker: SharedRuntimeBrokerStatus{State: "absent"}, LastReadinessMatch: &now}, false},
++		{"broker starting", SharedRuntimeStatus{Broker: SharedRuntimeBrokerStatus{State: "starting"}, LastReadinessMatch: &now}, false},
++		{"serving without readiness match", SharedRuntimeStatus{Broker: SharedRuntimeBrokerStatus{State: "serving"}}, false},
++		{"serving and ready", SharedRuntimeStatus{Broker: SharedRuntimeBrokerStatus{State: "serving"}, LastReadinessMatch: &now}, true},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			if got := sharedRuntimeAttestedAndReady(test.report); got != test.want {
++				t.Fatalf("sharedRuntimeAttestedAndReady = %v, want %v", got, test.want)
++			}
++		})
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/agents_management_external_test.go b/tools/agents-infra/internal/infra/agents_management_external_test.go
+new file mode 100644
+index 0000000..fa72259
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_external_test.go
+@@ -0,0 +1,32 @@
++package infra_test
++
++import (
++	"context"
++
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
++)
++
++// This external-package declaration intentionally compiles against the exact
++// accepted public candidate. It prevents tests from leaning on internal or
++// copied observer/turn types.
++var (
++	_ vendorplugin.EngineObservationAdapter = externalAdapter{}
++	_                                       = vendorplugin.NewRegistryWithEngineObservationAdapters
++	_                                       = managementpi.ValidateTurnResult
++	_                                       = managementpi.TurnResultInput{
++		Exit:         managementpi.ProcessAExit{Code: 0},
++		Intervention: managementpi.TurnInterventionNone,
++		Cleanup:      managementpi.ProcessACleanupNotRequired,
++	}
++)
++
++type externalAdapter struct{}
++
++func (externalAdapter) EngineObservationAdapterDeclaration() vendorplugin.EngineObservationAdapterDeclaration {
++	return vendorplugin.EngineObservationAdapterDeclaration{}
++}
++
++func (externalAdapter) ObserveEngine(context.Context, vendorplugin.EngineObservationQuery) (vendorplugin.EngineObservation, error) {
++	return vendorplugin.EngineObservation{}, nil
++}
+diff --git a/tools/agents-infra/internal/infra/agents_management_observer.go b/tools/agents-infra/internal/infra/agents_management_observer.go
+new file mode 100644
+index 0000000..787582a
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_observer.go
+@@ -0,0 +1,134 @@
++package infra
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"time"
++
++	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
++	"github.com/relux-works/skill-agents-management/pkg/plugin"
++	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
++)
++
++const (
++	SanitizedEngineObservationContract      = "agents-infra.sanitized-engine-observation"
++	SanitizedEngineObservationSchemaVersion = 1
++)
++
++// SanitizedEngineFact is one closed inference-engine reading. It carries no
++// process handle, environment value, credential, raw status payload, or
++// lifecycle operation.
++type SanitizedEngineFact struct {
++	Fact    inferenceengine.Fact
++	Outcome inferenceengine.Outcome
++	Value   string
++	Cause   inferenceengine.NotObservedCause
++	Detail  string
++}
++
++// SanitizedEngineObservation is the versioned, value-only handoff from the
++// agents-infra-owned Process-B observation plane to agents-management's
++// immutable registry adapter. Identity is copied, never used to redirect a
++// launch.
++type SanitizedEngineObservation struct {
++	Contract      string
++	SchemaVersion int
++	Engine        plugin.Ref
++	Runtime       vendorplugin.RuntimeID
++	Model         vendorplugin.ModelID
++	Profile       string
++	ObservedAt    time.Time
++	ValidUntil    time.Time
++	Facts         []SanitizedEngineFact
++}
++
++// SanitizedEngineObservationReader performs one bounded, read-only
++// observation. The adapter invokes it exactly once for a BuildLaunch call.
++type SanitizedEngineObservationReader interface {
++	ReadSanitizedEngineObservation(context.Context, vendorplugin.EngineObservationQuery) (SanitizedEngineObservation, error)
++}
++
++type SanitizedEngineObservationReaderFunc func(context.Context, vendorplugin.EngineObservationQuery) (SanitizedEngineObservation, error)
++
++func (f SanitizedEngineObservationReaderFunc) ReadSanitizedEngineObservation(ctx context.Context, query vendorplugin.EngineObservationQuery) (SanitizedEngineObservation, error) {
++	return f(ctx, query)
++}
++
++// SanitizedEngineObservationAdapter is the concrete agents-infra adapter that
++// the trusted assembly registers for its configured inference engine. Engine
++// identity arrives as injected data, never as a literal on this launch path,
++// so the adapter carries no runtime, model, or engine special case.
++// Process-B ownership remains outside this type; it can only ask its injected
++// reader for one bounded sanitized value.
++type SanitizedEngineObservationAdapter struct {
++	engine plugin.Ref
++	reader SanitizedEngineObservationReader
++}
++
++func NewSanitizedEngineObservationAdapter(engine plugin.Ref, reader SanitizedEngineObservationReader) (*SanitizedEngineObservationAdapter, error) {
++	if engine.ID == "" || engine.Kind != inferenceengine.Kind {
++		return nil, fmt.Errorf("agents-infra: invalid inference-engine declaration %#v", engine)
++	}
++	if reader == nil {
++		return nil, errors.New("agents-infra: sanitized engine observation reader is required")
++	}
++	return &SanitizedEngineObservationAdapter{engine: engine, reader: reader}, nil
++}
++
++func (a *SanitizedEngineObservationAdapter) EngineObservationAdapterDeclaration() vendorplugin.EngineObservationAdapterDeclaration {
++	return vendorplugin.EngineObservationAdapterDeclaration{
++		Contract:       vendorplugin.EngineObservationAdapterContract,
++		SchemaVersion:  vendorplugin.EngineObservationAdapterSchemaVersion,
++		Engine:         a.engine,
++		EngineKind:     inferenceengine.EngineKindNativeTransformer,
++		EngineContract: inferenceengine.ContractVersion,
++	}
++}
++
++func (a *SanitizedEngineObservationAdapter) ObserveEngine(ctx context.Context, query vendorplugin.EngineObservationQuery) (vendorplugin.EngineObservation, error) {
++	if err := ctx.Err(); err != nil {
++		return vendorplugin.EngineObservation{}, err
++	}
++	snapshot, err := a.reader.ReadSanitizedEngineObservation(ctx, query)
++	if err != nil {
++		return vendorplugin.EngineObservation{}, err
++	}
++	if err := ctx.Err(); err != nil {
++		return vendorplugin.EngineObservation{}, err
++	}
++
++	readings := make([]inferenceengine.Reading, 0, len(snapshot.Facts))
++	for _, fact := range snapshot.Facts {
++		var outcome inferenceengine.ReadOutcome
++		switch fact.Outcome {
++		case inferenceengine.OutcomeObservedValue:
++			outcome = inferenceengine.ReadValue(fact.Value)
++		case inferenceengine.OutcomeObservedAbsent:
++			outcome = inferenceengine.ReadAbsent()
++		case inferenceengine.OutcomeNotObserved:
++			outcome = inferenceengine.ReadFailure(fact.Cause, fact.Detail)
++		default:
++			outcome = inferenceengine.ReadFailure(inferenceengine.NotObservedMalformed, "unknown sanitized outcome")
++		}
++		readings = append(readings, inferenceengine.NewReading(fact.Fact, outcome))
++	}
++
++	contract := vendorplugin.EngineObservationAdapterContract
++	schema := vendorplugin.EngineObservationAdapterSchemaVersion
++	if snapshot.Contract != SanitizedEngineObservationContract || snapshot.SchemaVersion != SanitizedEngineObservationSchemaVersion {
++		contract = snapshot.Contract
++		schema = snapshot.SchemaVersion
++	}
++	return vendorplugin.EngineObservation{
++		Contract:      contract,
++		SchemaVersion: schema,
++		Engine:        snapshot.Engine,
++		Runtime:       snapshot.Runtime,
++		Model:         snapshot.Model,
++		Profile:       snapshot.Profile,
++		ObservedAt:    snapshot.ObservedAt,
++		ValidUntil:    snapshot.ValidUntil,
++		Readings:      readings,
++	}, nil
++}
+diff --git a/tools/agents-infra/internal/infra/agents_management_process_a.go b/tools/agents-infra/internal/infra/agents_management_process_a.go
+new file mode 100644
+index 0000000..b686bca
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_process_a.go
+@@ -0,0 +1,129 @@
++package infra
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"io"
++	"os/exec"
++	"sync"
++	"time"
++
++	"github.com/relux-works/skill-agents-management/pkg/agentic"
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
++)
++
++const processACleanupTimeout = 5 * time.Second
++
++type ProcessATurnRunner interface {
++	RunProcessATurn(context.Context, agentic.Plan) (managementpi.TurnResultInput, error)
++}
++
++type OSProcessATurnRunner struct{}
++
++// BuildAndRunPiTurn is the production consumer boundary. It obtains the exact
++// Process-A plan through vendorplugin.BuildLaunch, waits for the actual child,
++// and delegates every schema-1 decision to the sole upstream classifier.
++func BuildAndRunPiTurn(ctx context.Context, registry *vendorplugin.Registry, request vendorplugin.SpawnRequest, runner ProcessATurnRunner) (managementpi.TurnResult, error) {
++	plan, err := vendorplugin.BuildLaunch(ctx, registry, request, agentic.LaunchModeExec)
++	if err != nil {
++		return managementpi.TurnResult{}, err
++	}
++	if runner == nil {
++		runner = OSProcessATurnRunner{}
++	}
++	input, err := runner.RunProcessATurn(ctx, plan)
++	if err != nil {
++		return managementpi.TurnResult{}, err
++	}
++	return managementpi.ValidateTurnResult(input)
++}
++
++func (OSProcessATurnRunner) RunProcessATurn(ctx context.Context, plan agentic.Plan) (managementpi.TurnResultInput, error) {
++	if err := ctx.Err(); err != nil {
++		return managementpi.TurnResultInput{}, err
++	}
++	command := exec.Command(plan.Binary, plan.Argv...)
++	command.Dir = plan.WorkDir
++	command.Env = append([]string(nil), plan.Env...)
++	if plan.Stdin.Attached {
++		command.Stdin = bytes.NewReader(append([]byte(nil), plan.Stdin.Bytes...))
++	}
++	stdout := newBoundedProcessAStdout(managementpi.TurnResultMaxStdoutBytes)
++	command.Stdout = stdout
++	command.Stderr = io.Discard
++	configureProcessACommand(command)
++	if err := command.Start(); err != nil {
++		return managementpi.TurnResultInput{}, err
++	}
++
++	waited := make(chan error, 1)
++	go func() { waited <- command.Wait() }()
++	waitErr, intervention, cleanup := waitForProcessA(ctx, command, waited)
++	return managementpi.TurnResultInput{
++		Stdout:          stdout.Bytes(),
++		StdoutTruncated: stdout.Truncated(),
++		Exit:            processAExit(waitErr),
++		Intervention:    intervention,
++		Cleanup:         cleanup,
++	}, nil
++}
++
++func waitForProcessA(ctx context.Context, command *exec.Cmd, waited <-chan error) (error, managementpi.TurnIntervention, managementpi.ProcessACleanupOutcome) {
++	select {
++	case err := <-waited:
++		return err, managementpi.TurnInterventionNone, managementpi.ProcessACleanupNotRequired
++	case <-ctx.Done():
++		select {
++		case err := <-waited:
++			return err, managementpi.TurnInterventionNone, managementpi.ProcessACleanupNotRequired
++		default:
++		}
++		intervention := managementpi.TurnInterventionCancel
++		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
++			intervention = managementpi.TurnInterventionDeadline
++		}
++		waitErr, cleanup := stopProcessA(command, waited, processACleanupTimeout)
++		return waitErr, intervention, cleanup
++	}
++}
++
++type boundedProcessAStdout struct {
++	mu        sync.Mutex
++	limit     int
++	data      []byte
++	truncated bool
++}
++
++func newBoundedProcessAStdout(limit int) *boundedProcessAStdout {
++	return &boundedProcessAStdout{limit: limit, data: make([]byte, 0, limit)}
++}
++
++func (b *boundedProcessAStdout) Write(p []byte) (int, error) {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	remaining := b.limit - len(b.data)
++	if remaining > 0 {
++		if remaining > len(p) {
++			remaining = len(p)
++		}
++		b.data = append(b.data, p[:remaining]...)
++	}
++	if remaining < len(p) {
++		b.truncated = true
++	}
++	return len(p), nil
++}
++
++func (b *boundedProcessAStdout) Bytes() []byte {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return append([]byte(nil), b.data...)
++}
++
++func (b *boundedProcessAStdout) Truncated() bool {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return b.truncated
++}
+diff --git a/tools/agents-infra/internal/infra/agents_management_process_a_posix.go b/tools/agents-infra/internal/infra/agents_management_process_a_posix.go
+new file mode 100644
+index 0000000..6b832fe
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_process_a_posix.go
+@@ -0,0 +1,55 @@
++//go:build !windows
++
++package infra
++
++import (
++	"errors"
++	"os/exec"
++	"syscall"
++	"time"
++
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++)
++
++func configureProcessACommand(command *exec.Cmd) {
++	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
++}
++
++func processAExit(err error) managementpi.ProcessAExit {
++	exit := managementpi.ProcessAExit{}
++	if err == nil {
++		return exit
++	}
++	var exitErr *exec.ExitError
++	if !errors.As(err, &exitErr) {
++		exit.Code = -1
++		return exit
++	}
++	exit.Code = exitErr.ExitCode()
++	if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
++		exit.Signaled = status.Signaled()
++	}
++	return exit
++}
++
++func stopProcessA(command *exec.Cmd, waited <-chan error, timeout time.Duration) (error, managementpi.ProcessACleanupOutcome) {
++	if command.Process == nil {
++		return nil, managementpi.ProcessACleanupFailed
++	}
++	_ = syscall.Kill(-command.Process.Pid, syscall.SIGTERM)
++	timer := time.NewTimer(timeout)
++	defer timer.Stop()
++	select {
++	case err := <-waited:
++		return err, managementpi.ProcessACleanupSucceeded
++	case <-timer.C:
++	}
++	_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
++	timer.Reset(timeout)
++	select {
++	case err := <-waited:
++		return err, managementpi.ProcessACleanupSucceeded
++	case <-timer.C:
++		return nil, managementpi.ProcessACleanupFailed
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/agents_management_process_a_windows.go b/tools/agents-infra/internal/infra/agents_management_process_a_windows.go
+new file mode 100644
+index 0000000..d995a77
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_process_a_windows.go
+@@ -0,0 +1,36 @@
++//go:build windows
++
++package infra
++
++import (
++	"errors"
++	"os/exec"
++	"time"
++
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++)
++
++func configureProcessACommand(*exec.Cmd) {}
++
++func processAExit(err error) managementpi.ProcessAExit {
++	if err == nil {
++		return managementpi.ProcessAExit{}
++	}
++	var exitErr *exec.ExitError
++	if errors.As(err, &exitErr) {
++		return managementpi.ProcessAExit{Code: exitErr.ExitCode()}
++	}
++	return managementpi.ProcessAExit{Code: -1}
++}
++
++func stopProcessA(command *exec.Cmd, waited <-chan error, timeout time.Duration) (error, managementpi.ProcessACleanupOutcome) {
++	if command.Process == nil || command.Process.Kill() != nil {
++		return nil, managementpi.ProcessACleanupFailed
++	}
++	select {
++	case err := <-waited:
++		return err, managementpi.ProcessACleanupSucceeded
++	case <-time.After(timeout):
++		return nil, managementpi.ProcessACleanupFailed
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/agents_management_registry.go b/tools/agents-infra/internal/infra/agents_management_registry.go
+new file mode 100644
+index 0000000..59e3d39
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agents_management_registry.go
+@@ -0,0 +1,145 @@
++package infra
++
++import (
++	"errors"
++	"fmt"
++
++	"github.com/relux-works/skill-agents-management/pkg/agentic"
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
++	"github.com/relux-works/skill-agents-management/pkg/localruntime"
++	"github.com/relux-works/skill-agents-management/pkg/plugin"
++	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
++	localmodels "github.com/relux-works/skill-agents-management/pkg/vendorplugin/vendors/local-models"
++)
++
++const defaultPiInferenceEngineID plugin.ID = "mlx"
++
++// PiPluginGraph is the trusted assembly result consumed by BuildLaunch. The
++// registry owns the adapter; launch callers receive no observation setter or
++// per-request evidence field.
++type PiPluginGraph struct {
++	Registry *vendorplugin.Registry
++	Runtime  vendorplugin.RuntimeID
++	Model    vendorplugin.ModelID
++	Profile  string
++	Engine   plugin.Ref
++}
++
++// BuildPiPluginGraph consumes an already-resolved canonical Pi target. The
++// agents-infra target vendor remains a product label; the plugin-plane vendor
++// is always local-models, and the registered agentic system is always Pi.
++func BuildPiPluginGraph(project string, resolved ResolvedCanonicalTarget, status localruntime.StatusReader, observations SanitizedEngineObservationReader) (PiPluginGraph, error) {
++	if status == nil {
++		return PiPluginGraph{}, errors.New("agents-infra: local runtime status reader is required")
++	}
++	if resolved.Target.Environment != "pi" || resolved.Target.Profile == nil || resolved.Profile == nil {
++		return PiPluginGraph{}, errors.New("agents-infra: canonical target is not a resolved Pi profile")
++	}
++	runtimeID, err := vendorplugin.NormalizeRuntimeID(resolved.Target.Name)
++	if err != nil {
++		return PiPluginGraph{}, fmt.Errorf("agents-infra: canonical target cannot name a plugin runtime: %w", err)
++	}
++	modelID := vendorplugin.ModelID(resolved.Target.Model)
++	if err := vendorplugin.ValidateModelID(modelID); err != nil {
++		return PiPluginGraph{}, fmt.Errorf("agents-infra: canonical target cannot name a plugin model: %w", err)
++	}
++	profileName := *resolved.Target.Profile
++	engine := plugin.Ref{ID: defaultPiInferenceEngineID, Kind: inferenceengine.Kind}
++	adapter, err := NewSanitizedEngineObservationAdapter(engine, observations)
++	if err != nil {
++		return PiPluginGraph{}, err
++	}
++
++	systems := agentic.NewRegistry()
++	if err := systems.Register(managementpi.New(status)); err != nil {
++		return PiPluginGraph{}, fmt.Errorf("agents-infra: register Pi system plugin: %w", err)
++	}
++	registry, err := vendorplugin.NewRegistryWithEngineObservationAdapters(systems, adapter)
++	if err != nil {
++		return PiPluginGraph{}, fmt.Errorf("agents-infra: construct vendor registry: %w", err)
++	}
++	if err := registry.RegisterPlugin(inferenceengine.NewConfigured(engine.ID)); err != nil {
++		return PiPluginGraph{}, fmt.Errorf("agents-infra: register inference engine: %w", err)
++	}
++
++	profile := *resolved.Profile
++	config := localmodels.Config{
++		InferenceEngines: []plugin.ID{engine.ID},
++		Runtimes: []localmodels.RuntimeEntry{{
++			ID:     runtimeID,
++			System: "pi",
++			Engine: engine,
++			Models: map[vendorplugin.ModelID]localmodels.ModelEntry{
++				modelID: {
++					Description:         "Local model selected by the canonical agents-infra Pi target",
++					Publisher:           resolved.Target.Vendor,
++					Family:              resolved.Target.Vendor,
++					Lifecycle:           vendorplugin.LifecycleCurrent,
++					ContextWindowTokens: profile.ContextWindow,
++					EffortSupport:       agentic.EffortSupportNone,
++					Engine:              engine,
++					Pointer: localmodels.Pointer{
++						AgentsInfraProject: project,
++						AgentsInfraProfile: profileName,
++					},
++				},
++			},
++		}},
++	}
++	if err := registry.Register(localmodels.New(config, localmodels.WithStatusReader(status))); err != nil {
++		return PiPluginGraph{}, fmt.Errorf("agents-infra: register local-models vendor: %w", err)
++	}
++	if err := registry.DeclareRuntime(vendorplugin.RuntimeDeclaration{
++		ID:     runtimeID,
++		System: "pi",
++		Vendor: localmodels.VendorID,
++		Broker: vendorplugin.BrokerProvenance{
++			Checked: []string{"agents-infra canonical target"},
++			Found:   "resolved canonical Pi target",
++		},
++		Engine: engine,
++	}); err != nil {
++		return PiPluginGraph{}, fmt.Errorf("agents-infra: declare canonical Pi runtime: %w", err)
++	}
++	return PiPluginGraph{Registry: registry, Runtime: runtimeID, Model: modelID, Profile: profileName, Engine: engine}, nil
++}
++
++// ResolvePiPluginGraph resolves the canonical Pi target and assembles the
++// trusted plugin graph for it. A nil status or observations reader is filled
++// with agents-infra's real production reader for that already-resolved
++// profile: localruntime.NewCLIStatusReader for preflight, and
++// SharedRuntimeSanitizedEngineObservationReader for the sanitized engine
++// observation. Tests that need a fake reader still pass one explicitly.
++func ResolvePiPluginGraph(projectDir, homeDir, entrypoint string, status localruntime.StatusReader, observations SanitizedEngineObservationReader) (PiPluginGraph, error) {
++	project, err := CanonicalProjectDir(projectDir)
++	if err != nil {
++		return PiPluginGraph{}, err
++	}
++	resolved, err := ResolveCanonicalTarget(entrypoint, project, homeDir)
++	if err != nil {
++		return PiPluginGraph{}, err
++	}
++	if status == nil {
++		status = localruntime.NewCLIStatusReader()
++	}
++	if observations == nil {
++		if resolved.Profile == nil {
++			return PiPluginGraph{}, errors.New("agents-infra: canonical target has no resolved Pi profile for engine observation")
++		}
++		observations = NewSharedRuntimeSanitizedEngineObservationReader(project, homeDir, "", *resolved.Profile)
++	}
++	return BuildPiPluginGraph(project, resolved, status, observations)
++}
++
++func (g PiPluginGraph) SpawnRequest(prompt []byte, workDir string, environ []string) vendorplugin.SpawnRequest {
++	return vendorplugin.SpawnRequest{
++		Runtime: g.Runtime,
++		Model:   g.Model,
++		Engine:  g.Engine,
++		Prompt:  append([]byte(nil), prompt...),
++		WorkDir: workDir,
++		Profile: g.Profile,
++		Env:     append([]string(nil), environ...),
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/pi_catalog.go b/tools/agents-infra/internal/infra/pi_catalog.go
+index ed0e880..7740507 100644
+--- a/tools/agents-infra/internal/infra/pi_catalog.go
++++ b/tools/agents-infra/internal/infra/pi_catalog.go
+@@ -281,30 +281,6 @@ func classifyPiTreeError(err error) error {
+ 	return piError("pi_execution_identity_mismatch", err)
+ }
+ 
+-func ValidatePiExecutionEnvironment(environ []string) error {
+-	seen := map[string]bool{}
+-	for _, item := range environ {
+-		name, _, ok := strings.Cut(item, "=")
+-		if !ok || name == "" {
+-			return piError("pi_execution_environment_invalid", errors.New("malformed environment entry"))
+-		}
+-		if seen[name] {
+-			return piError("pi_execution_environment_invalid", fmt.Errorf("duplicate environment name %q", name))
+-		}
+-		seen[name] = true
+-		if name == "HF_ENDPOINT" || name == "MODEL_ENDPOINT" || name == "GGML_BACKEND_PATH" || name == "LLAMA_API_KEY" {
+-			return piError("pi_execution_environment_invalid", fmt.Errorf("runtime-affecting environment name %q is denied", name))
+-		}
+-		upper := strings.ToUpper(name)
+-		for _, prefix := range []string{"DYLD_", "LD_", "NODE_", "BUN_", "LLAMA_ARG_"} {
+-			if strings.HasPrefix(upper, prefix) {
+-				return piError("pi_execution_environment_invalid", fmt.Errorf("runtime-affecting environment name %q is denied", name))
+-			}
+-		}
+-	}
+-	return nil
+-}
+-
+ func piIdentityEqual(a, b PiExecutionIdentity) bool {
+ 	return a.Compatibility == b.Compatibility && a.AssetSHA256 == b.AssetSHA256 && a.Host == b.Host && a.ReleaseRoot == b.ReleaseRoot && a.Entrypoint == b.Entrypoint && a.ManifestSHA256 == b.ManifestSHA256 && a.EntrypointSHA256 == b.EntrypointSHA256 && a.FileCount == b.FileCount && a.ObservedState == b.ObservedState && a.PointOfUseRecheck == b.PointOfUseRecheck
+ }
+diff --git a/tools/agents-infra/internal/infra/pi_environment.go b/tools/agents-infra/internal/infra/pi_environment.go
+new file mode 100644
+index 0000000..2991424
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_environment.go
+@@ -0,0 +1,33 @@
++package infra
++
++import (
++	"errors"
++	"fmt"
++	"strings"
++)
++
++// ValidatePiExecutionEnvironment applies the Process-A denial contract on
++// every platform. It never includes the rejected value in its error.
++func ValidatePiExecutionEnvironment(environ []string) error {
++	seen := map[string]bool{}
++	for _, item := range environ {
++		name, _, ok := strings.Cut(item, "=")
++		if !ok || name == "" {
++			return piError("pi_execution_environment_malformed", errors.New("malformed environment entry"))
++		}
++		if seen[name] {
++			return piError("pi_execution_environment_malformed", errors.New("duplicate environment name"))
++		}
++		seen[name] = true
++		if name == "HF_ENDPOINT" || name == "MODEL_ENDPOINT" || name == "GGML_BACKEND_PATH" || name == "LLAMA_API_KEY" {
++			return piError("pi_execution_environment_invalid", fmt.Errorf("runtime-affecting environment name %q is denied", name))
++		}
++		upper := strings.ToUpper(name)
++		for _, prefix := range []string{"DYLD_", "LD_", "NODE_", "BUN_", "LLAMA_ARG_"} {
++			if strings.HasPrefix(upper, prefix) {
++				return piError("pi_execution_environment_invalid", fmt.Errorf("runtime-affecting environment name %q is denied", name))
++			}
++		}
++	}
++	return nil
++}
+diff --git a/tools/agents-infra/internal/infra/pi_platform_windows.go b/tools/agents-infra/internal/infra/pi_platform_windows.go
+index cd40b19..759315d 100644
+--- a/tools/agents-infra/internal/infra/pi_platform_windows.go
++++ b/tools/agents-infra/internal/infra/pi_platform_windows.go
+@@ -39,7 +39,6 @@ type PiExecutionIdentity struct {
+ func VerifyPiExecutionIdentity(string, string) (PiExecutionIdentity, error) {
+ 	return PiExecutionIdentity{}, piError("pi_compatibility_unsupported", errors.New("managed Pi profiles are supported only on darwin/arm64"))
+ }
+-func ValidatePiExecutionEnvironment([]string) error { return nil }
+ 
+ type PiStatePaths struct {
+ 	CanonicalCacheRoot string `json:"canonical_cache_root"`
+diff --git a/tools/agents-infra/internal/infra/pi_shared_engine_observation_darwin_test.go b/tools/agents-infra/internal/infra/pi_shared_engine_observation_darwin_test.go
+new file mode 100644
+index 0000000..0b97903
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_shared_engine_observation_darwin_test.go
+@@ -0,0 +1,221 @@
++//go:build darwin
++
++package infra
++
++import (
++	"context"
++	"fmt"
++	"net"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
++	"github.com/relux-works/skill-agents-management/pkg/plugin"
++	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
++)
++
++// Reviewer findings F1 and F2 (CR-TASK-260830-y6infr-1 revision 1), and F2 of
++// CR-TASK-260830-y6infr-2 revision 2: the concrete SanitizedEngineObservationReader
++// must perform a real bounded read against agents-infra's own Process-B broker,
++// not a self-minted fixture, and the production consumer's Process-A launch must
++// be exercised alongside a real (fake-backed) Process-B lifecycle rather than a
++// marker file or a self-minted observation reader substituted right before the
++// production call. This test drives the real Registry/BuildLaunch/observation
++// path with the real SharedRuntimeSanitizedEngineObservationReader bound to a
++// genuinely attested (test-built, non-live-model) broker whose sanitized facts
++// permit BuildLaunch, then runs BuildAndRunPiTurn with a fake Process A while an
++// independent real Process-A-shaped shared-runtime lease is held concurrently
++// with the pre-existing Process-B peer lease, proving Process-A activity and its
++// own lease acquire/release lifecycle never disturb the independently-held peer
++// lease or the runtime.
++func TestSharedRuntimeEngineObservationReaderReadsRealBrokerAndProcessASpawnsNeverTouchProcessB(t *testing.T) {
++	testRoot, err := os.MkdirTemp("/tmp", "x")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(testRoot) })
++	project := filepath.Join(testRoot, "project")
++	home := filepath.Join(testRoot, "home")
++	cache := filepath.Join(home, "Library", "Caches")
++	for _, directory := range []string{project, cache} {
++		if err := os.MkdirAll(directory, 0o700); err != nil {
++			t.Fatal(err)
++		}
++	}
++	listener, err := net.Listen("tcp4", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	port := listener.Addr().(*net.TCPAddr).Port
++	listener.Close()
++	runtimeExecutable := buildSharedFakeRuntime(t, testRoot)
++	// The weight-artifact fact requires an absolute --model path; the readiness
++	// check only requires the runtime's served id to equal the configured
++	// `model` field, so both are set to the same absolute-path-shaped string.
++	absoluteModelPath := filepath.Join(testRoot, "fixtures", "weights.safetensors")
++	body := validPiProfileWithArgv(t, sharedTestProfileName, runtimeExecutable, port, []string{"serve", "--model", absoluteModelPath}, 8)
++	body = strings.Replace(body, `model = "Model"`, fmt.Sprintf("model = %q", absoluteModelPath), 1)
++	body += fmt.Sprintf(`
++[agents.pi.profiles.%[1]q.runtime.sharing]
++mode = "shared"
++linger_seconds = 0
++max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
++heartbeat_interval_seconds = 1
++lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
++broker_start_timeout_seconds = 40
++resource_pressure_mode = "provider"
++
++[agents.pi.profiles.%[1]q.runtime.sharing.resource_pressure]
++observation_path = "/agents-infra/resources"
++observation_timeout_milliseconds = 2000
++pressure_threshold_bytes = 10_000_000_000
++recovery_threshold_bytes = 8_000_000_000
++eviction_grace_seconds = 0
++pressure_action = "refuse-new-drain-idle"
++unknown_action = "refuse-new"
++busy_action = "observe"
++`, sharedTestProfileName)
++	writePiProjectConfig(t, project, body)
++
++	resolved, err := resolveSharedProfile(project, home, cache, sharedTestProfileName)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	// Establish a real (fake-backed) Process B: a real broker process holding
++	// a real lease against a real, independently launched runtime child.
++	helper := startSharedLeaseHelper(t, project, home, "RUN-observation")
++	t.Cleanup(func() {
++		if helper.command.ProcessState == nil {
++			_ = helper.command.Process.Kill()
++			_ = helper.command.Wait()
++		}
++	})
++
++	preStatus, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: sharedTestProfileName})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if preStatus.Broker.State != "serving" || preStatus.Runtime == nil || preStatus.Runtime.PID != helper.info.RuntimePID || len(preStatus.Leases) != 1 {
++		t.Fatalf("Process B was not attested before the reader ran: %#v", preStatus)
++	}
++
++	// The real reader performs its own bounded read of the same attested
++	// broker. The fake runtime now serves a genuine provider resource
++	// observation, so a real (not fabricated) success is the correct outcome;
++	// the reader must reach the live broker to produce it, and BuildLaunch
++	// below must consume this exact reader rather than a self-minted one.
++	reader := NewSharedRuntimeSanitizedEngineObservationReader(project, home, cache, resolved.Profile)
++	engine := plugin.Ref{ID: "mlx", Kind: inferenceengine.Kind}
++	directObservation, err := reader.ReadSanitizedEngineObservation(context.Background(), vendorplugin.EngineObservationQuery{
++		Engine: engine, Runtime: vendorplugin.RuntimeID(sharedTestProfileName), Model: vendorplugin.ModelID("local-test-model"), Profile: sharedTestProfileName,
++	})
++	if err != nil {
++		t.Fatalf("observation reader refused a genuinely measured broker-backed observation: %v", err)
++	}
++	if directObservation.Contract != SanitizedEngineObservationContract || len(directObservation.Facts) == 0 {
++		t.Fatalf("observation reader returned an incomplete real observation: %#v", directObservation)
++	}
++
++	// Establish a second, independent, real shared-runtime lease against the
++	// same broker, representing the lease a real (non-fake) Process A would
++	// acquire through RunPi's shared-mode path. This is a genuine lease
++	// acquired through the production client, not a fabricated marker.
++	processARunID := "RUN-process-a"
++	processAState, err := ResolvePiClientStatePaths(cache, resolved.Project, resolved.ProfileName, processARunID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := CreatePiStateTree(processAState); err != nil {
++		t.Fatal(err)
++	}
++	processALock, err := AcquirePiProfileLock(processAState)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = processALock.Close() })
++	processALease, err := acquireSharedRuntimeLease(resolved, processAState, processARunID, os.Environ(), nil, nil)
++	if err != nil {
++		t.Fatalf("Process-A-shaped shared-runtime lease acquisition failed: %v", err)
++	}
++	processALeaseMonitor := processALease.monitor()
++	t.Cleanup(func() { processALease.close() })
++
++	duringStatus, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: sharedTestProfileName})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if duringStatus.Broker.State != "serving" || duringStatus.Runtime == nil || duringStatus.Runtime.PID != helper.info.RuntimePID || len(duringStatus.Leases) != 2 {
++		t.Fatalf("Process-A shared-runtime lease was not visible alongside the independently-held Process-B peer lease: %#v", duringStatus)
++	}
++
++	// Drive the real production consumer (fake Process A) concurrently, using
++	// the exact production graph built from the real reader above. This must
++	// never reach, signal, lease, or release the Process B (nor the
++	// independent Process-A-shaped lease) this test is holding.
++	resolvedTarget := ResolvedCanonicalTarget{
++		Target:  ProjectTarget{Name: "qwen-infra", Vendor: "qwen", Environment: "pi", Model: "local-test-model", Profile: &resolved.ProfileName},
++		Profile: &resolved.Profile,
++	}
++	graph, err := BuildPiPluginGraph(project, resolvedTarget, &fakeManagementStatusReader{}, reader)
++	if err != nil {
++		t.Fatalf("BuildPiPluginGraph: %v", err)
++	}
++
++	dir, env := fakeProcessA(t, "printf '%s' '"+okTurnDocument+"'\nexit 0\n")
++	request := graph.SpawnRequest([]byte("prompt"), dir, env)
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	result, err := BuildAndRunPiTurn(ctx, graph.Registry, request, OSProcessATurnRunner{})
++	if err != nil || result.FinalText != "accepted" {
++		t.Fatalf("BuildAndRunPiTurn = %#v, %v", result, err)
++	}
++
++	// Also drive a cancelled turn through the same real production consumer
++	// while Process B and the independent Process-A-shaped lease are still
++	// held, then assert both survived untouched: broker still serving, same
++	// runtime PID, same lease count.
++	cancelDir, cancelEnv := fakeProcessA(t, "sleep 30\n")
++	cancelRequest := graph.SpawnRequest([]byte("prompt"), cancelDir, cancelEnv)
++	cancelCtx, cancelNow := context.WithCancel(context.Background())
++	go func() {
++		time.Sleep(200 * time.Millisecond)
++		cancelNow()
++	}()
++	if _, err := BuildAndRunPiTurn(cancelCtx, graph.Registry, cancelRequest, OSProcessATurnRunner{}); err == nil {
++		t.Fatal("cancelled turn reported success")
++	}
++
++	postRunStatus, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: sharedTestProfileName})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if postRunStatus.Broker.State != "serving" || postRunStatus.Runtime == nil || postRunStatus.Runtime.PID != helper.info.RuntimePID || len(postRunStatus.Leases) != 2 {
++		t.Fatalf("Process B or the independent Process-A-shaped lease was disturbed by Process-A activity: before=%#v after=%#v", duringStatus, postRunStatus)
++	}
++
++	// Release the Process-A-shaped lease and prove only it goes away: the
++	// Process-B peer lease and runtime remain exactly as before. Closing races
++	// the client's own connection teardown against its monitor goroutine (the
++	// same client-initiated-close race the existing subprocess lease helper
++	// avoids by never inspecting its monitor channel after a deliberate
++	// release), so the release is confirmed through broker status instead.
++	processALease.close()
++	<-processALeaseMonitor
++	waitForSharedTest(t, 8*time.Second, func() bool {
++		status, statusErr := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: sharedTestProfileName})
++		return statusErr == nil && status.Broker.State == "serving" && status.Runtime != nil && status.Runtime.PID == helper.info.RuntimePID && len(status.Leases) == 1
++	}, "releasing the Process-A-shaped lease did not leave only the Process-B peer lease")
++
++	helper.release(t)
++}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_integration_test.go b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+index 2b96169..757c33e 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_integration_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+@@ -1044,6 +1044,15 @@ func main() {
+     writer.Header().Set("Content-Type", "application/json")
+     _ = json.NewEncoder(writer).Encode(map[string]any{"object":"list", "data":[]map[string]string{{"id":*model}}})
+   })
++  http.HandleFunc("/agents-infra/resources", func(writer http.ResponseWriter, request *http.Request) {
++    writer.Header().Set("Content-Type", "application/json")
++    _ = json.NewEncoder(writer).Encode(map[string]any{
++      "schema": "agents-infra.pi.shared-runtime.resource-observation.v1",
++      "model": *model,
++      "loaded_model_memory": map[string]any{"state": "observed", "bytes": 123456789},
++      "inference": map[string]any{"state": "idle"},
++    })
++  })
+   if err := http.ListenAndServe(*host+":"+strconv.Itoa(*port), nil); err != nil { panic(err) }
+ }
+ `
+diff --git a/tools/agents-infra/internal/infra/pi_standalone.go b/tools/agents-infra/internal/infra/pi_standalone.go
+index f25d995..ccf54fb 100644
+--- a/tools/agents-infra/internal/infra/pi_standalone.go
++++ b/tools/agents-infra/internal/infra/pi_standalone.go
+@@ -32,9 +32,10 @@ var piStandaloneAllowedTools = map[string]bool{
+ // effective primary managed Pi profile for the direct pi-infra command.
+ // ClientRunID is an internal test/lifecycle seam and is never caller CLI input.
+ type PiStandaloneRequest struct {
+-	Prompt      string
+-	Entrypoint  string
+-	ClientRunID string
++	Prompt          string
++	Entrypoint      string
++	ExpectedProfile string
++	ClientRunID     string
+ }
+ 
+ type PiStandaloneToolAuthorization struct {
+@@ -145,8 +146,8 @@ func validatePiStandaloneRequest(request PiStandaloneRequest, callerArgs []strin
+ 	if strings.TrimSpace(request.Prompt) == "" {
+ 		return piError("pi_standalone_prompt_invalid", errors.New("standalone Pi prompt must not be empty"))
+ 	}
+-	if strings.IndexByte(request.Prompt, 0) >= 0 || strings.HasPrefix(request.Prompt, "-") || strings.HasPrefix(request.Prompt, "@") {
+-		return piError("pi_standalone_prompt_invalid", errors.New("standalone Pi prompt cannot be represented as a safe pinned Pi operand"))
++	if strings.IndexByte(request.Prompt, 0) >= 0 {
++		return piError("pi_standalone_prompt_invalid", errors.New("standalone Pi prompt cannot contain NUL"))
+ 	}
+ 	if request.Entrypoint != "" && request.Entrypoint != "qwen-infra" {
+ 		return piError("pi_standalone_entrypoint_invalid", errors.New("standalone Pi admits only the qwen-infra canonical entrypoint"))
+@@ -162,6 +163,7 @@ func BuildStandalonePiArguments(callerArgs []string, profile PiProfile, policy P
+ 	if err := validatePiStandalonePolicy(policy); err != nil {
+ 		return PiArgumentPlan{}, err
+ 	}
++	const promptSlot = "agents-infra-standalone-prompt-slot"
+ 	managed := []string{
+ 		"--no-approve",
+ 		"--no-extensions",
+@@ -169,15 +171,16 @@ func BuildStandalonePiArguments(callerArgs []string, profile PiProfile, policy P
+ 		"--mode", "json",
+ 		"--no-session",
+ 		"--print",
+-		"--", prompt,
++		"--", promptSlot,
+ 	}
+ 	plan, err := BuildManagedPiArguments(managed, "", profile)
+ 	if err != nil {
+ 		return PiArgumentPlan{}, err
+ 	}
+-	if len(plan.DiagnosticArgv) == 0 || plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] != prompt {
++	if len(plan.Argv) == 0 || len(plan.DiagnosticArgv) == 0 || plan.Argv[len(plan.Argv)-1] != promptSlot || plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] != promptSlot {
+ 		return PiArgumentPlan{}, piError("pi_standalone_argument_invariant_failed", errors.New("standalone Pi prompt operand was not composed canonically"))
+ 	}
++	plan.Argv = append(plan.Argv[:len(plan.Argv)-1], "--", prompt)
+ 	plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] = "<prompt>"
+ 	return plan, nil
+ }
+@@ -218,12 +221,20 @@ func resolvePiStandaloneSelection(composite compositeProjectConfig, request PiSt
+ 				Err:         errors.New("standalone Pi requires a canonical Pi target"),
+ 			}
+ 		}
+-		return *resolved.Target.Profile, resolved.Target.Source, primarySessionTargetFromResolution(resolved), nil
++		selected := *resolved.Target.Profile
++		if request.ExpectedProfile != "" && request.ExpectedProfile != selected {
++			return "", "", nil, piError("pi_profile_mismatch", errors.New("standalone Pi profile assertion does not match the resolved profile"))
++		}
++		return selected, resolved.Target.Source, primarySessionTargetFromResolution(resolved), nil
+ 	}
+ 	if !composite.PiPrimarySession.Profile.Present {
+ 		return "", "", nil, piError("unknown_pi_profile", errors.New("standalone pi-infra requires an effective managed primary Pi profile"))
+ 	}
+-	return composite.PiPrimarySession.Profile.Value, composite.PiPrimarySession.Profile.Source, nil, nil
++	selected := composite.PiPrimarySession.Profile.Value
++	if request.ExpectedProfile != "" && request.ExpectedProfile != selected {
++		return "", "", nil, piError("pi_profile_mismatch", errors.New("standalone Pi profile assertion does not match the resolved profile"))
++	}
++	return selected, composite.PiPrimarySession.Profile.Source, nil, nil
+ }
+ 
+ func BuildPiStandaloneLaunchPlan(projectDir, homeDir string, request PiStandaloneRequest, producer ChildLaunchCompositionProducer, lookPath func(string) (string, error)) (PiStandaloneLaunchPlan, error) {
+diff --git a/tools/agents-infra/internal/infra/pi_standalone_test.go b/tools/agents-infra/internal/infra/pi_standalone_test.go
+index 599d544..a61e3b2 100644
+--- a/tools/agents-infra/internal/infra/pi_standalone_test.go
++++ b/tools/agents-infra/internal/infra/pi_standalone_test.go
+@@ -64,6 +64,7 @@ func TestBuildStandalonePiArgumentsOwnsExactAuthorizationAndMediumReasoning(t *t
+ 		"--mode", "json",
+ 		"--no-session",
+ 		"--print",
++		"--",
+ 		"write the requested sentinel",
+ 	}
+ 	if !reflect.DeepEqual(plan.Argv, want) {
+@@ -163,13 +164,19 @@ func TestRunPiStandaloneMalformedPolicyFailsClosedBeforeExecutableLookup(t *test
+ 	}
+ }
+ 
+-func TestStandalonePiPromptCannotBecomeAFlagOrFileOperand(t *testing.T) {
++func TestStandalonePiNamedPromptAllowsLeadingFlagAndFileMarkers(t *testing.T) {
+ 	profile := PiProfile{Provider: "local-provider", Model: "Model", Thinking: "medium"}
+ 	policy := PiStandaloneSessionPolicy{
+ 		YoloMode:      PiPolicyBoolValue{Value: true, Present: true},
+ 		ToolAllowlist: PiPolicyStringListValue{Value: []string{"read"}, Present: true},
+ 	}
+-	for _, prompt := range []string{"--approve", "@/tmp/injected-prompt", "safe\x00suffix", "   "} {
++	for _, prompt := range []string{"--approve", "@/tmp/injected-prompt"} {
++		plan, err := BuildStandalonePiArguments(nil, profile, policy, prompt)
++		if err != nil || plan.Argv[len(plan.Argv)-1] != prompt || plan.Argv[len(plan.Argv)-2] != "--" {
++			t.Fatalf("named prompt %q was not preserved behind --: plan=%#v err=%v", prompt, plan, err)
++		}
++	}
++	for _, prompt := range []string{"safe\x00suffix", "   "} {
+ 		if _, err := BuildStandalonePiArguments(nil, profile, policy, prompt); piErrorCode(err) != "pi_standalone_prompt_invalid" {
+ 			t.Fatalf("prompt %q was admitted: %v", prompt, err)
+ 		}
+diff --git a/tools/agents-infra/internal/infra/pi_test.go b/tools/agents-infra/internal/infra/pi_test.go
+index 3424d9c..e3f253f 100644
+--- a/tools/agents-infra/internal/infra/pi_test.go
++++ b/tools/agents-infra/internal/infra/pi_test.go
+@@ -1052,7 +1052,10 @@ func TestPiMuseDiagnosticsRemainConfiguredUnverified(t *testing.T) {
+ }
+ 
+ func TestPiExecutionEnvironmentRejectsLoaderNamesAndDuplicates(t *testing.T) {
+-	for _, env := range [][]string{{"PATH=/bin", "PATH=/usr/bin"}, {"DYLD_INSERT_LIBRARIES=x"}, {"NODE_OPTIONS=x"}, {"BUN_CONFIG=x"}, {"LD_PRELOAD=x"}} {
++	if err := ValidatePiExecutionEnvironment([]string{"PATH=/bin", "PATH=/usr/bin"}); piErrorCode(err) != "pi_execution_environment_malformed" {
++		t.Fatalf("duplicate environment err=%v", err)
++	}
++	for _, env := range [][]string{{"DYLD_INSERT_LIBRARIES=x"}, {"NODE_OPTIONS=x"}, {"BUN_CONFIG=x"}, {"LD_PRELOAD=x"}} {
+ 		if err := ValidatePiExecutionEnvironment(env); piErrorCode(err) != "pi_execution_environment_invalid" {
+ 			t.Fatalf("env=%q err=%v", env, err)
+ 		}
+@@ -1178,7 +1181,11 @@ func TestPiLaunchRejectsLoaderAndInboundPiEnvironmentBeforeState(t *testing.T) {
+ 			project, home, cache := t.TempDir(), t.TempDir(), t.TempDir()
+ 			writePiProjectConfig(t, project, validPiProfileTOML("profile", "/bin/echo", 18030, false))
+ 			err := RunPi(RunPiOptions{ProjectDir: project, HomeDir: home, CacheRoot: cache, Environ: env, LookPath: func(string) (string, error) { return filepath.Join(piRoot, "pi"), nil }})
+-			if piErrorCode(err) != "pi_execution_environment_invalid" {
++			wantCode := "pi_execution_environment_invalid"
++			if name == "duplicate" {
++				wantCode = "pi_execution_environment_malformed"
++			}
++			if piErrorCode(err) != wantCode {
+ 				t.Fatalf("production environment shape=%s err=%v", name, err)
+ 			}
+ 			if strings.Contains(err.Error(), "secret-model-path") || strings.Contains(err.Error(), "secret-context-size") || strings.Contains(err.Error(), "secret-hf-origin") || strings.Contains(err.Error(), "secret-model-origin") || strings.Contains(err.Error(), "secret/backend/path") || strings.Contains(err.Error(), "secret-llama-api-key") {
+diff --git a/tools/agents-infra/internal/infra/pi_turn_result.go b/tools/agents-infra/internal/infra/pi_turn_result.go
+new file mode 100644
+index 0000000..b4f6c0d
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_turn_result.go
+@@ -0,0 +1,333 @@
++package infra
++
++import (
++	"bufio"
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"unicode/utf8"
++
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++)
++
++const maxRawPiTurnBytes = 16 << 20
++
++type PiTurnProcessAError struct {
++	code managementpi.TurnResultCode
++	exit int
++}
++
++func WritePiTurnRefusal(output io.Writer, code managementpi.TurnResultCode) error {
++	document := piTurnResultDocument{
++		Contract:      managementpi.TurnResultContract,
++		SchemaVersion: managementpi.TurnResultSchemaVersion,
++		Status:        "error",
++		Error:         &piTurnResultError{Code: code},
++	}
++	if err := json.NewEncoder(output).Encode(document); err != nil {
++		return &PiTurnProcessAError{code: managementpi.TurnCodeResultInvalid, exit: 3}
++	}
++	return &PiTurnProcessAError{code: code, exit: piTurnResultExit(code)}
++}
++
++func (e *PiTurnProcessAError) Error() string { return string(e.code) }
++func (e *PiTurnProcessAError) ExitCode() int { return e.exit }
++
++type piTurnResultDocument struct {
++	Contract      string             `json:"contract"`
++	SchemaVersion int                `json:"schema_version"`
++	Status        string             `json:"status"`
++	FinalText     string             `json:"final_text,omitempty"`
++	Error         *piTurnResultError `json:"error,omitempty"`
++}
++
++type piTurnResultError struct {
++	Code managementpi.TurnResultCode `json:"code"`
++}
++
++// RunPiTurnProcessA owns schema-1 production. Raw Pi JSONL is captured and
++// translated here; it never crosses the Process-A stdout boundary.
++func RunPiTurnProcessA(opts RunPiOptions, output io.Writer) error {
++	if output == nil {
++		return errors.New("agents-infra: Pi turn result output is required")
++	}
++	raw := newBoundedProcessAStdout(maxRawPiTurnBytes)
++	report := PiRunReport{}
++	opts.Stdout = raw
++	opts.Stderr = io.Discard
++	opts.Report = &report
++	runErr := RunPi(opts)
++
++	code, finalText := classifyPiTurn(runErr, report, raw.Bytes(), raw.Truncated())
++	document := piTurnResultDocument{
++		Contract:      managementpi.TurnResultContract,
++		SchemaVersion: managementpi.TurnResultSchemaVersion,
++	}
++	exit := 0
++	if code == "" {
++		document.Status = "ok"
++		document.FinalText = finalText
++	} else {
++		document.Status = "error"
++		document.Error = &piTurnResultError{Code: code}
++		exit = piTurnResultExit(code)
++	}
++	if err := json.NewEncoder(output).Encode(document); err != nil {
++		return &PiTurnProcessAError{code: managementpi.TurnCodeResultInvalid, exit: 3}
++	}
++	if exit != 0 {
++		return &PiTurnProcessAError{code: code, exit: exit}
++	}
++	return nil
++}
++
++func classifyPiTurn(runErr error, report PiRunReport, raw []byte, truncated bool) (managementpi.TurnResultCode, string) {
++	if report.Managed && !report.CleanupConfirmed {
++		return managementpi.TurnCodeCleanupFailed, ""
++	}
++	if errors.Is(runErr, context.Canceled) {
++		return managementpi.TurnCodeCancelled, ""
++	}
++	if report.DeadlineExceeded || errors.Is(runErr, context.DeadlineExceeded) {
++		return managementpi.TurnCodeDeadlineExceeded, ""
++	}
++	if runErr != nil {
++		if code := piTurnPreChildCode(runErr); code != "" {
++			return code, ""
++		}
++		return managementpi.TurnCodeChildFailed, ""
++	}
++	finalText, toolFailed, err := parsePiTurnJSONL(raw, truncated)
++	if err != nil {
++		return managementpi.TurnCodeResultInvalid, ""
++	}
++	if toolFailed {
++		return managementpi.TurnCodeToolFailed, ""
++	}
++	return "", finalText
++}
++
++func piTurnPreChildCode(err error) managementpi.TurnResultCode {
++	var launch *PiLaunchError
++	if !errors.As(err, &launch) {
++		return ""
++	}
++	switch launch.Code {
++	case "pi_standalone_prompt_invalid", "pi_standalone_conflicting_arguments", "pi_standalone_entrypoint_invalid", "pi_standalone_deadline_invalid":
++		return managementpi.TurnCodeRequestInvalid
++	case "pi_profile_missing":
++		return managementpi.TurnCodeProfileMissing
++	case "unknown_pi_profile":
++		return managementpi.TurnCodeProfileUnknown
++	case "pi_profile_mismatch":
++		return managementpi.TurnCodeProfileMismatch
++	case "pi_execution_environment_malformed":
++		return managementpi.TurnCodeEnvironmentMalformed
++	case "pi_execution_environment_invalid":
++		return managementpi.TurnCodeEnvironmentDenied
++	case "invalid_project_configuration":
++		return managementpi.TurnCodeConfigurationInvalid
++	case "pi_tool_authorization_required", "pi_tool_allowlist_required", "pi_tool_allowlist_invalid":
++		return managementpi.TurnCodeAuthorizationDenied
++	case "provider_executable_not_found", "pi_execution_identity_invalid", "pi_execution_identity_changed":
++		return managementpi.TurnCodeIdentityInvalid
++	case "runtime_executable_not_found", "runtime_executable_invalid", "runtime_listener_occupied", "runtime_listener_check_failed", "runtime_start_failed", "runtime_readiness_failed", "runtime_exited_early", "shared_runtime_refused":
++		return managementpi.TurnCodeRuntimeRefused
++	default:
++		return ""
++	}
++}
++
++func piTurnResultExit(code managementpi.TurnResultCode) int {
++	switch code {
++	case managementpi.TurnCodeCancelled, managementpi.TurnCodeDeadlineExceeded:
++		return 2
++	case managementpi.TurnCodeResultInvalid:
++		return 3
++	default:
++		return 1
++	}
++}
++
++func parsePiTurnJSONL(raw []byte, truncated bool) (string, bool, error) {
++	if truncated || len(raw) == 0 || !utf8.Valid(raw) {
++		return "", false, errors.New("invalid bounded Pi event stream")
++	}
++	scanner := bufio.NewScanner(bytes.NewReader(raw))
++	scanner.Buffer(make([]byte, 64<<10), maxRawPiTurnBytes)
++	lineNumber := 0
++	sawSession, sawAgentStart, sawAgentEnd := false, false, false
++	sawFinalAssistantMessage := false
++	turnOpen, messageOpen := false, false
++	toolFailed := false
++	openTools := map[string]string{}
++	finalText := ""
++	for scanner.Scan() {
++		line := bytes.TrimSpace(scanner.Bytes())
++		if len(line) == 0 {
++			continue
++		}
++		lineNumber++
++		if err := rejectDuplicateJSONNames(line); err != nil {
++			return "", false, err
++		}
++		var event struct {
++			Type       string          `json:"type"`
++			Version    int             `json:"version"`
++			ToolCallID string          `json:"toolCallId"`
++			ToolName   string          `json:"toolName"`
++			IsError    *bool           `json:"isError"`
++			Message    json.RawMessage `json:"message"`
++		}
++		if err := decodeOneModelCheckEvent(line, &event); err != nil || event.Type == "" {
++			return "", false, errors.New("malformed Pi event")
++		}
++		if lineNumber == 1 && (event.Type != "session" || event.Version != 3) {
++			return "", false, errors.New("invalid Pi session header")
++		}
++		switch event.Type {
++		case "session":
++			if sawSession || lineNumber != 1 {
++				return "", false, errors.New("duplicate Pi session")
++			}
++			sawSession = true
++		case "agent_start":
++			if !sawSession || sawAgentStart {
++				return "", false, errors.New("invalid Pi agent start")
++			}
++			sawAgentStart = true
++		case "agent_end":
++			if !sawAgentStart || sawAgentEnd || turnOpen {
++				return "", false, errors.New("invalid Pi agent end")
++			}
++			sawAgentEnd = true
++		case "queue_update", "compaction_start", "compaction_end":
++			if !sawAgentStart || sawAgentEnd {
++				return "", false, errors.New("event outside Pi lifecycle")
++			}
++		case "turn_start":
++			if !sawAgentStart || sawAgentEnd || turnOpen {
++				return "", false, errors.New("invalid Pi turn start")
++			}
++			turnOpen = true
++		case "turn_end":
++			if !sawAgentStart || sawAgentEnd || !turnOpen || messageOpen {
++				return "", false, errors.New("invalid Pi turn end")
++			}
++			turnOpen = false
++		case "message_start":
++			if !sawAgentStart || sawAgentEnd || !turnOpen || messageOpen {
++				return "", false, errors.New("invalid Pi message start")
++			}
++			messageOpen = true
++		case "message_update":
++			if !sawAgentStart || sawAgentEnd || !turnOpen || !messageOpen {
++				return "", false, errors.New("message update outside Pi lifecycle")
++			}
++		case "message_end":
++			if !sawAgentStart || sawAgentEnd || !turnOpen || !messageOpen {
++				return "", false, errors.New("invalid Pi message end")
++			}
++			messageOpen = false
++			message, err := parseModelCheckMessage(event.Message)
++			if err != nil {
++				return "", false, err
++			}
++			if message.role == "assistant" {
++				if message.errorText != "" {
++					return "", false, errors.New("assistant failure")
++				}
++				finalText = message.text
++				sawFinalAssistantMessage = true
++			}
++		case "tool_execution_start":
++			if !sawAgentStart || sawAgentEnd {
++				return "", false, errors.New("tool start outside Pi lifecycle")
++			}
++			if event.ToolCallID == "" || event.ToolName == "" || openTools[event.ToolCallID] != "" {
++				return "", false, errors.New("invalid Pi tool start")
++			}
++			openTools[event.ToolCallID] = event.ToolName
++		case "tool_execution_update":
++			if !sawAgentStart || sawAgentEnd {
++				return "", false, errors.New("tool update outside Pi lifecycle")
++			}
++			if openTools[event.ToolCallID] == "" {
++				return "", false, errors.New("invalid Pi tool update")
++			}
++		case "tool_execution_end":
++			if !sawAgentStart || sawAgentEnd {
++				return "", false, errors.New("tool end outside Pi lifecycle")
++			}
++			if event.IsError == nil || event.ToolName == "" || openTools[event.ToolCallID] != event.ToolName {
++				return "", false, errors.New("invalid Pi tool end")
++			}
++			toolFailed = toolFailed || *event.IsError
++			delete(openTools, event.ToolCallID)
++		default:
++			return "", false, fmt.Errorf("unknown Pi event %q", event.Type)
++		}
++	}
++	if err := scanner.Err(); err != nil || !sawSession || !sawAgentStart || !sawAgentEnd || turnOpen || messageOpen || len(openTools) != 0 {
++		return "", false, errors.New("incomplete Pi event stream")
++	}
++	if !sawFinalAssistantMessage {
++		return "", false, errors.New("missing authoritative assistant message")
++	}
++	return finalText, toolFailed, nil
++}
++
++func rejectDuplicateJSONNames(document []byte) error {
++	decoder := json.NewDecoder(bytes.NewReader(document))
++	var walk func() error
++	walk = func() error {
++		token, err := decoder.Token()
++		if err != nil {
++			return err
++		}
++		delimiter, ok := token.(json.Delim)
++		if !ok {
++			return nil
++		}
++		switch delimiter {
++		case '{':
++			seen := map[string]bool{}
++			for decoder.More() {
++				nameToken, err := decoder.Token()
++				if err != nil {
++					return err
++				}
++				name, ok := nameToken.(string)
++				if !ok || seen[name] {
++					return errors.New("duplicate JSON object member")
++				}
++				seen[name] = true
++				if err := walk(); err != nil {
++					return err
++				}
++			}
++			_, err = decoder.Token()
++			return err
++		case '[':
++			for decoder.More() {
++				if err := walk(); err != nil {
++					return err
++				}
++			}
++			_, err = decoder.Token()
++			return err
++		default:
++			return errors.New("unexpected JSON delimiter")
++		}
++	}
++	if err := walk(); err != nil {
++		return err
++	}
++	if token, err := decoder.Token(); !errors.Is(err, io.EOF) || token != nil {
++		return errors.New("trailing JSON value")
++	}
++	return nil
++}
+diff --git a/tools/agents-infra/internal/infra/pi_turn_result_test.go b/tools/agents-infra/internal/infra/pi_turn_result_test.go
+new file mode 100644
+index 0000000..0651853
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_turn_result_test.go
+@@ -0,0 +1,196 @@
++package infra
++
++import (
++	"errors"
++	"os"
++	"strings"
++	"testing"
++
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++)
++
++const validPiTurnJSONL = `{"type":"session","version":3,"id":"fixture","timestamp":"2026-08-30T00:00:00Z","cwd":"/repo"}
++{"type":"agent_start"}
++{"type":"turn_start"}
++{"type":"message_start","message":{"role":"assistant","content":[]}}
++{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"accepted"}}
++{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"accepted"}]}}
++{"type":"turn_end","message":{"role":"assistant","content":[]},"toolResults":[]}
++{"type":"agent_end","messages":[]}
++`
++
++func TestPinnedPiGrammarDrivesSchemaOneTranslation(t *testing.T) {
++	manifest, err := os.ReadFile("pi-v0.84.2-darwin-arm64-tree-manifest.txt")
++	if err != nil {
++		t.Fatal(err)
++	}
++	excerpt, err := os.ReadFile("testdata/pi-v0.84.2-json-grammar-excerpt.md")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !strings.Contains(string(manifest), "9c324127fac36eadc781c5222937f3a2b938a5fd671976aab020b27d7c1362a7  ./docs/json.md") ||
++		!strings.Contains(string(excerpt), "message_end` contains the final authoritative message") {
++		t.Fatal("content-addressed Pi v0.84.2 grammar evidence drifted")
++	}
++	text, toolFailed, err := parsePiTurnJSONL([]byte(validPiTurnJSONL), false)
++	if err != nil || toolFailed || text != "accepted" {
++		t.Fatalf("parsePiTurnJSONL = %q, %v, %v", text, toolFailed, err)
++	}
++}
++
++func TestPiTurnTranslatorRefusesNarrowedProtocolAttacks(t *testing.T) {
++	tests := []struct {
++		name string
++		raw  string
++	}{
++		{"wrong session version", strings.Replace(validPiTurnJSONL, `"version":3`, `"version":2`, 1)},
++		{"duplicate type", strings.Replace(validPiTurnJSONL, `{"type":"agent_start"}`, `{"type":"agent_start","type":"agent_start"}`, 1)},
++		{"unknown event", strings.Replace(validPiTurnJSONL, `"turn_start"`, `"invented"`, 1)},
++		{"missing agent end", strings.Replace(validPiTurnJSONL, "{\"type\":\"agent_end\",\"messages\":[]}\n", "", 1)},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			if _, _, err := parsePiTurnJSONL([]byte(test.raw), false); err == nil {
++				t.Fatal("protocol attack was admitted")
++			}
++		})
++	}
++	if _, _, err := parsePiTurnJSONL([]byte(validPiTurnJSONL), true); err == nil {
++		t.Fatal("bounded-capture truncation was admitted")
++	}
++}
++
++// Reviewer finding F3: the translator must require the final authoritative
++// assistant message and must reject a tool lifecycle event outside the
++// active agent_start/agent_end window, even when the rest of the stream is
++// otherwise well-formed.
++func TestPiTurnTranslatorRefusesMissingAuthoritativeMessageAndPostAgentTools(t *testing.T) {
++	missingAssistantMessage := `{"type":"session","version":3,"id":"fixture","timestamp":"2026-08-30T00:00:00Z","cwd":"/repo"}
++{"type":"agent_start"}
++{"type":"turn_start"}
++{"type":"turn_end","message":{"role":"assistant","content":[]},"toolResults":[]}
++{"type":"agent_end","messages":[]}
++`
++	if _, _, err := parsePiTurnJSONL([]byte(missingAssistantMessage), false); err == nil {
++		t.Fatal("missing authoritative assistant message was admitted as success")
++	}
++
++	postAgentTool := validPiTurnJSONL + `{"type":"tool_execution_start","toolCallId":"t1","toolName":"read","args":{}}
++{"type":"tool_execution_end","toolCallId":"t1","toolName":"read","result":{},"isError":false}
++`
++	if _, _, err := parsePiTurnJSONL([]byte(postAgentTool), false); err == nil {
++		t.Fatal("post-agent_end tool lifecycle was admitted as success")
++	}
++
++	postAgentToolUpdate := validPiTurnJSONL + `{"type":"tool_execution_update","toolCallId":"t1"}
++`
++	if _, _, err := parsePiTurnJSONL([]byte(postAgentToolUpdate), false); err == nil {
++		t.Fatal("post-agent_end tool update was admitted as success")
++	}
++}
++
++// Reviewer finding F1 (CR-TASK-260830-y6infr-2 revision 2): the translator
++// tracked only the outer agent lifecycle plus "some assistant message_end
++// exists". It did not track whether a turn was open, whether a message was
++// started, or whether a second turn_start arrived while the first turn was
++// still open, so a schema-1 success could be minted from an incomplete or
++// contradictory raw Pi event stream. Every case here drives the real
++// parsePiTurnJSONL production entry point directly with a single removed,
++// duplicated, or reordered lifecycle event against the otherwise-valid fixture.
++func TestPiTurnTranslatorRefusesTurnAndMessageLifecycleViolations(t *testing.T) {
++	removeLine := func(source, line string) string {
++		replaced := strings.Replace(source, line, "", 1)
++		if replaced == source {
++			t.Fatalf("fixture line %q not found for removal", line)
++		}
++		return replaced
++	}
++	firstTurnWithoutAgentEnd := removeLine(validPiTurnJSONL, "{\"type\":\"agent_end\",\"messages\":[]}\n")
++	tests := []struct {
++		name string
++		raw  string
++	}{
++		{
++			// Reviewer attack 1: missing turn_start. message_start/message_end
++			// must never be admitted without an open turn.
++			name: "missing turn_start",
++			raw:  removeLine(validPiTurnJSONL, "{\"type\":\"turn_start\"}\n"),
++		},
++		{
++			// Reviewer attack 2: missing message_start. message_end must never
++			// be admitted without a preceding message_start.
++			name: "missing message_start",
++			raw:  removeLine(validPiTurnJSONL, "{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n"),
++		},
++		{
++			// Reviewer attack 3: duplicate turn_start. A second turn_start
++			// while the first turn is still open must never be admitted.
++			name: "duplicate turn_start",
++			raw:  strings.Replace(validPiTurnJSONL, "{\"type\":\"turn_start\"}\n", "{\"type\":\"turn_start\"}\n{\"type\":\"turn_start\"}\n", 1),
++		},
++		{
++			// turn_end must never be admitted without an open turn: a second,
++			// duplicate turn_end right after the first (already-closed) one
++			// must be refused even though the rest of the stream is valid.
++			name: "turn_end without turn_start",
++			raw: strings.Replace(validPiTurnJSONL,
++				"{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"toolResults\":[]}\n",
++				"{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"toolResults\":[]}\n{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"toolResults\":[]}\n", 1),
++		},
++		{
++			// A second message_start while the first message is still open
++			// must never be admitted.
++			name: "duplicate message_start",
++			raw: strings.Replace(validPiTurnJSONL,
++				"{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n",
++				"{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n", 1),
++		},
++		{
++			// turn_end must never be admitted while the message it should have
++			// closed first is still open. The first turn completes normally
++			// inside the same still-open agent lifecycle (so the authoritative
++			// -assistant-message requirement is already satisfied); the second
++			// turn's message is left open when its turn_end fires.
++			name: "turn_end while message open",
++			raw: firstTurnWithoutAgentEnd + `{"type":"turn_start"}
++{"type":"message_start","message":{"role":"assistant","content":[]}}
++{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"accepted"}}
++{"type":"turn_end","message":{"role":"assistant","content":[]},"toolResults":[]}
++{"type":"agent_end","messages":[]}
++`,
++		},
++		{
++			// agent_end must never be admitted while a turn is still open. The
++			// first turn completes normally; the second turn's message closes
++			// properly, but its turn is never closed before agent_end fires.
++			name: "agent_end while turn open",
++			raw: firstTurnWithoutAgentEnd + `{"type":"turn_start"}
++{"type":"message_start","message":{"role":"assistant","content":[]}}
++{"type":"message_update","usage":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"accepted"}}
++{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"accepted"}]}}
++{"type":"agent_end","messages":[]}
++`,
++		},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			if _, _, err := parsePiTurnJSONL([]byte(test.raw), false); err == nil {
++				t.Fatalf("turn/message lifecycle attack %q was admitted as success", test.name)
++			}
++		})
++	}
++}
++
++func TestPiTurnTranslatorClassPrecedence(t *testing.T) {
++	code, _ := classifyPiTurn(errors.New("child failed"), PiRunReport{Managed: true, CleanupConfirmed: false}, []byte(validPiTurnJSONL), false)
++	if code != managementpi.TurnCodeCleanupFailed {
++		t.Fatalf("cleanup precedence = %q", code)
++	}
++	toolFailure := strings.Replace(validPiTurnJSONL,
++		`{"type":"turn_end"`,
++		"{\"type\":\"tool_execution_start\",\"toolCallId\":\"t1\",\"toolName\":\"read\",\"args\":{}}\n{\"type\":\"tool_execution_end\",\"toolCallId\":\"t1\",\"toolName\":\"read\",\"result\":{},\"isError\":true}\n{\"type\":\"turn_end\"", 1)
++	code, _ = classifyPiTurn(nil, PiRunReport{}, []byte(toolFailure), false)
++	if code != managementpi.TurnCodeToolFailed {
++		t.Fatalf("tool failure class = %q", code)
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/testdata/pi-v0.84.2-json-grammar-excerpt.md b/tools/agents-infra/internal/infra/testdata/pi-v0.84.2-json-grammar-excerpt.md
+new file mode 100644
+index 0000000..7196a0e
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/testdata/pi-v0.84.2-json-grammar-excerpt.md
+@@ -0,0 +1,23 @@
++# Pi v0.84.2 JSON grammar excerpt
++
++Source: `packages/coding-agent/docs/json.md` from the pinned
++`earendil-works/pi@v0.84.2` Darwin/arm64 release tree. The installed release
++path is `./docs/json.md`; its SHA-256 in
++`pi-v0.84.2-darwin-arm64-tree-manifest.txt` is
++`9c324127fac36eadc781c5222937f3a2b938a5fd671976aab020b27d7c1362a7`.
++
++The following source excerpt is preserved verbatim:
++
++> Each line is a JSON object. The first line is the session header:
++>
++> `{"type":"session","version":3,"id":"uuid","timestamp":"...","cwd":"/path"}`
++>
++> `message_update` records are delta-only. They omit both the cumulative `message` field and
++> `assistantMessageEvent.partial` to keep stream size linear. The top-level `usage` field contains
++> the latest cumulative provider-reported usage and may remain zero when a provider only reports
++> usage at completion. Use `contentIndex` and `delta` to assemble live text, thinking, or tool-call
++> arguments if needed. `message_end` contains the final authoritative message.
++
++The same pinned source declares the closed tool lifecycle fields used by the
++translator: `toolCallId`, `toolName`, and `isError` on
++`tool_execution_start`, `tool_execution_update`, and `tool_execution_end`.
+diff --git a/tools/agents-infra/main.go b/tools/agents-infra/main.go
+index 9122df4..d36103a 100644
+--- a/tools/agents-infra/main.go
++++ b/tools/agents-infra/main.go
+@@ -6,6 +6,7 @@ import (
+ 	"errors"
+ 	"flag"
+ 	"fmt"
++	"io"
+ 	"os"
+ 	"os/exec"
+ 	"runtime"
+@@ -14,6 +15,7 @@ import (
+ 
+ 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/attachments"
+ 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
+ )
+ 
+ var (
+@@ -38,6 +40,10 @@ func main() {
+ 		if errors.As(err, &modelCheckFailure) {
+ 			code = modelCheckFailure.ExitCode()
+ 		}
++		var piTurnFailure *infra.PiTurnProcessAError
++		if errors.As(err, &piTurnFailure) {
++			code = piTurnFailure.ExitCode()
++		}
+ 		fmt.Fprintln(os.Stderr, err)
+ 		os.Exit(code)
+ 	}
+@@ -476,6 +482,9 @@ func runPi(args []string) error {
+ 	if len(args) > 0 && args[0] == "spawn" {
+ 		return runPiStandaloneCLI("", args[1:])
+ 	}
++	if len(args) > 0 && args[0] == "turn" {
++		return runPiTurnCLI(args[1:])
++	}
+ 	startDir := os.Getenv(callerCWDEnv)
+ 	if startDir == "" {
+ 		var err error
+@@ -510,9 +519,13 @@ func runPi(args []string) error {
+ }
+ 
+ func runPiStandaloneCLI(entrypoint string, args []string) error {
++	if selectsPiTurnResultSchema1(args) {
++		return runPiTurnSchema1CLI(entrypoint, args)
++	}
+ 	fs := flag.NewFlagSet("pi spawn", flag.ContinueOnError)
+ 	fs.SetOutput(os.Stderr)
+ 	prompt := fs.String("prompt", "", "single unattended worker prompt")
++	profile := fs.String("profile", "", "exact resolved managed Pi profile assertion")
+ 	printConfig := fs.Bool("print-config", false, "resolve and print the standalone launch plan without launching")
+ 	deadline := fs.Duration("deadline", 30*time.Minute, "total standalone worker deadline (maximum 30m)")
+ 	if err := fs.Parse(args); err != nil {
+@@ -525,7 +538,7 @@ func runPiStandaloneCLI(entrypoint string, args []string) error {
+ 		return &infra.PiStandaloneFailure{Code: "pi_standalone_deadline_invalid", Err: errors.New("standalone Pi deadline must be within (0, 30m]")}
+ 	}
+ 	startDir := callerProjectDir()
+-	request := infra.PiStandaloneRequest{Prompt: *prompt, Entrypoint: entrypoint}
++	request := infra.PiStandaloneRequest{Prompt: *prompt, Entrypoint: entrypoint, ExpectedProfile: *profile}
+ 	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
+ 	if *printConfig {
+ 		plan, err := infra.BuildPiStandaloneLaunchPlan(startDir, "", request, producer, nil)
+@@ -550,6 +563,105 @@ func runPiStandaloneCLI(entrypoint string, args []string) error {
+ 	return infra.WrapPiStandaloneFailure(err)
+ }
+ 
++func selectsPiTurnResultSchema1(args []string) bool {
++	for index, arg := range args {
++		if arg == "--result-schema=1" {
++			return true
++		}
++		if arg == "--result-schema" && index+1 < len(args) && args[index+1] == "1" {
++			return true
++		}
++	}
++	return false
++}
++
++func runPiTurnSchema1CLI(entrypoint string, args []string) error {
++	fs := flag.NewFlagSet("pi spawn", flag.ContinueOnError)
++	fs.SetOutput(io.Discard)
++	prompt := fs.String("prompt", "", "single unattended worker prompt")
++	profile := fs.String("profile", "", "exact resolved managed Pi profile")
++	deadline := fs.Duration("deadline", 30*time.Minute, "total standalone worker deadline")
++	resultSchema := fs.Int("result-schema", 0, "versioned Process-A result schema")
++	if err := fs.Parse(args); err != nil || len(fs.Args()) != 0 || repeatedPiTurnFlags(args) {
++		return infra.WritePiTurnRefusal(os.Stdout, managementpi.TurnCodeRequestInvalid)
++	}
++	if *resultSchema != managementpi.TurnResultSchemaVersion || *deadline <= 0 || *deadline > 30*time.Minute {
++		return infra.WritePiTurnRefusal(os.Stdout, managementpi.TurnCodeRequestInvalid)
++	}
++	if *profile == "" {
++		return infra.WritePiTurnRefusal(os.Stdout, managementpi.TurnCodeProfileMissing)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), *deadline)
++	defer cancel()
++	request := infra.PiStandaloneRequest{Prompt: *prompt, Entrypoint: entrypoint, ExpectedProfile: *profile}
++	return infra.RunPiTurnProcessA(infra.RunPiOptions{
++		ProjectDir: callerProjectDir(),
++		Environ:    os.Environ(),
++		Context:    ctx,
++		Standalone: &request,
++	}, os.Stdout)
++}
++
++func repeatedPiTurnFlags(args []string) bool {
++	counts := map[string]int{}
++	for _, arg := range args {
++		name := arg
++		if before, _, ok := strings.Cut(arg, "="); ok {
++			name = before
++		}
++		switch name {
++		case "--prompt", "--profile", "--deadline", "--result-schema":
++			counts[name]++
++			if counts[name] > 1 {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++// runPiTurnCLI is the real production consumer/parent entry point: it
++// resolves the trusted Pi plugin graph (real preflight status reader, real
++// sanitized engine observation reader) and drives the exact Process-A plan
++// through vendorplugin.BuildLaunch and the sole pi.ValidateTurnResult
++// classifier. It never itself owns Process-B lifecycle; that stays with the
++// broker/runtime status surfaces the observation reader reads from.
++func runPiTurnCLI(args []string) error {
++	fs := flag.NewFlagSet("pi turn", flag.ContinueOnError)
++	fs.SetOutput(os.Stderr)
++	prompt := fs.String("prompt", "", "single unattended worker prompt")
++	deadline := fs.Duration("deadline", 30*time.Minute, "total turn deadline (maximum 30m)")
++	if err := fs.Parse(args); err != nil {
++		return err
++	}
++	if len(fs.Args()) != 0 {
++		return errors.New("pi turn does not accept positional arguments")
++	}
++	if *deadline <= 0 || *deadline > 30*time.Minute {
++		return errors.New("pi turn deadline must be within (0, 30m]")
++	}
++	startDir := callerProjectDir()
++	homeDir, err := os.UserHomeDir()
++	if err != nil {
++		homeDir = ""
++	}
++	graph, err := infra.ResolvePiPluginGraph(startDir, homeDir, "", nil, nil)
++	if err != nil {
++		return err
++	}
++	request := graph.SpawnRequest([]byte(*prompt), startDir, os.Environ())
++	ctx, cancel := context.WithTimeout(context.Background(), *deadline)
++	defer cancel()
++	result, runErr := infra.BuildAndRunPiTurn(ctx, graph.Registry, request, infra.OSProcessATurnRunner{})
++	if result.Class == "" {
++		return runErr
++	}
++	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
++		return err
++	}
++	return runErr
++}
++
+ func runRuntime(args []string) error {
+ 	if len(args) == 0 {
+ 		return errors.New("runtime requires status, stop, quarantine, unquarantine, broker, or runtime-launch")
+diff --git a/tools/agents-infra/pi_standalone_main_test.go b/tools/agents-infra/pi_standalone_main_test.go
+index 9f9b46c..4c97bb3 100644
+--- a/tools/agents-infra/pi_standalone_main_test.go
++++ b/tools/agents-infra/pi_standalone_main_test.go
+@@ -3,6 +3,7 @@
+ package main
+ 
+ import (
++	"encoding/json"
+ 	"errors"
+ 	"path/filepath"
+ 	"reflect"
+@@ -10,6 +11,7 @@ import (
+ 	"testing"
+ 
+ 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
+ )
+ 
+ func mainStandaloneQwenProject(t *testing.T) (project, home string) {
+@@ -41,6 +43,44 @@ qwen-infra = "qwen"
+ 	return project, home
+ }
+ 
++func TestSchemaOneWriterPrecedesProfileAndRequestRefusals(t *testing.T) {
++	tests := []struct {
++		name string
++		args []string
++		code managementpi.TurnResultCode
++	}{
++		{"missing profile", []string{"spawn", "--prompt", "secret", "--deadline", "30m", "--result-schema", "1"}, managementpi.TurnCodeProfileMissing},
++		{"duplicate profile", []string{"spawn", "--profile", "a", "--profile", "b", "--prompt", "secret", "--deadline", "30m", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			var runErr error
++			output := captureStdout(t, func() { runErr = runPi(test.args) })
++			var failure *infra.PiTurnProcessAError
++			if !errors.As(runErr, &failure) {
++				t.Fatalf("runPi error = %#v", runErr)
++			}
++			var document struct {
++				Contract      string `json:"contract"`
++				SchemaVersion int    `json:"schema_version"`
++				Status        string `json:"status"`
++				Error         struct {
++					Code managementpi.TurnResultCode `json:"code"`
++				} `json:"error"`
++			}
++			if err := json.Unmarshal([]byte(output), &document); err != nil {
++				t.Fatalf("schema-1 output = %q: %v", output, err)
++			}
++			if document.Contract != managementpi.TurnResultContract || document.SchemaVersion != 1 || document.Status != "error" || document.Error.Code != test.code {
++				t.Fatalf("schema-1 refusal = %#v", document)
++			}
++			if strings.Contains(output, "secret") || strings.Count(strings.TrimSpace(output), "\n") != 0 {
++				t.Fatalf("schema-1 refusal leaked or emitted multiple documents: %q", output)
++			}
++		})
++	}
++}
++
+ // Production call site: runTarget -> runPiStandaloneCLI ->
+ // BuildPiStandaloneLaunchPlan. This proves the public qwen-infra command emits
+ // the managed unattended contract without starting Pi or revealing the prompt.
+diff --git a/tools/agents-infra/pi_turn_cli_test.go b/tools/agents-infra/pi_turn_cli_test.go
+new file mode 100644
+index 0000000..dbf99dd
+--- /dev/null
++++ b/tools/agents-infra/pi_turn_cli_test.go
+@@ -0,0 +1,38 @@
++package main
++
++import (
++	"strings"
++	"testing"
++)
++
++// runPiTurnCLI is the real production consumer/parent entry point wired at
++// `agents-infra pi turn`. These cases only exercise argument validation,
++// which must refuse before infra.ResolvePiPluginGraph or any launch effect.
++func TestRunPiTurnCLIRefusesInvalidArgumentsBeforeAnyGraphResolution(t *testing.T) {
++	tests := []struct {
++		name string
++		args []string
++	}{
++		{"unknown flag", []string{"--bogus"}},
++		{"positional argument", []string{"--prompt", "hi", "extra"}},
++		{"zero deadline", []string{"--prompt", "hi", "--deadline", "0s"}},
++		{"negative deadline", []string{"--prompt", "hi", "--deadline", "-1m"}},
++		{"deadline over the 30m ceiling", []string{"--prompt", "hi", "--deadline", "31m"}},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			if err := runPiTurnCLI(test.args); err == nil {
++				t.Fatal("invalid pi turn arguments were admitted")
++			}
++		})
++	}
++}
++
++// The top-level `pi` dispatcher must route "turn" to the real production
++// consumer entry point rather than to standalone Process-A spawn handling.
++func TestRunPiDispatchesTurnSubcommandToPiTurnCLI(t *testing.T) {
++	err := runPi([]string{"turn", "--deadline", "0s"})
++	if err == nil || !strings.Contains(err.Error(), "deadline") {
++		t.Fatalf("runPi([turn ...]) = %v, want the pi turn deadline refusal", err)
++	}
++}
+diff --git a/tools/agents-infra/pi_turn_schema_main_test.go b/tools/agents-infra/pi_turn_schema_main_test.go
+new file mode 100644
+index 0000000..51eb77d
+--- /dev/null
++++ b/tools/agents-infra/pi_turn_schema_main_test.go
+@@ -0,0 +1,181 @@
++//go:build darwin && arm64
++
++package main
++
++import (
++	"encoding/json"
++	"errors"
++	"strings"
++	"testing"
++
++	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
++	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++)
++
++type schemaOneDocument struct {
++	Contract      string `json:"contract"`
++	SchemaVersion int    `json:"schema_version"`
++	Status        string `json:"status"`
++	FinalText     string `json:"final_text"`
++	Error         struct {
++		Code managementpi.TurnResultCode `json:"code"`
++	} `json:"error"`
++}
++
++func decodeSchemaOneRefusal(t *testing.T, output string, runErr error) schemaOneDocument {
++	t.Helper()
++	var failure *infra.PiTurnProcessAError
++	if !errors.As(runErr, &failure) {
++		t.Fatalf("schema-1 entry returned %#v, want a typed Process-A failure", runErr)
++	}
++	var document schemaOneDocument
++	if err := json.Unmarshal([]byte(output), &document); err != nil {
++		t.Fatalf("schema-1 stdout = %q: %v", output, err)
++	}
++	if document.Contract != managementpi.TurnResultContract || document.SchemaVersion != 1 || document.Status != "error" {
++		t.Fatalf("schema-1 refusal envelope = %#v", document)
++	}
++	if strings.Count(strings.TrimSpace(output), "\n") != 0 {
++		t.Fatalf("schema-1 refusal emitted more than one document: %q", output)
++	}
++	return document
++}
++
++// Production call site: runPi -> runPiStandaloneCLI -> runPiTurnSchema1CLI. The
++// schema-1 result writer is installed the moment `--result-schema 1` is
++// positively parsed, so every later outer-request refusal is still reported as
++// exactly one bounded document with the exact closed code and never leaks the
++// prompt or the supplied profile.
++func TestSchemaOneOuterRequestRefusalsAreExactAndSanitized(t *testing.T) {
++	secret := "secret prompt bytes"
++	tests := []struct {
++		name string
++		args []string
++		code managementpi.TurnResultCode
++		exit int
++	}{
++		{"trailing operand", []string{"spawn", "--profile", "p", "--prompt", secret, "--deadline", "30m", "--result-schema", "1", "leftover"}, managementpi.TurnCodeRequestInvalid, 1},
++		{"deadline over the bound", []string{"spawn", "--profile", "p", "--prompt", secret, "--deadline", "30m1ns", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid, 1},
++		{"deadline at zero", []string{"spawn", "--profile", "p", "--prompt", secret, "--deadline", "0", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid, 1},
++		{"unknown inner flag", []string{"spawn", "--profile", "p", "--prompt", secret, "--tools", "bash", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid, 1},
++		{"repeated result schema", []string{"spawn", "--profile", "p", "--prompt", secret, "--result-schema", "1", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid, 1},
++		{"prompt swallows the selector", []string{"spawn", "--profile", "p", "--prompt", "--result-schema=1"}, managementpi.TurnCodeRequestInvalid, 1},
++		{"missing profile", []string{"spawn", "--prompt", secret, "--result-schema", "1"}, managementpi.TurnCodeProfileMissing, 1},
++		{"equals-form selector without profile", []string{"spawn", "--prompt", secret, "--result-schema=1"}, managementpi.TurnCodeProfileMissing, 1},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			var runErr error
++			output := captureStdout(t, func() { runErr = runPi(test.args) })
++			document := decodeSchemaOneRefusal(t, output, runErr)
++			if document.Error.Code != test.code {
++				t.Fatalf("schema-1 code = %q, want %q", document.Error.Code, test.code)
++			}
++			var failure *infra.PiTurnProcessAError
++			errors.As(runErr, &failure)
++			if failure.ExitCode() != test.exit {
++				t.Fatalf("schema-1 exit = %d, want %d", failure.ExitCode(), test.exit)
++			}
++			if strings.Contains(output, secret) || strings.Contains(output, "\"p\"") {
++				t.Fatalf("schema-1 refusal leaked caller input: %q", output)
++			}
++		})
++	}
++}
++
++// Negative: a value other than exactly 1 is not a positive schema-1 selection.
++// It must fall through to the unchanged legacy operator surface rather than
++// silently producing a versioned document for a version nobody requested.
++func TestSchemaOneSelectorRequiresExactlyVersionOne(t *testing.T) {
++	for _, args := range [][]string{
++		{"spawn", "--profile", "p", "--prompt", "x", "--result-schema", "2"},
++		{"spawn", "--profile", "p", "--prompt", "x", "--result-schema=2"},
++		{"spawn", "--profile", "p", "--prompt", "x", "--result-schema"},
++	} {
++		t.Run(strings.Join(args[4:], " "), func(t *testing.T) {
++			if selectsPiTurnResultSchema1(args) {
++				t.Fatalf("args %v were mistaken for a schema-1 selection", args)
++			}
++			var runErr error
++			output := captureStdout(t, func() { runErr = runPi(args) })
++			var turnFailure *infra.PiTurnProcessAError
++			if errors.As(runErr, &turnFailure) {
++				t.Fatalf("legacy surface emitted a schema-1 failure: %#v", turnFailure)
++			}
++			var failure *infra.PiStandaloneFailure
++			if !errors.As(runErr, &failure) || failure.Code != "pi_standalone_cli_invalid" {
++				t.Fatalf("legacy refusal = %#v", runErr)
++			}
++			if strings.Contains(output, managementpi.TurnResultContract) {
++				t.Fatalf("legacy surface emitted a schema-1 document: %q", output)
++			}
++		})
++	}
++}
++
++// Production call site: runPi -> runPiStandaloneCLI. `--profile` is an exact
++// byte assertion over the runtime-resolved profile on both the schema-1 and the
++// legacy surface. No aliasing, case folding, trimming, or fallback is admitted,
++// and the refusal never echoes the supplied profile.
++func TestExactProfileAssertionRefusesEveryNonIdenticalProfile(t *testing.T) {
++	project, home := mainStandaloneQwenProject(t)
++	t.Setenv(callerCWDEnv, project)
++	t.Setenv("HOME", home)
++	t.Setenv("PATH", mainTestOfficialPiAsset(t))
++
++	resolved := captureStdout(t, func() {
++		if err := runPi([]string{"spawn", "--prompt", "safe prompt", "--print-config"}); err != nil {
++			t.Fatalf("baseline print-config: %v", err)
++		}
++	})
++	var plan infra.PiStandaloneLaunchPlan
++	decodeSingleJSONDocument(t, resolved, &plan)
++	if plan.Profile.Value == nil || *plan.Profile.Value == "" {
++		t.Fatalf("baseline plan carried no resolved profile: %#v", plan)
++	}
++	profile := *plan.Profile.Value
++
++	t.Run("exact profile is accepted", func(t *testing.T) {
++		if err := runPi([]string{"spawn", "--profile", profile, "--prompt", "safe prompt", "--print-config"}); err != nil {
++			t.Fatalf("exact profile assertion refused: %v", err)
++		}
++	})
++
++	near := []string{
++		strings.ToUpper(profile),
++		" " + profile,
++		profile + " ",
++		profile + "-2",
++		strings.TrimSuffix(profile, profile[len(profile)-1:]),
++	}
++	for _, candidate := range near {
++		if candidate == profile {
++			continue
++		}
++		t.Run("legacy refuses "+candidate, func(t *testing.T) {
++			err := runPi([]string{"spawn", "--profile", candidate, "--prompt", "safe prompt", "--print-config"})
++			var failure *infra.PiStandaloneFailure
++			if !errors.As(err, &failure) || failure.Code != "pi_profile_mismatch" {
++				t.Fatalf("near-miss profile %q error = %#v", candidate, err)
++			}
++			const want = `{"contract":"agents-infra.pi-standalone-result","schema_version":1,"status":"error","error":{"code":"pi_profile_mismatch"}}`
++			if err.Error() != want {
++				t.Fatalf("legacy profile refusal = %s, want the exact sanitized document", err)
++			}
++		})
++		t.Run("schema-1 refuses "+candidate, func(t *testing.T) {
++			var runErr error
++			output := captureStdout(t, func() {
++				runErr = runPi([]string{"spawn", "--profile", candidate, "--prompt", "safe prompt", "--deadline", "30m", "--result-schema", "1"})
++			})
++			document := decodeSchemaOneRefusal(t, output, runErr)
++			if document.Error.Code != managementpi.TurnCodeProfileMismatch {
++				t.Fatalf("schema-1 near-miss code = %q, want %q", document.Error.Code, managementpi.TurnCodeProfileMismatch)
++			}
++			const want = `{"contract":"agents-infra.pi-turn-result","schema_version":1,"status":"error","error":{"code":"pi_turn_profile_mismatch"}}`
++			if strings.TrimSpace(output) != want {
++				t.Fatalf("schema-1 profile refusal = %q, want the exact sanitized document", output)
++			}
++		})
++	}
++}
