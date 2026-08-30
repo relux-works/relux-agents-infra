@@ -5,6 +5,12 @@
 
 ## 2026-08-31
 
+### 1115 — Mixed Sol/Medium + Sonnet-5/High Spawn Policy Applied To Fresh Trunk
+- SCOPE: `task-board.config.json` only, on fresh `origin/main` (`5feebbb170ea9a9ef884899c846a897d58f02fc5`, worktree `HEAD` matched exactly). `spawn.ceilings`, `spawn.preferred_agentic_system` replaced and `spawn.workload_classes` added, byte-equal (canonical `jq -S` diff) to the attached `spawn-policy-v4` authority. `fast_mode` confirmed absent.
+- FINDING: `tools/agents-infra` Go source never reads `preferred_agentic_system`/`workload_classes`/`reasoning_effort_criterion` — this repo's spawn policy is consumed entirely by the external `task-board` CLI binary, not in-repo code. Config-only spawn-policy tasks have no in-repo code path to unit test; the Story's configured `go test ./... -count=1` / `go vet ./...` landing gate was still re-run and passes.
+- FINDING: The new ceiling is a real gate, verified live, not just static JSON. Two `task-board spawn` attempts against the actual production call site — `codex gpt-5.6-sol/high` (old ceiling allowed `high`, new caps at `medium`) and `claude claude-opus-5/high` (old ceiling allowed `claude-opus-5`, new `allowed_models` is `[claude-sonnet-5]` only) — were both refused (`workload_class_pair_unavailable_in_snapshot`) before any task lookup or launch side effect (task status/assignee unchanged, no RUN created).
+- STATUS: handed off `to-review` on `TASK-260831-1qpmwm`; evidence at `.task-board/.resources/TASK-260831-1qpmwm/TASK-260831-1qpmwm_validation-evidence.md`.
+
 ### 0125 — Runtime Decision: NO-GO On Both Candidates, Python mlx-lm Stays Default
 - DECISION: **NO-GO on MLX Swift and NO-GO on llama.cpp.** Python `mlx-lm` remains the default local Qwen runtime; no installed configuration was changed and `profiles.qwen-local` is untouched. Published as `articles/260831_local-qwen-runtime-comparison-study/` and `.research/260831_local-qwen-runtime-comparison-study.md` (byte-identical).
 - WEIGHTING, PRE-REGISTERED BEFORE THE NUMBERS: peak resident memory and decode throughput equal, with TTFT, 75,000-token capacity, tool-call parity, stability and migration risk alongside. Best overall compromise, explicitly not the single-axis winner — and llama.cpp *is* the single-axis winner on speed.
