@@ -71,6 +71,50 @@ Three of the replacements are strictly stronger than the code they replace:
   is replaced by a snapshot of the **entire** Homebrew formula list, which is
   what makes a `brew install go` visible (revision-6 F1).
 
+## Revision 9 — what the revision-8 review found, and what changed
+
+Two findings, High and Low, and the High one invalidates a load-bearing claim
+revision 8 introduced rather than a mechanism this document built. Severity keeps
+falling and the subject keeps moving toward the migration domain, which is the
+process working. It is also the fourth time this project has met the same defect
+shape.
+
+| Finding | What changed |
+| --- | --- |
+| F1 — the "daemon newer than CLI" refusal that Part I, P7 and R1 step 8 all rest on is **unreachable from every production `ConnectOrStart` call site**. The plan asserted it as fact | Part I's "Daemon newer than CLI" paragraph is rewritten to what production does: the newer branch returns an untyped `fmt.Errorf`, `ConnectOrStart`'s single `errors.As` discards it, the `launch == nil` arm is dead in this binary, and control reaches `takeOverUnresponsiveManager`, which runs no compatibility check and either returns an **unchecked live client** or **SIGTERM/SIGKILLs** the newer daemon — decided by its `startup_healthy`, which is unknown. "The point of irreversibility" keeps its conclusion and replaces its reason. P7's "Different" disposition and R1 step 8 widen from "do not run the spawn canary" to **"run no `ConnectOrStart`-class command against that board"**. Part V's `W2d` impact cell is corrected in the other direction too — in that window nothing fails; the impact is silence. Section **L** adds the reachability probes that should have accompanied I5-I7. The missing guard is recorded as a **named prerequisite for `skill-project-management`**, not written into this plan's prose. |
+| F2 — Low: the attached validator's section J read revision 7 from `HEAD`, so it went red the moment revision 8 was committed and could not be reproduced from the shipped artifact | Section J now pins the revision-7 document by SHA (`0425fb7`) instead of reading `HEAD`, so the comparison is reproducible from any later checkout. |
+
+**The shape, named once more.** *The check is present but uncalled from
+production.* The engine-kind contract, the External-CI policy gate, the
+comparison instrumentation, and now the wrapper's own protocol refusal — a guard
+that exists, reads correctly, and never runs on the path that matters. Revision
+8's section I asked whether the newer-daemon branch *exists* (I5-I7) and whether
+the *older* takeover is *reached* (I9), and never crossed the two. That is the
+whole defect, and it produced a plan that told an operator a wrong command would
+be refused when in fact it proceeds.
+
+**What the correction changes operationally.** The conclusion "the downgrade
+direction has no rollback" survives. What does not survive is the implied safety
+underneath it. Revision 8 said the restored CLI cannot touch that board, so the
+state would sit still until somebody decided what to do. It will not sit still:
+the next `ConnectOrStart`-class command from any agent or human on the host
+either drives that daemon unchecked or kills it. So the mitigation is no longer
+"the session plane is unavailable, avoid it" but an explicit prohibition on a
+named command family, and a downgrade of such a board requires its owner to stop
+the newer daemon **first**, out of band, with the session loss accepted in
+advance.
+
+**On convergence, asked directly by the review and answered directly.** Two
+properties this plan depends on cannot be reduced by more writing: whether a
+protocol-5 `tb-sessiond` populates `startup_healthy` (it decides which of F1's
+two branches fires, and `0.25.0` does not exist yet), and what a terminated
+daemon's provider children do. Both are settled only by building the release and
+trying it on a disposable board — which this task is forbidden to do. They are
+recorded with the other three such cases in **"The limit of what more writing can
+fix"** at the end of this document, which revision 9 extends rather than
+duplicates. Naming the limit is the result; a tenth revision that adds another
+section without a rehearsal would be adding words, not confidence.
+
 ## Revision 8 — what the revision-7 review found, and what changed
 
 Revision 7's form held. The harness is gone, the preconditions are commands an
@@ -81,7 +125,7 @@ Low.
 
 | Finding | What changed |
 | --- | --- |
-| F1 — `tb-sessiond` is a long-lived daemon carrying its own CLI-to-daemon protocol version; the plan modelled neither the daemon's lifecycle nor the skew a staged release creates, and R1 could not recover the downgrade direction | Part I gains a section that models the daemon and its control protocol from production text. **P7** enumerates the live daemons and derives `controlProtocolVersion` on both sides *before* the window. Part V names `W2d`, `W5d` and `Wimg`. R1 gains a daemon census and a canary that reaches the session manager instead of only a config reader. The downgrade direction is stated as **unrecoverable by any command this plan or the product provides**, with the exact point of irreversibility named. |
+| F1 — `tb-sessiond` is a long-lived daemon carrying its own CLI-to-daemon protocol version; the plan modelled neither the daemon's lifecycle nor the skew a staged release creates, and R1 could not recover the downgrade direction | Part I gains a section that models the daemon and its control protocol from production text. **P7** enumerates the live daemons and derives `controlProtocolVersion` on both sides *before* the window. Part V names `W2d`, `W5d` and `Wimg`. R1 gains a daemon census and a canary that reaches the session manager instead of only a config reader. The downgrade direction is stated as **unrecoverable by any command this plan or the product provides**, with the exact point of irreversibility named. **Partly SUPERSEDED by revision 9 F1:** the conclusion stands, the stated reason did not — revision 8 believed a refusal protected the downgrade direction, and no production `ConnectOrStart` path performs one. |
 | F2 — the snapshot records a `directory` kind for the `~/.claude` and `~/.codex` link trees, stages no tree for it, and R1 then aborts mid-rollback | The snapshot stages link-tree directories symmetrically with `~/.agents`, and **R1 gains a pre-mutation admissibility pass** over the whole snapshot — kinds, link targets, staged trees, saved executables, saved roles and the saved install state. A snapshot R1 cannot restore is refused before the first `mv`, not discovered halfway through. |
 | F3 — two of six evidence sections described running the document's own commands when they ran a reimplementation | Section D is retitled as what it is, a fixture-level illustration, with the real P6 run pointed at section H. Section E now drives **the document's own P4 fence, verbatim**, including the manual append the document requires of the operator. Section G's prose matches how the suite actually locates the block. |
 
@@ -539,16 +583,100 @@ host are v4 and can drain, so on this host the automatic path is the gentler
 one — but that is a measurement of two processes today, not a property of the
 step.
 
-**Daemon newer than CLI** — `actual > controlProtocolVersion`
-(`client.go:725-731`) is a hard refusal: *"Session Manager protocol v%d is newer
-than this wrapper supports (v%d); update task-board before retrying"*. There is
-no recovery path in that direction. `takeOverOutdatedManager` refuses it
-explicitly at `stale_takeover.go:76-78` — *"refusing protocol takeover without
-an older daemon version"* — and no CLI subcommand exposes `Drain`; it is reached
-only from inside the takeover that just refused. `session status` still answers,
-because `Dial` performs no compatibility check and the response decoder is
-lenient (`client.go:677`, a plain `json.Decoder.Decode` with no
-`DisallowUnknownFields`), but that is a **read**, not a repair.
+**Daemon newer than CLI** — this is the direction revision 8 got wrong, and the
+correction changes the shape of the risk rather than its size.
+
+The refusal text exists. `actual > controlProtocolVersion` (`client.go:725-731`)
+returns *"Session Manager protocol v%d is newer than this wrapper supports
+(v%d); update task-board before retrying"*. Revisions 1-8 asserted that an older
+CLI therefore **cannot** use that board's session plane. That assertion is
+false for every `ConnectOrStart` call site in this binary, and `ConnectOrStart`
+is the family this plan cares about — goal-bound `spawn`, `session doctor`,
+`logs`, `reclaim-contexts`, the managed `codex`/`claude` wrappers.
+
+The reason is that the refusal is returned as a **plain `fmt.Errorf`**, while the
+older-daemon branch one `if` above it returns the typed
+`*ManagerProtocolUpgradeError`. `ConnectOrStart` inspects the error with exactly
+one `errors.As(err, &upgrade)` against that typed value (`client.go:145-166`).
+For the newer-daemon error the match fails, the `else` block falls through
+without returning, and **the error is discarded**. The only arm that would
+surface it is `if launch == nil { return nil, ErrManagerNotRunning }` — which
+does not surface it either, and is unreachable regardless: all three production
+callers pass a non-nil launch closure (`cmd/session.go:366`,
+`cmd/codex_manager.go:92`, `cmd/claude_manager.go:115`). Control therefore
+reaches `takeOverUnresponsiveManager(ctx, layout)`
+(`stale_takeover.go:168-266`), which dials with `dialManagerStatus`
+(`stale_takeover.go:25-41`) — the **unchecked** variant. The compatibility check
+lives only in `dialHealthyManager` (`:43-59`), which the takeover never calls.
+So the older CLI meets the newer daemon with no compatibility check at all, and
+takes one of three branches:
+
+| Live newer daemon's state | What the older CLI does | Operator sees |
+| --- | --- | --- |
+| holds the singleton lock, second status round-trip reports `startup_healthy: true` | `takeOverUnresponsiveManager` returns that client; `ConnectOrStart` returns it unchanged | **success.** A live client to a daemon speaking a protocol this build does not support, and v4 control calls are then issued against it |
+| holds the lock, `startup_healthy: false`, past the 3 s `startupHealthyDeadline` from its recorded `StartedAt` | falls through the recorded/alive/instance re-checks to `terminateStaleInstance` (`:265`) → SIGTERM, 6 s grace, then SIGKILL — then `launch()` starts a daemon from whatever `tb-sessiond` `PATH` resolves to | **success**, after the newer daemon and its sessions were killed out of band |
+| does not hold the lock | `(nil, nil, nil)`; `launch()` runs and the poll loop re-dials through `dialHealthyManager`, which *does* check compatibility and keeps failing | `waiting for session manager: context deadline exceeded` after 15 s (`session`) or up to 4 min (managed wrappers). The message names no protocol |
+
+Both of the first two contradict what revisions 1-8 wrote. The first is worse in
+kind: the plan told the operator the session plane was *lost*, so a wrong command
+would produce a clean refusal. It does not; it proceeds. The second is worse in
+blast radius: it is exactly the **out-of-band termination** this plan's own NOT
+IMPLEMENTED table calls *"the only remaining move … its blast radius decides
+whether that state is recoverable at all … UNKNOWN"* — arriving automatically,
+on a daemon that may hold dozens of sessions, instead of as a decision somebody
+made.
+
+Which branch fires is decided by one field, `StartupHealthy` / `startup_healthy`
+(`types.go:114-128`). Whether a protocol-5 daemon still populates it is
+**unknown**: the status shape is precisely what a protocol bump changes, and the
+decoder is lenient (`client.go:677`, a plain `json.Decoder.Decode` with no
+`DisallowUnknownFields`), so a renamed or dropped field decodes as the zero value
+`false` and selects the terminate branch. Stated as unknown, not predicted.
+
+**Where the refusal *is* reachable, and why neither place helps.** Two production
+paths do run the check against a newer daemon:
+
+- `sessionmanager.Connect` (`client.go:112`) is the launch-less, compat-checked
+  entry. It has zero direct call sites under `cmd/`; it reaches production once,
+  as a function value at `cmd/context_security.go:75`, invoked inside
+  `FinalizeAndRequireBuilderCoverageEvidence`
+  (`builder_gateway_manager.go:319-352`) on the `task-board context publish`
+  path. There the refusal is not `ErrManagerNotRunning`, so it takes the
+  `default:` arm and surfaces as a `ContextError` with code
+  `builder_trace_unavailable` — a message about an unreadable trace, not about a
+  protocol.
+- `ConnectOrStartAndAttach` (`client.go:228-250`) — but only *after*
+  `ConnectOrStart` has already handed back the unchecked client and `Attach` was
+  rejected by the newer daemon with an unknown-field 400 (`client.go:669-671`).
+  Only then does `takeOverManagerForProtocolUpgrade(ctx, layout, true)` re-dial,
+  run `managerProtocolCompatibility`, fail its `errors.As`, and return the
+  refusal — wrapped in *"automatic Session Manager protocol upgrade failed after
+  a rejected request; retry the wrapper"*, advice that cannot succeed. Whether a
+  v5 daemon would reject a v4 attach body at all is unknown; an older client
+  sends fewer fields, so it may simply be accepted.
+
+Neither path is a spawn or route command, and neither prevents the unchecked
+client from being issued first. **The downgrade direction is unprotected, not
+protected-by-refusal.**
+
+`takeOverOutdatedManager` does still refuse explicitly at
+`stale_takeover.go:76-78` — *"refusing protocol takeover without an older daemon
+version"* — and no CLI subcommand exposes `Drain`, so no operator can drain a
+newer daemon by hand. Both remain true. What they do **not** establish, and what
+revision 8 read them as establishing, is that anything stops the older CLI from
+driving or killing that daemon. `session status` still answers, because `Dial`
+performs no compatibility check, but that is a **read**, not a repair.
+
+**A named prerequisite for the owning repository, not for this plan.** If the
+`ConnectOrStart` path is to fail closed in the downgrade direction, that is a
+change to `skill-project-management`: either `managerProtocolCompatibility`
+returns a typed error for the newer branch too and `ConnectOrStart` surfaces it,
+or `takeOverUnresponsiveManager` runs a compatibility check before returning a
+client or signalling a PID. This plan cannot add behaviour to `tb-sessiond` or
+to the wrapper; it can only describe what those binaries do today. The gap is
+recorded in the NOT IMPLEMENTED table and, until it is closed, the plan's
+response is prevention in P7 and a prohibition in R1 — not a refusal it does not
+have.
 
 ### Why a bump is likely rather than hypothetical
 
@@ -574,18 +702,41 @@ against a board whose daemon is older** — a `task-board spawn` with a goal, a
 `session doctor`, a managed `codex`/`claude` wrapper. At that moment that board
 gets a daemon speaking the new protocol. From then on:
 
-- R1 restores every file, and the restored CLI still cannot use that board's
-  session plane, because the daemon is newer than it supports.
-- Nothing in the older build can drain, replace or stop that daemon.
-- The only remaining moves are to leave it running until it exits on its own, or
-  to terminate it out of band. A termination is **not** a drain, and this plan
-  makes no claim about what its provider children do — that is stated as
-  unknown, not guessed.
+- R1 restores every file. The restored CLI then meets a daemon newer than it
+  supports and, on every `ConnectOrStart` path, **does not refuse it**: it
+  either receives an unchecked live client and issues v4 control calls against a
+  v5 daemon, or it SIGTERM/SIGKILLs that daemon and starts a replacement. Which
+  one happens is decided by the newer daemon's `startup_healthy`, a field this
+  plan cannot predict.
+- The plan does not get to choose between those two. There is no flag, no
+  environment variable and no subcommand that selects one, and no operator
+  action between the install and the first command that changes it.
+- `takeOverOutdatedManager` refuses the downgrade explicitly, and no CLI
+  subcommand reaches `Drain`, so nothing in the older build performs a *graceful*
+  replacement. What it does instead is a fenced termination, and a termination is
+  **not** a drain. What that does to the daemon's provider children is stated as
+  **UNKNOWN** in the NOT IMPLEMENTED table, and it stays unknown here.
 
-So the downgrade direction is not recoverable by R1, and saying so is more
-useful than writing a rollback step that would not work. The response is
-prevention, in P7: either the release does not change the constant, or every
-live daemon is quiesced and stopped by its owner **before** Step 2 opens.
+**The conclusion "no rollback" is unchanged; the reason is different, and the
+difference matters operationally.** Revisions 1-8 said the restored CLI cannot
+touch that daemon, which implied a wrong command would produce a clean refusal
+and leave the daemon intact. It will not. The restored CLI will drive that
+daemon or fence it, without a compatibility check, and neither outcome is a
+rollback. So the instruction is not "the session plane is unavailable, avoid it
+and it will keep" but **"run no `ConnectOrStart`-class command against that
+board at all"** — because running one is what causes the next irreversible thing,
+and its blast radius is UNKNOWN.
+
+A downgrade of that board therefore requires stopping the newer daemon
+**first**, by its owner, out of band, with the session loss accounted for
+beforehand — not relying on a refusal that this binary does not perform. That is
+a decision for the board's owner, and this plan has no authority to make it.
+
+The response is prevention, in P7: either the release does not change the
+constant, or every live daemon is quiesced and stopped by its owner **before**
+Step 2 opens. Prevention was already the right answer; it is now the *only*
+answer, because the fallback revision 8 believed in — a refusal that keeps the
+state frozen until somebody decides — does not exist.
 
 ### Image skew, which exists even when the protocol does not change
 
@@ -1159,11 +1310,25 @@ laid out in Part I and are not survivable by R1:
    the sessions it holds. The operator does not choose when: any goal-bound
    `spawn`, `session doctor`, `session logs`, or managed `codex`/`claude`
    wrapper does it.
-2. From that moment the rollback is one-way. A restored older CLI cannot use
-   that board's session plane, cannot drain the newer daemon and cannot replace
-   it.
-3. The migration board itself has no daemon, so its installed canary cannot
-   observe either failure.
+2. From that moment the rollback is one-way, and **not because the restored CLI
+   refuses the newer daemon — it does not.** On every `ConnectOrStart` path the
+   restored older CLI meets that daemon with no compatibility check
+   (`client.go:145-166` discards the untyped newer-daemon error;
+   `stale_takeover.go:168-266` dials with the unchecked `dialManagerStatus`) and
+   either receives a live client and issues v4 calls against a v5 daemon, or
+   SIGTERM/SIGKILLs it and starts a replacement. Which one is decided by that
+   daemon's `startup_healthy`, which is unknown for a protocol it does not yet
+   define. Neither is a rollback, and the plan cannot select between them.
+3. Therefore the prohibition after a bump is not "avoid the session plane, it
+   will refuse you" but **run no `ConnectOrStart`-class command against that
+   board, recovery-prefixed or not**: goal-bound `spawn`, `session doctor`,
+   `session logs`, `session reclaim-contexts`, `session context` and the managed
+   `codex`/`claude` wrappers. `Dial`-only reads (`session status`, `list`) remain
+   safe, and are the only thing that is. A downgrade of such a board requires its
+   owner to stop the newer daemon first, out of band, with the session loss
+   accepted in advance.
+4. The migration board itself has no daemon, so its installed canary cannot
+   observe any of this.
 
 The only forms of this step that are safe are: **(a)** the release does not
 change the constant, or **(b)** every live daemon is quiesced and stopped by its
@@ -1184,11 +1349,12 @@ Stated so that the gap is visible rather than papered over by an untested guard.
 | Verify that the `env -u` list in Steps 2/5 still covers every `TASK_BOARD_*` name P2 reports | Two lists that must agree; today the operator compares them by eye | **NOT IMPLEMENTED.** Mitigation: both lists appear in this document adjacent to each other, and P2's diff catches an added name even though it does not catch a forgotten `-u`. |
 | Rehearse any rollback procedure against a real installed pair | See "UNTESTED" throughout Part III | **NOT IMPLEMENTED / UNTESTED.** |
 | Prevent a `ConnectOrStart`-class command from reaching a board with an older daemon during `W2`/`W5` | The restart is automatic and any wrapper, agent or human on the host can trigger it; only quiescing the daemons beforehand removes it | **NOT IMPLEMENTED.** Mitigation: P7's per-board disposition, and a release that does not change `controlProtocolVersion`. There is no host-wide interlock, and this plan does not pretend to one. |
-| Establish what a live daemon's provider children do when the daemon is terminated out of band rather than drained | It is the only remaining move after a protocol downgrade, and its blast radius decides whether that state is recoverable at all | **NOT IMPLEMENTED / UNKNOWN.** Not measured here, and not guessed. |
+| Establish what a live daemon's provider children do when the daemon is terminated out of band rather than drained | Revision 8 called this "the only remaining move after a protocol downgrade", implying somebody chooses it. Part I now shows the restored older CLI performs it **automatically** on one of the two branches of `takeOverUnresponsiveManager`. Its blast radius decides whether that state is recoverable at all | **NOT IMPLEMENTED / UNKNOWN.** Not measured here, and not guessed. Raised in importance by the F1 correction: it is no longer a consequence of an operator decision but of a command any agent or human on the host can run. |
+| Fail closed when an older CLI meets a newer daemon on a `ConnectOrStart` path | The refusal text exists (`client.go:725-731`) and is unreachable from every production `ConnectOrStart` call site: the newer branch returns an untyped `fmt.Errorf`, `ConnectOrStart`'s single `errors.As` matches only the typed older-daemon error, and `takeOverUnresponsiveManager` runs no compatibility check. So the downgrade direction is unprotected, not protected | **NOT IMPLEMENTED, and not this plan's to implement.** This is a change to `skill-project-management` — a typed error for the newer branch surfaced by `ConnectOrStart`, or a compatibility check inside `takeOverUnresponsiveManager` before it returns a client or signals a PID — and a **named prerequisite** if the downgrade direction is ever to be survivable. The plan cannot add behaviour to a binary it only describes. Mitigation until then: P7's prevention, and R1 step 8's prohibition on `ConnectOrStart`-class commands. |
 
 None of these is a substitute for a guard that was removed: P1, P2, P3, P4, P5
-and P6 each cover strictly more than the code they replace. These four are
-properties no revision ever had.
+and P6 each cover strictly more than the code they replace. These are properties
+no revision ever had, and the last one is a property the *product* does not have.
 
 # Part III — Recovery snapshot and rollback
 
@@ -1542,7 +1708,11 @@ mv -f "$(dirname "$(cat "$MANIFEST/pm-state-path.txt")")/.install.json.rollback.
 # 8. Session-manager daemons. R1 restores files. It does not restore a running
 #    daemon and it cannot downgrade one, so this step REPORTS rather than
 #    repairs. A board whose daemon is newer than the restored CLI supports has
-#    not been rolled back, whatever the file system says.
+#    not been rolled back, whatever the file system says -- and the restored CLI
+#    does NOT refuse such a daemon: on every ConnectOrStart path it either drives
+#    it unchecked or SIGTERM/SIGKILLs it. So the census below is followed by a
+#    prohibition, not by a safe idle state. Read the canary notes before running
+#    anything else against a board this step names.
 rc=0
 pgrep -fl tb-sessiond > "$RECOVERY_ROOT/daemons-after-r1.txt" || rc=$?
 case "$rc" in
@@ -1577,7 +1747,13 @@ while IFS= read -r board; do
 done < "$RECOVERY_ROOT/daemon-boards-after-r1.txt"
 
 # then a live spawn -> outcome -> handoff -> reviewer route canary, recovery-prefixed,
-# on a board whose reported protocol_version the restored CLI supports
+# on a board whose reported protocol_version the restored CLI supports.
+#
+# For any board reporting a GREATER protocol_version: run NO ConnectOrStart-class
+# command against it -- goal-bound spawn, session doctor, session logs, session
+# reclaim-contexts, session context, or the managed codex/claude wrappers --
+# recovery-prefixed or not. The `session status` reads above are Dial-based and
+# are the only safe ones. Escalate to that board's owner instead.
 ```
 
 Reading the canary:
@@ -1588,16 +1764,31 @@ Reading the canary:
 - `protocol_version` **equal** to the restored build's `controlProtocolVersion`
   (P7c, read from `$RECOVERY_ROOT/sources/skill-project-management`) is the
   rolled-back state.
-- `protocol_version` **greater** is the one state R1 cannot fix. That board's
-  session plane is lost to the restored CLI: `spawn` with a goal, `session
-  doctor`, and the managed wrappers all refuse, and nothing in the restored
-  build can drain or replace the daemon. Report the step `unknown/failed`, name
-  the board, and escalate to that board's owner. **Do not** run the live spawn
-  canary against it and call the absence of a result a pass.
+- `protocol_version` **greater** is the one state R1 cannot fix, and it is more
+  dangerous than revision 8 wrote. The restored CLI does **not** refuse that
+  daemon on any `ConnectOrStart` path: `client.go:145-166` matches only the
+  typed older-daemon error and discards the untyped newer one, and
+  `takeOverUnresponsiveManager` (`stale_takeover.go:168-266`) dials with the
+  unchecked `dialManagerStatus`. So the next such command either gets a live
+  client and issues v4 calls against a newer daemon, or SIGTERM/SIGKILLs a daemon
+  holding live sessions and starts a replacement — decided by that daemon's
+  `startup_healthy`, which is unknown. Report the step `unknown/failed`, name the
+  board, and escalate to that board's owner.
+
+  **From that point, run no `ConnectOrStart`-class command against that board —
+  recovery-prefixed or not.** That is: goal-bound `spawn`, `session doctor`,
+  `session logs`, `session reclaim-contexts`, `session context`, and the managed
+  `codex`/`claude` wrappers. The prohibition is wider than "do not run the live
+  spawn canary", because the canary is not the only command that fires the
+  takeover; any of the above does, including one an agent or another human on the
+  host runs. The `session status` reads above are safe and are the only reads that
+  are: `Dial` starts nothing and checks nothing.
 
 The last bullet is why P7 exists. R1 can detect this state; it was never able to
-recover it, and revision 7 was wrong to imply otherwise by pairing R1 with a
-canary that could not see it.
+recover it, revision 7 was wrong to imply otherwise by pairing R1 with a canary
+that could not see it, and revision 8 was wrong in the other direction — it
+believed a refusal stood between the restored CLI and the newer daemon. Nothing
+does. Detection is followed by a prohibition, not by a safe idle state.
 
 Rollback status: **UNTESTED operationally.** R1's logic was exercised against a
 disposable `HOME` with fake artifacts (Part VI section G: restore, quarantine of
@@ -2159,7 +2350,7 @@ Rollback status: **UNTESTED**.
 | `W3`: agents-infra `v1.7.0` install | First managed binary replacement to installed canary or R2 canary; measured | Every executable the release's `BINARY_NAME`/`MODEL_HARNESS_BINARY_NAME` name, the machine-scoped install state in the resolved config dir, `.agents`, links/helpers and receipt may mix; new composition may fail. | Saved current-pair; existing children/sessions keep process images; retry later mutations through the saved pair. |
 | `0.25.0` installed while `v1.7.0` is not yet installed | Until Step 3 canary | Supported only if the Step-2 live external-seam canary passed. | An explicit tested pair, not inferred independence. |
 | Public `v0.6.0` while both installed consumers embed `v0.5.0` | `0s` dynamic mismatch | None from publication alone. | Exact pins; no `@latest`. |
-| `W2d`: daemon protocol skew after `0.25.0` is installed, **only if `0.25.0` changes `controlProtocolVersion`** | Opens when the new `tb-sessiond`/`task-board` pair is on disk. Closes **per board**, when that board's daemon is next reached by a `ConnectOrStart`-class command — an interval with no upper bound, since a board nobody touches keeps its old daemon indefinitely | Each such board's daemon is restarted without operator action: drained if it is v2+, fenced with SIGTERM/SIGKILL otherwise. Until then the board runs a daemon whose protocol the installed CLI refuses, so goal-bound `spawn`, `session doctor`, `logs`, `reclaim-contexts` and the managed wrappers fail on it. **After the takeover, R1 cannot restore that board**: the newer daemon outlives the rollback and the restored CLI refuses it. | **Not survived — avoided.** P7c derives the constant on both sides before the window and stops the step if it changed. If it must change, every live daemon is quiesced and stopped by its owner before the window opens, so no board carries an older daemon into it. There is no third option, and there is no rollback. |
+| `W2d`: daemon protocol skew after `0.25.0` is installed, **only if `0.25.0` changes `controlProtocolVersion`** | Opens when the new `tb-sessiond`/`task-board` pair is on disk. Closes **per board**, when that board's daemon is next reached by a `ConnectOrStart`-class command — an interval with no upper bound, since a board nobody touches keeps its old daemon indefinitely | Each such board's daemon is restarted without operator action: drained if it is v2+, fenced with SIGTERM/SIGKILL otherwise. **Until then nothing visibly fails** — this cell said the opposite in revision 8 and contradicted its own "restarted without operator action" in the same sentence. In this direction the CLI is the newer side, `managerProtocolCompatibility` returns the *typed* `ManagerProtocolUpgradeError`, and `ConnectOrStart` handles it by taking over and succeeding; the `Dial`-based commands (`session status`, `list`, `stop`) never check compatibility at all. The window's impact is **silence**: a takeover the operator did not ask for and is not told about. **After the takeover, R1 cannot restore that board** — and not because the restored CLI refuses the newer daemon. It does not refuse it: it drives it unchecked or fences it, decided by that daemon's `startup_healthy`. See Part I. | **Not survived — avoided.** P7c derives the constant on both sides before the window and stops the step if it changed. If it must change, every live daemon is quiesced and stopped by its owner before the window opens, so no board carries an older daemon into it. There is no third option, and there is no rollback. |
 | `Wimg`: daemon image skew, **whether or not the protocol changes** | Opens when `tb-sessiond` is replaced. Closes per board when that board's daemon next exits. Unbounded; on this host it is already open, with daemons 60 and 48 commits behind the installed file, 8 and 5 days old | Each live daemon keeps executing the old task-board image and its old embedded agents-management while the CLI on disk executes the new one. Protocol equality proves the transport is compatible and proves nothing about how the two embedded contract versions compose across it. Sessions held: 31 and 2 at planning time. | P7's recorded per-board disposition: the board is quiesced and its daemon stopped by its owner outside the window, or it is explicitly excluded from goal-bound and writable-context spawn until its daemon exits. A board with a live daemon and no recorded disposition stops the step. |
 | `W5`: task-board `0.25.1` install | First `install_binary` call to installed or R1 canary; measured | Same task-board surface as `W2`, including the unconditional `install_skills` stage; new default spawn/route withheld. | Saved bridge-pair authority, the same P3/P4 preconditions, and the full R1 rollback. |
 | `0.25.1/v0.6.0` with agents-infra `v1.7.0/v0.5.0` | Until Step 6 canary | Cross-version embedded libraries behind one external seam. | Allowed only after the Step-5 real spawn/compose/route canary. |
@@ -2226,21 +2417,26 @@ Every command below was run read-only against the real production installers at
 against the real host. Each row is the exact command this plan tells the
 operator to run.
 
-Validator: `.temp/TASK-260830-s5ro4e-rev8/validate-revision8.sh`, run under both
-`bash` and `zsh`. **151 probes, 0 failures, exit 0 in both shells.** Logs:
-`.temp/TASK-260830-s5ro4e-rev8/val-bash.log`, `val-zsh.log`.
+Validator: `.temp/TASK-260830-s5ro4e-rev9/validate-revision9.sh`, run under both
+`bash` and `zsh`. Logs: `.temp/TASK-260830-s5ro4e-rev9/val-bash.log`,
+`val-zsh.log`, attached as
+`TASK-260830-s5ro4e_validate-revision9-{bash,zsh}.log`. Probe counts are in the
+logs and in the board notes, not restated here where they would go stale.
 
 The suite locates every block it drives — R1, P4a, P4b, P6, P7a and the snapshot
 — inside this document **by content**, not by line number, so a shifted offset
 cannot silently point it at the wrong block or at nothing. Where a section
-compares against the *previous* revision's text, that text is recovered from the
-committed document at `HEAD` and extracted the same way, so "red on the shipped
-text" is measured rather than asserted.
+compares against a *previous* revision's text, that text is recovered **by
+commit SHA** and extracted the same way, so "red on the shipped text" is measured
+rather than asserted. Revision 8's validator read it from `HEAD`, which went red
+the moment revision 8 was committed and could not be re-run by a reviewer — the
+revision-8 F2 finding. Section J now pins `0425fb7` and fails closed if that
+object cannot be read.
 
-Every one of the 43 shell fences in this document was extracted mechanically
-(`.temp/TASK-260830-s5ro4e-rev8/extract-fences.py`) and syntax-checked: `bash -n`
+Every shell fence in this document was extracted mechanically
+(`.temp/TASK-260830-s5ro4e-rev9/extract-fences.py`) and syntax-checked: `bash -n`
 and `zsh -n` on every `bash` fence, `zsh -n` on every verbatim-production `zsh`
-fence. All 43 parse in every applicable shell. The `zsh` fences parsing is what
+fence. All of them parse in every applicable shell. The `zsh` fences parsing is what
 confirms the production excerpts in Part I are quoted faithfully rather than
 paraphrased.
 
@@ -2400,7 +2596,7 @@ daemons were observed and left alone.
 | I1-I2 | `controlProtocolVersion` is a compile-time constant, and its value | one match, `4` |
 | I3 | `task-board --version` does not report it — so it can only come from source | 0 mentions |
 | I4 | the daemon publishes it as `protocol_version` on its status endpoint | present in `ManagerStatus` |
-| I5-I7 | `managerProtocolCompatibility` has an older-daemon branch, a newer-daemon branch, and the newer branch is a bare refusal | all three present |
+| I5-I7 | `managerProtocolCompatibility` has an older-daemon branch, a newer-daemon branch, and the newer branch is a bare refusal | all three present — **presence only; see section L for whether it runs** |
 | I8 | `takeOverOutdatedManager` refuses the downgrade direction in words | *"refusing protocol takeover without an older daemon version"* |
 | I9 | the takeover is reached from `ConnectOrStart` itself, not from a helper | present in `ConnectOrStart`'s body |
 | I10-I11 | the takeover drains first and falls through to a fenced terminate | both present |
@@ -2420,6 +2616,66 @@ daemons were observed and left alone.
 I24 and I27-I29 are the two rows that make this section evidence rather than
 description. The first says the skew is not hypothetical on this host; the
 second says the canary the plan already had could not have seen it.
+
+**What this section did wrong in revision 8, stated plainly.** I5-I7 asserted
+that the newer-daemon branch *exists*. I9 asserted that the *older*-daemon
+takeover is reached from `ConnectOrStart`. Nothing asked whether the newer branch
+is reached from anything — and the plan then used I5-I7 as if it were a
+guarantee that an older CLI cannot touch a newer daemon. That is the standard
+negative shape **"the check is present but uncalled from production"**, and this
+document has now hit it in three separate places (the engine-kind contract, the
+External-CI policy gate, the comparison instrumentation) before hitting it here.
+A presence probe for a guard is not evidence the guard runs. Section L is the
+reachability probe that should have accompanied I5-I7 from the start.
+
+The same asymmetry exists in the product's own tests:
+`TestConnectOrStartUpgradesHealthyOutdatedProtocolHolder` and
+`TestConnectOrStartTakesOverHolderWithoutStartupHealthy` cover the older
+direction and the terminate branch; **no test file under
+`internal/sessionmanager` names the newer-than-wrapper refusal at all** (L21).
+
+### L — is the newer-daemon refusal reachable from production? Measured, not assumed
+
+Every row is a read of production text at `skill-project-management` `f1319eff`.
+No process was signalled, no protocol mismatch staged, no second image built.
+The conclusion rests on call sites and their arguments, not on an observed
+takeover — the same standard section I uses, and the limit is stated in "What
+this revision did not do".
+
+| # | Check | Result |
+| --- | --- | --- |
+| L1 | the newer-daemon branch returns a bare `fmt.Errorf`, **not** a typed error | 1 |
+| L2 | while the older-daemon branch returns `*ManagerProtocolUpgradeError` | 1 |
+| L3 | `ConnectOrStart` inspects the compat error with exactly one `errors.As` | 1 |
+| L4 | and performs no other `errors.As`/`errors.Is` on it | 1 total |
+| L5 | so the untyped newer error matches nothing and the `else` block returns nothing for it | 2 `return nil, upgrade`, both inside the typed arm |
+| L6 | the only `launch == nil` early return is `ErrManagerNotRunning`, which is not the refusal | 1 |
+| L7-L9 | every production `ConnectOrStart`/`…AndAttach` caller passes a **non-nil** launch closure — `cmd/session.go:366`, `cmd/codex_manager.go:92`, `cmd/claude_manager.go:115` | 3 of 3 |
+| L10 | so that arm is dead in this binary and control reaches `takeOverUnresponsiveManager` | 2 call sites in `ConnectOrStart` |
+| L11 | `managerProtocolCompatibility` has exactly two production call sites | 2 |
+| L12 | **neither is inside `takeOverUnresponsiveManager`** | 0 |
+| L13 | which dials with `dialManagerStatus`, the unchecked variant | 1 |
+| L14 | and `dialManagerStatus` contains no compatibility check | 0 |
+| L15 | a `StartupHealthy` holder is returned to the caller as a live client | 1 |
+| L16 | a non-`StartupHealthy` holder falls through to `terminateStaleInstance` | 1 |
+| L17 | which signals the process: SIGTERM then SIGKILL | 2 |
+| L18 | and `ConnectOrStart` returns that unchecked healthy client directly | 2 |
+| L19 | `sessionmanager.Connect`, the launch-less compat-checked entry, has **zero** direct call sites under `cmd/` | 0 |
+| L20 | it reaches production once as a function value, at `cmd/context_security.go:75` | 1 |
+| L20a | that value is invoked inside `FinalizeAndRequireBuilderCoverageEvidence`, whose `default:` arm turns the refusal into a `builder_trace_unavailable` `ContextError` | both present |
+| L20b | reached only from `context publish` / the mutate enforcement hook, not from any spawn or route command | 2 callers, neither a session command |
+| L21 | test files naming the newer-than-wrapper refusal | **0** |
+| L22-L23 | while the older direction and the terminate branch each have a dedicated test — narrowing control, so L21 is a real gap and not a grep artefact | 1 and 1 |
+| L24 | `takeOverManagerForProtocolUpgrade` **does** run the check and **does** surface the untyped refusal — the one `ConnectOrStart`-adjacent place it is reachable | 1 |
+| L25 | but only from `ConnectOrStartAndAttach`, after `ConnectOrStart` already returned the unchecked client and `Attach` was rejected | reached via `errors.Is(err, ErrManagerProtocolUpgradeRequired)` |
+| L26 | and it is wrapped in *"…retry the wrapper"*, advice that cannot succeed | 1 |
+| L27 | the plan now names the mechanism it previously did not: `takeOverUnresponsiveManager`, `StartupHealthy`, `startup_healthy`, `dialManagerStatus`, `launch == nil`; drops both false claims; states the prohibition as the whole `ConnectOrStart` family; records the owning-repo prerequisite | 9 of 9 |
+| L28-L28f | **narrowing control, pinned at `cbe69f3`:** every one of those nine rows run against **revision 8's shipped text** | **9 of 9 red** — five terms absent, both false claims present, no prohibition, no prerequisite. So L27 measures the correction and not the grep |
+
+L12 is the row the whole correction turns on. L15 and L16 are the two outcomes,
+L21-L23 are why neither was caught, L24-L26 say where the refusal *is* reachable
+so that "unreachable" is not overclaimed, and L28 is the control that makes L27
+attributable — the row revision 8's own section I never had for I5-I7.
 
 ### J — the recorded-but-unrestorable kind, attacked against the shipped text
 
@@ -2509,11 +2765,14 @@ the daemons and derives the constant on both sides before the window, with a
 `Wimg` with their real duration semantics — per board, unbounded, closing when
 that board's daemon is next reached or next exits. **R1** gains a daemon census
 and a canary that reaches the session manager instead of a config reader that
-could go green over the failure. And the downgrade direction is stated as what
-production says it is: refused by `managerProtocolCompatibility`, refused again
-by `takeOverOutdatedManager`, with no cobra command anywhere near `Drain` (I12).
-It is not recoverable, the point of irreversibility is named, and the answer is
-prevention rather than a rollback step that would not work.
+could go green over the failure. The downgrade direction is stated as what
+production says it is — but **revision 8 stated it wrongly and revision 9
+corrects it**: `managerProtocolCompatibility` does contain the refusal,
+`takeOverOutdatedManager` does refuse the downgrade, and no cobra command reaches
+`Drain` (I12), yet none of that is reached from any production `ConnectOrStart`
+call site, so the direction is *unprotected* rather than refused (section L). It
+is still not recoverable, the point of irreversibility is still named, and the
+answer is still prevention rather than a rollback step that would not work.
 
 **F2 — a recorded kind with nothing to restore it from.** The snapshot stages
 both link trees; R1 refuses before it mutates; section J drives the shipped
@@ -2525,6 +2784,42 @@ the difference. Working the finding also found the fail-open one arm over
 is; section E drives the document's own P4 fences including the manual append;
 section G's prose matches its validator. Where revision 8 still checks text
 rather than execution — J23-J24 — the row says "text check, not an execution".
+
+### The two revision-8 findings, and where each is closed
+
+**F1 — the newer-daemon refusal is unreachable from production.** Confirmed
+independently against `f1319eff` and closed in six places, exactly as the review
+required. Part I's "Daemon newer than CLI" paragraph now describes the three
+branches an older CLI actually takes and names `client.go:145-166`,
+`stale_takeover.go:168-266` and the dead `launch == nil` arm. "The point of
+irreversibility" keeps its conclusion and replaces its reason: the state is
+one-way because the restored CLI will *drive or fence* that daemon without a
+check, not because it cannot touch it. P7's "Different" disposition item 2 and
+R1 step 8's `protocol_version`-greater bullet are rewritten, and the prohibition
+widened from the spawn canary to the whole `ConnectOrStart` family — goal-bound
+`spawn`, `session doctor`, `logs`, `reclaim-contexts`, `session context` and the
+managed wrappers, recovery-prefixed or not. Part V's `W2d` impact cell is
+corrected in the other direction too: in that window nothing fails, and the
+impact is silence. Section **L** adds twenty-seven reachability probes next to
+I5-I7. And the missing guard is recorded as a **named prerequisite for
+`skill-project-management`** in the NOT IMPLEMENTED table, not written into this
+document's prose — this plan cannot add behaviour to a binary it only describes.
+
+Working the finding produced two facts the review did not have, both of which
+narrow rather than widen the claim. The refusal **is** reachable from exactly two
+production paths — `sessionmanager.Connect` as a function value at
+`cmd/context_security.go:75`, where it surfaces as a `builder_trace_unavailable`
+`ContextError` on the `context publish` path, and
+`takeOverManagerForProtocolUpgrade` from `ConnectOrStartAndAttach`, but only
+*after* `ConnectOrStart` already handed back the unchecked client. Neither is a
+spawn or route command and neither prevents the unchecked client, so the
+conclusion holds; "unreachable from every production `ConnectOrStart` call site"
+is the accurate form, and L19-L20b and L24-L26 record both.
+
+**F2 — section J read revision 7 from `HEAD`.** Closed by pinning the comparison
+to `0425fb7` by SHA. The validator now fails closed if that object cannot be read
+rather than silently comparing the document with itself, and section J is
+reproducible from any later checkout.
 
 ### What this revision did not do, stated as unknown
 
@@ -2562,9 +2857,22 @@ rather than execution — J23-J24 — the row says "text check, not an execution
   constants to watch the takeover fire. What a takeover does to a real
   daemon's 31 sessions is therefore **unknown**, not estimated.
 - **What a live daemon's provider children do when it is terminated out of band**
-  — the only remaining move after a protocol downgrade — was not measured. The
-  code says `Drain` deliberately leaves them running; it says nothing about
-  SIGTERM. Stated as unknown rather than inferred from the drain comment.
+  was not measured. The code says `Drain` deliberately leaves them running; it
+  says nothing about SIGTERM. Stated as unknown rather than inferred from the
+  drain comment. Revision 9 raises its importance: `terminateStaleInstance` is
+  not a move somebody chooses after a downgrade, it is one of two branches the
+  restored CLI takes **automatically**.
+- **Whether a protocol-5 `tb-sessiond` would populate `startup_healthy` is
+  unknown**, and it is the single field that decides which of those two branches
+  fires. The decoder is lenient, so a renamed or dropped field decodes as `false`
+  and selects the terminate branch — that is a mechanism, not a prediction, and
+  no prediction is made. See "The limit of what more writing can fix", point 4.
+- **Section L rests on call sites and their arguments, not on an observed
+  takeover.** No protocol mismatch was staged, no second image with a different
+  constant was built, and no `ConnectOrStart` was run against a newer daemon.
+  L1-L27 establish that no production `ConnectOrStart` path *calls* the check;
+  they do not show the resulting takeover happening. That distinction is the same
+  one the F1 finding was about, so it is stated here rather than left implicit.
 - **Whether `0.25.0` or `0.25.1` will change `controlProtocolVersion` is not
   established.** Those tags do not exist. That is exactly why P7c derives it at
   execution time instead of this document guessing in either direction.
@@ -2608,6 +2916,22 @@ rather than execution — J23-J24 — the row says "text check, not an execution
    other arms. F2 reported an abort in the `directory` arm; the `symlink` arm on
    the same input fails *open* (J13-J17), which is worse and was not reported.
    Fixing the reported instance would have left that one shipping.
+6. **New in revision 9:** a probe that a guard *exists* is not evidence the guard
+   *runs*, and a plan that treats the first as the second is asserting a
+   protection it does not have. Revision 8's I5-I7 read the newer-daemon branch
+   correctly and never asked what calls it; the answer was "no production
+   `ConnectOrStart` path", and an entire mitigation strategy rested on the gap.
+   This is the fourth instance of the shape *the check is present but uncalled
+   from production* in this project. The rule that follows: **for every guard a
+   plan relies on, name the production entry point that reaches it, and probe the
+   path — not the text.**
+7. **Also new:** when writing about a binary you do not own, the plan may only
+   *describe*. A missing guard is a prerequisite for the owning repository, named
+   as such, never a sentence added to the plan that reads as though the behaviour
+   exists.
+8. **Also new:** say where more writing stops helping. Two properties this plan
+   depends on can only be settled by a rehearsal it is forbidden to run, and
+   naming that limit is a result — not a gap to paper over with another section.
 
 # Stop conditions
 
@@ -2667,13 +2991,34 @@ them, and the remaining reduction is not another paragraph:
    this plan specifies.** They are quoted, derived and reviewed; they are not
    executed.
 
+Revision 9 adds two more, both surfaced by correcting F1, and both of the same
+kind — questions about a binary that does not exist yet:
+
+4. **Whether a protocol-5 `tb-sessiond` populates `startup_healthy`.** It is the
+   single field that decides whether a restored older CLI receives an unchecked
+   live client or SIGKILLs a daemon holding live sessions. It cannot be read from
+   `f1319eff`, because the answer is a property of an unreleased build. The next
+   useful thing is to build `0.25.0`, start its daemon on a disposable board, and
+   ask it — not a sharper reading of `takeOverUnresponsiveManager`.
+5. **What a terminated daemon's provider children do.** Marked UNKNOWN since
+   revision 8 and now more load-bearing, because the termination is automatic
+   rather than chosen. It is a process-tree question and is not answerable from
+   source with any confidence worth acting on.
+
+Points 2, 4 and 5 are one rehearsal: build `0.25.0`, install it into a disposable
+`HOME`, start a daemon on a disposable board, downgrade, and watch. If that
+rehearsal is not authorised, then P7's prevention is not one of two options — it
+is **mandatory**, because the fallback revision 8 believed in (a refusal that
+freezes the state until somebody decides) does not exist, and section L is why.
+
 Everything else in this plan is either derived at execution time or labelled
-`UNTESTED`/`unknown`. These three are the cases where the honest answer is
+`UNTESTED`/`unknown`. These five are the cases where the honest answer is
 **"this step cannot be made safe without trying it on a disposable copy first"**,
 and a reviewer should treat further prose about them as noise. The plan's own
 acceptance criterion — reviewed and accepted before the first breaking change —
 is met by review; its *operational* readiness is not, and no revision of this
-document can supply it.
+document can supply it. That is the limit, stated as a result rather than as an
+apology.
 
 # References
 
@@ -2702,15 +3047,29 @@ Production sources read at `skill-project-management` `f1319eff` and
   `:112-126` (`Connect`), `:128-165` (`ConnectOrStart` and the upgrade branch),
   `:228-253` (`ConnectOrStartAndAttach`), `:340-346` (`Drain`), `:677`
   (lenient response decoding), `:714-735` (`managerProtocolCompatibility`)
-- task-board session manager `internal/sessionmanager/stale_takeover.go:71-79`
+- task-board session manager `internal/sessionmanager/stale_takeover.go:25-41`
+  (`dialManagerStatus`, unchecked), `:43-59` (`dialHealthyManager`, the only
+  caller of the compatibility check on this path), `:71-79`
   (`takeOverOutdatedManager` and its downgrade refusal), `:86-163`
-  (`takeOverManagerForProtocolUpgrade`, drain then fence)
+  (`takeOverManagerForProtocolUpgrade`, drain then fence, and the one production
+  place the newer-daemon refusal is surfaced), `:168-266`
+  (`takeOverUnresponsiveManager`, no compatibility check), `:265`
+  (`terminateStaleInstance`, SIGTERM then SIGKILL)
+- task-board session manager `internal/sessionmanager/builder_gateway_manager.go:319-352`
+  (`FinalizeAndRequireBuilderCoverageEvidence`, the only production invocation of
+  `Connect`)
+- task-board `cmd/context_security.go:75` (`sessionmanager.Connect` passed as a
+  function value), `cmd/context_publish.go:138` and `cmd/mutate.go:127` (its two
+  callers)
+- task-board `cmd/codex_manager.go:92` and `cmd/claude_manager.go:115`
+  (`ConnectOrStartAndAttach` with a non-nil launch closure)
 - task-board `cmd/session.go:26` (`tb-sessiond`), `:34-110` (`Dial`-based
   reads), `:151,199,245` (`ConnectOrStart`-based commands), `:360-372`
   (`connectOrStartSessionManager`), `:480-506` (`launchSessionManagerDaemon`,
   `exec.LookPath`, `--board-dir`/`--remote-origin` argv)
 - task-board `cmd/codex_goal_spawn.go:35-44` (`connectManagedSpawnSession`),
   `:50-56` (`launchTrackedSpawnRun`), `:74-79` (`requiresManagedSpawnSession`)
+- `TASK-260830-s5ro4e_review-verdict-rev7.md`
 - `TASK-260830-s5ro4e_review-verdict-rev6.md`
 - `TASK-260830-s5ro4e_review-verdict.md`
 - `TASK-260830-s5ro4e_review-verdict-rev3.md`
