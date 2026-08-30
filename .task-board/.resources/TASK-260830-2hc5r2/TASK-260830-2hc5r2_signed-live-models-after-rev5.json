@@ -1,0 +1,1 @@
+{"object": "list", "data": [{"id": "mlx-community/Qwen1.5-0.5B-Chat-4bit", "object": "model", "created": 1788058732, "meta": {"n_ctx": 76800}}, {"id": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit", "object": "model", "created": 1788058732, "meta": {"n_ctx": 76800}}]}

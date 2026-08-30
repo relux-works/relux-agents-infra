@@ -1,0 +1,518 @@
+diff --git a/.research/260829_llamacpp-against-the-python-baseline.md b/.research/260829_llamacpp-against-the-python-baseline.md
+index b15af8b..1707ec8 100644
+--- a/.research/260829_llamacpp-against-the-python-baseline.md
++++ b/.research/260829_llamacpp-against-the-python-baseline.md
+@@ -1,5 +1,22 @@
+ # llama.cpp measured against the Python mlx-lm baseline
+ 
++> **Corrected outcome, 2026-08-30:** TASK-260829-3k4qrc supersedes the
++> provisional TTFT/decode and memory conclusions below. One corrected
++> six-scenario invocation completed both runtimes sequentially with MTP observed
++> off and was correctly refused on `contextPolicy` (`kv=unbounded` versus
++> `kv=76800`, exit 4). On the exact-token `long_prompt_8k` case, llama.cpp decode
++> is 7.880 versus 6.598 tok/s (**+19.42%**), overturning the provisional deficit;
++> TTFT is 69.451 versus 111.402 s (**-37.66%**). At `context_75k`, the corrected
++> resident upper bound is 42.000 versus 44.509 GiB (**-5.64%**), preserving the
++> capacity-memory direction but overturning the provisional 9% magnitude.
++> llama.cpp is 0.78%-48.58% higher in the other five memory windows. Both
++> records have `speculation=off`; no with-MTP number exists. The full outcome,
++> refusal inventory, raw-component interpretation, and validation exits are in
++> `.temp/TASK-260829-3k4qrc/TASK-260829-3k4qrc_results.md` and its board resource.
++>
++> Everything below this notice is the historical provisional investigation. It
++> remains for audit trail and must not be used as the current number set.
++
+ Task: TASK-260828-2wcrph (story STORY-260828-2faxgm)
+ Date: 2026-08-29
+ Author role: developer
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index df42391..b8e2a4f 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,8 +3,31 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-30
++
++### 0154 — Seeded Python Benchmark Now Runs And Attests A Real Bounded Cache
++- ROOT CAUSE: `mlx_lm.server` omitted `BatchGenerator.max_kv_size`, Qwen3.5's custom `make_cache()` always returned unbounded `KVCache`, and the benchmark's required `seed=1234` bypasses batching through `_serve_single`; fixing only the advertised batch option would therefore leave the production benchmark unbounded.
++- FIX: `/Users/alexis/src/relux-works/mlx-lm` threads `--max-kv-size` through both server paths and Qwen3.5 cache construction. Full-attention layers use `RotatingKVCache(max_size=76800, keep=4)`; linear `ArraysCache` layers and the unbounded default are unchanged.
++- ATTESTATION: `/v1/models` omits `meta` before cache construction even when argv carries 76800, then derives `meta.n_ctx=76800` from the actual constructed rotating caches. A seeded production-path negative using `KVCache` under the same flag reports no bound.
++- EVIDENCE: A live continuation used 73,139 prompt tokens with 73,111 served from the bounded cache, exited 0 with `finish_reason=stop`, and named the coolant loop, intake manifold, and telemetry uplink correctly; live `meta.n_ctx` remained 76800 afterward. Python 114-test pair, Swift 403-test suite, Release build, formatter gates, and production benchmark smoke exit 0.
++- SCOPE: `TASK-260830-2hc5r2`; only benchmark profiles share 76800. The deployed unbounded default remains unchanged. Outcome `.temp/TASK-260830-2hc5r2/TASK-260830-2hc5r2_results.md`.
++
++### 0038 — Corrected llama.cpp Rerun Overturns Decode Deficit And Narrows Capacity-Memory Advantage
++- RESULT: One six-scenario `benchmark-run` completed Python then llama.cpp sequentially with no other model resident. Both records sealed, all scenarios succeeded, prompt-token parity was exact, tool-call parity passed, both 20-iteration soaks passed, and both pins recorded `speculation=off`.
++- REFUSAL: Production exited 4 and wrote no decision: Python `kv=unbounded` cannot match llama.cpp `kv=76800`. Recorded measurements are evidence under asymmetric context policies, not an accepted migration decision.
++- DECODE/TTFT: Exact-token `long_prompt_8k` corrected decode is 6.598 versus 7.880 tok/s (+19.42% llama.cpp), overturning the provisional deficit; TTFT is 111.402 versus 69.451 s (-37.66%). Every measured single-stream decode and TTFT points the same direction.
++- MEMORY: Corrected `context_75k` resident upper bound is 44.509 versus 42.000 GiB (-5.64% llama.cpp), preserving the capacity advantage direction but not the provisional 9% magnitude. llama.cpp is 0.78%-48.58% higher in every other scenario window; soak memory climbs 6.41 GiB.
++- EVIDENCE: `.temp/TASK-260829-3k4qrc/TASK-260829-3k4qrc_results.md`; sealed session `session-c76800-corrected-cadence5/`. Full benchmark expected-red exit 4; Release 402-test suite, build, strict format lint, diff check, and post-run teardown verification exit 0.
++
+ ## 2026-08-29
+ 
++### 2332 — External vmmap Inherited An In-Process Sampling Cadence
++- REGRESSION: Corrected resident-memory accounting launched blocking `/usr/bin/vmmap -summary` at the legacy Mach-reader cadence of 250 ms. Two full-size attempts did not produce one baseline record before timeout; the second spent 1h50m before `context_75k`, then reached only 32,768/73,016 prompt tokens in the next 34m before termination.
++- ROOT CAUSE: `BenchmarkFootprintSampler.swift:103` retained the old 0.25 s default when `currentMemoryReading()` changed from one `proc_pid_rusage` call to a subprocess that walks the target's mappings. The observer became material benchmark load.
++- FIX: `RuntimeMemoryAccounting.samplingIntervalSeconds` owns a five-second production cadence; `BenchmarkFootprintSampler` has no caller override and still takes synchronous samples at every window boundary. Contract coverage pins the cadence above the retired 250 ms value.
++- PROCESS EVIDENCE: RUN-260829-d6b68d termination left `model-harness` pid 40394 and Python child 40395 holding ~31 GiB until the process group was signalled externally, reproducing TASK-260828-28gdmq blocker B7 in production.
++- STATUS: Rerun pending on the corrected cadence; no partial attempt is a benchmark result.
++
+ ### 1740 — Memory Decision Is Bound To Re-Derived Raw Components
+ - REGRESSION: A Mach-only narrowing of `RuntimeMemoryPeak.validatedScoredBytes` survived 400 tests and the revision-2 production smoke because records retained the composite while decision deltas consumed only Mach bytes.
+ - ROOT CAUSE: `RuntimeMemoryAccounting.swift:154` compared two caller-controlled derived fields and never re-derived Mach plus mapped-file bytes; `benchmark-gate-smoke.sh` asserted record shape but not decision-to-record equality.
+diff --git a/README.md b/README.md
+index c74b43d..04d7a9c 100644
+--- a/README.md
++++ b/README.md
+@@ -1467,7 +1467,7 @@ rg -n "Primary Parent Goal Actualization" \
+ | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra` and stopped as a process group on `SIGINT`/`SIGTERM`/`SIGHUP`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+ | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
+-| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, clocks first-to-last generated deltas across `content`, `reasoning`, and `reasoning_content`, and samples both runtimes over warm-up, scenario, soak and process windows with the same `peak_resident_memory_upper_bound_bytes`: exact Mach physical footprint plus a conservative upper edge for resident `vmmap` mapped-file bytes, retaining both raw components and refusing absent, failed, partial or malformed reads; it seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
++| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, clocks first-to-last generated deltas across `content`, `reasoning`, and `reasoning_content`, and samples both runtimes over warm-up, scenario, soak and process windows with the same `peak_resident_memory_upper_bound_bytes`: exact Mach physical footprint plus a conservative upper edge for resident `vmmap` mapped-file bytes, sampled every five seconds and synchronously at window boundaries, retaining both raw components and refusing absent, failed, partial or malformed reads; it seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+ | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+diff --git a/tools/mlx-swift-runtime-prototype/README.md b/tools/mlx-swift-runtime-prototype/README.md
+index 3cac239..4e60053 100644
+--- a/tools/mlx-swift-runtime-prototype/README.md
++++ b/tools/mlx-swift-runtime-prototype/README.md
+@@ -641,6 +641,9 @@ in full in `.research/260829_llamacpp-against-the-python-baseline.md`.
+   all fail closed. The sum can double-count pages on a runtime whose Mach
+   footprint already charges file-backed residency, so its residual directional
+   bias is runtime-dependent and the raw components remain in every record.
++  The external `vmmap` reader runs every five seconds, plus a synchronous sample
++  at each window boundary; the earlier 250 ms cadence belonged to the cheap
++  Mach-only read and materially stalled the runtime once `vmmap` was added.
+ 
+ The earlier paired probe's 8.449/8.772 tok/s Python/llama.cpp result remains one
+ bounded observation, not a rate hardened into this gate. The withdrawn 8.88,
+@@ -716,7 +719,7 @@ Per pass, all of it read first-hand about a process it spawned:
+ | the SHA-256 of the executable actually running | the file the kernel named |
+ | the SHA-256 of the launcher config | the file on disk |
+ | the model ID the runtime is serving | a live `GET /v1/models` before teardown |
+-| the context bound the runtime is running under | the same live `GET /v1/models`: `data[].meta.n_ctx` where the runtime reports one |
++| the context bound the runtime is running under | the same live `GET /v1/models`: `data[].meta.n_ctx`; the bounded Python benchmark reports this only after constructing its active cache, so argv alone cannot earn the pin |
+ | whether the runtime is speculating | a live `GET /slots`: `params.speculative`. Measured, and deliberately not `/props`: on build `b10621-c1d0e7a00`, `--spec-type ngram-mod` flips `/slots` to `true` while `/props` keeps reporting `"none"` |
+ | the SHA-256 of the equivalence verdict, and whether it is a decision this repository took | the file named by `--equivalence`, read in the gate's own process and matched against `TrustedEquivalenceDecisions.shipped`, which is compiled into the gate from versioned source |
+ | the digest of each pass's weight artifact | `config.json` plus the safetensors index for a weight directory; the whole file for a `.gguf` |
+@@ -913,8 +916,9 @@ completed it, and the gate scored that 1.094x ratio as "within".
+   that left it to the template.
+ - **The KV bound is read off the running process, not off the launch.** The
+   derivation used to read the absence of `--max-kv-size` as `unbounded`, on the
+-  grounds that absence meant the same thing on both sides. It does for the two
+-  MLX runtimes and not for a third: `llama-server` has no unbounded mode at all.
++  grounds that absence meant the same thing on both sides. That describes the
++  unbounded MLX defaults and not `llama-server`, which has no unbounded mode at
++  all.
+   Measured on Homebrew `llama.cpp 0.3.0`, build `b10621-c1d0e7a00`, it reports
+   `n_ctx` **32768** — the model's `n_ctx_train` — with no context flag, and
+   **8192** under `--ctx-size 8192`. A record derived from argv would have
+@@ -923,10 +927,12 @@ completed it, and the gate scored that 1.094x ratio as "within".
+   MLX baseline: the gate would have stayed green over a 32k window compared
+   against no window. There is no additive argv spelling that repairs this —
+   absence still means "finite, from the model" for llama.cpp and "no bound" for
+-  `mlx_lm.server` — so the gate asks the process. A runtime that names its bound
+-  pins that number; one that answers and names none falls back to
+-  `--max-kv-size` or `unbounded`, which is what both MLX runtimes measurably
+-  are; a bound the gate could not read is `kv=unread` and is refused. A launch
++  an unbounded `mlx_lm.server` — so the gate asks the process. A runtime that
++  names its bound pins that number; one that answers and names none falls back
++  to `--max-kv-size` or `unbounded`. The benchmark-only Python profile reports
++  its constructed `76800` cache bound, while the deployed default profile stays
++  unbounded and reports none. A bound the gate could not read is `kv=unread` and
++  is refused. A launch
+   that pins `--ctx-size` and a server that will not confirm it is a
+   contradiction and is refused too, so a llama.cpp launch never reaches the argv
+   fallback.
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeAttestation.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeAttestation.swift
+index c05dad4..b3383bf 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeAttestation.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeAttestation.swift
+@@ -23,9 +23,11 @@ import Foundation
+ ///
+ /// * ``reported(_:)`` — the runtime answered and named its bound. This is the
+ ///   only case that produces a KV pin the launch did not have to spell.
+-/// * ``notReported`` — the runtime answered and named none. `mlx_lm.server` and
+-///   the Swift prototype's ``ModelsListing`` both emit an entry with no `meta`
+-///   block, so this is their case, and only here does the argv reading apply.
++/// * ``notReported`` — the runtime answered and named none. An unbounded
++///   `mlx_lm.server` and the Swift prototype's ``ModelsListing`` emit an entry
++///   with no `meta` block, so this is their case, and only here does the argv
++///   reading apply. The bounded Python benchmark reports its active cache bound
++///   after cache construction and therefore uses ``reported(_:)`` instead.
+ /// * ``unread`` — the gate could not get an answer at all. **Never** read as
+ ///   ``notReported``: a failed read is not an absence. It derives `kv=unread`,
+ ///   which is in ``RuntimeBenchmark/unpinnableConditions`` and is refused.
+@@ -34,8 +36,10 @@ import Foundation
+ /// back to argv, so a *bounded* runtime that answered `/v1/models` and declined
+ /// to say so would be read as unbounded. That is not the llama.cpp case — it
+ /// always reports, measured above — and closing it in general would require
+-/// refusing `mlx_lm.server`, which reports nothing and is the incumbent
+-/// baseline. What is closed instead is the contradiction: a launch that pins
++/// refusing an unbounded `mlx_lm.server`, whose default profile reports no
++/// bound. The benchmark-only bounded Python profile closes that gap by reporting
++/// the active cache bound after cache construction. What is closed for every
++/// runtime is the contradiction: a launch that pins
+ /// `--ctx-size` and a server that will not confirm the bound is refused by
+ /// ``RuntimeBenchmark/AdmissionError/contextBoundNotHonoured(runtime:flag:declared:reported:)``,
+ /// so a llama.cpp launch cannot reach the argv fallback at all.
+@@ -101,8 +105,9 @@ public enum RuntimeContextWindow: Sendable, Equatable, Codable {
+     /// So the two facts are separated at the source:
+     ///
+     /// * no `meta` block, or a `meta` block carrying no `n_ctx` key — the
+-    ///   runtime answered and named no bound. ``notReported``, and the two MLX
+-    ///   runtimes' measured case.
++    ///   runtime answered and named no bound. ``notReported``; this is the
++    ///   unbounded Python and Swift default case. A bounded Python server reports
++    ///   its active cache size after construction instead.
+     /// * a `meta` that is not an object, an `n_ctx` that is not a JSON integer,
+     ///   or an integer that is not positive — the field is there and the gate
+     ///   could not get a bound out of it. ``unread``, which is unpinnable and
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+index 6fcf93c..449752a 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+@@ -880,11 +880,12 @@ public enum RuntimeBenchmark {
+     ///   `n_ctx` 8192 under `--ctx-size 8192` and 32768 with no context flag at
+     ///   all. There is no additive argv spelling that rescues the premise —
+     ///   absence still means "finite, taken from the model" for llama.cpp and
+-    ///   "no bound" for `mlx_lm.server` — so the bound comes from
++    ///   "no bound" for an unbounded `mlx_lm.server` — so the bound comes from
+     ///   ``RuntimeContextWindow``, which the gate reads from the running
+     ///   process. A runtime that names its bound pins that number; a runtime
+     ///   that answered and named none falls back to `--max-kv-size` or
+-    ///   `unbounded`, which is what the two MLX runtimes measurably are; a
++    ///   `unbounded`, which remains the two MLX runtimes' default case; the
++    ///   bounded Python benchmark instead reports its constructed cache bound. A
+     ///   bound the gate could not read at all is `unread`, which is
+     ///   unpinnable and refused. The value is rendered as a bare number on
+     ///   every path, so a llama.cpp `n_ctx` of 8192 and an MLX
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeMemoryAccounting.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeMemoryAccounting.swift
+index 6cebe7e..49b6793 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeMemoryAccounting.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeMemoryAccounting.swift
+@@ -25,6 +25,16 @@ public enum RuntimeMemoryAccounting: String, Codable, Equatable, Sendable {
+     }
+ 
+     public static let scoreSemantics = "conservative-upper-bound"
++
++    /// Production cadence for the external `vmmap` reader.
++    ///
++    /// The legacy 250 ms cadence was chosen for the in-process Mach read. A
++    /// `vmmap -summary` launch walks another process's mappings and materially
++    /// stalls this 28 GiB workload when repeated at that frequency. Scenario
++    /// boundaries still take synchronous samples, so a five-second periodic
++    /// cadence retains at least one attempt per short window without turning
++    /// the observer into most of the benchmark load.
++    public static let samplingIntervalSeconds: TimeInterval = 5
+ }
+ 
+ /// Raw components from one simultaneous memory sample.
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift
+index d0ddaf1..1b1566d 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift
+@@ -89,7 +89,6 @@ func residentMemorySample(pid: Int) -> RuntimeMemorySampleRead {
+ final class BenchmarkFootprintSampler: @unchecked Sendable {
+     private let pid: Int
+     private let accounting: RuntimeMemoryAccounting
+-    private let interval: TimeInterval
+     private let lock = NSLock()
+     private var stopped = false
+     private var processReads: [RuntimeMemorySampleRead] = []
+@@ -98,13 +97,9 @@ final class BenchmarkFootprintSampler: @unchecked Sendable {
+     private var passLoadMax: Double?
+     private var thread: Thread?
+ 
+-    init(
+-        pid: Int, accounting: RuntimeMemoryAccounting = .residentMemoryUpperBound,
+-        interval: TimeInterval = 0.25
+-    ) {
++    init(pid: Int, accounting: RuntimeMemoryAccounting = .residentMemoryUpperBound) {
+         self.pid = pid
+         self.accounting = accounting
+-        self.interval = interval
+     }
+ 
+     func currentMemoryReading() -> RuntimeMemorySampleRead {
+@@ -141,7 +136,7 @@ final class BenchmarkFootprintSampler: @unchecked Sendable {
+             processReads.append(reading)
+             windowReads.append(reading)
+             lock.unlock()
+-            Thread.sleep(forTimeInterval: interval)
++            Thread.sleep(forTimeInterval: RuntimeMemoryAccounting.samplingIntervalSeconds)
+         }
+     }
+ 
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift
+index 5c0384b..9fcd705 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift
+@@ -796,9 +796,10 @@ enum BenchmarkRunCommand {
+     ///
+     /// `meta.n_ctx` is `llama-server`'s spelling and is measured, not assumed —
+     /// build `b10621-c1d0e7a00` reports 8192 under `--ctx-size 8192` and 32768
+-    /// with no context flag. The MLX runtimes emit no `meta` block at all, so
+-    /// they answer ``RuntimeContextWindow/notReported`` and their KV pin still
+-    /// comes from argv.
++    /// with no context flag. Unbounded MLX launches emit no `meta` block and
++    /// answer ``RuntimeContextWindow/notReported``. The bounded Python benchmark
++    /// reports its active cache bound after construction, so its KV pin comes
++    /// from this live answer rather than argv.
+     ///
+     /// A malformed field is not an absent field, and the two are separated in
+     /// ``RuntimeContextWindow/read(fromModelsEntry:)`` — see there for the F2
+diff --git a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkContextBoundTests.swift b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkContextBoundTests.swift
+index 77af0ab..1ae259e 100644
+--- a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkContextBoundTests.swift
++++ b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkContextBoundTests.swift
+@@ -44,34 +44,19 @@ struct RuntimeBenchmarkContextBoundTests {
+         return argv
+     }
+ 
+-    /// An `mlx_lm.server` launch: no KV flag exists for it, and it reports no
+-    /// bound, so `unbounded` is a true reading of it and not an inference from
+-    /// silence.
++    /// The deployed-default `mlx_lm.server` launch: no KV bound is requested,
++    /// so `unbounded` is a true reading of this profile.
+     static let unboundedMLXArgv = [
+         "--model", Fixture.modelPath, "--host", "127.0.0.1", "--port", "18031",
+         "--prefill-step-size", "2048",
+         "--chat-template-args", #"{"reasoning_effort": "medium"}"#,
+     ]
+ 
+-    /// The launch that *can* state the bound, for the pair that should match.
+-    ///
+-    /// This is the **Swift** runtime, not the Python one, and the distinction
+-    /// is the whole of TASK-260828-2wcrph's result. An earlier revision built
+-    /// this fixture as `unboundedMLXArgv + ["--max-kv-size", "8192"]` and
+-    /// labelled the records it produced `python-mlx-lm`, which describes a
+-    /// launch that cannot exist: `mlx_lm-relux.server --help` on the pinned
+-    /// build lists no KV bound option at all, and TASK-260828-2jbufw had
+-    /// already measured the same thing -- "KV bound: no flag; unbounded". The
+-    /// fiction mattered because it made
+-    /// ``admitsALlamaCPPCandidateWithNoClauseRelaxed`` look like it described
+-    /// the comparison this story exists to run -- llama.cpp against the Python
+-    /// incumbent -- when the only admissible pair is llama.cpp against the
+-    /// Swift prototype. See
+-    /// ``refusesTheLlamaCPPCandidateAgainstThePythonIncumbent``.
+-    ///
+-    /// Spelled as `examples/model-harness.benchmark.toml` spells the Swift
+-    /// profile: the subcommand, this runtime's own reasoning flag, and the
+-    /// prefill chunk under the name it shares with `mlx_lm.server`.
++    /// The benchmark-only Python launch. Unlike the deployed default, this
++    /// launch asks for the same finite bound as the llama.cpp candidate.
++    static let boundedPythonArgv = unboundedMLXArgv + ["--max-kv-size", "76800"]
++
++    /// A bounded Swift launch retained for cross-runtime derivation coverage.
+     static let boundedSwiftArgv = [
+         "serve",
+         "--model", Fixture.modelPath, "--host", "127.0.0.1", "--port", "18031",
+@@ -128,8 +113,13 @@ struct RuntimeBenchmarkContextBoundTests {
+                 == "kv=32768;prefill-step=2048;reasoning=medium")
+         #expect(
+             RuntimeBenchmark.contextPolicy(
+-                derivedFrom: Self.llamaCPPArgv(), observing: .reported(8192))
+-                == "kv=8192;prefill-step=2048;reasoning=medium")
++                derivedFrom: Self.llamaCPPArgv(contextSize: "76800"),
++                observing: .reported(76800))
++                == "kv=76800;prefill-step=2048;reasoning=medium")
++        #expect(
++            RuntimeBenchmark.contextPolicy(
++                derivedFrom: Self.boundedPythonArgv, observing: .reported(76800))
++                == "kv=76800;prefill-step=2048;reasoning=medium")
+     }
+ 
+     @Test("no llama.cpp launch derives an unbounded KV pin, with or without --ctx-size")
+@@ -147,9 +137,8 @@ struct RuntimeBenchmarkContextBoundTests {
+ 
+     @Test("a runtime that answered and named no bound still reads argv")
+     func keepsTheArgvReadingForRuntimesThatReportNothing() {
+-        // Neither MLX runtime emits a `meta` block, so this is their path and
+-        // it is unchanged. `mlx_lm.server` has no KV flag at all and is
+-        // measurably unbounded; the Swift runtime takes `--max-kv-size`.
++        // The deployed-default Python launch and the Swift runtime's current
++        // listing emit no `meta` block, so this fallback remains covered.
+         #expect(
+             RuntimeBenchmark.contextPolicy(
+                 derivedFrom: Self.unboundedMLXArgv, observing: .notReported)
+@@ -204,15 +193,16 @@ struct RuntimeBenchmarkContextBoundTests {
+         // the pair that genuinely shares every condition has to get through —
+         // and it does so with `unpinnableConditions` untouched.
+         let baseline = Self.record(
+-            runtime: "mlx-swift", argv: Self.boundedSwiftArgv, window: .notReported,
++            runtime: "python-mlx-lm", argv: Self.boundedPythonArgv, window: .reported(76800),
+             startedAt: 100, finishedAt: 200, executableDigest: Fixture.digest("cd"))
+         let candidate = Self.record(
+-            runtime: "llama-cpp", argv: Self.llamaCPPArgv(), window: .reported(8192),
++            runtime: "llama-cpp", argv: Self.llamaCPPArgv(contextSize: "76800"),
++            window: .reported(76800),
+             startedAt: 300, finishedAt: 400, executableDigest: Fixture.digest("12"))
+         let comparison = try Self.admit(
+-            baseline: baseline, baselineWindow: .notReported,
+-            candidate: candidate, candidateWindow: .reported(8192))
+-        #expect(comparison.pins.contextPolicy == "kv=8192;prefill-step=2048;reasoning=medium")
++            baseline: baseline, baselineWindow: .reported(76800),
++            candidate: candidate, candidateWindow: .reported(76800))
++        #expect(comparison.pins.contextPolicy == "kv=76800;prefill-step=2048;reasoning=medium")
+     }
+ 
+     @Test(
+@@ -252,20 +242,12 @@ struct RuntimeBenchmarkContextBoundTests {
+         }
+     }
+ 
+-    @Test("the shipped benchmark config states no KV bound for the Python incumbent")
+-    func theShippedConfigCannotBoundThePythonIncumbent() throws {
++    @Test("the shipped benchmark pair pins 76800 without changing the deployed default")
++    func theShippedConfigBoundsOnlyTheBenchmarkPair() throws {
+         // Reads the versioned file, the way `trustedDecisionMatchesItsDocument`
+         // reads the equivalence document, so the comment beside the profile is
+         // an artifact the build checks rather than prose next to the code.
+         //
+-        // What this proves: the `qwen-benchmark-python` profile names neither
+-        // `--max-kv-size` -- the only spelling `contextPolicy` reads as a bound
+-        // for a runtime that reports none -- nor either spelling of llama.cpp's
+-        // context flag, so every record it can produce pins `kv=unbounded`.
+-        // What it does not prove: that `mlx_lm-relux.server` would REJECT such
+-        // a flag. That is a fact about the installed binary, measured by
+-        // TASK-260828-2wcrph off `--help` and recorded in its report, and no
+-        // unit test on this side of the process boundary can establish it.
+         let configPath = URL(fileURLWithPath: #filePath)
+             .deletingLastPathComponent()
+             .deletingLastPathComponent()
+@@ -282,8 +264,7 @@ struct RuntimeBenchmarkContextBoundTests {
+         }
+ 
+         let python = try profileBlock("qwen-benchmark-python")
+-        // Every spelling of a KV bound this gate reads, absent.
+-        #expect(!python.contains("--max-kv-size"))
++        #expect(python.contains(#""--max-kv-size", "76800""#))
+         #expect(!python.contains("--ctx-size"))
+         #expect(!python.contains("\"-c\""))
+         // The conditions it does state, so this is not passing because the
+@@ -292,13 +273,11 @@ struct RuntimeBenchmarkContextBoundTests {
+         #expect(python.contains("--chat-template-args"))
+ 
+         let llamacpp = try profileBlock("qwen-benchmark-llamacpp")
+-        #expect(llamacpp.contains("--ctx-size"))
++        #expect(llamacpp.contains(#""--ctx-size", "76800""#))
+         #expect(llamacpp.contains("--ubatch-size"))
+ 
+-        // And the consequence, derived rather than asserted as a string.
+-        let derived = RuntimeBenchmark.contextPolicy(
+-            derivedFrom: Self.unboundedMLXArgv, observing: .notReported)
+-        #expect(derived.hasPrefix("kv=unbounded;"))
++        // The deployed profile is outside this benchmark-only file.
++        #expect(!text.contains("[profiles.qwen-local]"))
+     }
+ 
+     @Test("a record whose bound the gate never read is refused by name")
+@@ -342,6 +321,27 @@ struct RuntimeBenchmarkContextBoundTests {
+         }
+     }
+ 
++    @Test("a --max-kv-size the Python process did not honour is refused")
++    func refusesAMaxKVSizeTheProcessDidNotHonour() {
++        let baseline = Self.record(
++            runtime: "python-mlx-lm", argv: Self.boundedPythonArgv,
++            window: .reported(4096), startedAt: 100, finishedAt: 200,
++            executableDigest: Fixture.digest("cd"))
++        let candidate = Self.record(
++            runtime: "llama-cpp", argv: Self.llamaCPPArgv(contextSize: "4096"),
++            window: .reported(4096), startedAt: 300, finishedAt: 400,
++            executableDigest: Fixture.digest("12"))
++        #expect(
++            throws: RuntimeBenchmark.AdmissionError.contextBoundNotHonoured(
++                runtime: "python-mlx-lm", flag: "--max-kv-size", declared: 76800,
++                reported: "4096")
++        ) {
++            try Self.admit(
++                baseline: baseline, baselineWindow: .reported(4096),
++                candidate: candidate, candidateWindow: .reported(4096))
++        }
++    }
++
+     @Test("a --ctx-size launch whose runtime reports nothing cannot reach the argv fallback")
+     func refusesASilentRuntimeThatPinnedAContextSize() {
+         // The residual the `notReported` fallback would otherwise leave open: a
+diff --git a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeStreamDeltaTests.swift b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeStreamDeltaTests.swift
+index 13f7b68..0f80a1d 100644
+--- a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeStreamDeltaTests.swift
++++ b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeStreamDeltaTests.swift
+@@ -42,6 +42,12 @@ struct RuntimeStreamDeltaTests {
+ 
+ @Suite("Runtime memory accounting")
+ struct RuntimeMemoryAccountingTests {
++    @Test("external vmmap sampling does not inherit the legacy 250 ms Mach cadence")
++    func productionVMMapCadenceIsBounded() {
++        #expect(RuntimeMemoryAccounting.samplingIntervalSeconds == 5)
++        #expect(RuntimeMemoryAccounting.samplingIntervalSeconds > 0.25)
++    }
++
+     @Test(
+         "every runtime shape uses the same resident upper bound",
+         arguments: [
+diff --git a/tools/mlx-swift-runtime-prototype/examples/model-harness.benchmark.toml b/tools/mlx-swift-runtime-prototype/examples/model-harness.benchmark.toml
+index eb1c68c..8f6051c 100644
+--- a/tools/mlx-swift-runtime-prototype/examples/model-harness.benchmark.toml
++++ b/tools/mlx-swift-runtime-prototype/examples/model-harness.benchmark.toml
+@@ -14,7 +14,8 @@
+ # `benchmark-run` performs both passes itself, one after the other, records each
+ # pass's wall-clock interval and refuses a pair whose intervals overlap.
+ 
+-# The incumbent, in its deployed configuration.
++# The incumbent with one benchmark-only override: the finite KV bound shared
++# with the llama.cpp candidate. The deployed `qwen-local` profile is unchanged.
+ #
+ # The prompt-cache flags are the ones the operator's installed
+ # `profiles.qwen-local` carries. They are kept rather than removed: the decision
+@@ -38,6 +39,9 @@ argv = [
+     # `RuntimeBenchmark.contextPolicy(derivedFrom:observing:)` reads this flag
+     # off the rendered launch and admission refuses a pair that left it out.
+     "--prefill-step-size", "2048",
++    # Benchmark-only context policy. The running server reports this value as
++    # `data[0].meta.n_ctx`; the gate does not award the pin from argv alone.
++    "--max-kv-size", "76800",
+     # The same reasoning policy the Swift profile states, in this runtime's
+     # spelling of it.
+     #
+@@ -109,25 +113,8 @@ argv = [
+ # running server's `/v1/models` `meta.n_ctx` by the gate, inside its own
+ # observation window. The flag is still stated because admission refuses a
+ # launch that pins a bound the process did not honour: ask for 8192 and run
+-# 4096 and the pair is refused by name.
+-#
+-# WHAT THIS PROFILE CANNOT BE COMPARED AGAINST, corrected by TASK-260828-2wcrph
+-# after running it. An earlier revision of this comment told the operator to
+-# "match it to the baseline's `--max-kv-size`". **The Python baseline has no
+-# such flag.** `mlx_lm-relux.server --help` on the pinned build lists no KV
+-# bound option at all, which TASK-260828-2jbufw had already measured -- its
+-# table reads "KV bound: no flag; unbounded" for `mlx_lm.server` -- and this
+-# runtime never reports `unbounded`, measured. So the two contextPolicy pins
+-# are `kv=unbounded` against `kv=<n>` for every n, the pair is refused
+-# `pinMismatch(field: "contextPolicy")`, and no argv on either side can fix it.
+-#
+-# That refusal is correct and is not a configuration mistake to work around:
+-# `llama-server` allocates its whole KV arena at load, so `--ctx-size` is a
+-# resident cost paid before the first token, while `mlx_lm.server` grows its
+-# cache per request. They are genuinely not the same condition. A llama.cpp
+-# candidate can only be admitted against a baseline that CAN state the same
+-# bound -- `mlx-swift-runtime-prototype serve --max-kv-size <n>`, the profile
+-# above -- and `RuntimeBenchmarkContextBoundTests` pins both directions.
++# 4096 and the pair is refused by name. The Python benchmark profile reports
++# the same 76,800-token bound from its running server.
+ [profiles.qwen-benchmark-llamacpp]
+ mode = "local"
+ executable = "/opt/homebrew/bin/llama-server"
+@@ -137,7 +124,7 @@ argv = [
+     "--port", "{port}",
+     # The bound the launch asks for. Checked against what the process reports;
+     # it is not the source of the pin.
+-    "--ctx-size", "8192",
++    "--ctx-size", "76800",
+     # The physical prompt-evaluation chunk, and the third spelling of the same
+     # pinned condition the other two profiles state as `--prefill-step-size`.
+     # `llama-server` defaults it to 512 where `mlx_lm.server` defaults its own

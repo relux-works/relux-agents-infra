@@ -1,0 +1,65 @@
+{
+  "accepted" : true,
+  "blockers" : [
+
+  ],
+  "declaredAsymmetries" : [
+
+  ],
+  "deltas" : [
+    {
+      "admissibleRatio" : "<= 1.5",
+      "baseline" : 14,
+      "candidate" : 14,
+      "metric" : "prompt_tokens",
+      "ratio" : 1,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 3.0",
+      "baseline" : 0.3632471561431885,
+      "candidate" : 0.356464147567749,
+      "metric" : "time_to_first_token_seconds",
+      "ratio" : 0.9813267400426237,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : ">= 0.3",
+      "baseline" : 38.54125149566577,
+      "candidate" : 39.27463700213829,
+      "metric" : "prefill_tokens_per_second",
+      "ratio" : 1.019028585684484,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : ">= 0.3",
+      "baseline" : 13.232481273221152,
+      "candidate" : 14.117308100090765,
+      "metric" : "decode_tokens_per_second",
+      "ratio" : 1.0668677936208575,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 3.0",
+      "baseline" : 12042576,
+      "candidate" : 13500872,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 1.1210950215302773,
+      "scenario" : "short_prompt",
+      "verdict" : "within"
+    },
+    {
+      "admissibleRatio" : "<= 3.0",
+      "baseline" : 12075344,
+      "candidate" : 13500872,
+      "metric" : "peak_physical_footprint_bytes",
+      "ratio" : 1.118052785908211,
+      "scenario" : "process",
+      "verdict" : "within"
+    }
+  ]
+}

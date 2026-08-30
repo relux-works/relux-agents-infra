@@ -1,0 +1,18 @@
+{
+  "closedAtUnixSeconds" : 1788053600.570249,
+  "configDigest" : "7a43dae9c2b15be5e211851a6f4277e66c85c3b51b63c6889582d9fd4b7b8302",
+  "configPath" : "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/serving.toml",
+  "gateBinaryDigest" : "36fb9bbe517cb4f62f59f21ac7ffbb9d3dca80328bb6b244aa54a48c2f708d3a",
+  "observedContextWindow" : {
+    "state" : "notReported"
+  },
+  "observedExecutableDigest" : "057446db49d0bb2e41903364c55c7bfee7ac04d17f60c20cea044f59d0b84e00",
+  "observedExecutablePath" : "\/Applications\/Xcode.app\/Contents\/Developer\/Library\/Frameworks\/Python3.framework\/Versions\/3.9\/Resources\/Python.app\/Contents\/MacOS\/Python",
+  "openedAtUnixSeconds" : 1788053595.468467,
+  "processID" : 94099,
+  "processStartUnixSeconds" : 1788053595.260527,
+  "profile" : "gate-smoke-baseline",
+  "runtime" : "gate-smoke-baseline",
+  "servedModelID" : "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/model",
+  "transcriptDigest" : "9f6c17337377ff51be7e70c33d50f6f1d4d5beb3ff8c1b2d6fc9947a4a0a1815"
+}

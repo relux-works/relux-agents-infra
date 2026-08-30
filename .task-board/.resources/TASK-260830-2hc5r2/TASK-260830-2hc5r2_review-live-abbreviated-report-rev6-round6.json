@@ -1,0 +1,9 @@
+{
+  "id": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+  "meta": {
+    "runtime_config": {
+      "prefill_step_size": 999,
+      "reasoning_effort": "medium"
+    }
+  }
+}

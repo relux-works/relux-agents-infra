@@ -1,0 +1,216 @@
+{
+  "command" : [
+    "\/Users\/alexis\/.local\/bin\/model-harness",
+    "run",
+    "gate-smoke-baseline",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "31041",
+    "--config",
+    "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/serving.toml"
+  ],
+  "declaredAsymmetries" : [
+
+  ],
+  "finishedAtUnixSeconds" : 1788053600.780294,
+  "peakPhysicalFootprintBytes" : 12075344,
+  "pins" : {
+    "contextPolicy" : "kv=76800;prefill-step=2048;reasoning=medium",
+    "hostIdentity" : "MacBookPro18,2\/68719476736\/25F80\/arm64",
+    "maxOutputTokens" : 256,
+    "modelDigest" : "bcf01ba5c25d77f07021278dac8cb12519cab257153291b7e0ea8261e02215fd",
+    "modelPath" : "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/model",
+    "promptSuiteDigest" : "2091dd161ad8f4a1577ac9859a2d278678023f236077f363bf7defbb6aeb368c",
+    "quantization" : "8bit\/group64\/affine",
+    "seed" : 1234,
+    "temperature" : 0,
+    "topP" : 1
+  },
+  "provenance" : {
+    "configDigest" : "7a43dae9c2b15be5e211851a6f4277e66c85c3b51b63c6889582d9fd4b7b8302",
+    "configPath" : "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/serving.toml",
+    "driverCommand" : [
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/.build\/release\/mlx-swift-runtime-prototype",
+      "benchmark-run",
+      "--config",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/serving.toml",
+      "--model",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/model",
+      "--prompts",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/prompts.json",
+      "--thresholds",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/thresholds.json",
+      "--session",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/session",
+      "--harness",
+      "\/Users\/alexis\/.local\/bin\/model-harness",
+      "--baseline-runtime",
+      "gate-smoke-baseline",
+      "--baseline-profile",
+      "gate-smoke-baseline",
+      "--candidate-runtime",
+      "gate-smoke-candidate",
+      "--candidate-profile",
+      "gate-smoke-candidate",
+      "--python-bin",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/baseline-venv\/bin\/python",
+      "--port",
+      "31041",
+      "--settle-seconds",
+      "2",
+      "--startup-timeout",
+      "90",
+      "--request-timeout",
+      "90"
+    ],
+    "driverDigest" : "36fb9bbe517cb4f62f59f21ac7ffbb9d3dca80328bb6b244aa54a48c2f708d3a",
+    "harnessCommand" : [
+      "\/Users\/alexis\/.local\/bin\/model-harness",
+      "run",
+      "gate-smoke-baseline",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "31041",
+      "--config",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/serving.toml"
+    ],
+    "launchArgv" : [
+      "31041",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/model",
+      "serving",
+      "--host",
+      "127.0.0.1",
+      "--model",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260830-2vrhg1\/worktree\/tools\/mlx-swift-runtime-prototype\/..\/..\/.temp\/review-TASK-260830-2hc5r2\/no-meta-run\/model",
+      "--max-kv-size",
+      "76800",
+      "--prefill-step-size",
+      "2048",
+      "--reasoning-effort",
+      "medium"
+    ],
+    "launchExecutable" : "\/Applications\/Xcode.app\/Contents\/Developer\/Library\/Frameworks\/Python3.framework\/Versions\/3.9\/Resources\/Python.app\/Contents\/MacOS\/Python",
+    "launchExecutableDigest" : "057446db49d0bb2e41903364c55c7bfee7ac04d17f60c20cea044f59d0b84e00",
+    "profile" : "gate-smoke-baseline",
+    "runtimeProcessID" : 94099
+  },
+  "revisions" : {
+    "mlx" : "0.0.1",
+    "mlx_lm" : "0.0.1",
+    "mlx_lm_commit" : "1111111111111111111111111111111111111111",
+    "mlx_lm_direct_url" : "{\"url\":\"file:\/\/\/benchmark-gate-smoke\/mlx-lm\",\"vcs_info\":{\"commit_id\":\"1111111111111111111111111111111111111111\",\"requested_revision\":\"1111111111111111111111111111111111111111\",\"vcs\":\"git\"}}",
+    "mlx_metal" : "0.0.1",
+    "model_harness" : "model-harness v1.6.1-84-g5c9b4e4 (5c9b4e4, 2026-08-30T00:41:01Z)",
+    "python" : "3.9.6",
+    "transformers" : "0.0.1"
+  },
+  "runtime" : "gate-smoke-baseline",
+  "scenarios" : [
+    {
+      "completionTokens" : 4,
+      "decodeTokensPerSecond" : 13.232481273221152,
+      "hostLoadAverageMax" : 11.07421875,
+      "name" : "short_prompt",
+      "peakPhysicalFootprintBytes" : 12042576,
+      "prefillTokensPerSecond" : 38.54125149566577,
+      "processPeakSoFarBytes" : 12042576,
+      "promptTokens" : 14,
+      "succeeded" : true,
+      "timeToFirstTokenSeconds" : 0.3632471561431885,
+      "transcript" : {
+        "exchanges" : [
+          {
+            "firstByteAtUnixSeconds" : 1788053596.3718538,
+            "lastByteAtUnixSeconds" : 1788053596.598685,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 430,
+            "requestDigest" : "149c718c0ecb1f017a6c8921f7b6fd96d86929115e78d29751cbea813f937a92",
+            "responseByteCount" : 1667,
+            "responseDigest" : "556017a47ae7cc7ddcbf341b49a3d39298a18efd84df1db1dc88c98e7204cc07",
+            "sentAtUnixSeconds" : 1788053596.008723,
+            "status" : 200
+          }
+        ]
+      },
+      "wallClockSeconds" : 0.5900988578796387
+    },
+    {
+      "completionTokens" : 8,
+      "name" : "tool_call",
+      "processPeakSoFarBytes" : 12042576,
+      "promptTokens" : 24,
+      "succeeded" : true,
+      "transcript" : {
+        "exchanges" : [
+          {
+            "firstByteAtUnixSeconds" : 1788053596.606607,
+            "lastByteAtUnixSeconds" : 1788053596.606607,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 619,
+            "requestDigest" : "1e76d7d10f4424a2ef40ebf55da7b85030af6ae1198d5a55e7847eb3bde3263a",
+            "responseByteCount" : 545,
+            "responseDigest" : "bd07a4ccf1f99f11feb55fdea673c07580ec432b8664590d5c4cc600343de203",
+            "sentAtUnixSeconds" : 1788053596.6044888,
+            "status" : 200
+          }
+        ]
+      },
+      "wallClockSeconds" : 0.0021181106567382812
+    },
+    {
+      "completionTokens" : 12,
+      "hostLoadAverageMax" : 11.07421875,
+      "name" : "stability_soak",
+      "peakPhysicalFootprintBytes" : 12075344,
+      "processPeakSoFarBytes" : 12075344,
+      "promptTokens" : 45,
+      "succeeded" : true,
+      "transcript" : {
+        "exchanges" : [
+          {
+            "firstByteAtUnixSeconds" : 1788053596.9682589,
+            "lastByteAtUnixSeconds" : 1788053597.1957269,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 437,
+            "requestDigest" : "671e15b4f337b4fca043b2c07c70ee3cd32acfcff7875c7ca22c2307d73a34c6",
+            "responseByteCount" : 1667,
+            "responseDigest" : "916c796ee6af81f4997794b37aaceaaed8a61609a32feefdaa99714b09820c24",
+            "sentAtUnixSeconds" : 1788053596.6109,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1788053597.5563989,
+            "lastByteAtUnixSeconds" : 1788053597.7823138,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 437,
+            "requestDigest" : "f1176e1f27cc25428da300d74ad2cd4d3f7eb36bbfb725d29bb34f25af6ae137",
+            "responseByteCount" : 1667,
+            "responseDigest" : "916c796ee6af81f4997794b37aaceaaed8a61609a32feefdaa99714b09820c24",
+            "sentAtUnixSeconds" : 1788053597.196003,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1788053598.134279,
+            "lastByteAtUnixSeconds" : 1788053598.359888,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 437,
+            "requestDigest" : "a2852748f36891ad99d1fd97618b7d0b99b9e1d379e548e5d5d4327f549bb23d",
+            "responseByteCount" : 1667,
+            "responseDigest" : "916c796ee6af81f4997794b37aaceaaed8a61609a32feefdaa99714b09820c24",
+            "sentAtUnixSeconds" : 1788053597.782541,
+            "status" : 200
+          }
+        ]
+      },
+      "wallClockSeconds" : 1.7492213249206543
+    }
+  ],
+  "startedAtUnixSeconds" : 1788053595.2557302
+}

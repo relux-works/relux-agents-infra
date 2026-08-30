@@ -1,0 +1,38 @@
+[profiles.gate-smoke-baseline]
+mode = "local"
+executable = "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260830-2vrhg1/worktree/.temp/TASK-260830-2hc5r2-review/benchmark-gate-out/baseline-venv/bin/mlx_lm.server"
+argv = [
+    "{port}",
+    "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260830-2vrhg1/worktree/.temp/TASK-260830-2hc5r2-review/benchmark-gate-out/model",
+    "serving",
+    "--host",
+    "{host}",
+    "--model",
+    "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260830-2vrhg1/worktree/.temp/TASK-260830-2hc5r2-review/benchmark-gate-out/model",
+    "--max-kv-size",
+    "76800",
+    "--prefill-step-size",
+    "2048",
+    "--reasoning-effort",
+    "medium",
+]
+
+[profiles.gate-smoke-candidate]
+mode = "local"
+executable = "/opt/homebrew/bin/python3"
+argv = [
+    "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260830-2vrhg1/worktree/.temp/TASK-260830-2hc5r2-review/duplicate-argv-rewriter.py",
+    "{port}",
+    "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260830-2vrhg1/worktree/.temp/TASK-260830-2hc5r2-review/benchmark-gate-out/model",
+    "serving",
+    "--host",
+    "{host}",
+    "--model",
+    "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260830-2vrhg1/worktree/.temp/TASK-260830-2hc5r2-review/benchmark-gate-out/model",
+    "--max-kv-size",
+    "76800",
+    "--prefill-step-size",
+    "2048",
+    "--reasoning-effort",
+    "medium",
+]

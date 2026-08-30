@@ -1,0 +1,13 @@
+{
+  "contextPolicy": "kv=8192;prefill-step=2048;reasoning=medium",
+  "decisionAccepted": true,
+  "launchArgvPrefix": [
+    "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260828-2faxgm/worktree/.temp/TASK-260830-2hc5r2/benchmark-smoke-02/fake-runtime.py",
+    "18993",
+    "/Users/alexis/src/relux-works/relux-agents-infra/.temp/STORY-260828-2faxgm/worktree/.temp/TASK-260830-2hc5r2/benchmark-smoke-02/model",
+    "serving"
+  ],
+  "launchExecutable": "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python",
+  "mlx_lm_direct_url": "{\"url\": \"file:///Users/alexis/src/relux-works/mlx-lm\", \"vcs_info\": {\"commit_id\": \"ec9eea0af1d741cd4eb21c8766478a3e79dd44d6\", \"requested_revision\": \"ec9eea0af1d741cd4eb21c8766478a3e79dd44d6\", \"vcs\": \"git\"}}",
+  "runtime": "python-mlx-lm"
+}
