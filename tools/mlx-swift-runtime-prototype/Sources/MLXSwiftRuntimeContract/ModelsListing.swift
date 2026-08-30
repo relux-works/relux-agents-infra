@@ -33,16 +33,31 @@ public struct ModelsListing: Sendable, Equatable {
     public let body: JSONValue
 
     public static func make(
-        modelID: String, readiness: RuntimeReadiness, created: Int
+        modelID: String, readiness: RuntimeReadiness, created: Int,
+        contextWindow: Int? = nil, prefillStepSize: Int? = nil,
+        reasoningEffort: String? = nil
     ) -> ModelsListing {
         switch readiness {
         case .ready:
-            let entry = JSONValue.object([
+            var fields: [String: JSONValue] = [
                 "id": .string(modelID),
                 "object": .string("model"),
                 "created": .int(created),
                 "owned_by": .string("mlx-swift-runtime-prototype"),
-            ])
+            ]
+            var runtimeConfiguration: [String: JSONValue] = [:]
+            if let prefillStepSize {
+                runtimeConfiguration["prefill_step_size"] = .int(prefillStepSize)
+            }
+            if let reasoningEffort {
+                runtimeConfiguration["reasoning_effort"] = .string(reasoningEffort)
+            }
+            var meta: [String: JSONValue] = [
+                "runtime_config": .object(runtimeConfiguration)
+            ]
+            if let contextWindow { meta["n_ctx"] = .int(contextWindow) }
+            fields["meta"] = .object(meta)
+            let entry = JSONValue.object(fields)
             return ModelsListing(
                 status: 200,
                 body: .object(["object": .string("list"), "data": .array([entry])]))

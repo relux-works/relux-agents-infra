@@ -1550,6 +1550,14 @@ rg -n "Primary Parent Goal Actualization" \
 
 ## Tooling
 
+For the Python-vs-Swift benchmark, `--python-bin` is only an assertion about
+the process that actually served the baseline. `benchmark-run` derives the
+immutable `mlx-lm` revision from the observed process, its package-owned
+`mlx_lm.server` entry point, and the installed distribution's RECORD and
+`direct_url.json`; it aborts without a decision when that chain cannot be
+established. The benchmark-only profiles pin both runtimes to a live-reported
+76,800-token KV window and leave the deployed default profile unchanged.
+
 | Tool | Purpose | Command | Outputs |
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |

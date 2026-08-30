@@ -575,6 +575,12 @@ records what it observed and judges the pair.** Not a driver plus a gate — one
 process, because every seam between the two turned out to be a place where a
 caller could hand the gate a document about work nobody did.
 
+The benchmark-only Python profile uses the immutable isolated `mlx-lm` fork at
+`45a472f2d0cda166b7ffe1a80fe50dd9621f4303`; it does not replace the deployed
+`mlx_lm-relux.server` environment. Its Qwen3.5 cache reports the constructed
+76,800-token window and parsed effective prefill/reasoning configuration through
+live `/v1/models` metadata.
+
 ```bash
 GATE=./DerivedData/Build/Products/Release/mlx-swift-runtime-prototype
 
@@ -588,7 +594,7 @@ GATE=./DerivedData/Build/Products/Release/mlx-swift-runtime-prototype
     --baseline-runtime python-mlx-lm --baseline-profile qwen-benchmark-python \
     --candidate-runtime mlx-swift    --candidate-profile qwen-benchmark-swift \
     --port 18031 \
-    --python-bin /Users/alexis/.local/pipx/venvs/mlx-lm-relux/bin/python \
+    --python-bin /Users/alexis/.local/pipx/venvs/mlx-lm-kv76800-45a472f/bin/python \
     --candidate-binary "$GATE" \
     --baseline-declare "deployed with --prompt-cache-size 1 …" \
     --candidate-declare "no prompt cache across requests …"
@@ -598,6 +604,21 @@ It writes `records/<runtime>.json`, `attest/<runtime>.attestation.json`,
 `logs/<runtime>-runtime.log`, `session.json` and `decision.json` under
 `--session`, and exits `0` accepted, `3` rejected, `4` inadmissible, `2` usage,
 `5` aborted before a pass could produce anything.
+
+`--python-bin` is an assertion, never the source of the baseline revision. The
+gate reads the observed process argv, verifies that it executed the
+package-owned and RECORD-matching `mlx_lm.server` console entry point, derives
+the interpreter from that entry point, and reads immutable `direct_url.json`
+provenance through that interpreter. A missing relationship, a modified
+installed file, a non-immutable direct URL, or a different `--python-bin`
+aborts without a decision.
+
+Prefill and reasoning are never decoded from another process's argv. Both
+runtimes report their effective values in `meta.runtime_config` on
+`GET /v1/models`; the attestation preserves that response and admission
+re-derives `contextPolicy` from it. Argv remains an audited assertion. Missing
+live fields become `not-reported`, malformed or unread fields become `unread`,
+and both states are inadmissible.
 
 The two passes are sequential, never concurrent — this host holds ~35 GiB free
 and one copy of this model is 28 GB, so overlapping runs would be measuring each
@@ -673,6 +694,7 @@ Per pass, all of it read first-hand about a process it spawned:
 | that pid's process start time | `sysctl KERN_PROC_PID`, the kernel; re-read before close, so a recycled pid is refused |
 | the SHA-256 of the executable actually running | the file the kernel named |
 | the SHA-256 of the launcher config | the file on disk |
+| the effective prefill and reasoning settings | live `GET /v1/models` `meta.runtime_config`, emitted after each runtime has parsed its own configuration |
 | the model ID the runtime is serving | a live `GET /v1/models` before teardown |
 | every request and response | performed by this process, timed by its own clock |
 | the runtime's physical footprint | `proc_pid_rusage` on that pid, sampled every 0.25 s |
@@ -702,9 +724,12 @@ Both entry points apply the same admission. It refuses:
 | both records name the same runtime | a runtime compared against itself cannot decide a migration |
 | a record carries no `provenance` block | it does not decode at all; a hand-minted document never reaches a comparison |
 | a record declares no `revisions` | a record that cannot name the code that ran is not evidence about a runtime |
-| the declared `contextPolicy` is not what the recorded launch argv derives | the pin would be the caller's claim rather than the run's condition |
-| the derived policy leaves the prefill chunk unstated | `mlx_lm.server` defaults it to 2048 and `MLXLMCommon` to 512, so an unstated condition is an unpinned one |
-| the derived policy leaves the reasoning effort unstated | this model's chat template defaults `reasoning_effort` to `xhigh` and injects an extra system instruction at that setting. A profile that says nothing renders a *different prompt*: 79 tokens against 41 for the same short messages, a constant +38 on every prompt in the suite. Read from `--reasoning-effort` here and from `--chat-template-args` for `mlx_lm.server` |
+| the baseline revision came from a Python interpreter other than the observed process's package-owned entry point | the pin describes caller-selected code, not the implementation that served |
+| the live `/v1/models` response omits `meta.n_ctx` | `kv=not-reported`; an answered omission is absence of evidence and never falls back to `--max-kv-size` |
+| the live `/v1/models` context read is failed or malformed | `kv=unread`; a failed read never falls back to argv |
+| the declared `contextPolicy` is not what the live server report derives | the pin would be the caller's claim rather than the run's condition |
+| live `meta.runtime_config.prefill_step_size` is absent or unreadable | `mlx_lm.server` and `MLXLMCommon` have different defaults; the gate refuses rather than decoding argv or guessing one |
+| live `meta.runtime_config.reasoning_effort` is absent or unreadable | this model's template default changes the rendered prompt; the gate refuses rather than parsing a runtime-specific flag spelling |
 | no attestation exists for a record's runtime | nobody observed that pass, so the record is the only witness to itself |
 | an attestation exists and cannot be read or decoded | reported as a read failure, which is a different fact from absence and never collapsed into it |
 | the attestation was opened and never closed | the gate saw the pass begin and never saw it end |
@@ -747,6 +772,12 @@ processes that answer `GET /v1/models` and refuse everything else, launched by
 served. Each remaining negative moves exactly one field of the **real** session
 the control produced — one measurement, one pid, one digest, one attestation —
 so the refusal it provokes is attributable to that thing.
+
+The smoke also drives the revision-2 provenance attack verbatim: a baseline
+profile launches `fake-runtime.py` under one interpreter while `--python-bin`
+points at an isolated immutable `mlx-lm` environment. The production entry must
+exit `5`, write no decision, and name that the runtime revision cannot be
+attributed to the process that served.
 
 And, having admitted the pair, it blocks the decision on:
 

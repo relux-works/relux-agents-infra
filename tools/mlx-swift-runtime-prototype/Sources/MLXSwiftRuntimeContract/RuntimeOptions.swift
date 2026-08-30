@@ -29,9 +29,9 @@ public struct RuntimeOptions: Sendable, Equatable {
     /// condition. `mlx_lm.server` takes `--prefill-step-size` and defaults it
     /// to `2048`; this runtime's default is `512`. Comparing the two as shipped
     /// measures a 4x difference in chunk size and reports it as a difference
-    /// between runtimes. ``RuntimeBenchmark/contextPolicy(derivedFrom:)`` reads
-    /// this flag off the rendered launch and refuses a benchmark pair that left
-    /// it to either default.
+    /// between runtimes. `/v1/models` reports the parsed effective value and
+    /// ``RuntimeBenchmark/contextPolicy(observing:generationConfiguration:)``
+    /// refuses a benchmark pair whose live report is absent or differs.
     public let prefillStepSize: Int?
 
     /// Which MLX Swift model factory this runtime is allowed to build the

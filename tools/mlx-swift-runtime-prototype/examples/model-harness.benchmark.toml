@@ -14,7 +14,8 @@
 # `benchmark-run` performs both passes itself, one after the other, records each
 # pass's wall-clock interval and refuses a pair whose intervals overlap.
 
-# The incumbent, in its deployed configuration.
+# The incumbent with a benchmark-only finite KV window. The deployed
+# `qwen-local` profile is not declared in this file and remains unchanged.
 #
 # The prompt-cache flags are the ones the operator's installed
 # `profiles.qwen-local` carries. They are kept rather than removed: the decision
@@ -24,7 +25,9 @@
 # away.
 [profiles.qwen-benchmark-python]
 mode = "local"
-executable = "/Users/alexis/.local/bin/mlx_lm-relux.server"
+# Isolated immutable install from relux-works/mlx-lm revision
+# 45a472f2d0cda166b7ffe1a80fe50dd9621f4303.
+executable = "/Users/alexis/.local/bin/mlx_lm-kv76800-45a472f.server"
 argv = [
     "--model", "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
     "--host", "{host}",
@@ -35,9 +38,12 @@ argv = [
     # not default this the same way -- `mlx_lm.server` to 2048, MLXLMCommon to
     # 512 -- so leaving it unstated compares a 4x difference in prefill chunk
     # size and calls it a difference between runtimes.
-    # `RuntimeBenchmark.contextPolicy(derivedFrom:)` reads this flag off the
-    # rendered launch and admission refuses a pair that left it out.
+    # The running server reports its parsed effective value through
+    # `/v1/models`; argv is retained only as an assertion and audit record.
     "--prefill-step-size", "2048",
+    # Reported by the active Qwen3.5 cache through `/v1/models`; argv alone
+    # cannot earn this context-policy pin.
+    "--max-kv-size", "76800",
     # The same reasoning policy the Swift profile states, in this runtime's
     # spelling of it.
     #
@@ -87,6 +93,7 @@ argv = [
     "--model-factory", "text-only",
     # The same pinned condition as the Python profile above.
     "--prefill-step-size", "2048",
+    "--max-kv-size", "76800",
 ]
 
 # Deliberately no supervision policy on either profile.

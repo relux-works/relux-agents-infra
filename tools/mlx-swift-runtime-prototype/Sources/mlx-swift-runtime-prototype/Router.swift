@@ -43,7 +43,10 @@ struct Router: Sendable {
             let listing = ModelsListing.make(
                 modelID: options.modelID,
                 readiness: await state.currentReadiness(),
-                created: created)
+                created: created,
+                contextWindow: options.maxKVSize,
+                prefillStepSize: options.prefillStepSize,
+                reasoningEffort: options.reasoningEffort)
             return .json(status: listing.status, body: listing.body)
         case ("POST", "/v1/chat/completions"):
             return await chatCompletions(body: body)

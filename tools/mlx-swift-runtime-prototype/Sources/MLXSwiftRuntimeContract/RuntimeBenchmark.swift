@@ -46,11 +46,11 @@ public enum RuntimeBenchmark {
         /// spelled the same way for both.
         ///
         /// Not free text, and not the driver's opinion: it is
-        /// ``RuntimeBenchmark/contextPolicy(derivedFrom:)`` applied to the
-        /// *rendered launch argv* recorded in ``RunRecord/provenance``, and
+        /// ``RuntimeBenchmark/contextPolicy(observing:generationConfiguration:)`` applied to
+        /// the running server's attested model listing, and
         /// ``RuntimeBenchmark/admit(baseline:baselineAttestation:candidate:candidateAttestation:requiredScenarios:gateBinaryDigest:)``
         /// re-derives it and refuses the pair when the two disagree. A record
-        /// can therefore no longer declare a policy its launch did not carry.
+        /// can therefore no longer declare a policy the server did not report.
         ///
         /// Review found the previous shape: `runtime-benchmark.py` assigned a
         /// module-level constant, so two records minted by hand with no launch
@@ -559,9 +559,9 @@ public enum RuntimeBenchmark {
             case .contextPolicyNotDerived(let runtime, let declared, let derived):
                 return
                     "record \(runtime.debugDescription) declares contextPolicy "
-                    + "\(declared.debugDescription) but its rendered launch argv derives "
-                    + "\(derived.debugDescription); the pin is the caller's claim, not the "
-                    + "run's condition"
+                    + "\(declared.debugDescription) but the running server reported "
+                    + "\(derived.debugDescription); the pin is the caller's claim, not a live "
+                    + "runtime observation"
             case .unpinnedLaunchCondition(let runtime, let condition):
                 return
                     "record \(runtime.debugDescription) left \(condition.debugDescription) to "
@@ -650,25 +650,26 @@ public enum RuntimeBenchmark {
         }
     }
 
-    /// The prompt-evaluation policy a rendered launch actually carries.
+    /// The prompt-evaluation policy the running server reports.
     ///
     /// The single source of truth for the ``Pins/contextPolicy`` pin: the
-    /// driver writes what this returns for the launch it performed, and
+    /// driver writes what this returns for the server it observed, and
     /// ``admit(baseline:baselineAttestation:candidate:candidateAttestation:requiredScenarios:gateBinaryDigest:)``
-    /// re-derives it from the
-    /// same recorded argv and refuses any record whose pin has drifted from it.
+    /// re-derives it from the same live attestation and refuses any record whose
+    /// pin has drifted from it.
     /// A record therefore cannot declare a policy by writing a string.
     ///
     /// Three conditions are read, and all three are conditions the two runtimes do
     /// **not** default to the same way:
     ///
-    /// * the KV bound. `mlx_lm.server` has no flag for one at all and is always
-    ///   unbounded; this runtime takes `--max-kv-size`. Absent on both sides
-    ///   means the same thing, so absence is a legitimate `unbounded` reading.
+    /// * the KV bound. Both benchmark profiles request one, but requested argv
+    ///   is not proof that either runtime honoured it. The pin comes only from
+    ///   the live `/v1/models` report. An answered omission is `not-reported`,
+    ///   an unusable answer is `unread`, and both are refused.
     /// * the prefill chunk. `mlx_lm.server` defaults `--prefill-step-size` to
     ///   `2048`; `MLXLMCommon.GenerateParameters` defaults `prefillStepSize` to
     ///   `512`. Absence here does **not** mean the same thing on both sides, so
-    ///   it is reported as `unpinned` and refused rather than read as a value.
+    ///   an omitted report is `not-reported` and refused rather than guessed.
     ///   Measuring 512-token chunks against 2048-token chunks and calling the
     ///   difference a runtime difference is exactly the comparison this pin
     ///   exists to prevent.
@@ -678,41 +679,29 @@ public enum RuntimeBenchmark {
     ///   that states `medium`. Review measured the consequence: 79 baseline
     ///   tokens against 41 candidate ones for the same messages, a constant +38
     ///   on every prompt in the suite, reported by revision 2 as a 1.93x
-    ///   runtime skew. The two runtimes spell the same condition differently —
-    ///   `--reasoning-effort medium` here, `--chat-template-args
-    ///   '{"reasoning_effort": "medium"}'` for `mlx_lm.server` — so both
-    ///   spellings are read and the *value* is what the pin carries. Absent on
-    ///   either side is `unpinned` and refused: absence there is the template
-    ///   default, which is not a shared default at all.
-    public static func contextPolicy(derivedFrom argv: [String]) -> String {
-        func value(of flag: String) -> String? {
-            for (index, token) in argv.enumerated() {
-                if token == flag, index + 1 < argv.count { return argv[index + 1] }
-                if token.hasPrefix(flag + "=") { return String(token.dropFirst(flag.count + 1)) }
-            }
-            return nil
+    ///   runtime skew. Each runtime reports the parsed effective value, so the pin never
+    ///   needs to emulate either command-line parser. Absence on either side is
+    ///   `not-reported` and refused.
+    public static func contextPolicy(
+        observing window: RuntimeContextWindow,
+        generationConfiguration: RuntimeGenerationConfiguration = .notReported
+    ) -> String {
+        let kv: String
+        switch window.observation {
+        case .observed(let length): kv = String(length)
+        case .observedAbsent: kv = "not-reported"
+        case .notObserved: kv = "unread"
         }
-        // Spelled two different ways by the two runtimes and meaning the same
-        // thing, so the derivation reads both and reports the value rather
-        // than the spelling. `mlx_lm.server` takes a JSON blob of chat-template
-        // kwargs; this runtime takes the one kwarg it supports as a flag.
-        func reasoningEffort() -> String {
-            if let effort = value(of: "--reasoning-effort") { return effort }
-            guard let raw = value(of: "--chat-template-args"),
-                let data = raw.data(using: .utf8),
-                let object = try? JSONSerialization.jsonObject(with: data),
-                let mapping = object as? [String: Any],
-                let effort = mapping["reasoning_effort"] as? String
-            else { return "unpinned" }
-            return effort
-        }
-        let kv = value(of: "--max-kv-size").map { "max-kv-size=\($0)" } ?? "unbounded"
-        let prefill = value(of: "--prefill-step-size") ?? "unpinned"
-        return "kv=\(kv);prefill-step=\(prefill);reasoning=\(reasoningEffort())"
+        return
+            "kv=\(kv);prefill-step=\(generationConfiguration.prefillStepSize.policyValue);"
+            + "reasoning=\(generationConfiguration.reasoningEffort.policyValue)"
     }
 
     /// Conditions the derived policy must not leave to a runtime default.
-    static let unpinnableConditions = ["prefill-step=unpinned", "reasoning=unpinned"]
+    static let unpinnableConditions = [
+        "kv=not-reported", "kv=unread", "prefill-step=not-reported",
+        "prefill-step=unread", "reasoning=not-reported", "reasoning=unread",
+    ]
 
     private static func isSHA256(_ value: String) -> Bool {
         value.count == 64 && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
@@ -724,7 +713,9 @@ public enum RuntimeBenchmark {
     /// not a re-execution: the gate cannot prove a benchmark happened, but it
     /// can refuse a document whose declared conditions contradict the launch it
     /// reports, or that reports no launch at all.
-    static func admitProvenance(_ record: RunRecord) throws {
+    static func admitProvenance(
+        _ record: RunRecord, observing attestation: RuntimeAttestation
+    ) throws {
         guard !record.revisions.isEmpty else {
             throw AdmissionError.missingRevisions(runtime: record.runtime)
         }
@@ -750,7 +741,9 @@ public enum RuntimeBenchmark {
             throw AdmissionError.harnessCommandUnbound(
                 runtime: record.runtime, missing: provenance.harnessCommand.joined(separator: " "))
         }
-        let derived = contextPolicy(derivedFrom: provenance.launchArgv)
+        let derived = contextPolicy(
+            observing: attestation.observedContextWindow,
+            generationConfiguration: attestation.observedGenerationConfiguration ?? .unread)
         guard record.pins.contextPolicy == derived else {
             throw AdmissionError.contextPolicyNotDerived(
                 runtime: record.runtime, declared: record.pins.contextPolicy, derived: derived)
@@ -932,8 +925,8 @@ public enum RuntimeBenchmark {
         // comparison *cannot* see: two records that agree on every pin because
         // one caller typed the same values into both. Nothing above this line
         // can tell that apart from two runs.
-        try admitProvenance(baseline)
-        try admitProvenance(candidate)
+        try admitProvenance(baseline, observing: baselineAttestation)
+        try admitProvenance(candidate, observing: candidateAttestation)
         guard baseline.provenance.configDigest == candidate.provenance.configDigest else {
             throw AdmissionError.configDigestMismatch(
                 baseline: baseline.provenance.configDigest,

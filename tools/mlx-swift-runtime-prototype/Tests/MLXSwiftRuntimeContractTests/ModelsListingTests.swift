@@ -24,6 +24,25 @@ struct ModelsListingTests {
         #expect(listing.body.objectValue?["object"] == .string("list"))
     }
 
+    @Test("a bounded ready runtime reports its live context window")
+    func reportsBoundedContextWindow() throws {
+        let listing = ModelsListing.make(
+            modelID: Self.modelID, readiness: .ready, created: 1,
+            contextWindow: 76_800, prefillStepSize: 2_048, reasoningEffort: "medium")
+        let encoded = try JSONEncoding.string(listing.body)
+        #expect(encoded.contains(#""n_ctx":76800"#))
+        #expect(encoded.contains(#""prefill_step_size":2048"#))
+        #expect(encoded.contains(#""reasoning_effort":"medium""#))
+    }
+
+    @Test("an unbounded default does not invent a context window")
+    func omitsContextWindowByDefault() throws {
+        let listing = ModelsListing.make(
+            modelID: Self.modelID, readiness: .ready, created: 1)
+        let encoded = try JSONEncoding.string(listing.body)
+        #expect(!encoded.contains("n_ctx"))
+    }
+
     @Test(
         "a runtime that is not ready never advertises the model",
         arguments: [

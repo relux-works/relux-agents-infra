@@ -5,6 +5,12 @@
 
 ## 2026-08-30
 
+### 0705 — Effective Generation Configuration Comes From The Server
+- ROOT CAUSE: The gate copied selected `argparse` behavior and still accepted `--prefill-step-size 2048 --prefill-step-siz 999` as 2,048 although the Python server parsed 999.
+- FIX: The signed `mlx-lm` fork reports effective prefill and reasoning values in `/v1/models` `meta.runtime_config`; `RuntimeBenchmark.swift` derives all context-policy pins from the live listing and never decodes runtime argv.
+- EVIDENCE: `benchmark-gate-smoke.sh` drives the exact abbreviation through production `benchmark-run` and requires the live baseline pin `prefill-step=999`; missing or malformed runtime reports remain explicit `not-reported` or `unread` refusals.
+- DECISION: KV, prefill, and reasoning are process-reported parameters. Launch argv is retained only for provenance and requested-model auditing; it cannot attest effective generation configuration.
+
 ### 0646 — Correction: Readiness Test Predates Later Main State
 - CORRECTION: `TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry` was introduced in `97ebda4`, not after `TASK-260817-3a0zr3`; it passes in the exact `0413aee` task-head suite and fails only in the current-main runs observed here.
 - FINDING: `TestModelCheckProductionEntrypoint/deadline_override_terminates_both_owned_process_groups` was introduced after the task head.
@@ -21,6 +27,44 @@
 - FINDING: Production `qwen-infra` resolution derives `compactAtTokens=50000` and `reserveTokens=25000`; changing only the window to `50000` is refused because the threshold reaches the window.
 - EVIDENCE: A narrowed real-entrypoint fixture with window/threshold `50000/50000` exits 1; `50000/33000` exits 0 while model, reasoning, endpoint, and yolo remain unchanged.
 - STATUS: Changes requested; restore the requested window with a valid compaction threshold and attach reproducible production evidence.
+
+### 0605 — Live Bound Appears Only After Cache Construction
+- OBSERVATION: The signed `mlx_lm` server answers `/v1/models` before its first generation without `meta.n_ctx`; after a real completion constructs the Qwen3.5 cache, the same running process reports `meta.n_ctx=76800`.
+- EVIDENCE: The observed kernel argv names the signed task executable and `--max-kv-size 76800`; a completion from that process exits with `finish_reason=stop` and the exact `SIGNED_BASELINE_OK` marker, then the post-generation model record reports 76,800. No listener remains on the test port.
+- CONSEQUENCE: Live attestation must sample the runtime after the benchmark scenarios have exercised cache construction. Pre-generation absence is not evidence of an unbounded cache and must not be replaced with argv-derived KV.
+
+### 0555 — External Fork PR Automation Corrected
+- ROOT CAUSE: The fork's `AGENTS.md` prohibits agents from creating PRs; it was read after the required signed branch publication, and the generic automatic-PR policy had already created `relux-works/mlx-lm#1`.
+- FIX: PR 1 was closed without a comment or branch deletion. The explicitly required signed task branch remains published; upstream PR 1791 remains at its original `b0a45b8` head.
+- STATUS: Reviewer/orchestrator may inspect commit `0a0452a9`; no automated PR or upstream submission remains open for the bounded-KV change.
+
+### 0551 — Observed Argv Uses The Observed Runtime's Parser Semantics
+- ROOT CAUSE: `RuntimeBenchmark.contextPolicy` scanned kernel argv with first-occurrence precedence, while `mlx_lm.server` uses Python argparse store actions and therefore applies the last repeated value; `2048, 999` was recorded as `2048` and admitted.
+- FIX: `RuntimeBenchmark.swift:701` owns one runtime parser registry: `python-mlx-lm` accepts argparse long-option spelling and last-wins repetition; `mlx-swift` accepts spaced unique flags and treats duplicates as unresolved; unknown runtimes and conflicting aliases refuse.
+- EVIDENCE: The exact unit witness was red before the fix. Unit narrowing covers different/equal Python repetitions, repeated reasoning JSON, Swift duplicate refusal, reasoning-alias conflict, repeated context bounds, and unknown runtimes; `benchmark-gate-smoke.sh` drives the real `benchmark-run` call site with baseline argv `--prefill-step-size 2048 --prefill-step-size 999` and requires exit 4 with effective `999` in the refusal.
+
+### 0550 — Bounded Baseline Source Pin Is Signed And Task-Isolated
+- REGRESSION: Fork commit `ec9eea0af1d741cd4eb21c8766478a3e79dd44d6` carried the bounded Qwen3.5 source tree but no cryptographic signature.
+- FIX: The byte-identical tree is republished as SSH-signed commit `0a0452a9ca64d5b8ee3786fb23d3f828417f9514` on `task/TASK-260830-2hc5r2-bounded-kv`; benchmark-only profile and immutable pip `direct_url.json` move to that OID.
+- ANOMALY: The original local branch backed upstream PR 1791. An initial push briefly appended the task commit there; a task branch was created first, then the old branch was lease-restored exactly to `b0a45b8fdd3bb5d6c390d65a6f8521c296f980ec`. Fork PR `relux-works/mlx-lm#1` now isolates only the bounded-KV delta.
+- EVIDENCE: Old and new commit trees both equal `7378b59c77a2add1dce15de9bf099b399867b761`; `git verify-commit` reports a good signature for `alexis@relux.works`; both task local/remote refs resolve to `0a0452a9`.
+
+### 0504 — Aborted Benchmark Passes Can Leave Runtime Children Listening
+- ANOMALY: Repeated `benchmark-gate-smoke.sh` runs found task-owned fake runtimes still listening after `benchmark-run` aborted the decoy provenance pass; reruns on the same ports failed with `EADDRINUSE` and exit 1.
+- EVIDENCE: Exact process commands pointed only into `.temp/TASK-260830-2hc5r2` and prior review artifacts. Those PIDs were terminated explicitly; a fresh-port rerun then passed every smoke check, but its decoy branch again left one listener until explicit cleanup.
+- SCOPE: Not caused by the KV observation change; likely `SpawnedProcess.terminate()`/model-harness descendant cleanup on early-abort paths. Preserve as separate cleanup debt rather than widening the attestation rework.
+
+### 0456 — Missing Live KV Evidence No Longer Falls Back To Argv
+- ROOT CAUSE: `RuntimeBenchmark.contextPolicy` treated an answered `/v1/models` response without `meta.n_ctx` as permission to reuse caller-requested `--max-kv-size`; production `benchmark-run` therefore accepted a pair whose attestations explicitly said `notReported`.
+- FIX: `RuntimeAttestation.swift` maps runtime facts once to `observed(value)`, `observedAbsent`, or `notObserved`; `RuntimeBenchmark.swift` derives KV only from that observation and refuses both absent and unread states. Prefill and reasoning come from `ProcessObservation.arguments`, so the record carries kernel argv rather than caller-supplied profile argv.
+- EVIDENCE: The exact finite-flag/no-meta admission test was red before the fix and green after it; `benchmark-gate-smoke.sh` now removes `meta.n_ctx` from both live responses while retaining `--max-kv-size 76800`, and production exits 4 with no accepted decision. Full Swift tests (290/24), strict format, macOS arm64 Release build, and smoke (0 failures) exit 0.
+
+### 0354 — Benchmark Revision Bound To The Observed Python Process
+- ROOT CAUSE: `benchmark-run` derived `mlx-lm` provenance from caller-supplied `--python-bin`, so a decoy server could be measured while an unrelated immutable environment supplied the accepted revision.
+- FIX: The production run now observes the serving process, requires the configured package-owned `mlx_lm.server` entry point in Darwin's exact shebang script slot (`argv[1]`), verifies the installed distribution's RECORD and immutable `direct_url.json`, and treats `--python-bin` only as an equality assertion; the candidate and model-harness pins now come from their observed executables as well.
+- EVIDENCE: `scripts/benchmark-gate-smoke.sh` drives the exact decoy setup through `benchmark-run`; it exits 5, attributes no runtime revision, and writes no decision, while the package-owned control remains admissible. Live `/v1/models` metadata supplies `kv=76800`; a failed or malformed read produces `kv=unread` and refuses.
+- SCOPE: The benchmark-only profiles use fork commit `ec9eea0af1d741cd4eb21c8766478a3e79dd44d6` and a 76,800-token KV bound. The deployed default profile is unchanged.
+- AUDIT: Thresholds, prompts, and profile declarations are explicit policy/workload inputs rather than runtime-identity claims. Served model and context remain live runtime reports under the documented non-malicious-runtime trust boundary; no other acceptance fact is pinned from a caller-selected executable.
 
 ## 2026-08-29
 

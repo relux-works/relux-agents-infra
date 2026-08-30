@@ -5,9 +5,9 @@ import Foundation
 /// Read from the same `model-harness` config bytes the launcher is handed, with
 /// the launcher's own `{host}` / `{port}` substitution applied, so the recorded
 /// argv is the tokens the runtime process receives rather than a template
-/// nobody ran. `RuntimeBenchmark.contextPolicy(derivedFrom:)` is then a reading
-/// of that argv, which is what makes the `contextPolicy` pin a fact about the
-/// launch instead of a claim beside it.
+/// nobody ran. Runtime provenance still audits those tokens, but effective KV,
+/// prefill, and reasoning values come only from the running server's model
+/// listing. The gate never attempts to reproduce a target runtime's parser.
 ///
 /// Parsed in-process rather than shelled out to Python. That is not a
 /// preference: the whole point of revision 4 is that launch, measurement,

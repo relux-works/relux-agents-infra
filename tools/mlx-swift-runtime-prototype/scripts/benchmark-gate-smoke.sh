@@ -63,12 +63,24 @@ JSON
 # One serves; one only lists. The second is the process review used to obtain
 # `accepted=true` from the previous revision in 7.2 seconds.
 cat > "$OUT/fake-runtime.py" <<'PY'
-import json, sys, time
+import argparse, json, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = int(sys.argv[1])
-MODEL = sys.argv[2]
-MODE = sys.argv[3] if len(sys.argv) > 3 else "serving"
+parser = argparse.ArgumentParser()
+parser.add_argument("port", type=int)
+parser.add_argument("model")
+parser.add_argument("mode", default="serving", nargs="?")
+parser.add_argument("--host")
+parser.add_argument("--model", dest="asserted_model")
+parser.add_argument("--max-kv-size", type=int)
+parser.add_argument("--prefill-step-size", type=int, default=2048)
+parser.add_argument("--reasoning-effort")
+parser.add_argument("--chat-template-args", type=json.loads, default={})
+args = parser.parse_args()
+PORT = args.port
+MODEL = args.model
+MODE = args.mode
+REASONING = args.reasoning_effort or args.chat_template_args.get("reasoning_effort")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -84,7 +96,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.endswith("/models"):
-            self._json({"data": [{"id": MODEL, "object": "model"}]})
+            entry = {"id": MODEL, "object": "model"}
+            meta = {}
+            if MODE != "serving-no-meta":
+                meta["n_ctx"] = 76800
+            if MODE != "serving-no-config":
+                runtime_config = {"prefill_step_size": args.prefill_step_size}
+                if REASONING is not None:
+                    runtime_config["reasoning_effort"] = REASONING
+                meta["runtime_config"] = runtime_config
+            entry["meta"] = meta
+            self._json({"data": [entry]})
             return
         self._json({"error": "not found"}, status=404)
 
@@ -165,6 +187,77 @@ class Handler(BaseHTTPRequestHandler):
 ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 PY
 
+# Re-exec the serving process with a different prefill flag than the profile
+# supplied. This distinguishes kernel-observed argv from caller configuration.
+cat > "$OUT/argv-rewriter.py" <<PY
+import os, sys
+port, model, mode = sys.argv[1:4]
+os.execv(sys.executable, [
+    sys.executable, "$OUT/fake-runtime.py", port, model, mode,
+    "--host", "127.0.0.1", "--model", model,
+    "--max-kv-size", "76800", "--prefill-step-size", "999",
+    "--reasoning-effort", "medium",
+])
+PY
+
+# A minimal immutable Python distribution for the baseline control. It is not
+# a shortcut around provenance: the production gate verifies this distribution
+# and its console script against RECORD through the interpreter behind the live
+# baseline process. The decoy negative below deliberately bypasses this wrapper.
+BASELINE_VENV="$OUT/baseline-venv"
+"$BASELINE_PYTHON" -m venv --without-pip "$BASELINE_VENV"
+SITE="$($BASELINE_VENV/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+mkdir -p "$SITE/mlx_lm" "$SITE/mlx_lm-0.0.1.dist-info"
+cat > "$SITE/mlx_lm/__init__.py" <<'PY'
+PY
+cat > "$SITE/mlx_lm/server.py" <<PY
+import runpy
+
+def main():
+    runpy.run_path("$OUT/fake-runtime.py", run_name="__main__")
+PY
+cat > "$BASELINE_VENV/bin/mlx_lm.server" <<PY
+#!$BASELINE_VENV/bin/python
+import sys
+from mlx_lm.server import main
+if __name__ == '__main__':
+    sys.exit(main())
+PY
+chmod +x "$BASELINE_VENV/bin/mlx_lm.server"
+cat > "$SITE/mlx_lm-0.0.1.dist-info/METADATA" <<'META'
+Metadata-Version: 2.1
+Name: mlx-lm
+Version: 0.0.1
+META
+cat > "$SITE/mlx_lm-0.0.1.dist-info/entry_points.txt" <<'ENTRY'
+[console_scripts]
+mlx_lm.server = mlx_lm.server:main
+ENTRY
+cat > "$SITE/mlx_lm-0.0.1.dist-info/direct_url.json" <<'JSON'
+{"url":"file:///benchmark-gate-smoke/mlx-lm","vcs_info":{"vcs":"git","commit_id":"1111111111111111111111111111111111111111","requested_revision":"1111111111111111111111111111111111111111"}}
+JSON
+for DIST in mlx mlx_metal transformers; do
+    mkdir -p "$SITE/${DIST}-0.0.1.dist-info"
+    NORMALIZED="${DIST//_/-}"
+    printf 'Metadata-Version: 2.1\nName: %s\nVersion: 0.0.1\n' "$NORMALIZED" \
+        > "$SITE/${DIST}-0.0.1.dist-info/METADATA"
+done
+"$BASELINE_VENV/bin/python" - "$SITE" "$BASELINE_VENV/bin/mlx_lm.server" <<'PY'
+import base64, csv, hashlib, os, pathlib, sys
+site, wrapper = map(pathlib.Path, sys.argv[1:])
+dist = site / "mlx_lm-0.0.1.dist-info"
+paths = [site / "mlx_lm/__init__.py", site / "mlx_lm/server.py",
+         dist / "METADATA", dist / "entry_points.txt", dist / "direct_url.json", wrapper]
+rows = []
+for path in paths:
+    data = path.read_bytes()
+    digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).decode().rstrip("=")
+    rows.append((os.path.relpath(path, site), f"sha256={digest}", str(len(data))))
+rows.append((os.path.relpath(dist / "RECORD", site), "", ""))
+with (dist / "RECORD").open("w", newline="") as handle:
+    csv.writer(handle).writerows(rows)
+PY
+
 cat > "$OUT/prompts.json" <<'JSON'
 {
   "version": "gate-smoke-1",
@@ -220,13 +313,14 @@ write_config() {
     cat > "$path" <<TOML
 [profiles.gate-smoke-baseline]
 mode = "local"
-executable = "$BASELINE_PYTHON"
+executable = "$BASELINE_VENV/bin/mlx_lm.server"
 argv = [
-    "$OUT/fake-runtime.py", "{port}", "$MODEL", "$mode",
+    "{port}", "$MODEL", "$mode",
     "--host", "{host}",
     "--model", "$MODEL",
+    "--max-kv-size", "76800",
     "--prefill-step-size", "2048",
-    "--reasoning-effort", "medium",
+    "--chat-template-args", "{\"reasoning_effort\":\"medium\"}",
 ]
 
 [profiles.gate-smoke-candidate]
@@ -236,6 +330,7 @@ argv = [
     "$OUT/fake-runtime.py", "{port}", "$MODEL", "$mode",
     "--host", "{host}",
     "--model", "$MODEL",
+    "--max-kv-size", "76800",
     "--prefill-step-size", "2048",
     "--reasoning-effort", "medium",
 ]
@@ -243,6 +338,70 @@ TOML
 }
 write_config "$OUT/serving.toml" serving
 write_config "$OUT/models-only.toml" models-only
+write_config "$OUT/no-meta.toml" serving-no-meta
+write_config "$OUT/no-runtime-config.toml" serving-no-config
+
+cat > "$OUT/rewritten-argv.toml" <<TOML
+[profiles.gate-smoke-baseline]
+mode = "local"
+executable = "$BASELINE_VENV/bin/mlx_lm.server"
+argv = [
+    "{port}", "$MODEL", "serving", "--host", "{host}", "--model", "$MODEL",
+    "--max-kv-size", "76800", "--prefill-step-size", "2048",
+    "--chat-template-args", "{\"reasoning_effort\":\"medium\"}",
+]
+[profiles.gate-smoke-candidate]
+mode = "local"
+executable = "$CANDIDATE_PYTHON"
+argv = [
+    "$OUT/argv-rewriter.py", "{port}", "$MODEL", "serving",
+    "--host", "{host}", "--model", "$MODEL",
+    "--max-kv-size", "76800", "--prefill-step-size", "2048",
+    "--reasoning-effort", "medium",
+]
+TOML
+
+cat > "$OUT/duplicate-python-prefill.toml" <<TOML
+[profiles.gate-smoke-baseline]
+mode = "local"
+executable = "$BASELINE_VENV/bin/mlx_lm.server"
+argv = [
+    "{port}", "$MODEL", "serving", "--host", "{host}", "--model", "$MODEL",
+    "--max-kv-size", "76800",
+    "--prefill-step-size", "2048", "--prefill-step-size", "999",
+    "--chat-template-args", "{\"reasoning_effort\":\"medium\"}",
+]
+[profiles.gate-smoke-candidate]
+mode = "local"
+executable = "$CANDIDATE_PYTHON"
+argv = [
+    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
+    "--host", "{host}", "--model", "$MODEL",
+    "--max-kv-size", "76800", "--prefill-step-size", "2048",
+    "--reasoning-effort", "medium",
+]
+TOML
+
+cat > "$OUT/abbreviated-python-prefill.toml" <<TOML
+[profiles.gate-smoke-baseline]
+mode = "local"
+executable = "$BASELINE_VENV/bin/mlx_lm.server"
+argv = [
+    "{port}", "$MODEL", "serving", "--host", "{host}", "--model", "$MODEL",
+    "--max-kv-size", "76800",
+    "--prefill-step-size", "2048", "--prefill-step-siz", "999",
+    "--chat-template-args", "{\"reasoning_effort\":\"medium\"}",
+]
+[profiles.gate-smoke-candidate]
+mode = "local"
+executable = "$CANDIDATE_PYTHON"
+argv = [
+    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
+    "--host", "{host}", "--model", "$MODEL",
+    "--max-kv-size", "76800", "--prefill-step-size", "2048",
+    "--reasoning-effort", "medium",
+]
+TOML
 
 run_benchmark() {
     local config="$1" session="$2" log="$3" port="$4"
@@ -250,8 +409,9 @@ run_benchmark() {
     "$BINARY" benchmark-run \
         --config "$config" --model "$MODEL" --prompts "$OUT/prompts.json" \
         --thresholds "$OUT/thresholds.json" --session "$session" --harness "$HARNESS" \
-        --baseline-runtime gate-smoke-baseline --baseline-profile gate-smoke-baseline \
-        --candidate-runtime gate-smoke-candidate --candidate-profile gate-smoke-candidate \
+        --baseline-runtime python-mlx-lm --baseline-profile gate-smoke-baseline \
+        --candidate-runtime mlx-swift --candidate-profile gate-smoke-candidate \
+        --python-bin "$BASELINE_VENV/bin/python" \
         --port "$port" --settle-seconds 2 --startup-timeout 90 --request-timeout 90 \
         > "$log" 2>&1
     printf '%s' "$?"
@@ -274,8 +434,151 @@ grep -q '"accepted" : true' "$OUT/run.log" \
     && pass "the accepted decision is reported with its deltas" \
     || fail "the control did not report accepted=true"
 
-BASE_RECORD="$SESSION/records/gate-smoke-baseline.json"
-CAND_RECORD="$SESSION/records/gate-smoke-candidate.json"
+# Exact revision-3 reviewer attack: both live model listings answer, but omit
+# meta.n_ctx while both launch profiles still request --max-kv-size 76800.
+# Requested configuration is not observed enforcement, so this must never
+# produce a decision.
+STATUS="$(run_benchmark "$OUT/no-meta.toml" "$OUT/session-no-meta" \
+    "$OUT/no-meta.log" "$((PORT + 21))")"
+if [ "$STATUS" = "4" ]; then
+    pass "an omitted live KV bound stays inadmissible despite a finite launch flag (exit 4)"
+else
+    fail "the omitted live KV bound exited $STATUS, not 4"
+    tail -20 "$OUT/no-meta.log"
+fi
+grep -qF "kv=not-reported" "$OUT/no-meta.log" \
+    && pass "the production refusal names absent live KV evidence" \
+    || fail "the omitted-bound refusal did not name the absent observation"
+grep -q '"accepted" : true' "$OUT/no-meta.log" \
+    && fail "the omitted live KV bound still reported accepted=true" \
+    || pass "the omitted live KV bound cannot mint an accepted record"
+
+STATUS="$(run_benchmark "$OUT/no-runtime-config.toml" "$OUT/session-no-runtime-config" \
+    "$OUT/no-runtime-config.log" "$((PORT + 24))")"
+if [ "$STATUS" = "4" ]; then
+    pass "an omitted live generation configuration is inadmissible (exit 4)"
+else
+    fail "the omitted live generation configuration exited $STATUS, not 4"
+    tail -20 "$OUT/no-runtime-config.log"
+fi
+grep -qF 'prefill-step=not-reported' "$OUT/no-runtime-config.log" \
+    && pass "the production refusal names the first absent live generation parameter" \
+    || fail "the omitted-generation-config refusal did not name absent live prefill evidence"
+
+rm -rf "$OUT/session-rewritten-argv"
+"$BINARY" benchmark-run \
+    --config "$OUT/rewritten-argv.toml" --model "$MODEL" --prompts "$OUT/prompts.json" \
+    --thresholds "$OUT/thresholds.json" --session "$OUT/session-rewritten-argv" \
+    --harness "$HARNESS" \
+    --baseline-runtime python-mlx-lm --baseline-profile gate-smoke-baseline \
+    --candidate-runtime mlx-swift --candidate-profile gate-smoke-candidate \
+    --python-bin "$BASELINE_VENV/bin/python" --port "$((PORT + 22))" \
+    --settle-seconds 0 --startup-timeout 90 --request-timeout 90 \
+    > "$OUT/rewritten-argv.log" 2>&1
+STATUS=$?
+if [ "$STATUS" = "4" ]; then
+    pass "kernel argv overrides a caller profile rewritten before serving (exit 4)"
+else
+    fail "the rewritten argv attack exited $STATUS, not 4"
+    tail -20 "$OUT/rewritten-argv.log"
+fi
+grep -qF 'prefill-step=2048;reasoning=medium" vs candidate "kv=76800;prefill-step=999' \
+    "$OUT/rewritten-argv.log" \
+    && pass "the production record derives prefill from the serving process report" \
+    || fail "the rewritten argv refusal did not expose the live-reported prefill value"
+grep -q '"accepted" : true' "$OUT/rewritten-argv.log" \
+    && fail "caller profile argv still minted an accepted record" \
+    || pass "caller profile argv cannot substitute for observed process argv"
+
+# Exact revision-4 reviewer shape, now applied to the actual argparse-backed
+# baseline: its observed argv repeats the pinned flag and argparse uses 999.
+# The running process must report that effective last value rather than the
+# gate trying to decode it independently.
+STATUS="$(run_benchmark "$OUT/duplicate-python-prefill.toml" \
+    "$OUT/session-duplicate-python-prefill" "$OUT/duplicate-python-prefill.log" \
+    "$((PORT + 23))")"
+if [ "$STATUS" = "4" ]; then
+    pass "repeated mlx_lm prefill flags are attested by the process (exit 4)"
+else
+    fail "the repeated mlx_lm prefill attack exited $STATUS, not 4"
+    tail -20 "$OUT/duplicate-python-prefill.log"
+fi
+grep -qF 'baseline "kv=76800;prefill-step=999;reasoning=medium" vs candidate "kv=76800;prefill-step=2048' \
+    "$OUT/duplicate-python-prefill.log" \
+    && pass "the production record pins the process-reported repeated value" \
+    || fail "the repeated prefill refusal did not expose the process-reported value"
+grep -q '"accepted" : true' "$OUT/duplicate-python-prefill.log" \
+    && fail "the repeated prefill attack still reported accepted=true" \
+    || pass "a non-effective repeated value cannot be attested"
+
+# Exact revision-5 reviewer attack. Python argparse accepts the unique
+# abbreviation and resolves 999; the gate must learn that from /v1/models,
+# never from an incomplete imitation of argparse.
+STATUS="$(run_benchmark "$OUT/abbreviated-python-prefill.toml" \
+    "$OUT/session-abbreviated-python-prefill" "$OUT/abbreviated-python-prefill.log" \
+    "$((PORT + 25))")"
+if [ "$STATUS" = "4" ]; then
+    pass "argparse abbreviation is attested by the running baseline (exit 4)"
+else
+    fail "the argparse abbreviation attack exited $STATUS, not 4"
+    tail -20 "$OUT/abbreviated-python-prefill.log"
+fi
+grep -qF 'baseline "kv=76800;prefill-step=999;reasoning=medium" vs candidate "kv=76800;prefill-step=2048' \
+    "$OUT/abbreviated-python-prefill.log" \
+    && pass "the production record carries argparse's live effective abbreviation" \
+    || fail "the abbreviation refusal did not expose the server-reported value"
+grep -q '"accepted" : true' "$OUT/abbreviated-python-prefill.log" \
+    && fail "the argparse abbreviation attack still reported accepted=true" \
+    || pass "argv abbreviation cannot mint a false effective prefill value"
+
+# Exact revision-2 reviewer attack: the baseline launches a decoy program under
+# one interpreter while --python-bin points at the immutable distribution above.
+cat > "$OUT/decoy.toml" <<TOML
+[profiles.gate-smoke-baseline]
+mode = "local"
+executable = "$BASELINE_PYTHON"
+argv = [
+    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
+    "--host", "{host}", "--model", "$MODEL",
+    "--max-kv-size", "76800", "--prefill-step-size", "2048",
+    "--chat-template-args", "{\"reasoning_effort\":\"medium\"}",
+]
+[profiles.gate-smoke-candidate]
+mode = "local"
+executable = "$CANDIDATE_PYTHON"
+argv = [
+    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
+    "--host", "{host}", "--model", "$MODEL",
+    "--max-kv-size", "76800", "--prefill-step-size", "2048",
+    "--reasoning-effort", "medium",
+]
+TOML
+rm -rf "$OUT/session-decoy"
+"$BINARY" benchmark-run \
+    --config "$OUT/decoy.toml" --model "$MODEL" --prompts "$OUT/prompts.json" \
+    --thresholds "$OUT/thresholds.json" --session "$OUT/session-decoy" \
+    --harness "$HARNESS" \
+    --baseline-runtime python-mlx-lm --baseline-profile gate-smoke-baseline \
+    --candidate-runtime mlx-swift --candidate-profile gate-smoke-candidate \
+    --python-bin "$BASELINE_VENV/bin/python" --port "$((PORT + 20))" \
+    --settle-seconds 0 --startup-timeout 90 --request-timeout 90 \
+    > "$OUT/decoy.log" 2>&1
+STATUS=$?
+if [ "$STATUS" = "5" ]; then
+    pass "a decoy baseline plus an unrelated --python-bin produces no decision (exit 5)"
+else
+    fail "the decoy provenance attack exited $STATUS, not 5"
+    tail -20 "$OUT/decoy.log"
+fi
+grep -qF "runtime revision cannot be attributed to the process that served" "$OUT/decoy.log" \
+    && pass "the production refusal names the unowned runtime revision" \
+    || fail "the decoy refusal did not name the provenance mismatch"
+grep -q '"accepted" : true' "$OUT/decoy.log" \
+    && fail "the decoy provenance attack still reported accepted=true" \
+    || pass "the decoy provenance attack cannot mint an accepted record"
+
+BASE_RECORD="$SESSION/records/python-mlx-lm.json"
+CAND_RECORD="$SESSION/records/mlx-swift.json"
 ATTEST="$SESSION/attest"
 if [ ! -s "$BASE_RECORD" ] || [ ! -s "$CAND_RECORD" ]; then
     fail "the control produced no records; nothing below can be checked"
@@ -336,8 +639,8 @@ rm -rf "$OUT/session-skipped"
     --config "$OUT/serving.toml" --model "$MODEL" --prompts "$OUT/prompts.json" \
     --thresholds "$OUT/thresholds.json" --session "$OUT/session-skipped" \
     --harness "$HARNESS" \
-    --baseline-runtime gate-smoke-baseline --baseline-profile gate-smoke-baseline \
-    --candidate-runtime gate-smoke-candidate --candidate-profile gate-smoke-candidate \
+    --baseline-runtime python-mlx-lm --baseline-profile gate-smoke-baseline \
+    --candidate-runtime mlx-swift --candidate-profile gate-smoke-candidate \
     --port "$((PORT + 2))" --settle-seconds 2 --startup-timeout 90 --request-timeout 90 \
     --skip tool_call > "$OUT/skipped.log" 2>&1
 STATUS=$?
@@ -466,8 +769,8 @@ fork_attestations() {
     local targets=("$directory/$runtime.attestation.json")
     if [ "$runtime" = "both" ]; then
         targets=(
-            "$directory/gate-smoke-baseline.attestation.json"
-            "$directory/gate-smoke-candidate.attestation.json"
+            "$directory/python-mlx-lm.attestation.json"
+            "$directory/mlx-swift.attestation.json"
         )
     fi
     python3 - "$patch" "${targets[@]}" <<'PY'
@@ -564,7 +867,7 @@ expect_refusal "a measurement with no transcript is refused" \
     "$BASE_RECORD" "$OUT/notranscript-candidate.json" "$ATTEST" "$OUT/notranscript.log"
 
 info "an observation that seals no transcript"
-fork_attestations "$OUT/attest-unsealed" gate-smoke-candidate '{"transcriptDigest": null}'
+fork_attestations "$OUT/attest-unsealed" mlx-swift '{"transcriptDigest": null}'
 expect_refusal "an observation of a process is not an observation of a measurement" \
     "seals no transcript" \
     "$BASE_RECORD" "$CAND_RECORD" "$OUT/attest-unsealed" "$OUT/unsealed.log"
@@ -584,14 +887,14 @@ expect_refusal "a record naming a process the gate never watched is refused" \
     "$BASE_RECORD" "$OUT/pid-candidate.json" "$ATTEST" "$OUT/pid.log"
 
 info "an attestation opened and never closed"
-fork_attestations "$OUT/attest-open" gate-smoke-candidate \
+fork_attestations "$OUT/attest-open" mlx-swift \
     '{"closedAtUnixSeconds": null, "servedModelID": null}'
 expect_refusal "an unclosed observation is not a watched pass" \
     "opened and never closed" \
     "$BASE_RECORD" "$CAND_RECORD" "$OUT/attest-open" "$OUT/open.log"
 
 info "an observation of a runtime serving some other model"
-fork_attestations "$OUT/attest-model" gate-smoke-candidate \
+fork_attestations "$OUT/attest-model" mlx-swift \
     '{"servedModelID": "/Users/alexis/src/local-models/something-else"}'
 expect_refusal "a runtime the gate saw serving another model is refused" \
     "the record describes a run the gate did not watch" \
@@ -610,7 +913,7 @@ expect_refusal "a pair nothing in this build observed is refused" \
 info "an attestation that exists and cannot be decoded"
 rm -rf "$OUT/attest-malformed"
 cp -R "$ATTEST" "$OUT/attest-malformed"
-printf 'not json at all' > "$OUT/attest-malformed/gate-smoke-candidate.attestation.json"
+printf 'not json at all' > "$OUT/attest-malformed/mlx-swift.attestation.json"
 expect_refusal "a failed read is reported as a read failure, not as absence" \
     "is malformed" \
     "$BASE_RECORD" "$CAND_RECORD" "$OUT/attest-malformed" "$OUT/malformed.log"
@@ -624,39 +927,11 @@ STATUS=$?
     || fail "omitting --attestations exited $STATUS, not 2"
 
 # ------------------------------------------------- the pins, attacked --
-info "a declared contextPolicy its launch does not carry"
-edit_record "$CAND_RECORD" "$OUT/policy-candidate.json" \
-    "{\"provenance\": {\"launchArgv\": [\"--model\", \"$MODEL\", \"--prefill-step-size\", \"512\", \"--reasoning-effort\", \"medium\"]}}"
-expect_refusal "a declared contextPolicy the launch does not derive is refused" \
-    "the pin is the caller's claim" \
-    "$BASE_RECORD" "$OUT/policy-candidate.json" "$ATTEST" "$OUT/policy.log"
-
-info "a launch that left the prefill chunk to the runtime default"
-edit_record "$BASE_RECORD" "$OUT/unpinned-baseline.json" \
-    "{\"pins\": {\"contextPolicy\": \"kv=unbounded;prefill-step=unpinned;reasoning=medium\"}, \"provenance\": {\"launchArgv\": [\"--model\", \"$MODEL\", \"--reasoning-effort\", \"medium\"]}}"
-edit_record "$CAND_RECORD" "$OUT/unpinned-candidate.json" \
-    "{\"pins\": {\"contextPolicy\": \"kv=unbounded;prefill-step=unpinned;reasoning=medium\"}, \"provenance\": {\"launchArgv\": [\"--model\", \"$MODEL\", \"--reasoning-effort\", \"medium\"]}}"
-expect_refusal "an unpinned prefill chunk is refused rather than defaulted" \
-    "prefill-step=unpinned" \
-    "$OUT/unpinned-baseline.json" "$OUT/unpinned-candidate.json" "$ATTEST" \
-    "$OUT/unpinned.log"
-
-info "a launch that left the reasoning effort to the chat template's default"
-edit_record "$BASE_RECORD" "$OUT/noreason-baseline.json" \
-    "{\"pins\": {\"contextPolicy\": \"kv=unbounded;prefill-step=2048;reasoning=unpinned\"}, \"provenance\": {\"launchArgv\": [\"--model\", \"$MODEL\", \"--prefill-step-size\", \"2048\"]}}"
-edit_record "$CAND_RECORD" "$OUT/noreason-candidate.json" \
-    "{\"pins\": {\"contextPolicy\": \"kv=unbounded;prefill-step=2048;reasoning=unpinned\"}, \"provenance\": {\"launchArgv\": [\"--model\", \"$MODEL\", \"--prefill-step-size\", \"2048\"]}}"
-expect_refusal "an unstated reasoning effort is refused rather than defaulted" \
-    "reasoning=unpinned" \
-    "$OUT/noreason-baseline.json" "$OUT/noreason-candidate.json" "$ATTEST" \
-    "$OUT/noreason.log"
-
-info "two runtimes rendering the template at different reasoning efforts"
-edit_record "$BASE_RECORD" "$OUT/xhigh-baseline.json" \
-    "{\"pins\": {\"contextPolicy\": \"kv=unbounded;prefill-step=2048;reasoning=xhigh\"}, \"provenance\": {\"launchArgv\": [\"--model\", \"$MODEL\", \"--prefill-step-size\", \"2048\", \"--chat-template-args\", \"{\\\"reasoning_effort\\\": \\\"xhigh\\\"}\"]}}"
-expect_refusal "two different reasoning policies are not a comparison" \
-    "pinned condition \"contextPolicy\" differs" \
-    "$OUT/xhigh-baseline.json" "$CAND_RECORD" "$ATTEST" "$OUT/xhigh.log"
+# Effective generation parameters are attacked above through production
+# `benchmark-run`: missing reports, rewritten argv, repeated argparse values,
+# and argparse abbreviation all reach the real live-attestation call site.
+# Replay tests below continue attacking record and attestation integrity, but
+# deliberately do not infer effective configuration from edited launch argv.
 
 info "a record that names no revisions"
 edit_record "$CAND_RECORD" "$OUT/norev-candidate.json" '{"revisions": {}}'

@@ -29,7 +29,8 @@ extension BenchmarkRunCommand {
         guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
         var buffer = [CChar](repeating: 0, count: size)
         guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return nil }
-        return String(cString: buffer)
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     static func sysctlUInt64(_ name: String) -> UInt64? {
@@ -104,24 +105,147 @@ extension BenchmarkRunCommand {
             status: process.terminationStatus, standardOutput: String(data: data, encoding: .utf8))
     }
 
-    /// Exact revisions of the incumbent's numerical stack, read from the
-    /// interpreter that will serve the baseline.
-    static func pythonRevisions(python: String) -> [String: String] {
+    static func canonicalPath(_ path: String) -> String? {
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path).resolvingSymlinksInPath().standardized.path
+    }
+
+    /// Resolve the executable image a Python interpreter path becomes after
+    /// macOS launcher/framework handoff, using a live child rather than path
+    /// spelling. `sys.executable` is not enough on Xcode Python: it names the
+    /// framework binary while `proc_pidpath` names `Python.app`.
+    static func observedInterpreterExecutable(_ python: String) throws -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = ["-c", "import time; time.sleep(10)"]
+        try process.run()
+        defer {
+            process.terminate()
+            process.waitUntilExit()
+        }
+        return ProcessObservation.settled(pid: Int(process.processIdentifier)).flatMap {
+            canonicalPath($0.executablePath)
+        }
+    }
+
+    /// Exact revisions of the incumbent's numerical stack, derived from the
+    /// Python process that actually served the pass.
+    ///
+    /// The caller's `--python-bin` is only an assertion. The authority is the
+    /// observed process argv, the package-owned `mlx_lm.server` entry point it
+    /// executed, that entry point's shebang, and the interpreter selected by
+    /// the shebang. Any missing or contradictory link refuses the run.
+    static func pythonRevisions(
+        observation: ProcessObservation.Reading,
+        profile: BenchmarkLaunchConfig.Profile,
+        assertedPython: String?
+    ) throws -> [String: String] {
+        guard let profileExecutable = canonicalPath(profile.executable) else {
+            throw RunError.unusableInput(
+                "baseline profile executable \(profile.executable.debugDescription) is unreadable")
+        }
+        guard let arguments = observation.arguments else {
+            throw RunError.unusableInput(
+                "the observed baseline process argv could not be read; runtime revision is unknown")
+        }
+        // Darwin keeps the interpreter image at argv[0] after a shebang exec
+        // and puts the executed script in argv[1]. Require that exact slot so
+        // a decoy cannot smuggle the expected path as an unused later argument.
+        let observedEntryPoint = arguments.dropFirst().first
+        guard observedEntryPoint.flatMap(canonicalPath) == profileExecutable else {
+            throw RunError.unusableInput(
+                "observed baseline pid \(observation.executablePath.debugDescription) did not "
+                    + "execute the configured entry point \(profile.executable.debugDescription); "
+                    + "observed argv[1] was \((observedEntryPoint ?? "<missing>").debugDescription); "
+                    + "runtime revision cannot be attributed to the process that served")
+        }
+        guard
+            let entryPointText = try? String(
+                contentsOfFile: profileExecutable, encoding: .utf8),
+            let firstLine = entryPointText.split(separator: "\n", maxSplits: 1).first,
+            firstLine.hasPrefix("#!")
+        else {
+            throw RunError.unusableInput(
+                "baseline profile executable \(profile.executable.debugDescription) is not a "
+                    + "Python console-script entry point")
+        }
+        let shebang = String(firstLine.dropFirst(2))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !shebang.contains(" "), let interpreter = canonicalPath(shebang),
+            let observedInterpreter = canonicalPath(observation.executablePath)
+        else {
+            throw RunError.unusableInput(
+                "baseline entry point has no readable interpreter; runtime revision is unknown")
+        }
+        let interpreterImage = try observedInterpreterExecutable(shebang)
+        guard interpreterImage == observedInterpreter
+        else {
+            throw RunError.unusableInput(
+                "baseline entry point interpreter does not match the executable observed for "
+                    + "the process that served (entry point becomes: "
+                    + "\((interpreterImage ?? shebang).debugDescription), observed: "
+                    + "\(observation.executablePath.debugDescription)); runtime revision is unknown"
+            )
+        }
+        if let assertedPython {
+            guard let assertion = canonicalPath(assertedPython), assertion == interpreter else {
+                throw RunError.unusableInput(
+                    "--python-bin \(assertedPython.debugDescription) is not the interpreter "
+                        + "behind the observed baseline process; refusing caller-supplied "
+                        + "runtime provenance")
+            }
+        }
+
         let script = """
-            import json, platform
-            from importlib.metadata import version, distribution
+            import base64, hashlib, json, pathlib, platform, re
+            from importlib.metadata import distribution, version
+
+            entry = pathlib.Path(__import__('sys').argv[1]).resolve(strict=True)
             d = distribution('mlx-lm')
-            url = ''.join((d.read_text('direct_url.json') or '').splitlines())
+            points = [e for e in d.entry_points
+                      if e.group == 'console_scripts' and e.name == 'mlx_lm.server']
+            if len(points) != 1 or points[0].value != 'mlx_lm.server:main':
+                raise RuntimeError('mlx-lm does not own the expected server entry point')
+            owned = []
+            for item in d.files or ():
+                target = pathlib.Path(d.locate_file(item)).resolve(strict=True)
+                if target == entry:
+                    owned.append(item)
+                if item.hash is None:
+                    continue
+                algorithm, expected = item.hash.mode, item.hash.value
+                digest = hashlib.new(algorithm, target.read_bytes()).digest()
+                actual = base64.urlsafe_b64encode(digest).decode().rstrip('=')
+                if actual != expected:
+                    raise RuntimeError(f'installed mlx-lm file differs from RECORD: {item}')
+            if len(owned) != 1 or owned[0].hash is None:
+                raise RuntimeError('observed server entry point is not hash-owned by mlx-lm')
+            direct = json.loads(d.read_text('direct_url.json') or '')
+            vcs = direct.get('vcs_info') or {}
+            commit = vcs.get('commit_id')
+            requested = vcs.get('requested_revision')
+            if vcs.get('vcs') != 'git' or commit != requested or not isinstance(commit, str) \
+                    or re.fullmatch(r'[0-9a-f]{40}', commit) is None:
+                raise RuntimeError('mlx-lm direct_url is not one immutable git revision')
+            url = json.dumps(direct, sort_keys=True, separators=(',', ':'))
             print(json.dumps({'mlx_lm': version('mlx-lm'), 'mlx': version('mlx'),
              'mlx_metal': version('mlx-metal'), 'transformers': version('transformers'),
-             'python': platform.python_version(), 'mlx_lm_direct_url': url}))
+             'python': platform.python_version(), 'mlx_lm_direct_url': url,
+             'mlx_lm_commit': commit}))
             """
-        guard let captured = try? capture(executable: python, arguments: ["-c", script]),
+        let captured = try capture(
+            executable: shebang, arguments: ["-c", script, profileExecutable])
+        guard captured.status == 0,
             let output = captured.standardOutput,
             let line = output.split(separator: "\n").last(where: { $0.hasPrefix("{") }),
             let data = line.data(using: .utf8),
             let document = try? JSONSerialization.jsonObject(with: data) as? [String: String]
-        else { return [:] }
+        else {
+            let detail = captured.standardOutput?.suffix(800) ?? "no output"
+            throw RunError.unusableInput(
+                "the observed baseline process could not attest its installed mlx-lm revision: "
+                    + detail)
+        }
         return document
     }
 

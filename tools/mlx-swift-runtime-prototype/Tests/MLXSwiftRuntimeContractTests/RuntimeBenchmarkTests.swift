@@ -7,13 +7,23 @@ import Testing
 struct RuntimeBenchmarkTests {
     static let modelPath = "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit"
 
-    /// A launch that pins all three conditions the derivation reads: no KV
-    /// bound, an explicit prefill chunk, and an explicit reasoning effort.
+    /// A launch that requests the same KV bound the fake live observation
+    /// reports, plus explicit prefill and reasoning conditions.
     static let launchArgv = [
         "serve", "--model", modelPath, "--host", "127.0.0.1", "--port", "18031",
-        "--model-factory", "text-only", "--prefill-step-size", "2048",
+        "--model-factory", "text-only", "--max-kv-size", "76800",
+        "--prefill-step-size", "2048",
         "--reasoning-effort", "medium",
     ]
+
+    static let pythonLaunchArgv = [
+        "mlx_lm.server", "--model", modelPath, "--host", "127.0.0.1", "--port", "18031",
+        "--max-kv-size", "76800", "--prefill-step-size", "2048",
+        "--chat-template-args", #"{"reasoning_effort":"medium"}"#,
+    ]
+
+    static let generationConfiguration = RuntimeGenerationConfiguration.reported(
+        prefillStepSize: 2_048, reasoningEffort: "medium")
 
     static func digest(_ seed: String) -> String {
         String(repeating: seed, count: 64 / seed.count)
@@ -48,7 +58,9 @@ struct RuntimeBenchmarkTests {
         modelDigest: "9f2c1a",
         quantization: "8bit/group64/affine",
         promptSuiteDigest: "aa11bb",
-        contextPolicy: RuntimeBenchmark.contextPolicy(derivedFrom: launchArgv),
+        contextPolicy: RuntimeBenchmark.contextPolicy(
+            observing: .reported(76_800),
+            generationConfiguration: generationConfiguration),
         maxOutputTokens: 256,
         temperature: 0.0,
         topP: 1.0,
@@ -145,6 +157,7 @@ struct RuntimeBenchmarkTests {
         let bound =
             provenance
             ?? RuntimeBenchmarkTests.provenance(
+                launchArgv: runtime == "python-mlx-lm" ? pythonLaunchArgv : launchArgv,
                 executableDigest: digest(runtime == "mlx-swift" ? "12" : "cd"))
         return RuntimeBenchmark.RunRecord(
             runtime: runtime, revisions: revisions, command: bound.harnessCommand,
@@ -185,6 +198,8 @@ struct RuntimeBenchmarkTests {
         configDigest: String? = nil,
         profile: String? = nil,
         processStart: Double? = nil,
+        contextWindow: RuntimeContextWindow? = nil,
+        generationConfiguration: RuntimeGenerationConfiguration? = nil,
         transcriptDigest: String?? = nil
     ) -> RuntimeAttestation {
         RuntimeAttestation(
@@ -200,6 +215,9 @@ struct RuntimeBenchmarkTests {
             openedAtUnixSeconds: openedAt ?? record.startedAtUnixSeconds,
             closedAtUnixSeconds: closedAt ?? record.finishedAtUnixSeconds,
             servedModelID: servedModelID ?? record.pins.modelPath,
+            observedContextWindow: contextWindow ?? .reported(76_800),
+            observedGenerationConfiguration: generationConfiguration
+                ?? Self.generationConfiguration,
             gateBinaryDigest: gateBinaryDigest ?? gateDigest,
             // Sealed over the record it is being minted for, which is what the
             // observing invocation does in production. A test that attacks the
@@ -636,52 +654,118 @@ struct RuntimeBenchmarkTests {
 
     // MARK: - Provenance: a record has to be tied to a run
 
-    @Test("the context policy is read out of the launch, not out of the record")
-    func derivesContextPolicyFromLaunch() {
+    @Test("live effective configuration is sufficient without argv parsing")
+    func derivesContextPolicyFromLiveConfiguration() {
         #expect(
-            RuntimeBenchmark.contextPolicy(derivedFrom: [
-                "serve", "--model", Self.modelPath, "--prefill-step-size", "2048",
-                "--reasoning-effort", "medium",
-            ]) == "kv=unbounded;prefill-step=2048;reasoning=medium")
-        #expect(
-            RuntimeBenchmark.contextPolicy(derivedFrom: [
-                "serve", "--max-kv-size", "4096", "--prefill-step-size=512",
-                "--reasoning-effort=low",
-            ]) == "kv=max-kv-size=4096;prefill-step=512;reasoning=low")
-        // Absence of a prefill flag is not a value. The two runtimes default it
-        // differently, so reading absence as either default would silently
-        // compare 512-token chunks against 2048-token ones.
-        #expect(
-            RuntimeBenchmark.contextPolicy(derivedFrom: ["serve", "--model", Self.modelPath])
-                == "kv=unbounded;prefill-step=unpinned;reasoning=unpinned")
+            RuntimeBenchmark.contextPolicy(
+                observing: .reported(76_800),
+                generationConfiguration: .reported(
+                    prefillStepSize: 999, reasoningEffort: "medium"))
+                == "kv=76800;prefill-step=999;reasoning=medium")
     }
 
-    @Test("a caller-authored context policy its launch does not carry is refused")
-    func refusesUndrivedContextPolicy() {
-        // The pins still agree with each other, exactly as review's forged pair
-        // did. What they no longer agree with is the launch beside them.
-        let launch = [
-            "serve", "--model", Self.modelPath, "--prefill-step-size", "512",
-            "--reasoning-effort", "medium",
-        ]
-        let candidate = Self.record(
-            runtime: "mlx-swift", startedAt: 300, finishedAt: 400,
-            provenance: Self.provenance(launchArgv: launch, executableDigest: Self.digest("12")))
+    @Test("a live context window overrides argv and malformed live values stay unread")
+    func derivesContextPolicyFromLiveRuntime() {
+        #expect(
+            RuntimeBenchmark.contextPolicy(
+                observing: .reported(76_800),
+                generationConfiguration: Self.generationConfiguration)
+                == "kv=76800;prefill-step=2048;reasoning=medium")
+        #expect(
+            RuntimeBenchmark.contextPolicy(
+                observing: .unread,
+                generationConfiguration: Self.generationConfiguration)
+                == "kv=unread;prefill-step=2048;reasoning=medium")
+        #expect(
+            RuntimeBenchmark.contextPolicy(
+                observing: .notReported,
+                generationConfiguration: Self.generationConfiguration)
+                == "kv=not-reported;prefill-step=2048;reasoning=medium")
+        #expect(
+            RuntimeContextWindow.read(fromModelsEntry: ["meta": ["n_ctx": "76800"]])
+                == .unread)
+        #expect(
+            RuntimeContextWindow.read(fromModelsEntry: ["meta": ["n_ctx": 76_800]])
+                == .reported(76_800))
+        #expect(RuntimeContextWindow.reported(76_800).observation == .observed(76_800))
+        #expect(RuntimeContextWindow.notReported.observation == .observedAbsent)
+        #expect(RuntimeContextWindow.unread.observation == .notObserved)
+        #expect(
+            RuntimeGenerationConfiguration.read(fromModelsEntry: [
+                "meta": [
+                    "runtime_config": [
+                        "prefill_step_size": 2_048, "reasoning_effort": "medium",
+                    ]
+                ]
+            ]) == Self.generationConfiguration)
+        #expect(
+            RuntimeGenerationConfiguration.read(fromModelsEntry: [
+                "meta": ["runtime_config": ["prefill_step_size": "2048"]]
+            ]).prefillStepSize == .unread)
+    }
+
+    @Test("admission refuses a failed live context read instead of falling back to argv")
+    func refusesUnreadLiveContextAtProductionAdmission() {
         #expect(
             throws: RuntimeBenchmark.AdmissionError.contextPolicyNotDerived(
-                runtime: "mlx-swift",
-                declared: "kv=unbounded;prefill-step=2048;reasoning=medium",
-                derived: "kv=unbounded;prefill-step=512;reasoning=medium")
+                runtime: "python-mlx-lm",
+                declared: "kv=76800;prefill-step=2048;reasoning=medium",
+                derived: "kv=unread;prefill-step=2048;reasoning=medium")
         ) {
-            try Self.admit(
-                baseline: Self.baseline, candidate: candidate, requiredScenarios: [])
+            try RuntimeBenchmark.admit(
+                baseline: Self.baseline,
+                baselineAttestation: Self.attestation(
+                    for: Self.baseline, contextWindow: .unread),
+                candidate: Self.candidate,
+                candidateAttestation: Self.attestation(for: Self.candidate),
+                requiredScenarios: [], gateBinaryDigest: Self.gateDigest)
         }
     }
 
-    @Test("a launch that left a condition to a runtime default is refused, not defaulted")
+    @Test("admission refuses an omitted live context bound despite any argv assertion")
+    func refusesAbsentLiveContextBoundAtProductionAdmission() {
+        #expect(
+            throws: RuntimeBenchmark.AdmissionError.contextPolicyNotDerived(
+                runtime: "python-mlx-lm",
+                declared: "kv=76800;prefill-step=2048;reasoning=medium",
+                derived: "kv=not-reported;prefill-step=2048;reasoning=medium")
+        ) {
+            try RuntimeBenchmark.admit(
+                baseline: Self.baseline,
+                baselineAttestation: Self.attestation(
+                    for: Self.baseline, contextWindow: .notReported),
+                candidate: Self.candidate,
+                candidateAttestation: Self.attestation(for: Self.candidate),
+                requiredScenarios: [], gateBinaryDigest: Self.gateDigest)
+        }
+    }
+
+    @Test("a caller-authored context policy the server did not report is refused")
+    func refusesUndrivedContextPolicy() {
+        #expect(
+            throws: RuntimeBenchmark.AdmissionError.contextPolicyNotDerived(
+                runtime: "mlx-swift",
+                declared: "kv=76800;prefill-step=2048;reasoning=medium",
+                derived: "kv=76800;prefill-step=512;reasoning=medium")
+        ) {
+            try RuntimeBenchmark.admit(
+                baseline: Self.baseline,
+                baselineAttestation: Self.attestation(for: Self.baseline),
+                candidate: Self.candidate,
+                candidateAttestation: Self.attestation(
+                    for: Self.candidate,
+                    generationConfiguration: .reported(
+                        prefillStepSize: 512, reasoningEffort: "medium")),
+                requiredScenarios: [], gateBinaryDigest: Self.gateDigest)
+        }
+    }
+
+    @Test("an omitted live prefill report is refused, not defaulted from argv")
     func refusesUnpinnedPrefillStep() {
         let launch = ["serve", "--model", Self.modelPath]
-        let policy = RuntimeBenchmark.contextPolicy(derivedFrom: launch)
+        let policy = RuntimeBenchmark.contextPolicy(
+            observing: .reported(76_800),
+            generationConfiguration: .notReported)
         var pins = Self.pins
         pins = RuntimeBenchmark.Pins(
             hostIdentity: pins.hostIdentity, modelPath: pins.modelPath,
@@ -695,15 +779,18 @@ struct RuntimeBenchmarkTests {
         let candidate = Self.record(
             runtime: "mlx-swift", pins: pins, startedAt: 300, finishedAt: 400,
             provenance: Self.provenance(launchArgv: launch, executableDigest: Self.digest("12")))
-        // Both records agree. Agreement is not the question -- they agree on a
-        // condition neither launch stated, and the two runtimes do not default
-        // it the same way.
         #expect(
             throws: RuntimeBenchmark.AdmissionError.unpinnedLaunchCondition(
-                runtime: "python-mlx-lm", condition: "prefill-step=unpinned")
+                runtime: "python-mlx-lm", condition: "prefill-step=not-reported")
         ) {
-            try Self.admit(
-                baseline: baseline, candidate: candidate, requiredScenarios: [])
+            try RuntimeBenchmark.admit(
+                baseline: baseline,
+                baselineAttestation: Self.attestation(
+                    for: baseline, generationConfiguration: .notReported),
+                candidate: candidate,
+                candidateAttestation: Self.attestation(
+                    for: candidate, generationConfiguration: .notReported),
+                requiredScenarios: [], gateBinaryDigest: Self.gateDigest)
         }
     }
 
@@ -1187,7 +1274,10 @@ struct RuntimeBenchmarkAttestationTests {
             configDigest: Self.candidate.provenance.configDigest,
             profile: Self.candidate.provenance.profile,
             openedAtUnixSeconds: 300, closedAtUnixSeconds: 400,
-            servedModelID: Fixture.modelPath, gateBinaryDigest: Fixture.gateDigest,
+            servedModelID: Fixture.modelPath,
+            observedContextWindow: .reported(76_800),
+            observedGenerationConfiguration: Fixture.generationConfiguration,
+            gateBinaryDigest: Fixture.gateDigest,
             transcriptDigest: RuntimeBenchmark.transcriptDigest(of: Self.candidate))
         Self.expectRefusal(
             .attestationDisagrees(
@@ -1258,70 +1348,32 @@ struct RuntimeBenchmarkAttestationTests {
 /// the consequence as a 1.93x runtime skew on `short_prompt`.
 @Suite("runtime benchmark reasoning policy derivation")
 struct RuntimeBenchmarkReasoningPolicyTests {
-    @Test("the Swift spelling of the policy is read off the launch")
-    func readsFlagSpelling() {
+    typealias Fixture = RuntimeBenchmarkTests
+
+    @Test("reasoning is read from the running server")
+    func readsLiveReasoning() {
         #expect(
-            RuntimeBenchmark.contextPolicy(derivedFrom: [
-                "serve", "--prefill-step-size", "2048", "--reasoning-effort", "medium",
-            ]) == "kv=unbounded;prefill-step=2048;reasoning=medium")
+            RuntimeBenchmark.contextPolicy(
+                observing: .reported(76_800),
+                generationConfiguration: .reported(
+                    prefillStepSize: 2_048, reasoningEffort: "medium"))
+                == "kv=76800;prefill-step=2048;reasoning=medium")
     }
 
-    @Test("the mlx_lm.server spelling of the same policy derives the same value")
-    func readsChatTemplateArgsSpelling() {
+    @Test("missing and malformed live reasoning are distinct refusals")
+    func refusesMissingAndMalformedLiveReasoning() {
+        let missing = RuntimeGenerationConfiguration(
+            prefillStepSize: .reported("2048"), reasoningEffort: .notReported)
+        let malformed = RuntimeGenerationConfiguration(
+            prefillStepSize: .reported("2048"), reasoningEffort: .unread)
         #expect(
-            RuntimeBenchmark.contextPolicy(derivedFrom: [
-                "--prefill-step-size", "2048",
-                "--chat-template-args", #"{"reasoning_effort": "medium"}"#,
-            ]) == "kv=unbounded;prefill-step=2048;reasoning=medium")
-    }
-
-    @Test("a template argument blob that does not carry the effort is unpinned")
-    func refusesUnrelatedChatTemplateArgs() {
-        // Not "the blob is present, therefore something was stated". The blob
-        // can say anything; only `reasoning_effort` decides this prompt.
+            RuntimeBenchmark.contextPolicy(
+                observing: .reported(76_800), generationConfiguration: missing)
+                == "kv=76800;prefill-step=2048;reasoning=not-reported")
         #expect(
-            RuntimeBenchmark.contextPolicy(derivedFrom: [
-                "--prefill-step-size", "2048",
-                "--chat-template-args", #"{"enable_thinking": true}"#,
-            ]) == "kv=unbounded;prefill-step=2048;reasoning=unpinned")
-    }
-
-    @Test("undecodable template arguments are unpinned rather than assumed")
-    func refusesMalformedChatTemplateArgs() {
-        #expect(
-            RuntimeBenchmark.contextPolicy(derivedFrom: [
-                "--prefill-step-size", "2048", "--chat-template-args", "{not json",
-            ]) == "kv=unbounded;prefill-step=2048;reasoning=unpinned")
-    }
-
-    @Test("a launch that states no reasoning policy is refused, not defaulted")
-    func refusesUnpinnedReasoning() {
-        let argv = [
-            "serve", "--model", RuntimeBenchmarkTests.modelPath, "--prefill-step-size", "2048",
-        ]
-        let pins = RuntimeBenchmark.Pins(
-            hostIdentity: "MacBookPro18,2/68719476736/25F80",
-            modelPath: RuntimeBenchmarkTests.modelPath,
-            modelDigest: "9f2c1a", quantization: "8bit/group64/affine",
-            promptSuiteDigest: "aa11bb",
-            contextPolicy: RuntimeBenchmark.contextPolicy(derivedFrom: argv),
-            maxOutputTokens: 256, temperature: 0, topP: 1, seed: 1234)
-        let baseline = RuntimeBenchmarkTests.record(
-            runtime: "python-mlx-lm", pins: pins, startedAt: 100, finishedAt: 200,
-            provenance: RuntimeBenchmarkTests.provenance(
-                launchArgv: argv, executableDigest: RuntimeBenchmarkTests.digest("cd")))
-        let candidate = RuntimeBenchmarkTests.record(
-            runtime: "mlx-swift", pins: pins, startedAt: 300, finishedAt: 400,
-            provenance: RuntimeBenchmarkTests.provenance(
-                launchArgv: argv, executableDigest: RuntimeBenchmarkTests.digest("12")))
-        #expect(
-            throws: RuntimeBenchmark.AdmissionError.unpinnedLaunchCondition(
-                runtime: "python-mlx-lm", condition: "reasoning=unpinned"),
-            performing: {
-                try RuntimeBenchmarkTests.admit(
-                    baseline: baseline, candidate: candidate,
-                    requiredScenarios: ["short_prompt"])
-            })
+            RuntimeBenchmark.contextPolicy(
+                observing: .reported(76_800), generationConfiguration: malformed)
+                == "kv=76800;prefill-step=2048;reasoning=unread")
     }
 
     @Test("two runtimes on different reasoning policies are not a comparison")
@@ -1334,32 +1386,46 @@ struct RuntimeBenchmarkReasoningPolicyTests {
             "serve", "--model", RuntimeBenchmarkTests.modelPath, "--prefill-step-size", "2048",
             "--reasoning-effort", "medium",
         ]
-        func pins(_ argv: [String]) -> RuntimeBenchmark.Pins {
+        func pins(reasoning: String) -> RuntimeBenchmark.Pins {
             RuntimeBenchmark.Pins(
                 hostIdentity: "MacBookPro18,2/68719476736/25F80",
                 modelPath: RuntimeBenchmarkTests.modelPath,
                 modelDigest: "9f2c1a", quantization: "8bit/group64/affine",
                 promptSuiteDigest: "aa11bb",
-                contextPolicy: RuntimeBenchmark.contextPolicy(derivedFrom: argv),
+                contextPolicy: RuntimeBenchmark.contextPolicy(
+                    observing: .reported(76_800),
+                    generationConfiguration: .reported(
+                        prefillStepSize: 2_048, reasoningEffort: reasoning)),
                 maxOutputTokens: 256, temperature: 0, topP: 1, seed: 1234)
         }
         let baseline = RuntimeBenchmarkTests.record(
-            runtime: "python-mlx-lm", pins: pins(baselineArgv), startedAt: 100, finishedAt: 200,
+            runtime: "python-mlx-lm",
+            pins: pins(reasoning: "xhigh"),
+            startedAt: 100, finishedAt: 200,
             provenance: RuntimeBenchmarkTests.provenance(
                 launchArgv: baselineArgv, executableDigest: RuntimeBenchmarkTests.digest("cd")))
         let candidate = RuntimeBenchmarkTests.record(
-            runtime: "mlx-swift", pins: pins(candidateArgv), startedAt: 300, finishedAt: 400,
+            runtime: "mlx-swift",
+            pins: pins(reasoning: "medium"),
+            startedAt: 300, finishedAt: 400,
             provenance: RuntimeBenchmarkTests.provenance(
                 launchArgv: candidateArgv, executableDigest: RuntimeBenchmarkTests.digest("12")))
         #expect(
             throws: RuntimeBenchmark.AdmissionError.pinMismatch(
                 field: "contextPolicy",
-                baseline: "kv=unbounded;prefill-step=2048;reasoning=xhigh",
-                candidate: "kv=unbounded;prefill-step=2048;reasoning=medium"),
+                baseline: "kv=76800;prefill-step=2048;reasoning=xhigh",
+                candidate: "kv=76800;prefill-step=2048;reasoning=medium"),
             performing: {
-                try RuntimeBenchmarkTests.admit(
-                    baseline: baseline, candidate: candidate,
-                    requiredScenarios: ["short_prompt"])
+                try RuntimeBenchmark.admit(
+                    baseline: baseline,
+                    baselineAttestation: Fixture.attestation(
+                        for: baseline,
+                        generationConfiguration: .reported(
+                            prefillStepSize: 2_048, reasoningEffort: "xhigh")),
+                    candidate: candidate,
+                    candidateAttestation: Fixture.attestation(for: candidate),
+                    requiredScenarios: ["short_prompt"],
+                    gateBinaryDigest: Fixture.gateDigest)
             })
     }
 }

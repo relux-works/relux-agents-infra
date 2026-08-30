@@ -182,12 +182,6 @@ enum BenchmarkRunCommand {
             promptSuiteDigest: promptSuiteDigest,
             maxOutputTokens: BenchmarkScenarios.defaultMaxOutputTokens)
 
-        var sharedRevisions: [String: String] = [:]
-        if let version = try? capture(executable: harness, arguments: ["version"]).standardOutput {
-            sharedRevisions["model_harness"] = version.trimmingCharacters(
-                in: .whitespacesAndNewlines)
-        }
-
         var passes: [String: PassOutcome] = [:]
         var order: [(role: String, runtime: String, profile: String, declare: [String])] = [
             (
@@ -206,21 +200,14 @@ enum BenchmarkRunCommand {
         }
 
         for (offset, pass) in order.enumerated() {
-            var revisions = sharedRevisions
-            if pass.role == "baseline", let python = single["--python-bin"] {
-                revisions.merge(pythonRevisions(python: python)) { current, _ in current }
-            }
-            if pass.role == "candidate", let binary = single["--candidate-binary"] {
-                revisions.merge(swiftRevisions(binary: binary, model: modelPath)) { current, _ in
-                    current
-                }
-            }
             StandardOutput.shared.log("[\(pass.runtime)] starting pass")
             let outcome = try await drive(
-                runtime: pass.runtime, profile: pass.profile, configPath: configPath,
+                role: pass.role, runtime: pass.runtime, profile: pass.profile,
+                assertedPython: single["--python-bin"],
+                assertedCandidateBinary: single["--candidate-binary"], configPath: configPath,
                 configDigest: configDigest, harness: harness, port: port, suite: suite,
-                skip: skip, common: common, revisions: revisions,
-                declaredAsymmetries: pass.declare, gateDigest: gateDigest,
+                skip: skip, common: common, declaredAsymmetries: pass.declare,
+                gateDigest: gateDigest,
                 startupTimeout: startupTimeout, requestTimeout: requestTimeout,
                 logPath: (logsDirectory as NSString)
                     .appendingPathComponent("\(pass.runtime)-runtime.log"))
@@ -306,8 +293,11 @@ enum BenchmarkRunCommand {
     /// One pass, end to end, inside this process.
     // swiftlint:disable:next function_body_length
     private static func drive(
+        role: String,
         runtime: String,
         profile profileName: String,
+        assertedPython: String?,
+        assertedCandidateBinary: String?,
         configPath: String,
         configDigest: String,
         harness: String,
@@ -315,7 +305,6 @@ enum BenchmarkRunCommand {
         suite: BenchmarkScenarios.Suite,
         skip: Set<String>,
         common: CommonPins,
-        revisions: [String: String],
         declaredAsymmetries: [String],
         gateDigest: String,
         startupTimeout: TimeInterval,
@@ -331,15 +320,6 @@ enum BenchmarkRunCommand {
                     + "\(common.modelPath.debugDescription) to the runtime; the modelPath pin "
                     + "would not be bound to the process under test")
         }
-        let contextPolicy = RuntimeBenchmark.contextPolicy(derivedFrom: profile.argv)
-        let pins = RuntimeBenchmark.Pins(
-            hostIdentity: common.hostIdentity, modelPath: common.modelPath,
-            modelDigest: common.modelDigest, quantization: common.quantization,
-            promptSuiteDigest: common.promptSuiteDigest, contextPolicy: contextPolicy,
-            maxOutputTokens: common.maxOutputTokens,
-            temperature: BenchmarkScenarios.temperature, topP: BenchmarkScenarios.topP,
-            seed: BenchmarkScenarios.seed)
-
         let harnessCommand = [
             harness, "run", profileName, "--host", host, "--port", String(port),
             "--config", configPath,
@@ -378,18 +358,22 @@ enum BenchmarkRunCommand {
             throw RunError.aborted("the launcher never spawned a runtime child")
         }
 
+        guard let launcherObservation = ProcessObservation.of(pid: Int(launcher.pid)),
+            let observedHarness = canonicalPath(launcherObservation.executablePath),
+            let requestedHarness = canonicalPath(harness), observedHarness == requestedHarness
+        else {
+            _ = launcher.terminate()
+            throw RunError.aborted(
+                "the model-harness revision cannot be attributed to the launcher process")
+        }
+
         // Opened before readiness rather than after it, so the observation
         // covers the model load as well as the scenarios. A window opened after
         // warm-up would leave the most expensive part of the pass outside the
         // only observation anybody can check.
-        guard let observation = ProcessObservation.of(pid: Int(runtimePID)) else {
+        guard let openingObservation = ProcessObservation.of(pid: Int(runtimePID)) else {
             _ = launcher.terminate()
             throw RunError.aborted("pid \(runtimePID) could not be observed from the kernel")
-        }
-        guard let observedExecutableDigest = fileDigest(observation.executablePath) else {
-            _ = launcher.terminate()
-            throw RunError.aborted(
-                "could not digest \(observation.executablePath.debugDescription)")
         }
         let openedAt = Date().timeIntervalSince1970
 
@@ -403,7 +387,8 @@ enum BenchmarkRunCommand {
             session: session, sampler: sampler)
 
         var scenarios: [RuntimeBenchmark.ScenarioResult] = []
-        var servedModelID: String?
+        var serving = ServingAnswer(
+            modelID: nil, contextWindow: .unread, generationConfiguration: .unread)
         do {
             try await awaitReady(
                 pass: pass, launcher: launcher, modelID: common.modelPath,
@@ -446,7 +431,66 @@ enum BenchmarkRunCommand {
         // observation the gate declined to close. Review's placeholder is
         // exactly this case: two processes that answered `/v1/models` happily
         // and never served a completion, and the refusal they deserve says so.
-        servedModelID = await servedModel(pass: pass, expecting: common.modelPath)
+        serving = await servingAnswer(pass: pass, expecting: common.modelPath)
+
+        // Resolve executable and implementation only after the process has
+        // served. Script runtimes may pass through more than one executable
+        // image during startup; a pre-read can attest the launcher image while
+        // a different Python image answers the benchmark.
+        guard let observation = ProcessObservation.settled(pid: Int(runtimePID)),
+            observation.startUnixSeconds == openingObservation.startUnixSeconds
+        else {
+            _ = launcher.terminate()
+            throw RunError.aborted(
+                "the process that served could not be re-observed for runtime provenance")
+        }
+        guard let observedLaunchArgv = observation.arguments else {
+            _ = launcher.terminate()
+            throw RunError.aborted(
+                "the process that served exposed no observable runtime argv")
+        }
+        guard let observedExecutableDigest = fileDigest(observation.executablePath) else {
+            _ = launcher.terminate()
+            throw RunError.aborted(
+                "could not digest \(observation.executablePath.debugDescription)")
+        }
+        var revisions: [String: String] = [:]
+        let harnessVersion = try capture(
+            executable: launcherObservation.executablePath, arguments: ["version"])
+        guard harnessVersion.status == 0,
+            let version = harnessVersion.standardOutput?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !version.isEmpty
+        else {
+            _ = launcher.terminate()
+            throw RunError.aborted(
+                "the observed model-harness process could not report its revision")
+        }
+        revisions["model_harness"] = version
+        if role == "baseline" {
+            revisions.merge(
+                try pythonRevisions(
+                    observation: observation, profile: profile,
+                    assertedPython: assertedPython)
+            ) { current, _ in current }
+        } else if let assertedCandidateBinary {
+            guard
+                canonicalPath(assertedCandidateBinary) == canonicalPath(observation.executablePath),
+                canonicalPath(profile.executable) == canonicalPath(observation.executablePath)
+            else {
+                _ = launcher.terminate()
+                throw RunError.unusableInput(
+                    "--candidate-binary is not the executable observed serving the candidate; "
+                        + "refusing caller-supplied runtime provenance")
+            }
+            let observed = swiftRevisions(
+                binary: observation.executablePath, model: common.modelPath)
+            guard !observed.isEmpty else {
+                _ = launcher.terminate()
+                throw RunError.unusableInput(
+                    "the observed candidate process could not report its compiled revisions")
+            }
+            revisions.merge(observed) { current, _ in current }
+        }
 
         // Re-read before close. A pid that was recycled is a different process,
         // and an observation spanning both attests to neither.
@@ -462,6 +506,17 @@ enum BenchmarkRunCommand {
         let harnessExit = launcher.terminate()
         session.invalidateAndCancel()
         let finishedAt = Date().timeIntervalSince1970
+
+        let pins = RuntimeBenchmark.Pins(
+            hostIdentity: common.hostIdentity, modelPath: common.modelPath,
+            modelDigest: common.modelDigest, quantization: common.quantization,
+            promptSuiteDigest: common.promptSuiteDigest,
+            contextPolicy: RuntimeBenchmark.contextPolicy(
+                observing: serving.contextWindow,
+                generationConfiguration: serving.generationConfiguration),
+            maxOutputTokens: common.maxOutputTokens,
+            temperature: BenchmarkScenarios.temperature, topP: BenchmarkScenarios.topP,
+            seed: BenchmarkScenarios.seed)
 
         let record = RuntimeBenchmark.RunRecord(
             runtime: runtime, revisions: revisions, command: harnessCommand,
@@ -481,7 +536,7 @@ enum BenchmarkRunCommand {
                 // disagree with every observation of the process.
                 launchExecutable: observation.executablePath,
                 launchExecutableDigest: observedExecutableDigest,
-                launchArgv: profile.argv, runtimeProcessID: Int(runtimePID)),
+                launchArgv: observedLaunchArgv, runtimeProcessID: Int(runtimePID)),
             pins: pins, startedAtUnixSeconds: startedAt, finishedAtUnixSeconds: finishedAt,
             peakPhysicalFootprintBytes: processPeak, scenarios: scenarios,
             declaredAsymmetries: declaredAsymmetries)
@@ -493,7 +548,7 @@ enum BenchmarkRunCommand {
         // refuses a record whose observation seals nothing rather than scoring
         // it. Absence and failure are different facts; this is the failure one.
         let sealed: String? =
-            stillTheSameProcess && servedModelID != nil
+            stillTheSameProcess && serving.modelID != nil
             ? RuntimeBenchmark.transcriptDigest(of: record) : nil
         let attestation = RuntimeAttestation(
             runtime: runtime, processID: Int(runtimePID),
@@ -502,7 +557,9 @@ enum BenchmarkRunCommand {
             observedExecutableDigest: observedExecutableDigest, configPath: configPath,
             configDigest: configDigest, profile: profileName, openedAtUnixSeconds: openedAt,
             closedAtUnixSeconds: stillTheSameProcess ? closedAt : nil,
-            servedModelID: servedModelID, gateBinaryDigest: gateDigest,
+            servedModelID: serving.modelID, observedContextWindow: serving.contextWindow,
+            observedGenerationConfiguration: serving.generationConfiguration,
+            gateBinaryDigest: gateDigest,
             transcriptDigest: sealed)
 
         return PassOutcome(
@@ -573,15 +630,28 @@ enum BenchmarkRunCommand {
     /// the pinned model. An unread answer is not an answer, and it is never
     /// read as one: a `nil` here leaves the attestation unclosed, which the
     /// comparison refuses.
-    private static func servedModel(pass: BenchmarkPass, expecting modelID: String) async
-        -> String?
+    struct ServingAnswer {
+        let modelID: String?
+        let contextWindow: RuntimeContextWindow
+        let generationConfiguration: RuntimeGenerationConfiguration
+    }
+
+    private static func servingAnswer(pass: BenchmarkPass, expecting modelID: String) async
+        -> ServingAnswer
     {
         let answer = await pass.models(timeout: 30)
         guard answer.status == 200,
             let document = try? JSONSerialization.jsonObject(with: answer.body) as? [String: Any],
             let entries = document["data"] as? [[String: Any]],
-            entries.contains(where: { ($0["id"] as? String) == modelID })
-        else { return nil }
-        return modelID
+            let entry = entries.first(where: { ($0["id"] as? String) == modelID })
+        else {
+            return ServingAnswer(
+                modelID: nil, contextWindow: .unread, generationConfiguration: .unread)
+        }
+        return ServingAnswer(
+            modelID: modelID,
+            contextWindow: RuntimeContextWindow.read(fromModelsEntry: entry),
+            generationConfiguration: RuntimeGenerationConfiguration.read(
+                fromModelsEntry: entry))
     }
 }

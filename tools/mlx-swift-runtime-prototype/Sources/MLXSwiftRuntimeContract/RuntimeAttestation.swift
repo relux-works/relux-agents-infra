@@ -1,5 +1,194 @@
 import Foundation
 
+/// The context bound named by the running server on `GET /v1/models`.
+///
+/// Absence and an unreadable value are intentionally separate. Neither can be
+/// satisfied by the launch argv: what the caller requested is not evidence of
+/// what the running process honoured.
+public enum RuntimeContextWindow: Sendable, Equatable, Codable {
+    case reported(Int)
+    case notReported
+    case unread
+
+    private enum CodingKeys: String, CodingKey { case state, length }
+    private enum State: String, Codable { case reported, notReported, unread }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(State.self, forKey: .state) {
+        case .reported:
+            self = .reported(try container.decode(Int.self, forKey: .length))
+        case .notReported:
+            self = .notReported
+        case .unread:
+            self = .unread
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .reported(let length):
+            try container.encode(State.reported, forKey: .state)
+            try container.encode(length, forKey: .length)
+        case .notReported:
+            try container.encode(State.notReported, forKey: .state)
+        case .unread:
+            try container.encode(State.unread, forKey: .state)
+        }
+    }
+
+    /// Strictly decode the live models entry selected by model ID.
+    public static func read(fromModelsEntry entry: [String: Any]) -> RuntimeContextWindow {
+        guard let rawMeta = entry["meta"] else { return .notReported }
+        guard let meta = rawMeta as? [String: Any] else { return .unread }
+        guard let rawLength = meta["n_ctx"] else { return .notReported }
+        guard !(rawLength is Bool), let number = rawLength as? NSNumber,
+            CFNumberIsFloatType(number) == false
+        else { return .unread }
+        let length = number.intValue
+        return length > 0 ? .reported(length) : .unread
+    }
+
+    /// The one observation rule consumed by context-policy decisions.
+    ///
+    /// `reported` is an observed value, `notReported` is an answered response
+    /// where the fact was absent, and `unread` means the fact was not observed
+    /// because the response could not be used. No caller-supplied value is a
+    /// fourth state.
+    var observation: FactObservation<Int> {
+        switch self {
+        case .reported(let length): .observed(length)
+        case .notReported: .observedAbsent
+        case .unread: .notObserved
+        }
+    }
+}
+
+/// One effective generation parameter reported by the running server.
+///
+/// The three states deliberately mirror ``RuntimeContextWindow``: an answered
+/// omission is not the same fact as an unreadable response, and neither may be
+/// replaced with a value decoded from another program's argv.
+public enum RuntimeConfigurationValue: Sendable, Equatable, Codable {
+    case reported(String)
+    case notReported
+    case unread
+
+    private enum CodingKeys: String, CodingKey { case state, value }
+    private enum State: String, Codable { case reported, notReported, unread }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(State.self, forKey: .state) {
+        case .reported:
+            self = .reported(try container.decode(String.self, forKey: .value))
+        case .notReported:
+            self = .notReported
+        case .unread:
+            self = .unread
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .reported(let value):
+            try container.encode(State.reported, forKey: .state)
+            try container.encode(value, forKey: .value)
+        case .notReported:
+            try container.encode(State.notReported, forKey: .state)
+        case .unread:
+            try container.encode(State.unread, forKey: .state)
+        }
+    }
+
+    var policyValue: String {
+        switch self {
+        case .reported(let value): value
+        case .notReported: "not-reported"
+        case .unread: "unread"
+        }
+    }
+}
+
+/// Effective pinned generation parameters read from `GET /v1/models`.
+///
+/// Production callers must use ``read(fromModelsEntry:)``. The launch argv is
+/// retained as an assertion and for auditability, but never parsed as evidence
+/// of what a different program ultimately configured.
+public struct RuntimeGenerationConfiguration: Sendable, Equatable, Codable {
+    public let prefillStepSize: RuntimeConfigurationValue
+    public let reasoningEffort: RuntimeConfigurationValue
+
+    public init(
+        prefillStepSize: RuntimeConfigurationValue,
+        reasoningEffort: RuntimeConfigurationValue
+    ) {
+        self.prefillStepSize = prefillStepSize
+        self.reasoningEffort = reasoningEffort
+    }
+
+    public static let notReported = RuntimeGenerationConfiguration(
+        prefillStepSize: .notReported, reasoningEffort: .notReported)
+    public static let unread = RuntimeGenerationConfiguration(
+        prefillStepSize: .unread, reasoningEffort: .unread)
+
+    public static func reported(
+        prefillStepSize: Int, reasoningEffort: String
+    ) -> RuntimeGenerationConfiguration {
+        RuntimeGenerationConfiguration(
+            prefillStepSize: .reported(String(prefillStepSize)),
+            reasoningEffort: .reported(reasoningEffort))
+    }
+
+    /// Strictly decode the live model entry selected by exact model ID.
+    public static func read(fromModelsEntry entry: [String: Any])
+        -> RuntimeGenerationConfiguration
+    {
+        guard let rawMeta = entry["meta"] else { return .notReported }
+        guard let meta = rawMeta as? [String: Any] else { return .unread }
+        guard let rawConfiguration = meta["runtime_config"] else { return .notReported }
+        guard let configuration = rawConfiguration as? [String: Any] else { return .unread }
+
+        let prefill: RuntimeConfigurationValue
+        if let raw = configuration["prefill_step_size"] {
+            if !(raw is Bool), let number = raw as? NSNumber,
+                CFNumberIsFloatType(number) == false, number.intValue > 0
+            {
+                prefill = .reported(String(number.intValue))
+            } else {
+                prefill = .unread
+            }
+        } else {
+            prefill = .notReported
+        }
+
+        let reasoning: RuntimeConfigurationValue
+        if let raw = configuration["reasoning_effort"] {
+            if let value = raw as? String, !value.isEmpty {
+                reasoning = .reported(value)
+            } else {
+                reasoning = .unread
+            }
+        } else {
+            reasoning = .notReported
+        }
+        return RuntimeGenerationConfiguration(
+            prefillStepSize: prefill, reasoningEffort: reasoning)
+    }
+}
+
+/// Whether a fact used by an admission decision was actually observed.
+///
+/// Runtime facts route through this type. No caller-supplied or argv-decoded
+/// value is a fourth state.
+enum FactObservation<Value: Sendable & Equatable>: Sendable, Equatable {
+    case observed(Value)
+    case observedAbsent
+    case notObserved
+}
+
 /// What the benchmark invocation itself saw of one runtime's pass, written by
 /// the process that launched that runtime and drove every request against it.
 ///
@@ -81,6 +270,10 @@ public struct RuntimeAttestation: Sendable, Equatable, Codable {
     /// Model ID the runtime listed when the gate asked it directly at close.
     /// `nil` until then.
     public let servedModelID: String?
+    /// Context bound read from that same live models entry.
+    public let observedContextWindow: RuntimeContextWindow
+    /// Effective prefill and reasoning settings read from that same entry.
+    public let observedGenerationConfiguration: RuntimeGenerationConfiguration?
     /// SHA-256 of the gate binary that wrote this document.
     public let gateBinaryDigest: String
     /// ``RuntimeBenchmark/transcriptDigest(of:)`` over the record this same
@@ -106,6 +299,8 @@ public struct RuntimeAttestation: Sendable, Equatable, Codable {
         openedAtUnixSeconds: Double,
         closedAtUnixSeconds: Double?,
         servedModelID: String?,
+        observedContextWindow: RuntimeContextWindow = .notReported,
+        observedGenerationConfiguration: RuntimeGenerationConfiguration? = nil,
         gateBinaryDigest: String,
         transcriptDigest: String?
     ) {
@@ -120,6 +315,8 @@ public struct RuntimeAttestation: Sendable, Equatable, Codable {
         self.openedAtUnixSeconds = openedAtUnixSeconds
         self.closedAtUnixSeconds = closedAtUnixSeconds
         self.servedModelID = servedModelID
+        self.observedContextWindow = observedContextWindow
+        self.observedGenerationConfiguration = observedGenerationConfiguration
         self.gateBinaryDigest = gateBinaryDigest
         self.transcriptDigest = transcriptDigest
     }
