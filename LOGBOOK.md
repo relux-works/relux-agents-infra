@@ -5,6 +5,22 @@
 
 ## 2026-08-30
 
+### 1220 — Current Main Invalidates Fast-Mode Preservation Premise
+- BLOCKED: A final fresh fetch advanced `main`, `origin/main`, and `FETCH_HEAD` to `d69a435945758ea1cd5dfa62395ca32498e712c7`; the managed workspace, Story branch, selected base, and CR base remain `fe3818209c9861fcafa1f2e68efe078cc0f96f30`.
+- CONFLICT: Upstream commit `d69a435` removes Codex `fast_mode` from `task-board.config.json`, while this task requires exact current main, preservation of the landed fast-mode configuration, and a four-path scope that excludes that config.
+- DECISION: Do not manually rebase the managed branch or reintroduce the out-of-scope config. The orchestrator must resolve whether current trunk is authoritative or fast-mode restoration is intended, then reprovision from the selected exact base.
+
+### 1218 — External-CI Composition Oracles Reject Additive Bypasses
+- REGRESSION: Revision 1's clause-presence checks admitted an additive contradictory mirror trigger, and its Claude entrypoint assertion compared installed bytes with the same production constant that generated them.
+- ROOT CAUSE: Partial phrases and a self-minted oracle did not independently constrain the complete policy section or Claude's real consumer entrypoint.
+- FIX: `tools/agents-infra/internal/infra/infra_test.go` pins the exact complete External-CI section and a test-owned Claude entrypoint, while production `Setup` publishes the tested Agents/Claude/Codex artifacts.
+- EVIDENCE: Additive-trigger, Claude entrypoint, Claude index-include, and Codex index-include live mutants each exit 1; restored focused tests, full Go tests, vet, build, canonical setup, global verification, and installed parity exit 0.
+
+### 1154 — External-CI Mirror Policy Replayed On Exact Current Main
+- MILESTONE: The four-path policy delta was replayed with `HEAD`, Story branch, selected base, `main`, `origin/main`, and `FETCH_HEAD` equal to `fe3818209c9861fcafa1f2e68efe078cc0f96f30` before editing.
+- EVIDENCE: Production `Setup` tests pass; broadened-trigger, Claude include-bypass, and Codex include-bypass live mutants each exit 1; full Go tests, vet, build, canonical skip-LLDB setup, global verification, and installed parity exit 0.
+- SCOPE: Only `.instructions/INSTRUCTIONS_WORKFLOW.md`, `README.md`, `LOGBOOK.md`, and `tools/agents-infra/internal/infra/infra_test.go` changed; landed Codex-only `fast_mode` configuration remains intact.
+
 ### 0705 — Effective Generation Configuration Comes From The Server
 - ROOT CAUSE: The gate copied selected `argparse` behavior and still accepted `--prefill-step-size 2048 --prefill-step-siz 999` as 2,048 although the Python server parsed 999.
 - FIX: The signed `mlx-lm` fork reports effective prefill and reasoning values in `/v1/models` `meta.runtime_config`; `RuntimeBenchmark.swift` derives all context-policy pins from the live listing and never decodes runtime argv.
