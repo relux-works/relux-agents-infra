@@ -1,0 +1,347 @@
+diff --git a/.configs/codex-config.toml b/.configs/codex-config.toml
+index 7b94818..6a57b23 100644
+--- a/.configs/codex-config.toml
++++ b/.configs/codex-config.toml
+@@ -1,4 +1,6 @@
+-model = "gpt-5.5"
++model = "gpt-5.6-sol"
++model_context_window = 272000
++model_auto_compact_token_limit = 245000
+ model_reasoning_effort = "xhigh"
+ service_tier = "default"
+ project_doc_max_bytes = 131072
+@@ -30,6 +32,19 @@ trust_level = "untrusted"
+ [projects."/"]
+ trust_level = "trusted"
+ 
++[projects."/Users/iv/Developer/relux-tunnel"]
++trust_level = "trusted"
++
++[projects."/Users/iv"]
++trust_level = "trusted"
++
++[projects."/Users/iv/Developer/ReluxWorks/agent-session-manager"]
++trust_level = "trusted"
++
+ [notice]
+ "hide_gpt-5.1-codex-max_migration_prompt" = true
+ hide_rate_limit_model_nudge = true
++
++[tui]
++status_line = ["model-with-reasoning", "current-dir", "git-branch", "pull-request-number", "run-state", "context-remaining", "weekly-limit", "context-window-size", "used-tokens"]
++status_line_use_colors = true
+diff --git a/.instructions/INSTRUCTIONS_REMOTE_AGENTS.md b/.instructions/INSTRUCTIONS_REMOTE_AGENTS.md
+index 5b081c4..6617b2c 100644
+--- a/.instructions/INSTRUCTIONS_REMOTE_AGENTS.md
++++ b/.instructions/INSTRUCTIONS_REMOTE_AGENTS.md
+@@ -98,13 +98,17 @@ ssh "$REMOTE_SSH" "
+   cd '$REMOTE_PROJECT' &&
+   git init -q &&
+   git add -A &&
+-  git commit -q -m baseline
++  git commit -q -m baseline &&
++  git update-ref refs/agents-infra/remote-baseline HEAD
+ "
+ ```
+ 
+ For repositories the remote can access directly, `git clone` plus checkout of
+-the exact branch/commit is fine. The important part is preserving a baseline so
+-the remote can produce a clean diff.
++the exact branch/commit is fine. Before the worker starts, create
++`refs/agents-infra/remote-baseline` at that exact commit as well. The private
++baseline ref, together with intent-to-add marking during export, makes the
++returned patch include committed, tracked working-tree, and non-ignored
++untracked changes without imposing a commit-timing rule on the worker.
+ 
+ ## Prompt Contract
+ 
+@@ -114,8 +118,8 @@ Write the prompt to a file and transfer it as an artifact. Include:
+ - exact files or directories in scope
+ - commands the remote agent should run
+ - "do not read or modify files outside this project copy"
+-- expected handoff: summary, tests run, known failures, and no commit unless
+-  explicitly requested
++- expected handoff: summary, tests run, known failures, and a reviewable change
++  artifact
+ 
+ Example:
+ 
+@@ -128,7 +132,8 @@ Task:
+ - Implement the requested change with minimal scope.
+ - Preserve existing behavior unless the task says otherwise.
+ - Run the relevant tests or build checks.
+-- Leave changes uncommitted.
++- Return the completed scoped change to the parent as a reviewable artifact.
++- Do not publish or land from this disposable worker; the parent owns delivery.
+ 
+ Handoff:
+ - Summarize files changed.
+@@ -175,7 +180,8 @@ Never trust only the remote agent's summary. Export and inspect the actual diff:
+ ssh "$REMOTE_SSH" "
+   cd '$REMOTE_PROJECT' &&
+   git status --short &&
+-  git diff --binary > '$REMOTE_RUN_ROOT/$RUN_ID/remote.patch'
++  git add -N -- . &&
++  git diff --binary refs/agents-infra/remote-baseline > '$REMOTE_RUN_ROOT/$RUN_ID/remote.patch'
+ "
+ 
+ scp "$REMOTE_SSH:$REMOTE_RUN_ROOT/$RUN_ID/remote.patch" "$LOCAL_PATCH"
+diff --git a/.instructions/INSTRUCTIONS_TOOLS.md b/.instructions/INSTRUCTIONS_TOOLS.md
+index e0b9f14..bec3143 100644
+--- a/.instructions/INSTRUCTIONS_TOOLS.md
++++ b/.instructions/INSTRUCTIONS_TOOLS.md
+@@ -16,7 +16,7 @@ Agent may use these tools freely.
+ 
+ * Inspect diffs, config, repo state.
+ * Agent may check git config to detect default branch and repo location.
+-* **Never run a repo-wide destructive git command.** `git checkout -- .`, `git restore .`, `git reset --hard`, `git clean -fd` and their equivalents discard uncommitted work that is not yours and cannot be recovered — in a shared checkout that is somebody else's unfinished task. Name single paths instead, and prefer a worktree when you need a clean tree.
++* **Never run a repo-wide destructive git command.** `git checkout -- .`, `git restore .`, `git reset --hard`, `git clean -fd` and their equivalents discard working-tree state that is not yours and cannot be recovered — in a shared checkout that is somebody else's unfinished task. Name single paths instead, and prefer a worktree when you need a clean tree.
+ 
+ ### python / perl / make
+ 
+diff --git a/.instructions/INSTRUCTIONS_WORKFLOW.md b/.instructions/INSTRUCTIONS_WORKFLOW.md
+index 65d71ab..16a34cb 100644
+--- a/.instructions/INSTRUCTIONS_WORKFLOW.md
++++ b/.instructions/INSTRUCTIONS_WORKFLOW.md
+@@ -39,18 +39,79 @@
+ 
+ ## Version Control
+ 
+-For task-board-tracked work, commit acknowledgement and timing come from the
+-project's `task-board.config.json -> version_control` policy and the board
+-workflow. This global module adds no separate commit, push, message, or
+-attribution policy. Repository-specific contribution rules still apply.
++### Automatic signed delivery
++
++* For every authorized repository-changing task, the owning agent must
++  automatically stage only the reviewed task scope, create signed commits,
++  publish a feature branch, open or update a pull request, wait for the required
++  review and checks, and land the accepted head in the default branch. Do not
++  stop merely to ask whether the already-authorized task should be committed,
++  pushed, or landed.
++* Every agent-created commit and tag must retain the configured human author
++  name and email and must be cryptographically signed with that author's
++  configured signing key. Use explicit signing (`git commit -S`, signed rebases,
++  and `git tag -s`) and verify the resulting objects before publication. Never
++  silently substitute an agent identity as the commit author or publish an
++  unsigned rewritten commit.
++* Agent co-authorship is allowed. Add an explicit `Co-authored-by` trailer when
++  the user, repository policy, or task requests attribution and a real,
++  intentionally configured agent name and email are available. Do not invent
++  an identity or a verification address merely to obtain an avatar or badge.
++* Project `task-board.config.json -> version_control` rules and stricter
++  repository contribution gates still apply.
++
++### Start every task from current main
++
++* Before creating a task branch or worktree, fetch `origin`, switch to the local
++  default branch (normally `main`), and fast-forward it to the exact current
++  remote default branch. Create the new branch or worktree only after verifying
++  the two refs are equal.
++* Never branch from a stale local default branch. If unrelated dirty work makes
++  the synchronization unsafe, preserve it and use an isolated clean worktree
++  rooted at the current remote default branch; never reset or absorb somebody
++  else's changes to satisfy this rule.
++
++```bash
++DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^origin/##')
++git fetch origin "$DEFAULT_BRANCH"
++git switch "$DEFAULT_BRANCH"
++git merge --ff-only "origin/$DEFAULT_BRANCH"
++test "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$DEFAULT_BRANCH")"
++git switch -c <task-branch>
++```
+ 
+ ### Canonical pull-request delivery
+ 
+-* When a hosted repository supports pull requests or merge requests, use a non-default branch and the canonical **branch → PR/MR → review → green checks → merge** flow by default. Do not push directly to the default branch merely because it is faster.
+-* When publication and merge are within the current authorization, the agent that owns the change owns the complete delivery lifecycle: push the branch, open the PR/MR, inspect the complete remote diff and current checks, submit a real review verdict through the hosting platform, and merge only after that review accepts the change and all required checks pass.
++* When a hosted repository supports pull requests or merge requests, use a
++  non-default branch and the canonical **branch → PR/MR → review → green checks
++  → exact-head landing** flow. Do not bypass review by pushing an unreviewed
++  feature head directly to the default branch.
++* When publication and landing are within the current authorization, the agent
++  that owns the change owns the complete delivery lifecycle: push the branch,
++  open the PR/MR, inspect the complete remote diff and current checks, submit a
++  real review verdict through the hosting platform, and automatically land only
++  after that review accepts the exact head and all required checks pass.
+ * Use the platform's actual review mechanism so repository history accurately represents the pull-request and code-review work. GitHub does not allow an author to approve their own pull request; in that case submit a comment review containing the verdict, and never invent another identity or misrepresent approval.
+-* A direct default-branch push is an exception only when the user or repository workflow explicitly requires it, or when the remote has no review workflow. A stricter repository-local PR/MR-only rule always wins. If the canonical flow is required but authentication, policy, or hosting constraints prevent it, report the exact blocker instead of silently falling back to a direct push.
+-* This section governs the shape of remote publication. It does not grant commit, push, review, or merge authority, and it does not replace task-board commit confirmation or repository-specific acceptance gates.
++* Preserve the reviewed author-signed commit objects. Prefer the repository's
++  approved non-rewriting fast-forward landing mechanism. Where policy permits,
++  a plain push of the exact reviewed PR head to the default branch is valid and
++  lets GitHub record the PR as indirectly merged. Do not use a platform rebase,
++  squash, or merge action that replaces the reviewed signed commits with
++  different unsigned objects.
++* Immediately before landing, fetch again, verify every introduced commit
++  signature, verify that the remote feature head and PR head equal the reviewed
++  local head, and require the current remote default branch to be its ancestor.
++  A plain push must fail closed if the default branch advanced. Never force the
++  default branch.
++* If the default branch advanced, rebase locally with signing enabled, update
++  only the feature branch with `--force-with-lease`, and repeat review and
++  checks for the new exact head before another landing attempt. If repository
++  policy cannot land without rewriting or cannot accept the signed head, report
++  that concrete blocker instead of silently weakening signature or review
++  requirements.
++* This section authorizes automatic commit and publication only for an otherwise
++  authorized repository-changing task. It does not broaden the task's product,
++  data, deployment, or external-system scope.
+ 
+ ## Worktrees
+ 
+diff --git a/README.md b/README.md
+index 1524252..1bcc496 100644
+--- a/README.md
++++ b/README.md
+@@ -1737,7 +1737,9 @@ Reference config with:
+ 
+ ### Codex CLI (`codex-config.toml`)
+ 
+-- Model: `gpt-5.5`
++- Model: `gpt-5.6-sol`
++- Context window override: `272000`
++- Auto-compaction token limit: `245000` (about 90% of the configured window, leaving headroom below the long-context pricing threshold)
+ - Reasoning effort: `xhigh`
+ - Service tier: `default` (Standard).
+ - Project docs byte limit: `131072`
+diff --git a/task-board.config.json b/task-board.config.json
+index ec5b3c2..fa77f93 100644
+--- a/task-board.config.json
++++ b/task-board.config.json
+@@ -7,20 +7,102 @@
+     "enabled": true,
+     "max_parallel": 20,
+     "ceilings": {
++      "contract_version": "spawn-policy-v4",
+       "codex": {
+-        "model": "gpt-5.6-sol",
+-        "model_criterion": "less_or_equal",
+-        "reasoning_effort": "high"
+-      },
+-      "claude": {
+-        "model": "claude-opus-5",
+-        "model_criterion": "less_or_equal",
+-        "reasoning_effort": "high"
++        "entries": [
++          {
++            "criterion": "equal",
++            "model": "gpt-5.6-sol",
++            "reasoning_effort": "high"
++          }
++        ],
++        "resolution_model": "gpt-5.6-sol",
++        "adjustment_confirmation": "none",
++        "fast_mode": true
+       }
+     },
+     "preferred_agentic_system": {
+       "exclusive": "codex"
+     },
++    "workload_classes": {
++      "unified": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ],
++      "architecture": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ],
++      "implementation": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ],
++      "mechanical": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ],
++      "debugging": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ],
++      "testing": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ],
++      "review": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ],
++      "research": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ],
++      "documentation": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ],
++      "migration": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ],
++      "operations": [
++        {
++          "runtime": "codex",
++          "model": "gpt-5.6-sol",
++          "reasoning_effort": "high"
++        }
++      ]
++    },
+     "worktree_isolation": {
+       "validation": {
+         "commands": [
+diff --git a/tools/agents-infra/internal/infra/infra_test.go b/tools/agents-infra/internal/infra/infra_test.go
+index cf6c898..fc279e2 100644
+--- a/tools/agents-infra/internal/infra/infra_test.go
++++ b/tools/agents-infra/internal/infra/infra_test.go
+@@ -1200,7 +1200,9 @@ hide_full_access_warning = true
+ 
+ 	configPath := filepath.Join(home, ".codex", "config.toml")
+ 	assertSymlink(t, configPath, existingConfigPath)
+-	assertFileContains(t, configPath, "model = 'gpt-5.5'")
++	assertFileContains(t, configPath, "model = 'gpt-5.6-sol'")
++	assertFileContains(t, configPath, "model_context_window = 272000")
++	assertFileContains(t, configPath, "model_auto_compact_token_limit = 245000")
+ 	assertFileContains(t, configPath, "service_tier = 'default'")
+ 	assertFileNotContains(t, configPath, "old-managed-model")
+ 	assertFileNotContains(t, configPath, "[profiles.fast]")
+@@ -1343,7 +1345,7 @@ func seedSourceRepo(t *testing.T) string {
+ 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
+ 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n")
+ 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
+-	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
++	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.6-sol\"\nmodel_context_window = 272000\nmodel_auto_compact_token_limit = 245000\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
+ 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
+ url = "https://mcp.figma.com/mcp"
+ 
