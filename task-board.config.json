@@ -18,89 +18,21 @@
         ],
         "resolution_model": "gpt-5.6-sol",
         "adjustment_confirmation": "none"
+      },
+      "claude": {
+        "entries": [
+          {
+            "criterion": "equal",
+            "model": "claude-opus-5",
+            "reasoning_effort": "high"
+          }
+        ],
+        "resolution_model": "claude-opus-5",
+        "adjustment_confirmation": "none"
       }
     },
     "preferred_agentic_system": {
-      "exclusive": "codex"
-    },
-    "workload_classes": {
-      "unified": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ],
-      "architecture": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ],
-      "implementation": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ],
-      "mechanical": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ],
-      "debugging": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ],
-      "testing": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ],
-      "review": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ],
-      "research": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ],
-      "documentation": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ],
-      "migration": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ],
-      "operations": [
-        {
-          "runtime": "codex",
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        }
-      ]
+      "exclusive": "claude"
     },
     "worktree_isolation": {
       "validation": {
