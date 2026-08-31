@@ -11,6 +11,11 @@
 - FINDING: The new ceiling is a real gate, verified live, not just static JSON. Two `task-board spawn` attempts against the actual production call site — `codex gpt-5.6-sol/high` (old ceiling allowed `high`, new caps at `medium`) and `claude claude-opus-5/high` (old ceiling allowed `claude-opus-5`, new `allowed_models` is `[claude-sonnet-5]` only) — were both refused (`workload_class_pair_unavailable_in_snapshot`) before any task lookup or launch side effect (task status/assignee unchanged, no RUN created).
 - STATUS: handed off `to-review` on `TASK-260831-1qpmwm`; evidence at `.task-board/.resources/TASK-260831-1qpmwm/TASK-260831-1qpmwm_validation-evidence.md`.
 
+### 0940 — TASK-260830-12w5gq: Spawn Policy Restore Found Already-Written, Unvalidated
+- FINDING: `task-board.config.json`'s `spawn.ceilings`/`preferred_agentic_system`/`workload_classes` already matched the target state (codex `gpt-5.6-sol`<=medium, claude `claude-sonnet-5`<=high, mixed provider set) as **uncommitted** working-tree state before this developer run started — an earlier partial run edited but never validated or attached evidence.
+- STATUS: Resolved by validation only, no re-edit. Confirmed byte-for-byte against `/Users/alexis/src/relux-works/skill-project-management/task-board.config.json` (the active project policy) and via `task-board q 'project_config(view=spawn-preflight, ...)'` for both `codex` and `claude` roles. `fast_mode` key absent, resolves `false` by default (`fast_mode_source: default`).
+- SCOPE: `task-board.config.json` only, per task instruction to preserve the rest of the pre-existing dirty checkout.
+
 ### 0125 — Runtime Decision: NO-GO On Both Candidates, Python mlx-lm Stays Default
 - DECISION: **NO-GO on MLX Swift and NO-GO on llama.cpp.** Python `mlx-lm` remains the default local Qwen runtime; no installed configuration was changed and `profiles.qwen-local` is untouched. Published as `articles/260831_local-qwen-runtime-comparison-study/` and `.research/260831_local-qwen-runtime-comparison-study.md` (byte-identical).
 - WEIGHTING, PRE-REGISTERED BEFORE THE NUMBERS: peak resident memory and decode throughput equal, with TTFT, 75,000-token capacity, tool-call parity, stability and migration risk alongside. Best overall compromise, explicitly not the single-axis winner — and llama.cpp *is* the single-axis winner on speed.
