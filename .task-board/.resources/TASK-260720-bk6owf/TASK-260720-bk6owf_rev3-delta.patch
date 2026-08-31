@@ -1,0 +1,389 @@
+diff --git a/.research/260831_extensible-auth-method-lifecycle.design.md b/.research/260831_extensible-auth-method-lifecycle.design.md
+index 31ed826..a1d94c8 100644
+--- a/.research/260831_extensible-auth-method-lifecycle.design.md
++++ b/.research/260831_extensible-auth-method-lifecycle.design.md
+@@ -101,8 +101,10 @@ closes the fail-open hazard: not a warning, and not a load-time check that
+ a future entry point could forget to call or that a bypass path could route
+ around. There is no check to bypass.
+ 
+-**What is checked rather than structural, stated plainly.** Two things, and
+-neither of them is a surface the running system exposes:
++**What is checked rather than structural, stated plainly.** Three things. Two
++are not surfaces the running system exposes. The third is, and it is the one an
++earlier revision of this section missed by enumerating the surfaces it had
++already thought of:
+ 
+ - The function is total by construction: its fallthrough arm returns *no class
+   established*, and `describe()` refuses a method that reaches it. A method
+@@ -112,10 +114,47 @@ neither of them is a surface the running system exposes:
+   four native-OAuth methods map to `vendor-opaque`. Its negative variant matters
+   more than its positive one: the test must fail when an arm is *changed* to
+   another class, not only when the mapping is deleted (6.4).
++- **The function's sole input lives on an editable on-disk surface.**
++  `custodian_class = f(method)`, and `method` is a field of the profile record
++  (3.5) — the same kind of artifact 3.3 refused to store the *class* in, and for
++  the reason 3.3 states: an operator or a migration can edit it. Deleting the
++  derived value while keeping its only input in that same file does not remove
++  the input surface; it adds one level of indirection. 3.5 marks `method`
++  immutable after enrol, and on its own that is an assertion with no enforcement
++  — the same kind of assertion 3.3 declined to trust. A record rewritten from
++  `subscription-oauth` to `api-key` passes H3 (the coordinates did not change),
++  passes the pin (the derivation did not change) and reads `active` in 6.2 (the
++  credential is still there), and would then be evaluated on the `host-owned`
++  branch, where 5.3's prohibitions do not apply by their own scoping sentence.
++  C2 below is the gate that stops it; before C2 there was none.
++
++**Invariant C2 — the computed class must agree with the recorded backend.** At
++enrol and at every launch, `f(method)` is compared against the recorded `backend`
++and `store_selector` (3.3). `vendor-opaque` admits exactly the backends a vendor
++store uses — claude's `keychain`, and codex's `file` or `keyring` as named by
++`store_selector`. `host-owned` and `provider-delegated` admit only
++`external-file` or `env`, the backends agents-infra or an external authority owns.
++Any other pairing refuses with `E_AUTH_CUSTODY_INCONSISTENT`, non-zero exit, no
++child process. A record whose `method` alone was rewritten therefore refuses at
++its next launch rather than silently changing branch. Its test has to be the
++narrowing one: flip `method` in a synthetic record, leave every other field
++byte-identical, and the launch must refuse — a test that only fails when
++`backend` is *also* cleared proves the fields are read and says nothing about
++their agreement.
++
++**C2's residual, stated rather than averaged away.** C2 is a checked gate, not a
++structural impossibility, and it belongs in 6.1's second half for that reason. It
++converts a one-field edit into a two-field consistent rewrite: a real reduction,
++not an elimination, and no defence at all against an actor who already has write
++access to both fields. What it does not weaken is C1 — there is still no field
++anywhere that names a custodian class, and the rewrite above forges a *method*,
++which is a lie the gate can catch, rather than declaring a *custody*, which the
++type has no place to hold. Q13 asks whether sealing the record is worth its key.
+ 
+ Changing a native method's custody therefore requires editing that function in a
+ reviewed commit against a failing test. It is not reachable from configuration,
+-argv, environment or plugin at all.
++argv, environment or plugin at all, and the one remaining path — forging the
++record's `method` — is what C2 gates.
+ 
+ ### 3.3 The credential handle is a locator
+ 
+@@ -166,8 +205,10 @@ custody healthy* using `stat` and metadata-only lookups. Three rules bound it:
+   find-generic-password -w`, no read of `auth.json` or `.credentials.json`
+   contents, no `-X` payload constructed by agents-infra, ever.
+ - **H2.** A failed, partial or permission-denied observation is `unknown`, never
+-  `absent`. Absence and failure-to-read are different facts and they take
+-  different branches (6.2).
++  `absent` **and never `active`**. Absence and failure-to-read are different
++  facts, and so are health and failure-to-read; all three take different branches
++  (6.2). The `active` half is stated here because it is the easier one to lose:
++  `absent` is obviously a claim, while `active` reads like the default.
+ - **H3.** `observed_coords` is *derived and recorded* at enrol and *re-derived
+   and compared* at every launch. A mismatch is `namespace-drift` and refuses.
+   For codex the re-derivation takes `store_selector` as an input alongside
+@@ -210,10 +251,10 @@ One JSON document per profile, no secrets, machine-scoped:
+ | --- | --- |
+ | `provider`, `runtime`, `alias` | Immutable after enrol. |
+ | `identity` | `{ email?, account_id?, org?, plan?, verification }`. Mutable; `verification` downgrades to `unverified` on any edit. |
+-| `method` | Immutable after enrol. Changing the method is a new enrolment. |
++| `method` | Immutable after enrol. Changing the method is a new enrolment. The immutability is not self-enforcing — this file is editable, and `method` is the sole input to the custodian class — so it is checked by C2 (3.2), not asserted by the record. |
+ | `credential_handle` | Per 3.3. `state_root` immutable. |
+ | `version_pin` | `{ runtime_version_at_enrol, supported_range, pin_test_id, pin_verified_at }`. |
+-| `custody_state` | Per 3.6. |
++| `custody_state` | One of `declared`, `enrolling`, `active`, `degraded:plaintext`, `degraded:version-unpinned`, `degraded:namespace-drift`, `unknown`, `retired-local`. Per 3.6. `removed` is terminal and is not a value this field ever holds: the record is gone, and only the tombstone may remain. |
+ | `acknowledgements` | e.g. `plaintext_custody_accepted: { at, reason, operator }`. Absent by default. |
+ | `enrolled_at`, `last_launch_at`, `retired_at` | Timestamps. |
+ | `tombstone` | Written by any `remove` that did not positively confirm local invalidation; see 5.4. |
+@@ -245,13 +286,36 @@ declared ──enrol──▶ enrolling ──vendor login observed──▶ act
+                         │      (observation result:         ├──▶ degraded:version-unpinned
+                         │       unknown; 5.1 step 8)        ├──▶ degraded:namespace-drift
+                         └──refused/failed──────▶ declared   └──▶ unknown  (observation failed)
+-active|degraded|unknown ──logout──▶ retired-local ──remove──▶ removed
++
++active|degraded|unknown ──logout(local: invalidated|already-absent)──▶ retired-local
++active|degraded|unknown ──logout(local: unknown|failed)──────────────▶ (self-edge; refuses)
++retired-local ──remove(local-logout)──▶ removed
++active|degraded|unknown ──remove(leave-vendor-state, --confirm)──────▶ removed
+ ```
+ 
+ - `active` is the only state that launches without an explicit acknowledgement.
+-  Every other state — `declared`, `enrolling`, every `degraded:*` and `unknown`
+-  — **refuses to launch**. Only `degraded:plaintext` has an acknowledgement path
+-  (6.3).
++  Every other state — `declared`, `enrolling`, every `degraded:*`, `unknown` and
++  `retired-local` — **refuses to launch**. Only `degraded:plaintext` has an
++  acknowledgement path (6.3).
++- **The destructive edge is gated, and `retired-local` is a positive assertion.**
++  `retired-local` means a *successful* metadata-only observation showed the local
++  credential invalidated or already absent (5.4). A `logout` resolving `local:
++  unknown` or `local: failed` does not reach it: the profile stays in whatever
++  state it was already in, `E_AUTH_LOGOUT_UNCONFIRMED`, nothing deleted. `remove`
++  under `--logout-policy local-logout` is reachable **only** from
++  `retired-local`, so on that policy it is reachable only from a
++  positively-confirmed logout. Drawing the `retired-local` edge from `unknown`
++  would manufacture a claim of local retirement out of a read that failed — the
++  same forgery shape as reporting `already-absent` for a denied `stat` — and
++  unlike that one it authorizes a deletion.
++- **`leave-vendor-state` is the one edge to `removed` that does not pass through
++  `retired-local`, and it is not a hole.** It deletes without ever claiming the
++  local credential was invalidated: no positive assertion is produced from an
++  `unknown`, because none is produced at all. The operator states in the verb
++  itself that vendor state is being left behind, `--confirm` is mandatory, and a
++  tombstone is written unconditionally with the coordinates the orphan will be
++  findable by (5.4). What D1 forbids is *inferring* retirement; declaring
++  deliberately that you are not retiring anything is the opposite move.
+ - `unknown` is reached only by a failed or malformed observation, and only from
+   `active|degraded`. It is never collapsed into `active` or into `absent`.
+ - **An observation that fails during enrol does not produce the `unknown`
+@@ -271,11 +335,11 @@ active|degraded|unknown ──logout──▶ retired-local ──remove──
+ 
+ | Operation | Signature | Semantics |
+ | --- | --- | --- |
+-| `describe()` | → `MethodDescriptor` | Static: custodian class, capability vocabulary, declared inputs with `secret` flags, supported runtimes, supported version range. |
++| `describe()` | → `MethodDescriptor` | Static: capability vocabulary, declared inputs with `secret` flags, supported runtimes, supported version range — plus the custodian class **rendered** from the total function in 3.2. The framework computes the class and fills that field; the adapter neither supplies nor overrides it, because a descriptor field an adapter author writes is the registry column C1 removed wearing a different name. A method whose mapping arm is missing reaches the fallthrough and `describe()` refuses it (3.2). |
+ | `start(profile)` | → `StartOutcome` | Begins enrolment. For `vendor-opaque` the only legal outcome is `handoff-to-vendor`: agents-infra prepares the state root, gates the version, then runs the vendor's own login command with the home variable set. agents-infra never proxies, intercepts or parses a login flow. |
+ | `continue(profile, input)` | → `ContinueOutcome` | Second leg for methods that have one — device code, OTP confirmation. Inputs marked `secret` are streamed to the vendor process and retained nowhere. Methods without a second leg declare `continue: unsupported`. |
+ | `status(profile)` | → `ProfileStatus` | Derived from non-secret observation only: version, pin comparison, presence at `observed_coords`, fallback-file presence. Returns `custody_state`, `identity` with its verification state, and a per-field `unknown` where the observation could not be made. |
+-| `refresh_capability()` | → `vendor \| host \| external-authority \| none \| unknown` | *Who* refreshes. Not an operation: for `vendor-opaque` there is no agents-infra refresh verb, by design (5.3). |
++| `refresh_capability()` | → `vendor \| host \| external-authority \| none \| unknown` | *Who* refreshes. The owner is **rendered from the custodian class**, not declared: `vendor-opaque` → `vendor`, `host-owned` → `host`, `provider-delegated` → `external-authority` — that is the "Who refreshes" column of 3.2's table, which is the class's own definition. The adapter may only narrow *within* the rendered owner: `none` where the method never refreshes at all, `unknown` where it is not established. It can never name a different owner, because "agents-infra refreshes this native login" is precisely the pairing C1 removed, and an adapter allowed to say it would have restored the declaration under another word. Not an operation: for `vendor-opaque` there is no agents-infra refresh verb, by design (5.3). |
+ | `logout(profile)` | → `LogoutOutcome` | Local invalidation of one profile. Reports `local: {invalidated \| already-absent \| unknown \| failed}` and `remote_revoke: {revoked \| not-attempted \| unsupported \| unknown}` as **separate** fields. Both carry `unknown`; neither is inferred from the other or from an exit code (5.4). |
+ | `revoke_capability()` | → `vendor-side-on-logout \| host-side \| unsupported \| unknown` | Declared, never assumed. |
+ | `local_delete(profile)` | → `DeleteOutcome` | Enumerates exactly what local bytes go away and what provably does not (5.4). |
+@@ -306,9 +370,14 @@ Four values, and the distinction between the last two is load-bearing:
+ | openai | `workload-identity` | provider-delegated | external | external | available for managed automation |
+ | qwen | — | — | — | — | **not modellable**: the qwen plugin declares `HomeEnvVar: ""`, so there is no state root to namespace and `vendor-opaque` has nothing to attach to. Provisional, per epic AC8. |
+ 
+-The **Custodian** column is rendered from the total function in 3.2, not stored
+-in these rows. There is no way to author a row of this table that disagrees with
+-it. The `openai` rows are custody-independent for the same reason: a codex
++The **Custodian** and **Refresh** columns are both rendered, not stored in these
++rows: Custodian from the total function in 3.2, Refresh from the class that
++function returns (4.1). A row supplies a provider, a method, its remote-revoke
++capability and its status, and says nothing about custody or refresh duty. There
++is no way to author a row of this table that disagrees with either column —
++including by authoring a plausible-looking `host` in the Refresh column beside a
++native method, which is the same claim as a custodian column and is unauthorable
++for the same reason. The `openai` rows are custody-independent for the same reason: a codex
+ profile is `vendor-opaque` on the `file` store and on the `keyring` store alike,
+ because custody class follows the method, not the filesystem (5.3).
+ 
+@@ -357,9 +426,12 @@ before the credential exists, because afterwards it cannot be.
+    with the home variable set to the recorded `state_root` string, verbatim.
+    agents-infra does not read the flow, the callback, the code or the result
+    payload.
+-8. **Observe.** Presence at `observed_coords` and absence of the fallback file.
+-   Present + no fallback → `active`. Fallback present → `degraded:plaintext`
+-   (6.3). Observation failed → `unknown`, and the profile stays `enrolling`.
++8. **Observe.** Presence at `observed_coords` and absence of the fallback file,
++   each by a *successful* metadata-only observation. Present + a successful
++   observation showing no fallback → `active`. Fallback present →
++   `degraded:plaintext` (6.3). Either observation failing, denied or malformed →
++   `unknown` result, and the profile stays `enrolling`. An unread fallback path
++   is not an absent one, and `active` is a claim about it (H2).
+ 9. **Write the record.** Identity claim as `declared` unless a non-secret vendor
+    status output confirmed it.
+ 
+@@ -535,9 +607,11 @@ that left an orphan says so rather than reporting clean success.
+ ### 6.1 What is eliminated, and what is only checked
+ 
+ The hazard needs an *enforcement mechanism* to fire: something has to deny the
+-CLI access to its own credential. Two separate things stand in the way, and they
+-are not the same kind of thing. Separating them is the point of this section,
+-because a decision that reads this document budgets its residual risk from it.
++CLI access to its own credential. Three separate things stand in the way, and no
++two of them are the same kind of thing: one is eliminated, two are checked.
++Separating them is the point of this section, because a decision that reads this
++document budgets its residual risk from it, and a single reassuring word would
++hide the fact that two thirds of the defence runs at build or launch time.
+ 
+ **Eliminated — C1 (3.2).** Custodian class is a total function of the method,
+ not a field on anything. No config file, flag, registry column, project table,
+@@ -548,8 +622,21 @@ cannot forget to call it and no bypass path can route around it, because there
+ is no check to bypass. The one way to reach the pairing is to edit the mapping
+ function in a commit, against a test that fails when an arm changes class.
+ 
+-**Mitigated, not eliminated — 5.3 and 6.4.** The prohibition list in 5.3 is a
+-list of operations no code path performs: setting an ACL, changing ownership,
++**One surface that enumeration misses, and it is not a rhetorical one.** The
++profile record (3.5) is not a config file, a flag, a registry column, a project
++table, a remote-config key, a plugin or an environment variable — it is in none
++of the categories the paragraph above enumerates — and it is where the class
++function's *input* lives. Rewriting its `method` declares no custody; C1 holds,
++there is still no field to hold one. It reaches the `host-owned` branch by
++forging the input instead, and every other gate passes through it unchanged
++(3.2). That path is closed by C2, which is a **checked** gate and therefore
++belongs in this section's second half. Counting it as eliminated would be the
++averaging this section exists to refuse, and the enumeration above is exactly how
++a claim of the form "nothing can set X" gets verified against the list of things
++its author already thought of.
++
++**Mitigated, not eliminated — 5.3, 6.4 and C2 (3.2).** The prohibition list in
++5.3 is a list of operations no code path performs: setting an ACL, changing ownership,
+ making a vendor store unwritable. Nothing in the type system stops an
+ implementer writing `os.Chmod` against a state root's credential store. What
+ stops it is 6.4 — a module-wide greppable-absent assertion plus negative tests,
+@@ -559,9 +646,11 @@ what its pattern set names. A new way to spell the same operation, added without
+ extending 6.4's set, would pass. Widening that set is part of reviewing any
+ change that touches a state root.
+ 
+-So: the *declaration* half of the hazard is eliminated, and the *implementation*
+-half is mitigated by CI. The two halves have different residual risk and this
+-document does not average them.
++So: the *declaration* half of the hazard is eliminated, the *implementation* half
++is mitigated by CI, and the *input* half — forging the method the class is
++computed from — is mitigated by a launch-time consistency gate that a two-field
++rewrite still passes. Three halves is the wrong word and the right count. They
++carry different residual risk and this document does not average them.
+ 
+ 5.3's prohibition table is scoped "For `vendor-opaque`", and that scoping is
+ safe **only because of C1**: a method whose credential lives in a vendor store
+@@ -583,13 +672,19 @@ and not on the mere presence of a credential file:
+ 
+ | Recorded store | Observation | Custody state |
+ | --- | --- | --- |
+-| any | Credential present at `observed_coords`, no unexplained plaintext artifact | `active` |
++| any | Credential present at `observed_coords`, no unexplained plaintext artifact, **every observation succeeded** | `active` |
+ | claude Keychain | `<state_root>/.credentials.json` present | `degraded:plaintext` — the vendor failed open and deleted the Keychain item |
+ | codex `file` | `<state_root>/auth.json` present at 0600 | **`active`** — this is the vendor's packaged default custody, not a fallback |
+ | codex `keyring` | `<state_root>/auth.json` present | `degraded:plaintext` — codex's keyring failure posture is **unknown**, so unexplained plaintext beside a keyring store is not classified as healthy |
+ | any | Nothing at `observed_coords` and no plaintext artifact, every observation succeeded | `absent` — the profile is not enrolled |
+ | any | Any observation failed, was denied, or returned malformed output — **including the store selector** | `unknown` |
+ 
++Rows one and five carry the same qualifier for the same reason, in the two
++directions D1 forbids: `active` is as much a positive claim as `absent` is, and
++a fallback path that could not be read has not been shown to be missing. The
++`absent` row is the one people remember to harden, because absence obviously
++needs evidence; `active` reads like the default and needs exactly as much.
++
+ Rows three and four are the same evidence read in two directions, and both are
+ needed. Calling codex-on-`file` `degraded:plaintext` would refuse every default
+ codex enrolment for a hazard that did not occur — the credential is in a 0600
+@@ -632,6 +727,30 @@ delete-generic-password`, `chmod`/`chown`/`chflags` against a state root's
+ credential store or a Keychain item, reads of `auth.json` or `.credentials.json`
+ contents, any `-X` payload construction, any acquisition of `.storage-write`.
+ 
++The two gates this design added after review need their own negatives, and both
++have to be **narrowing** rather than deleting, for the reason 7.2 states:
++
++- **C2 (3.2).** Flip `method` from `subscription-oauth` to `api-key` in a
++  synthetic record and leave every other field byte-identical: the launch must
++  refuse with `E_AUTH_CUSTODY_INCONSISTENT`. A test that only fails when
++  `backend` is cleared as well proves the fields are read and says nothing about
++  their agreement. Assert also that the *consistent* two-field rewrite is
++  **admitted** — C2 claims to catch a one-field forgery and nothing more, and a
++  test that pretends otherwise would overstate the gate 6.1 already budgets as
++  mitigated.
++- **The 3.6 destructive edge.** A `logout` whose post-observation is denied must
++  leave the profile in its prior state, must not produce `retired-local`, and
++  `remove --logout-policy local-logout` must then refuse and delete nothing.
++  Drive it by making the observation *fail* rather than by making the credential
++  absent: a test that supplies an absent credential exercises `already-absent`,
++  which is the path that is allowed to delete, and would pass against an
++  implementation that collapses the two.
++- **`describe()` (4.1).** An adapter that returns a `MethodDescriptor` with a
++  custodian class disagreeing with 3.2's function must fail to compile or be
++  rejected at registration. If the descriptor type makes the field settable at
++  all, this test is the only thing standing between the design and the registry
++  column C1 removed.
++
+ ## 7. Version gate and namespace pins
+ 
+ ### 7.1 Supported ranges
+@@ -703,9 +822,13 @@ nothing populates — vacuously, forever. That is this pin's sharpest negative.
+   `file`-store profile, must **fail**. A pin that passes on both branches is
+   selecting neither.
+ - Negative — no keyring item appears: with the store resolved to `file`, a
+-  synthetic home must produce no `Codex Auth` item for its derived account. If
+-  one appears, store selection is not doing what this design assumes and the
+-  file branch is invalid.
++  synthetic home must produce no `Codex Auth` item for its derived account, and
++  the lookup must have **succeeded** for that to count. A denied, errored or
++  malformed lookup fails the pin; it does not satisfy it (H2). A negative
++  assertion satisfied by a failed read asserts nothing, and this one runs on the
++  branch where the whole file-store custody argument rests. If an item does
++  appear, store selection is not doing what this design assumes and the file
++  branch is invalid.
+ - Negative — outside the root: an `auth.json` under a *different* synthetic home
+   must not satisfy this profile's pin. Asserting "some `auth.json` exists"
+   measures nothing.
+@@ -792,14 +915,30 @@ indistinguishable from working, right up until it was not.
+ 
+ ### 8.3 Extensibility
+ 
+-Adding `device-code`, `enterprise-sso`, `api-key` or `coding-plan` adds one
+-registry entry and one adapter. It changes no verb, no selector, no record
+-field, and nothing about the provider/profile model — because the method is a
+-*value* of `--method`, the custodian class is a property the method declares,
+-and the capability vocabulary already carries `unsupported` and `unknown` for
+-the operations a new method does not have. A method that cannot refresh declares
+-`refresh_capability: none`; a method with no second leg declares `continue:
+-unsupported`; neither needs a new verb to say so.
++Adding `device-code`, `enterprise-sso`, `api-key` or `coding-plan` is **three**
++edits, not two:
++
++1. a registry entry, declaring that the method exists for that provider;
++2. an adapter implementing 4.1;
++3. **an arm in the custodian-class mapping function (3.2).**
++
++The third is not a formality. A method added without it reaches the function's
++fallthrough, `describe()` refuses it, and the method is unusable from its first
++call — the safe failure, and the reason 3.2 makes the function total. But a
++recipe that names only the first two hands an implementer two thirds of the work
++and lets the design's own safety property deliver the remainder as a runtime
++refusal. State the edit set instead.
++
++It changes no verb, no selector, no record field, and nothing about the
++provider/profile model — because the method is a *value* of `--method`, the
++custodian class is a **total function of that value (3.2, C1)** rather than
++anything the method declares, and the capability vocabulary already carries
++`unsupported` and `unknown` for the operations a new method does not have. A
++method that cannot refresh declares `refresh_capability: none`; a method with no
++second leg declares `continue: unsupported`; neither needs a new verb to say so.
++Neither declaration names a custodian class or a refresh *owner*: both come back
++from the class (4.1). Extensibility here means a new method cannot express a new
++custody, which is the property that makes adding one cheap to review.
+ 
+ ### 8.4 Secret-bearing inputs are structurally kept off argv
+ 
+@@ -862,12 +1001,13 @@ committed to (Q7).
+ | H2 | A failed or malformed observation is `unknown`, never `absent` and never `active`. |
+ | H3 | `observed_coords` is re-derived and compared at every launch; drift refuses. |
+ | C1 | Custodian class is a total function of the method, not a declared field. Native-OAuth methods map to `vendor-opaque`, and no config, flag, registry column or environment input can express otherwise — there is nothing to set (3.2, 6.1). |
++| C2 | The class computed from `method` must agree with the recorded `backend`/`store_selector`; a rewritten `method` refuses at the next launch, `E_AUTH_CUSTODY_INCONSISTENT` (3.2). **Checked, not structural** — a consistent two-field rewrite still passes (6.1). |
+ | S1 | Secret-marked inputs are refused on argv, config and composed environment. |
+ | P1 | Profile ↔ state root is a bijection; roots are never reused. |
+ | P2 | The recorded state-root string is passed byte-verbatim, never re-derived. |
+ | L1 | The home variable is written on every launch, never inherited. |
+ | L2 | One state root, one enrolment; vendor concurrency never arbitrates two accounts. |
+-| D1 | `unknown` custody never collapses into `absent` or `active` — including `logout`'s `local` field, where `unknown` and `failed` both refuse `remove` and nothing is deleted (5.4). |
++| D1 | `unknown` custody never collapses into `absent` or `active` — including `logout`'s `local` field, where `unknown` and `failed` both refuse `remove` and nothing is deleted (5.4); including 3.6's `retired-local`, which no `unknown` observation reaches and which is the only state `remove` is reachable from; and including 6.2's `active` row and 5.1's step 8, which both require every observation to have succeeded. |
+ | A1 | Ambiguous selectors refuse; no heuristic ever picks a profile. |
+ | V1 | Version outside the pinned range, or unreadable, refuses the launch. |
+ | R1 | agents-infra never deletes a Keychain item and never runs a vendor's revoke on its own. |
+@@ -891,6 +1031,7 @@ now in hand, and none is guessed at above.
+ | Q10 | Does qwen get a state root at all? Its plugin declares `HomeEnvVar: ""`, so `vendor-opaque` has nothing to attach to and the epic's qwen ambition has no mechanism. | Audit the qwen CLI for a state-root environment variable and a credential store, as `TASK-260720-3moaky` did for the other two. | Free, a source audit. |
+ | Q11 | Is refusing on `CLAUDE_SECURESTORAGE_CONFIG_DIR` (7.3) right, or does some legitimate operator setup set it? | Survey the operator environment and the vendor's docs; if legitimate, honour it as an explicit override with its own recorded coordinate. | Free. |
+ | Q12 | What is codex's failure posture on the `keyring` store? The research proved `auto` falls back to a plaintext `auth.json` and left `keyring` unestablished, so 6.2 classifies plaintext-beside-keyring as `degraded:plaintext` rather than guess. If keyring also fails open, codex inherits Claude's fail-open hazard and 5.3's prohibitions become load-bearing on that branch too; if it fails closed, the row can be relaxed. | Synthetic profile with `cli_auth_credentials_store = "keyring"`; induce a non-transient keyring write failure and observe whether an `auth.json` appears. Needs a credential-shaped payload, so it needs the disposable ChatGPT account from Q2. | Blocked on Q2. |
++| Q13 | Is the profile record worth cryptographically sealing? C2 (3.2) turns a `method` forgery into a two-field consistent rewrite, and stops nothing that can write both fields. A seal over the immutable fields, verified at launch, would — at the cost of a key living on the same machine as the record it protects. | A threat-model decision: does the model include local write access to `~/Library/Application Support/agents-infra/auth/`? If it does, C2 is insufficient and the seal is required, with its key custody a question of its own. If it does not, C2 is the right stopping point and the seal is ceremony. | Decision, not experiment. |
+ 
+ ## 12. What this task verified itself
+ 
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 132b21e..cc4ee06 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,18 @@
+ 
+ ## 2026-08-31
+ 
++### 0810 — A Fixed Invariant Leaks In The Section The Rework Never Opened, And The Cited Instances Undercount It
++- FINDING (reviewer, CR rev2 of `TASK-260720-bk6owf`, recorded here because the reviewer role is read-only on the repo): both rev1 defects were fixed correctly *at the site they were found* and both survived elsewhere. The rework's own hunk map is the tell — 20 hunks, every one inside a section a finding named, and section 8 was never opened.
++- SHAPE 1 — the corrected claim survives verbatim where nobody looked. 3.2/3.3/4.3/6.1/10 all said custodian class is a total function with no declared field. `design.md:798` (8.3, extensibility) still said "the custodian class is a property the method declares" — rev1 text, in the one section governing how a *new* method enters the system. Its add-a-method recipe was "one registry entry and one adapter", omitting the mapping arm 3.2 makes mandatory.
++- SHAPE 2 — the invariant leaks one line from its own fix. 5.4 refused `remove` on `local: unknown|failed`. `design.md:248` (3.6) still drew `active|degraded|unknown --logout--> retired-local --remove--> removed`, unconditional, and the producer had edited that same diagram one line above. `retired-local` was a positive assertion of local retirement produced from `unknown`, and it appeared exactly once in 908 lines, in no vocabulary and no other section.
++- SHAPE 3 — deleting a derived field does not remove its input surface. 3.3 dropped stored `custodian_class` because "an on-disk record an operator or a migration could edit" is an input surface. But `custodian_class = f(method)` and `method` is a field of that same record (3.5). A migration flipping `method` to `api-key` passes H3 (coordinates unchanged), passes the pin, and reads `active` in 6.2 — landing a native credential on the `host-owned` branch where 5.3's prohibitions do not apply by their own scoping.
++- **THE REUSABLE ONE, and it is the count, not the shapes.** rev3 stopped fixing citations and swept all 908 lines for both invariants. The reviewer cited 3 sites; the sweep found **11**. Five more carried the *same two claims* in sections no finding had named: `refresh_capability()` let an adapter declare *who refreshes*, which is the "Who refreshes" column of 3.2's class table and therefore the pairing C1 removed wearing another word; 4.3's **Refresh** column sat un-annotated beside a **Custodian** column explicitly marked "rendered"; H2 in 3.3 said "never `absent`" and omitted "never `active`" while H2 in section 10 said both; 6.2's `absent` row required "every observation succeeded" and its `active` row did not; 5.1 step 8 had the same asymmetry; and a 7.2 pin negative ("no keyring item appears") was satisfiable by a *failed* lookup.
++- THE PATTERN IN THAT LIST: the leaks cluster on the **reassuring** side of each invariant. `absent` gets hardened because absence obviously needs evidence; `active` reads like the default and gets missed. A declared *custodian* gets deleted; a declared *refresh owner* — the same claim, different noun — survives. Sweep for the concept's synonyms and for the invariant's *other* direction, not for the sentence that was rewritten.
++- ROOT CAUSE (all of it): a claim of the form "X is structural, not checked" is a claim about the *whole document*, but it gets verified against the paragraph that makes it, and its fix gets verified against the line that was cited.
++- METHOD THAT WORKED: grep the verb near the concept (`declares`, `set`, `configured`, `stored`) rather than the rewritten sentence; read the diff's hunk map and treat zero-hunk sections as the suspect set; and for a two-sided invariant, enumerate both sides separately — the side nobody worries about is the side that leaks.
++- ALSO FIXED IN rev3: 3.2 now admits the profile record as a third checked surface and adds **C2**, a launch-time gate refusing a computed class that disagrees with the recorded backend/store (`E_AUTH_CUSTODY_INCONSISTENT`). C2 is labelled checked, not structural: it turns a one-field forgery into a two-field consistent rewrite, which is a reduction and not an elimination, and 6.1 now budgets three halves rather than two. Q13 carries the seal-the-record decision.
++- SCOPE: `.research/260831_extensible-auth-method-lifecycle.design.md` (908 -> 1047). STATUS: rev2 changes requested -> rev3 handed to review.
++
+ ### 0748 — Correction: `already-absent` Is A Positive Claim, And A Read Failure Can Forge It
+ - CORRECTS the 0912 entry below on two points, and records the shape that produced both. Original entries left intact.
+ - FINDING (the reusable one): a result vocabulary that carries `unknown` on one field and omits it on another **leaks at the omission**, and the leak is only dangerous if the omitting field gates something irreversible. `TASK-260720-bk6owf`'s design gave `logout` a `remote_revoke: {revoked|not-attempted|unsupported|unknown}` and a `local: {invalidated|already-absent|failed}` — and gated `remove`'s state-root deletion on `local`. `already-absent` is a **positive assertion of absence**, so a locked login keychain, a swallowed permission error, or a vendor that exits 0 printing nothing all classify as "there was nothing there" and destruction proceeds. On macOS that destroys the Keychain service-name derivation input and strands an item nothing can ever name again.

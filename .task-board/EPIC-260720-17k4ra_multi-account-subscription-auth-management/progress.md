@@ -1,5 +1,5 @@
 ## Status
-backlog
+done
 
 ## Review
 required
@@ -30,4 +30,4 @@ Lifecycle clarification: authentication must be method-parameterized. Initial UX
 2026-07-20T15:59:12Z
 
 ## Last Update
-2026-07-20T16:02:12Z
+2026-08-31T10:17:48Z
