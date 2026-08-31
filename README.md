@@ -1674,6 +1674,55 @@ The current runtime decision lives in
 llama.cpp; Python `mlx-lm` remains the default local Qwen runtime**, with the reopening
 conditions stated in its §7.
 
+The current multi-account authentication decision lives in
+`.research/260831_multi-account-auth-architecture.adr.md`: **agents-infra-owned custody of a
+native login is a permanent NO-GO; deterministic child-environment composition for one
+account per runtime is a GO; multi-account native switching splits per provider —
+CONDITIONAL GO for Claude, HELD/UNESTABLISHED for Codex.** Anthropic documents the macOS Keychain
+namespacing and names running multiple accounts side by side as the intended use of
+`CLAUDE_CONFIG_DIR`, so the Claude half is gated only on one empirical check that a second
+concurrent enrolment leaves the first working.
+
+**The Codex half is not closed — an earlier revision of this README said it was, and
+that was wrong.** Nothing OpenAI publishes addresses multiple accounts on the Codex
+**CLI**. Its account-switching article says switching is "not yet supported in *Codex
+desktop* or the native ChatGPT mobile apps" — two GUI surfaces, not the CLI, in the
+tense of a roadmap note, and second-hand at that, since `help.openai.com` returns 403
+from this host. Entitlement there is **unestablished**: neither permitted nor
+prohibited. The version-gate cost the earlier revision also cited does not apply to
+Codex's packaged `file` store, which has no hash derivation and whose isolation
+property OpenAI documents. The version-gate cost the earlier revision also cited does not apply to
+Codex's packaged `file` store, which has no hash derivation and whose isolation
+property OpenAI documents.
+
+**A later revision said the substantive open risk was `sqlite_home`. That check has
+now been run and it came back clean.** `sqlite_home` defaults **inside** `CODEX_HOME`,
+so two credential-isolated Codex profiles do **not** share a state database. The
+keyring store has no plaintext fallback either — that fallback belongs to `auto` only.
+Both were free source reads the ADR had ranked first and left unrun for a round; both
+are now done and both favour Codex. Neither changed the verdict, because neither was
+ever about entitlement. **The only thing left that can decide the Codex half is a
+second account.**
+
+Both halves of multi-account switching are **unstarted**, for the same reason: the
+evidence is not in. The epic's headline capability — switching among multiple Claude
+*and* Codex accounts — is therefore not deliverable as one feature today, which is not
+the same as either half being closed. Per-provider conditions are in its §12.
+
+**One thing an operator should act on now.** Composing the child environment for one
+account per runtime (the adopted option) needs a larger variable set than earlier
+revisions of this note implied. Codex reads **eight** ambient environment inputs that
+relocate its state root, supply its credential or redirect its OAuth endpoints —
+including `CODEX_SQLITE_HOME`, which no earlier revision mentioned at all. Two matter
+particularly: `CODEX_API_KEY` takes precedence over *any* stored credential, so an
+ambient key silently makes a launch run as the wrong identity; and
+`CODEX_REFRESH_TOKEN_URL_OVERRIDE` is accepted with no allowlist, where Claude's
+equivalent refuses anything off a fixed list. Claude has a comparable class plus a
+second, profile-named credential store selected by `ANTHROPIC_CONFIG_DIR` /
+`ANTHROPIC_PROFILE`. And **qwen is not, as an earlier revision said, "not modellable"**
+— it reads `QWEN_HOME`; the missing state root was our own plugin declaration. See the
+ADR's §2.4, §11.1 and §11.2.
+
 ## Structure
 
 ```
