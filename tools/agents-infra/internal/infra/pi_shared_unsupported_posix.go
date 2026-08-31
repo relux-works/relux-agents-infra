@@ -43,6 +43,7 @@ type SharedRuntimeSharingStatus struct {
 }
 
 type SharedRuntimeStatus struct {
+	ContractVersion    int                         `json:"contract_version"`
 	RuntimeKey         string                      `json:"runtime_key"`
 	ProfileDigest      string                      `json:"profile_digest"`
 	RestartCount       int                         `json:"restart_count"`
@@ -51,6 +52,7 @@ type SharedRuntimeStatus struct {
 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
 	ManualQuarantine   bool                        `json:"manual_quarantine"`
 	HalfOpen           bool                        `json:"half_open"`
+	FailureHistory     []SharedRuntimeFailureEvent `json:"failure_history"`
 	Resources          SharedRuntimeResourceStatus `json:"resources"`
 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`

@@ -862,11 +862,33 @@ deadline contributes no backoff verdict; consumers continue with attested
 broker/runtime facts, so a serving runtime is never relabeled from a historical
 restart count. `half_open` alone likewise contributes no availability verdict.
 
-`last_failure` and `last_failure_at` are explicitly deferred and absent from
-this status schema. Restart-ledger v1 persists neither a failure reason nor a
-failure timestamp, so publishing placeholders or deriving them from another
-field would fabricate provenance. Adding them requires a separately reviewed
-ledger/event write contract and new pre/post fixtures.
+Status JSON also carries an explicit `contract_version` integer. A consumer
+built against this contract understands `contract_version` values
+`SharedRuntimeStatusMinSupportedContractVersion..SharedRuntimeStatusContractVersion`
+inclusive (currently `1..1`); only a change that removes or redefines an
+existing field's meaning bumps the version, purely additive fields never do.
+`DecodeSharedRuntimeStatus` is the sanctioned decode entry point for any
+consumer, in or out of this repository: it inspects `contract_version` before
+trusting any other field and refuses a version outside that range with
+`shared_runtime_status_unsupported_contract_version`, naming both the observed
+version and the supported range, rather than parsing the fields it recognises
+from an unsupported version and dropping the rest. `agents-infra runtime
+status --json` round-trips its own output through `DecodeSharedRuntimeStatus`
+before printing it, so it can never publish a payload its own contract
+refuses.
+
+`last_failure` and `last_failure_at` as separate scalar fields remain absent.
+Restart-ledger v1 now persists bounded failure/backoff evidence instead:
+`failure_history` is a list, copied verbatim from the ledger into status JSON,
+whose entries record `occurred_at`, the restart count at that attempt, and
+either `backoff_seconds` for an ordinary retry or `quarantined` plus
+`quarantined_until` for an attempt that quarantined the runtime. The ledger
+retains at most the most recent `sharedRuntimeFailureHistoryLimit` (20)
+entries; recording a failure past that bound evicts the oldest retained entry
+first (FIFO), so the evidence a multi-week unattended run accumulates never
+grows without limit. The most recent entry already carries what a scalar
+`last_failure`/`last_failure_at` pair would have, so the deferred fields are
+superseded rather than added alongside `failure_history`.
 Every configured seconds field is bounded before conversion to `time.Duration`;
 coupled handoff and doubled lease-stale windows are bounded as effective
 durations too, so overflow is refused during config resolution before launch.

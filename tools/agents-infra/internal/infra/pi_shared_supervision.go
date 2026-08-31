@@ -13,16 +13,80 @@ import (
 
 const sharedRuntimeRestartLedgerSchema = "agents-infra.pi.shared-runtime.restart-ledger.v1"
 
+// sharedRuntimeFailureHistoryLimit bounds the failure/backoff evidence a
+// ledger retains. Without a bound, a multi-week unattended run accumulates
+// one entry per failed restart attempt forever; this caps that growth and
+// evicts the oldest entry first, keeping only the most recent attempts.
+const sharedRuntimeFailureHistoryLimit = 20
+
+// SharedRuntimeStatusContractVersion is the current published version of the
+// SharedRuntimeStatus wire contract emitted by "runtime status --json". Bump
+// it whenever a change removes or redefines the meaning of an existing
+// field; purely additive fields never require a bump. A consumer compiled
+// against version N understands contract versions
+// SharedRuntimeStatusMinSupportedContractVersion..N inclusive and must
+// refuse anything outside that range through DecodeSharedRuntimeStatus
+// rather than parsing the fields it recognises from an unsupported version
+// and silently ignoring the rest.
+const SharedRuntimeStatusContractVersion = 1
+
+// SharedRuntimeStatusMinSupportedContractVersion is the oldest contract
+// version this build still understands. It only advances when an older
+// version is deliberately retired, never implicitly.
+const SharedRuntimeStatusMinSupportedContractVersion = 1
+
+type SharedRuntimeFailureEvent struct {
+	OccurredAt       time.Time  `json:"occurred_at"`
+	RestartCount     int        `json:"restart_count"`
+	BackoffSeconds   int        `json:"backoff_seconds,omitempty"`
+	Quarantined      bool       `json:"quarantined"`
+	QuarantinedUntil *time.Time `json:"quarantined_until,omitempty"`
+}
+
+// DecodeSharedRuntimeStatus is the sanctioned entry point for any consumer
+// reading a SharedRuntimeStatus payload produced by "runtime status --json".
+// It refuses a payload declaring a contract version outside
+// [SharedRuntimeStatusMinSupportedContractVersion, SharedRuntimeStatusContractVersion]
+// before trusting any other field, naming both the observed version and the
+// supported range. It never falls back to parsing the fields it recognises
+// from an unsupported version and dropping the rest.
+func DecodeSharedRuntimeStatus(data []byte) (SharedRuntimeStatus, error) {
+	var probe struct {
+		ContractVersion int `json:"contract_version"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return SharedRuntimeStatus{}, sharedRuntimeError("shared_runtime_status_undecodable", err)
+	}
+	if probe.ContractVersion < SharedRuntimeStatusMinSupportedContractVersion || probe.ContractVersion > SharedRuntimeStatusContractVersion {
+		return SharedRuntimeStatus{}, &SharedRuntimeError{
+			Code: "shared_runtime_status_unsupported_contract_version",
+			Details: map[string]any{
+				"observed_contract_version":      probe.ContractVersion,
+				"supported_contract_version_min": SharedRuntimeStatusMinSupportedContractVersion,
+				"supported_contract_version_max": SharedRuntimeStatusContractVersion,
+			},
+			Err: fmt.Errorf("shared runtime status contract version %d is not supported; this build supports %d..%d",
+				probe.ContractVersion, SharedRuntimeStatusMinSupportedContractVersion, SharedRuntimeStatusContractVersion),
+		}
+	}
+	var status SharedRuntimeStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		return SharedRuntimeStatus{}, sharedRuntimeError("shared_runtime_status_undecodable", err)
+	}
+	return status, nil
+}
+
 type SharedRuntimeRestartLedger struct {
-	Schema             string     `json:"schema"`
-	RuntimeKey         string     `json:"runtime_key"`
-	ProfileDigest      string     `json:"profile_digest"`
-	RestartCount       int        `json:"restart_count"`
-	RestartNotBefore   *time.Time `json:"restart_not_before"`
-	QuarantinedUntil   *time.Time `json:"quarantined_until"`
-	LastReadinessMatch *time.Time `json:"last_readiness_match"`
-	ManualQuarantine   bool       `json:"manual_quarantine"`
-	HalfOpen           bool       `json:"half_open"`
+	Schema             string                      `json:"schema"`
+	RuntimeKey         string                      `json:"runtime_key"`
+	ProfileDigest      string                      `json:"profile_digest"`
+	RestartCount       int                         `json:"restart_count"`
+	RestartNotBefore   *time.Time                  `json:"restart_not_before"`
+	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
+	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
+	ManualQuarantine   bool                        `json:"manual_quarantine"`
+	HalfOpen           bool                        `json:"half_open"`
+	FailureHistory     []SharedRuntimeFailureEvent `json:"failure_history"`
 }
 
 type sharedRuntimeRestartDecision struct {
@@ -87,11 +151,16 @@ func sharedRuntimeResetStableRun(ledger *SharedRuntimeRestartLedger) {
 
 func sharedRuntimeRecordFailure(ledger *SharedRuntimeRestartLedger, policy PiRuntimeSharing, now time.Time) sharedRuntimeRestartDecision {
 	ledger.RestartCount++
+	occurredAt := now.UTC()
 	if ledger.HalfOpen || ledger.RestartCount >= policy.RestartLimit {
-		until := now.UTC().Add(time.Duration(policy.QuarantineSeconds) * time.Second)
+		until := occurredAt.Add(time.Duration(policy.QuarantineSeconds) * time.Second)
 		ledger.QuarantinedUntil = &until
 		ledger.HalfOpen = false
 		ledger.RestartNotBefore = nil
+		appendSharedRuntimeFailureEvent(ledger, SharedRuntimeFailureEvent{
+			OccurredAt: occurredAt, RestartCount: ledger.RestartCount,
+			Quarantined: true, QuarantinedUntil: &until,
+		})
 		return sharedRuntimeRestartDecision{Quarantined: true}
 	}
 	delay := time.Duration(policy.RestartInitialBackoffSeconds) * time.Second
@@ -103,9 +172,25 @@ func sharedRuntimeRecordFailure(ledger *SharedRuntimeRestartLedger, policy PiRun
 		}
 		delay *= 2
 	}
-	notBefore := now.UTC().Add(delay)
+	notBefore := occurredAt.Add(delay)
 	ledger.RestartNotBefore = &notBefore
+	appendSharedRuntimeFailureEvent(ledger, SharedRuntimeFailureEvent{
+		OccurredAt: occurredAt, RestartCount: ledger.RestartCount,
+		BackoffSeconds: int(delay / time.Second),
+	})
 	return sharedRuntimeRestartDecision{Backoff: delay}
+}
+
+// appendSharedRuntimeFailureEvent enforces sharedRuntimeFailureHistoryLimit
+// by evicting the oldest retained event first (FIFO), so the ledger's
+// failure/backoff evidence never grows past the bound regardless of how many
+// restart attempts a long unattended run accumulates.
+func appendSharedRuntimeFailureEvent(ledger *SharedRuntimeRestartLedger, event SharedRuntimeFailureEvent) {
+	ledger.FailureHistory = append(ledger.FailureHistory, event)
+	if len(ledger.FailureHistory) > sharedRuntimeFailureHistoryLimit {
+		overflow := len(ledger.FailureHistory) - sharedRuntimeFailureHistoryLimit
+		ledger.FailureHistory = append([]SharedRuntimeFailureEvent(nil), ledger.FailureHistory[overflow:]...)
+	}
 }
 
 func sharedRuntimeRestartDelay(ledger SharedRuntimeRestartLedger, now time.Time) time.Duration {

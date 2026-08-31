@@ -5,7 +5,9 @@ package infra
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -30,15 +32,54 @@ type SharedRuntimePaths struct {
 }
 
 type SharedRuntimeRestartLedger struct {
-	Schema             string     `json:"schema"`
-	RuntimeKey         string     `json:"runtime_key"`
-	ProfileDigest      string     `json:"profile_digest"`
-	RestartCount       int        `json:"restart_count"`
-	RestartNotBefore   *time.Time `json:"restart_not_before"`
-	QuarantinedUntil   *time.Time `json:"quarantined_until"`
-	LastReadinessMatch *time.Time `json:"last_readiness_match"`
-	ManualQuarantine   bool       `json:"manual_quarantine"`
-	HalfOpen           bool       `json:"half_open"`
+	Schema             string                      `json:"schema"`
+	RuntimeKey         string                      `json:"runtime_key"`
+	ProfileDigest      string                      `json:"profile_digest"`
+	RestartCount       int                         `json:"restart_count"`
+	RestartNotBefore   *time.Time                  `json:"restart_not_before"`
+	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
+	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
+	ManualQuarantine   bool                        `json:"manual_quarantine"`
+	HalfOpen           bool                        `json:"half_open"`
+	FailureHistory     []SharedRuntimeFailureEvent `json:"failure_history"`
+}
+
+// SharedRuntimeStatusContractVersion and SharedRuntimeStatusMinSupportedContractVersion
+// mirror the !windows contract in pi_shared_supervision.go; see that file for
+// the compatibility rule. Windows never produces a real payload, but any
+// consumer built for this platform must see the same contract.
+const SharedRuntimeStatusContractVersion = 1
+const SharedRuntimeStatusMinSupportedContractVersion = 1
+
+type SharedRuntimeFailureEvent struct {
+	OccurredAt       time.Time  `json:"occurred_at"`
+	RestartCount     int        `json:"restart_count"`
+	BackoffSeconds   int        `json:"backoff_seconds,omitempty"`
+	Quarantined      bool       `json:"quarantined"`
+	QuarantinedUntil *time.Time `json:"quarantined_until,omitempty"`
+}
+
+// DecodeSharedRuntimeStatus mirrors the !windows implementation in
+// pi_shared_supervision.go.
+func DecodeSharedRuntimeStatus(data []byte) (SharedRuntimeStatus, error) {
+	var probe struct {
+		ContractVersion int `json:"contract_version"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return SharedRuntimeStatus{}, &SharedRuntimeError{Code: "shared_runtime_status_undecodable", Err: err}
+	}
+	if probe.ContractVersion < SharedRuntimeStatusMinSupportedContractVersion || probe.ContractVersion > SharedRuntimeStatusContractVersion {
+		return SharedRuntimeStatus{}, &SharedRuntimeError{
+			Code: "shared_runtime_status_unsupported_contract_version",
+			Err: fmt.Errorf("shared runtime status contract version %d is not supported; this build supports %d..%d",
+				probe.ContractVersion, SharedRuntimeStatusMinSupportedContractVersion, SharedRuntimeStatusContractVersion),
+		}
+	}
+	var status SharedRuntimeStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		return SharedRuntimeStatus{}, &SharedRuntimeError{Code: "shared_runtime_status_undecodable", Err: err}
+	}
+	return status, nil
 }
 
 func SharedRuntimeProfileDigest(profile PiProfile) string {
@@ -104,6 +145,7 @@ type SharedRuntimeSharingStatus struct {
 }
 
 type SharedRuntimeStatus struct {
+	ContractVersion    int                         `json:"contract_version"`
 	RuntimeKey         string                      `json:"runtime_key"`
 	ProfileDigest      string                      `json:"profile_digest"`
 	RestartCount       int                         `json:"restart_count"`
@@ -112,6 +154,7 @@ type SharedRuntimeStatus struct {
 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
 	ManualQuarantine   bool                        `json:"manual_quarantine"`
 	HalfOpen           bool                        `json:"half_open"`
+	FailureHistory     []SharedRuntimeFailureEvent `json:"failure_history"`
 	Resources          SharedRuntimeResourceStatus `json:"resources"`
 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
