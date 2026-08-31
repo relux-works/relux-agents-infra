@@ -87,7 +87,8 @@ describes a revision of `RuntimeContextWindow` that predates
 `STORY-260830-2vrhg1` (which gave the `mlx-lm` fork a `--max-kv-size` flag at
 all) and predates `TASK-260830-2hc5r2`, which found the identical fallback
 live in production `benchmark-run`, root-caused it, and closed it:
-`LOGBOOK.md:310` — *"`RuntimeBenchmark.contextPolicy` treated an answered
+`LOGBOOK.md`, entry `0456` — "Missing Live KV Evidence No Longer Falls Back To
+Argv" — *"`RuntimeBenchmark.contextPolicy` treated an answered
 `/v1/models` response without `meta.n_ctx` as permission to reuse
 caller-requested `--max-kv-size`; production `benchmark-run` therefore
 accepted a pair whose attestations explicitly said `notReported`."* The fix
@@ -132,7 +133,7 @@ adapter concerns the study surfaced around them.
 | **Live report** | `llama-server`: `meta.n_ctx` on `GET /v1/models`, present unconditionally, measured `8192`/`76800`/`32768` across sessions. The pinned `mlx_lm` fork (post `STORY-260830-2vrhg1`): also `meta.n_ctx` on `/v1/models`, but **only after cache construction** — the value is absent on the first `/v1/models` answer after launch and appears only once a real completion has built the `RotatingKVCache` (`TASK-260830-2hc5r2` progress, revision 6 rework: "KV remains live `meta.n_ctx` after cache construction"). `mlx-swift` prototype: reported live in the `kv=unbounded` era (study §4.2). |
 | **Citations** | Study §4.1 ("both records pin `kv=76800`, derived by the gate from each running process's live `/v1/models` `meta.n_ctx`"); `.research/260828_llamacpp-under-the-managed-harness.md:96-110`; `TASK-260830-2hc5r2` progress (revision 6 rework). |
 | **`reported`** | Trusted, becomes the pin. |
-| **`notReported`** | **No argv fallback.** "The runtime answered and named none" is not evidence of `unbounded` — it is refused, `kv=not-reported` in `unpinnableConditions`, exactly like `unread` (`.task-board/.resources/TASK-260830-2hc5r2/TASK-260830-2hc5r2_rework-rev4-results.md:5-7`: *"`notReported` becomes `kv=not-reported`; `unread` remains `kv=unread`; both are inadmissible and neither can fall back to `--max-kv-size`. An answered omission with `--max-kv-size 76800` is refused as `contextBoundNotHonoured`."*). An earlier draft of this contract named this state as the one standing argv-fallback exception, citing a superseded MLX-Swift-only design (`.research/260828_llamacpp-in-the-benchmark-gate.md:481`, predates `STORY-260830-2vrhg1` and `TASK-260830-2hc5r2`); that fallback was found live in production, root-caused as a bug, and closed (`LOGBOOK.md:310`) — see §2. |
+| **`notReported`** | **No argv fallback.** "The runtime answered and named none" is not evidence of `unbounded` — it is refused, `kv=not-reported` in `unpinnableConditions`, exactly like `unread` (`.task-board/.resources/TASK-260830-2hc5r2/TASK-260830-2hc5r2_rework-rev4-results.md:5-7`: *"`notReported` becomes `kv=not-reported`; `unread` remains `kv=unread`; both are inadmissible and neither can fall back to `--max-kv-size`. An answered omission with `--max-kv-size 76800` is refused as `contextBoundNotHonoured`."*). An earlier draft of this contract named this state as the one standing argv-fallback exception, citing a superseded MLX-Swift-only design (`.research/260828_llamacpp-in-the-benchmark-gate.md:481`, predates `STORY-260830-2vrhg1` and `TASK-260830-2hc5r2`); that fallback was found live in production, root-caused as a bug, and closed (`LOGBOOK.md`, entry `0456` — "Missing Live KV Evidence No Longer Falls Back To Argv") — see §2. |
 | **`unread`** | Non-object `meta`, non-integer/non-positive `n_ctx` → refused, `kv=unread` is in `unpinnableConditions` (`.research/260828_llamacpp-in-the-benchmark-gate.md:327-328`). |
 | **Adapter obligation** | An adapter must **not** treat "`/v1/models` answered 200" as sufficient to read the KV pin on the `mlx_lm` fork. It must either drive one real completion first, or poll `/v1/models` again after the first generation, before treating a missing `n_ctx` as `notReported` rather than as "not yet constructed." Conflating those two produces a false `unbounded` pin on a runtime that is in fact bounded, one request away from proving it (§4 Knob 8 covers the general readiness-vs-attestability distinction this is an instance of). |
 
@@ -275,7 +276,8 @@ adapter concerns the study surfaced around them.
 - Knobs 1, 2, and 3's argv fallback is explicitly **forbidden**, not merely
   undocumented — an adapter implementation that adds one reopens either the
   study's central finding (Knobs 2/3) or `TASK-260830-2hc5r2`'s root-caused
-  and closed production bug (Knob 1, `LOGBOOK.md:310`), and must be treated
+  and closed production bug (Knob 1, `LOGBOOK.md`, entry `0456` — "Missing
+  Live KV Evidence No Longer Falls Back To Argv"), and must be treated
   as a regression against this specification, not a convenience.
 - Known false-friend endpoints (`/props default_generation_settings.params
   .reasoning_format` for Knob 3, `/props params["speculative.types"]` for
