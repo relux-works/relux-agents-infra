@@ -614,19 +614,34 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 		return err
 	}
 	defer lock.Close()
-	sessionLog, err := openPiSessionLog(state)
+	sessionLog, err := openPiSessionLog(opts.Context, state, profile.LifecycleLogRetention)
 	if err != nil {
 		return err
 	}
-	defer sessionLog.close()
+	defer func() {
+		closeErr := sessionLog.close(opts.Context)
+		status, statusErr := PiLifecycleStatus(context.Background(), state, profile.LifecycleLogRetention, profile.Source, "")
+		if closeErr != nil {
+			status.UnknownCount++
+			status.Errors = append(status.Errors, closeErr.Error())
+			status.WithinPolicy, status.SoakReady = false, false
+		}
+		if statusErr != nil && len(status.Errors) == 0 {
+			status.UnknownCount++
+			status.Errors = append(status.Errors, statusErr.Error())
+		}
+		recordPiLifecycleStatus(opts.Report, status)
+	}()
 	if opts.Report != nil {
 		opts.Report.SessionLog = sessionLog.path
 	}
-	sessionLog.event("session_start", map[string]any{
+	if err := sessionLog.event(opts.Context, "session_start", map[string]any{
 		"mode": "shared", "project": project, "profile": profileName,
 		"provider": profile.Provider, "model": profile.Model,
 		"thinking": profile.Thinking, "transcript_dir": state.SessionsDir,
-	})
+	}); err != nil {
+		return err
+	}
 	if opts.Stderr != nil {
 		fmt.Fprintf(opts.Stderr, "agents-infra: Pi session log: %s\n", sessionLog.path)
 	}
@@ -661,14 +676,16 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 	}
 	lease, err := acquireSharedRuntimeLease(resolved, state, runID, opts.Environ, opts.HTTPClient, opts.Context)
 	if err != nil {
-		sessionLog.event("shared_runtime_acquire_failed", map[string]any{"error": err.Error()})
+		_ = sessionLog.event(opts.Context, "shared_runtime_acquire_failed", map[string]any{"error": err.Error()})
 		if opts.Report != nil {
 			opts.Report.DeadlineExceeded = errors.Is(err, context.DeadlineExceeded)
 		}
 		return err
 	}
 	defer lease.close()
-	sessionLog.event("shared_runtime_acquired", map[string]any{"lease_id": lease.lease.LeaseID})
+	if err := sessionLog.event(opts.Context, "shared_runtime_acquired", map[string]any{"lease_id": lease.lease.LeaseID}); err != nil {
+		return err
+	}
 
 	if current, err := inspectRuntimeExecutable(profile.Runtime.Executable); err != nil || current != runtimeIdentity {
 		if err == nil {
@@ -702,12 +719,11 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
 	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
 	if err := piCmd.Start(); err != nil {
-		sessionLog.event("pi_start_failed", map[string]any{"error": err.Error()})
+		_ = sessionLog.event(opts.Context, "pi_start_failed", map[string]any{"error": err.Error()})
 		return piError("pi_start_failed", err)
 	}
 	piFields := piProcessIdentityFields(piCmd.Process.Pid)
 	piFields["foreground"] = foreground
-	sessionLog.event("pi_started", piFields)
 	if opts.Report != nil {
 		opts.Report.PiProcessGroupCleanup = "pending"
 	}
@@ -722,10 +738,16 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 		if err != nil {
 			fields["error"] = err.Error()
 		}
-		sessionLog.event("pi_cleanup", fields)
+		_ = sessionLog.event(opts.Context, "pi_cleanup", fields)
 		piCleaned = true
 		if opts.Report != nil {
 			opts.Report.PiProcessGroupCleanup = fields["state"].(string)
+		}
+		return err
+	}
+	if err := sessionLog.event(opts.Context, "pi_started", piFields); err != nil {
+		if cleanupErr := cleanupPi(syscall.SIGTERM); cleanupErr != nil {
+			return cleanupErr
 		}
 		return err
 	}
@@ -746,22 +768,22 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 		if result != nil {
 			fields["error"] = result.Error()
 		}
-		sessionLog.event("pi_exited", fields)
+		_ = sessionLog.event(opts.Context, "pi_exited", fields)
 	case brokerErr := <-brokerDone:
 		if brokerErr == nil {
 			brokerErr = sharedRuntimeError("broker_terminated", errors.New("broker closed the lease"))
 		}
-		sessionLog.event("shared_runtime_terminated", map[string]any{"error": brokerErr.Error()})
+		_ = sessionLog.event(opts.Context, "shared_runtime_terminated", map[string]any{"error": brokerErr.Error()})
 		result = brokerErr
 	case received := <-signals:
-		sessionLog.event("signal_received", map[string]any{"signal": received.String()})
+		_ = sessionLog.event(opts.Context, "signal_received", map[string]any{"signal": received.String()})
 		forward := syscall.SIGTERM
 		if signalValue, ok := received.(syscall.Signal); ok {
 			forward = signalValue
 		}
 		result = cleanupPi(forward)
 	case <-opts.Context.Done():
-		sessionLog.event("context_done", map[string]any{"error": opts.Context.Err().Error()})
+		_ = sessionLog.event(context.Background(), "context_done", map[string]any{"error": opts.Context.Err().Error()})
 		if opts.Report != nil {
 			opts.Report.DeadlineExceeded = errors.Is(opts.Context.Err(), context.DeadlineExceeded)
 		}
@@ -777,6 +799,6 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile 
 		endFields["status"] = "error"
 		endFields["error"] = result.Error()
 	}
-	sessionLog.event("session_end", endFields)
+	_ = sessionLog.event(context.Background(), "session_end", endFields)
 	return result
 }

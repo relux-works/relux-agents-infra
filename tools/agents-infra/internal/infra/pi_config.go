@@ -75,9 +75,28 @@ type PiProfile struct {
 	Thinking              string
 	RequestedCapabilities []string
 	Compaction            *PiCompaction
+	LifecycleLogRetention PiLifecycleLogRetention
 	Compat                PiCompat
 	Runtime               PiRuntime
 	Source                string
+}
+
+// PiLifecycleLogRetention is deliberately all-required. Retention is an
+// admission boundary, so silently filling a missing numeric limit would turn
+// an incomplete policy into authority to create durable evidence.
+type PiLifecycleLogRetention struct {
+	MaxCount                  int `json:"max_count"`
+	MaxBytes                  int `json:"max_bytes"`
+	MaxEnvelopeBytes          int `json:"max_envelope_bytes"`
+	MaxAgeSeconds             int `json:"max_age_seconds"`
+	CreateTimeoutSeconds      int `json:"create_timeout_seconds"`
+	AppendTimeoutSeconds      int `json:"append_timeout_seconds"`
+	CloseTimeoutSeconds       int `json:"close_timeout_seconds"`
+	StatusTimeoutSeconds      int `json:"status_timeout_seconds"`
+	MaintenanceTimeoutSeconds int `json:"maintenance_timeout_seconds"`
+	MaxScanEntries            int `json:"max_scan_entries"`
+	MaxScanControlBytes       int `json:"max_scan_control_bytes"`
+	MaxMutationsPerOperation  int `json:"max_mutations_per_operation"`
 }
 
 type PiCompaction struct {
@@ -230,7 +249,7 @@ func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, 
 func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) {
 	field := "agents.pi.profiles." + name
 	if err := rejectUnknownFields(table, field,
-		"provider", "model", "base_url", "api", "reasoning", "input", "context_window", "max_tokens", "thinking", "requested_capabilities", "compaction", "compat", "runtime"); err != nil {
+		"provider", "model", "base_url", "api", "reasoning", "input", "context_window", "max_tokens", "thinking", "requested_capabilities", "compaction", "lifecycle_log_retention", "compat", "runtime"); err != nil {
 		return PiProfile{}, projectConfigFieldError(path, errField(err), err)
 	}
 	var p PiProfile
@@ -297,6 +316,16 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 		}
 		p.Compaction = &compaction
 	}
+	retentionTable, present, tableErr := projectConfigTable(table, "lifecycle_log_retention", field+".lifecycle_log_retention")
+	if tableErr != nil || !present {
+		if tableErr == nil {
+			tableErr = errors.New("required table is absent")
+		}
+		return p, projectConfigFieldError(path, field+".lifecycle_log_retention", tableErr)
+	}
+	if p.LifecycleLogRetention, err = parsePiLifecycleLogRetention(retentionTable, field+".lifecycle_log_retention"); err != nil {
+		return p, projectConfigFieldError(path, errField(err), err)
+	}
 	compatTable, present, tableErr := projectConfigTable(table, "compat", field+".compat")
 	if tableErr != nil || !present {
 		if tableErr == nil {
@@ -331,6 +360,96 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 		return p, projectConfigFieldError(path, field+".runtime.dflash.target_model", errors.New("must equal profile model"))
 	}
 	return p, nil
+}
+
+func parsePiLifecycleLogRetention(table map[string]any, field string) (PiLifecycleLogRetention, error) {
+	if err := rejectUnknownFields(table, field,
+		"max_count", "max_bytes", "max_envelope_bytes", "max_age_seconds",
+		"create_timeout_seconds", "append_timeout_seconds", "close_timeout_seconds",
+		"status_timeout_seconds", "maintenance_timeout_seconds", "max_scan_entries",
+		"max_scan_control_bytes", "max_mutations_per_operation"); err != nil {
+		return PiLifecycleLogRetention{}, err
+	}
+	var policy PiLifecycleLogRetention
+	values := []struct {
+		name string
+		dst  *int
+	}{
+		{"max_count", &policy.MaxCount},
+		{"max_bytes", &policy.MaxBytes},
+		{"max_envelope_bytes", &policy.MaxEnvelopeBytes},
+		{"max_age_seconds", &policy.MaxAgeSeconds},
+		{"create_timeout_seconds", &policy.CreateTimeoutSeconds},
+		{"append_timeout_seconds", &policy.AppendTimeoutSeconds},
+		{"close_timeout_seconds", &policy.CloseTimeoutSeconds},
+		{"status_timeout_seconds", &policy.StatusTimeoutSeconds},
+		{"maintenance_timeout_seconds", &policy.MaintenanceTimeoutSeconds},
+		{"max_scan_entries", &policy.MaxScanEntries},
+		{"max_scan_control_bytes", &policy.MaxScanControlBytes},
+		{"max_mutations_per_operation", &policy.MaxMutationsPerOperation},
+	}
+	for _, value := range values {
+		parsed, err := requiredPositiveInt(table, value.name)
+		if err != nil {
+			return policy, fieldError(field+"."+value.name, err)
+		}
+		*value.dst = parsed
+	}
+	for _, timeout := range []struct {
+		name  string
+		value int
+	}{
+		{"create_timeout_seconds", policy.CreateTimeoutSeconds},
+		{"append_timeout_seconds", policy.AppendTimeoutSeconds},
+		{"close_timeout_seconds", policy.CloseTimeoutSeconds},
+		{"status_timeout_seconds", policy.StatusTimeoutSeconds},
+		{"maintenance_timeout_seconds", policy.MaintenanceTimeoutSeconds},
+	} {
+		if int64(timeout.value) > maxTimeDurationSeconds {
+			return policy, fieldError(field+"."+timeout.name, fmt.Errorf("must be at most %d seconds so its effective duration fits time.Duration", maxTimeDurationSeconds))
+		}
+	}
+	minimumEnvelope, ok := checkedPositiveAddMul(policy.MaxBytes, 4096, policy.MaxCount)
+	if !ok {
+		return policy, fieldError(field+".max_envelope_bytes", errors.New("max_bytes + 4096*max_count overflows platform integer"))
+	}
+	if policy.MaxEnvelopeBytes < minimumEnvelope {
+		return policy, fieldError(field+".max_envelope_bytes", fmt.Errorf("must be at least max_bytes + 4096*max_count (%d)", minimumEnvelope))
+	}
+	managedSlots, ok := checkedPositiveAddMul(policy.MaxCount, 1, policy.MaxMutationsPerOperation)
+	if !ok {
+		return policy, fieldError(field+".max_mutations_per_operation", errors.New("max_count + max_mutations_per_operation overflows platform integer"))
+	}
+	requiredEntries, ok := checkedPositiveAddMul(5, 4, managedSlots)
+	if !ok {
+		return policy, fieldError(field+".max_scan_entries", errors.New("5 + 4*(max_count+max_mutations_per_operation) overflows platform integer"))
+	}
+	if policy.MaxScanEntries < requiredEntries {
+		return policy, fieldError(field+".max_scan_entries", fmt.Errorf("must be at least 5 + 4*(max_count+max_mutations_per_operation) (%d)", requiredEntries))
+	}
+	controlDocuments, ok := checkedPositiveAddMul(managedSlots, 1, 4)
+	if !ok {
+		return policy, fieldError(field+".max_scan_control_bytes", errors.New("max_count + max_mutations_per_operation + 4 overflows platform integer"))
+	}
+	requiredControl, ok := checkedPositiveAddMul(0, 4096, controlDocuments)
+	if !ok {
+		return policy, fieldError(field+".max_scan_control_bytes", errors.New("4096*(max_count+max_mutations_per_operation+4) overflows platform integer"))
+	}
+	if policy.MaxScanControlBytes < requiredControl {
+		return policy, fieldError(field+".max_scan_control_bytes", fmt.Errorf("must be at least 4096*(max_count+max_mutations_per_operation+4) (%d)", requiredControl))
+	}
+	return policy, nil
+}
+
+func checkedPositiveAddMul(add, multiplier, value int) (int, bool) {
+	if add < 0 || multiplier < 0 || value < 0 {
+		return 0, false
+	}
+	maxInt := int(^uint(0) >> 1)
+	if value != 0 && multiplier > (maxInt-add)/value {
+		return 0, false
+	}
+	return add + multiplier*value, true
 }
 
 func parsePiCompaction(table map[string]any, field string, contextWindow, maxTokens int) (PiCompaction, error) {

@@ -1089,6 +1089,19 @@ context_window = 8192
 max_tokens = 1024
 thinking = "off"
 requested_capabilities = ["text", "tools"]
+[agents.pi.profiles.profile.lifecycle_log_retention]
+max_count = 8
+max_bytes = 1048576
+max_envelope_bytes = 2097152
+max_age_seconds = 4838400
+create_timeout_seconds = 5
+append_timeout_seconds = 5
+close_timeout_seconds = 5
+status_timeout_seconds = 5
+maintenance_timeout_seconds = 5
+max_scan_entries = 512
+max_scan_control_bytes = 262144
+max_mutations_per_operation = 8
 [agents.pi.profiles.profile.compat]
 supports_developer_role = false
 [agents.pi.profiles.profile.runtime]

@@ -176,19 +176,34 @@ func RunPi(opts RunPiOptions) error {
 		return err
 	}
 	defer lock.Close()
-	sessionLog, err := openPiSessionLog(state)
+	sessionLog, err := openPiSessionLog(opts.Context, state, profile.LifecycleLogRetention)
 	if err != nil {
 		return err
 	}
-	defer sessionLog.close()
+	defer func() {
+		closeErr := sessionLog.close(opts.Context)
+		status, statusErr := PiLifecycleStatus(context.Background(), state, profile.LifecycleLogRetention, profile.Source, "")
+		if closeErr != nil {
+			status.UnknownCount++
+			status.Errors = append(status.Errors, closeErr.Error())
+			status.WithinPolicy, status.SoakReady = false, false
+		}
+		if statusErr != nil && len(status.Errors) == 0 {
+			status.UnknownCount++
+			status.Errors = append(status.Errors, statusErr.Error())
+		}
+		recordPiLifecycleStatus(opts.Report, status)
+	}()
 	if opts.Report != nil {
 		opts.Report.SessionLog = sessionLog.path
 	}
-	sessionLog.event("session_start", map[string]any{
+	if err := sessionLog.event(opts.Context, "session_start", map[string]any{
 		"project": project, "profile": selected, "provider": profile.Provider,
 		"model": profile.Model, "thinking": profile.Thinking,
 		"transcript_dir": state.SessionsDir,
-	})
+	}); err != nil {
+		return err
+	}
 	if opts.Stderr != nil {
 		fmt.Fprintf(opts.Stderr, "agents-infra: Pi session log: %s\n", sessionLog.path)
 	}
@@ -227,10 +242,9 @@ func RunPi(opts RunPiOptions) error {
 	runtimeCmd.Stderr = runtimeOutput
 	runtimeCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := runtimeCmd.Start(); err != nil {
-		sessionLog.event("runtime_start_failed", map[string]any{"error": err.Error()})
+		_ = sessionLog.event(opts.Context, "runtime_start_failed", map[string]any{"error": err.Error()})
 		return piError("runtime_start_failed", err)
 	}
-	sessionLog.event("runtime_started", piProcessIdentityFields(runtimeCmd.Process.Pid))
 	if opts.Report != nil {
 		opts.Report.RuntimeProcessGroupCleanup = "pending"
 	}
@@ -241,7 +255,7 @@ func RunPi(opts RunPiOptions) error {
 		if err != nil {
 			fields["error"] = err.Error()
 		}
-		sessionLog.event("runtime_cleanup", fields)
+		_ = sessionLog.event(opts.Context, "runtime_cleanup", fields)
 		if opts.Report != nil {
 			opts.Report.RuntimeProcessGroupCleanup = fields["state"].(string)
 		}
@@ -253,12 +267,20 @@ func RunPi(opts RunPiOptions) error {
 			_ = cleanupRuntime()
 		}
 	}()
+	if err := sessionLog.event(opts.Context, "runtime_started", piProcessIdentityFields(runtimeCmd.Process.Pid)); err != nil {
+		cleanupErr := cleanupRuntime()
+		cleaned = true
+		if cleanupErr != nil {
+			return cleanupErr
+		}
+		return err
+	}
 	wantModel := profile.Model
 	if profile.Runtime.DFlash != nil {
 		wantModel = profile.Runtime.DFlash.TargetModel
 	}
 	if err := waitPiRuntimeReady(opts.Context, opts.HTTPClient, profile.BaseURL+profile.Runtime.ReadinessPath, wantModel, runtimeCmd.Process, runtimeWait, time.Duration(profile.Runtime.StartupTimeoutSeconds)*time.Second); err != nil {
-		sessionLog.event("runtime_readiness_failed", map[string]any{"error": err.Error()})
+		_ = sessionLog.event(opts.Context, "runtime_readiness_failed", map[string]any{"error": err.Error()})
 		if opts.Report != nil {
 			opts.Report.DeadlineExceeded = errors.Is(err, context.DeadlineExceeded)
 		}
@@ -269,7 +291,14 @@ func RunPi(opts RunPiOptions) error {
 		}
 		return err
 	}
-	sessionLog.event("runtime_ready", map[string]any{"endpoint": profile.BaseURL, "model": wantModel})
+	if err := sessionLog.event(opts.Context, "runtime_ready", map[string]any{"endpoint": profile.BaseURL, "model": wantModel}); err != nil {
+		cleanupErr := cleanupRuntime()
+		cleaned = true
+		if cleanupErr != nil {
+			return cleanupErr
+		}
+		return err
+	}
 	select {
 	case <-runtimeWait.done:
 		cleanupErr := cleanupRuntime()
@@ -314,14 +343,13 @@ func RunPi(opts RunPiOptions) error {
 	piCmd.Stdout = piProcessWriter(outputMu, opts.Stdout)
 	piCmd.Stderr = piProcessWriter(outputMu, opts.Stderr)
 	if err := piCmd.Start(); err != nil {
-		sessionLog.event("pi_start_failed", map[string]any{"error": err.Error()})
+		_ = sessionLog.event(opts.Context, "pi_start_failed", map[string]any{"error": err.Error()})
 		_ = cleanupRuntime()
 		cleaned = true
 		return piError("pi_start_failed", err)
 	}
 	piFields := piProcessIdentityFields(piCmd.Process.Pid)
 	piFields["foreground"] = foreground
-	sessionLog.event("pi_started", piFields)
 	if opts.Report != nil {
 		opts.Report.PiProcessGroupCleanup = "pending"
 	}
@@ -336,10 +364,19 @@ func RunPi(opts RunPiOptions) error {
 		if err != nil {
 			fields["error"] = err.Error()
 		}
-		sessionLog.event("pi_cleanup", fields)
+		_ = sessionLog.event(opts.Context, "pi_cleanup", fields)
 		piCleaned = true
 		if opts.Report != nil {
 			opts.Report.PiProcessGroupCleanup = fields["state"].(string)
+		}
+		return err
+	}
+	if err := sessionLog.event(opts.Context, "pi_started", piFields); err != nil {
+		cleanupErr := cleanupPi(syscall.SIGTERM)
+		_ = cleanupRuntime()
+		cleaned = true
+		if cleanupErr != nil {
+			return cleanupErr
 		}
 		return err
 	}
@@ -360,7 +397,7 @@ func RunPi(opts RunPiOptions) error {
 		if result != nil {
 			fields["error"] = result.Error()
 		}
-		sessionLog.event("pi_exited", fields)
+		_ = sessionLog.event(opts.Context, "pi_exited", fields)
 		select {
 		case <-runtimeWait.done:
 			result = piError("runtime_exited_early", fmt.Errorf("runtime child exited before Pi session ended: %v", runtimeWait.err))
@@ -370,7 +407,7 @@ func RunPi(opts RunPiOptions) error {
 			}
 		}
 	case <-runtimeWait.done:
-		sessionLog.event("runtime_exited_early", map[string]any{"error": fmt.Sprint(runtimeWait.err)})
+		_ = sessionLog.event(opts.Context, "runtime_exited_early", map[string]any{"error": fmt.Sprint(runtimeWait.err)})
 		_ = cleanupPi(syscall.SIGTERM)
 		cleanupErr := cleanupRuntime()
 		cleaned = true
@@ -379,14 +416,14 @@ func RunPi(opts RunPiOptions) error {
 		}
 		result = piError("runtime_exited_early", fmt.Errorf("runtime child exited during Pi session: %v", runtimeWait.err))
 	case sig := <-signals:
-		sessionLog.event("signal_received", map[string]any{"signal": sig.String()})
+		_ = sessionLog.event(opts.Context, "signal_received", map[string]any{"signal": sig.String()})
 		forward := syscall.SIGTERM
 		if received, ok := sig.(syscall.Signal); ok {
 			forward = received
 		}
 		result = cleanupPi(forward)
 	case <-contextDone:
-		sessionLog.event("context_done", map[string]any{"error": opts.Context.Err().Error()})
+		_ = sessionLog.event(context.Background(), "context_done", map[string]any{"error": opts.Context.Err().Error()})
 		if opts.Report != nil {
 			opts.Report.DeadlineExceeded = errors.Is(opts.Context.Err(), context.DeadlineExceeded)
 		}
@@ -410,7 +447,7 @@ func RunPi(opts RunPiOptions) error {
 		endFields["status"] = "error"
 		endFields["error"] = result.Error()
 	}
-	sessionLog.event("session_end", endFields)
+	_ = sessionLog.event(context.Background(), "session_end", endFields)
 	return result
 }
 

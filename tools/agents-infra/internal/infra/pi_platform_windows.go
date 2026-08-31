@@ -44,6 +44,9 @@ type PiStatePaths struct {
 	CanonicalCacheRoot string `json:"canonical_cache_root"`
 	ProjectStateKey    string `json:"project_state_key"`
 	ProfileStateKey    string `json:"profile_state_key"`
+	RunStateKey        string `json:"run_state_key,omitempty"`
+	ProfileRoot        string `json:"profile_root"`
+	LifecycleLogsRoot  string `json:"lifecycle_logs_root"`
 	Root               string `json:"root"`
 	AgentDir           string `json:"agent_dir"`
 	SessionsDir        string `json:"sessions_dir"`
@@ -56,6 +59,21 @@ type PiStatePaths struct {
 func ValidatePiStateKeyCollisions(map[string]PiProfile) error { return nil }
 func ResolvePiStatePaths(string, string, string) (PiStatePaths, error) {
 	return PiStatePaths{}, piError("pi_compatibility_unsupported", errors.New("managed Pi profiles are supported only on darwin/arm64"))
+}
+func ResolvePiClientStatePaths(string, string, string, string) (PiStatePaths, error) {
+	return PiStatePaths{}, piError("pi_compatibility_unsupported", errors.New("managed Pi profiles are supported only on darwin/arm64"))
+}
+
+func PiLifecycleOperatorStatus(context.Context, PiLifecycleOperatorOptions, string) (PiLifecycleLogStatus, error) {
+	return PiLifecycleLogStatus{}, piError("pi_compatibility_unsupported", errors.New("managed Pi lifecycle operators are unsupported on Windows"))
+}
+
+func PiLegacyRetirementOperatorDryRun(context.Context, PiLifecycleOperatorOptions) (PiLegacyRetirementPlan, error) {
+	return PiLegacyRetirementPlan{}, piError("pi_compatibility_unsupported", errors.New("managed Pi lifecycle operators are unsupported on Windows"))
+}
+
+func PiLegacyRetirementOperatorConfirm(context.Context, PiLifecycleOperatorOptions, string) (PiLegacyRetirementResult, error) {
+	return PiLegacyRetirementResult{}, piError("pi_compatibility_unsupported", errors.New("managed Pi lifecycle operators are unsupported on Windows"))
 }
 
 type RunPiOptions struct {

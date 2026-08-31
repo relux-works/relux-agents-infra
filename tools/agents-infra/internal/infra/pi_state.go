@@ -26,6 +26,8 @@ type PiStatePaths struct {
 	ProjectStateKey    string `json:"project_state_key"`
 	ProfileStateKey    string `json:"profile_state_key"`
 	RunStateKey        string `json:"run_state_key,omitempty"`
+	ProfileRoot        string `json:"profile_root"`
+	LifecycleLogsRoot  string `json:"lifecycle_logs_root"`
 	Root               string `json:"root"`
 	AgentDir           string `json:"agent_dir"`
 	SessionsDir        string `json:"sessions_dir"`
@@ -94,11 +96,12 @@ func resolvePiClientStatePaths(cacheRoot, canonicalProject, profileName, runID s
 		return PiStatePaths{}, piError("profile_state_path_invalid", errors.New("managed state suffix is invalid"))
 	}
 	root := filepath.Join(canonical, suffix)
+	profileRoot := filepath.Join(canonical, filepath.Join("agents-infra", "pi", projectKey, profileKey))
 	rel, err := filepath.Rel(canonical, root)
 	if err != nil || rel != suffix {
 		return PiStatePaths{}, piError("profile_state_path_invalid", errors.New("managed state escaped canonical cache root"))
 	}
-	paths := PiStatePaths{CanonicalCacheRoot: canonical, ProjectStateKey: projectKey, ProfileStateKey: profileKey, RunStateKey: runKey, Root: root, AgentDir: filepath.Join(root, "agent"), SessionsDir: filepath.Join(root, "sessions"), LogsDir: filepath.Join(root, "logs"), ModelsJSON: filepath.Join(root, "agent", "models.json"), SettingsJSON: filepath.Join(root, "agent", "settings.json"), Lock: filepath.Join(root, lockName), components: components}
+	paths := PiStatePaths{CanonicalCacheRoot: canonical, ProjectStateKey: projectKey, ProfileStateKey: profileKey, RunStateKey: runKey, ProfileRoot: profileRoot, LifecycleLogsRoot: filepath.Join(profileRoot, "lifecycle-logs"), Root: root, AgentDir: filepath.Join(root, "agent"), SessionsDir: filepath.Join(root, "sessions"), LogsDir: filepath.Join(root, "logs"), ModelsJSON: filepath.Join(root, "agent", "models.json"), SettingsJSON: filepath.Join(root, "agent", "settings.json"), Lock: filepath.Join(root, lockName), components: components}
 	if err := validateExistingPiStateComponents(paths); err != nil {
 		return PiStatePaths{}, piError("profile_state_path_invalid", err)
 	}

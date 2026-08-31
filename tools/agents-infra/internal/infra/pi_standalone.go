@@ -78,6 +78,7 @@ type PiStandaloneLaunchPlan struct {
 	State             PiStandaloneStatePlan          `json:"state"`
 	RuntimeMode       string                         `json:"runtime_mode"`
 	Runtime           PiRuntimePlan                  `json:"runtime"`
+	LifecycleLogs     PiLifecycleLogPlan             `json:"lifecycle_logs"`
 	PiIdentity        PiExecutionIdentity            `json:"pi_identity"`
 	Sources           []PrimarySessionSource         `json:"sources"`
 }
@@ -295,6 +296,10 @@ func BuildPiStandaloneLaunchPlan(projectDir, homeDir string, request PiStandalon
 			ownership = "shared-runtime-lease-broker"
 		}
 	}
+	state, err := ResolvePiStatePaths("", canonicalProject, profileName)
+	if err != nil {
+		return PiStandaloneLaunchPlan{}, err
+	}
 	plan := PiStandaloneLaunchPlan{
 		Contract:          PiStandaloneLaunchPlanContract,
 		SchemaVersion:     PiStandaloneLaunchPlanSchemaVersion,
@@ -312,6 +317,7 @@ func BuildPiStandaloneLaunchPlan(projectDir, homeDir string, request PiStandalon
 		ToolAuthorization: piStandaloneToolAuthorization(composite.PiStandaloneSession),
 		State:             PiStandaloneStatePlan{Isolation: "per-process-random-run-key", Persistence: "disabled"},
 		RuntimeMode:       sharing,
+		LifecycleLogs:     PiLifecycleLogPlan{PolicySource: profile.Source, AggregateRoot: state.LifecycleLogsRoot, Policy: profile.LifecycleLogRetention, Status: "not-inspected"},
 		Runtime: PiRuntimePlan{
 			Executable:             profile.Runtime.Executable,
 			Argv:                   append([]string(nil), profile.Runtime.Argv...),

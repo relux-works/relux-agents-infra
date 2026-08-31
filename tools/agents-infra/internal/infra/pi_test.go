@@ -58,6 +58,20 @@ max_tokens = 1024
 thinking = "off"
 %s
 
+[agents.pi.profiles.%q.lifecycle_log_retention]
+max_count = 8
+max_bytes = 1048576
+max_envelope_bytes = 2097152
+max_age_seconds = 4838400
+create_timeout_seconds = 5
+append_timeout_seconds = 5
+close_timeout_seconds = 5
+status_timeout_seconds = 5
+maintenance_timeout_seconds = 5
+max_scan_entries = 512
+max_scan_control_bytes = 262144
+max_mutations_per_operation = 8
+
 [agents.pi.profiles.%q.compat]
 supports_developer_role = false
 supports_reasoning_effort = false
@@ -71,7 +85,16 @@ argv = %s
 readiness_path = "/models"
 startup_timeout_seconds = 5
 shutdown_timeout_seconds = 2
-%s`, name, PiCompatibilityV0842DarwinARM64, name, port, extraCaps, name, name, runtime, argv, dflashBlock)
+%s`, name, PiCompatibilityV0842DarwinARM64, name, port, extraCaps, name, name, name, runtime, argv, dflashBlock)
+}
+
+func testPiLifecyclePolicy() PiLifecycleLogRetention {
+	return PiLifecycleLogRetention{
+		MaxCount: 8, MaxBytes: 1048576, MaxEnvelopeBytes: 2097152, MaxAgeSeconds: 4838400,
+		CreateTimeoutSeconds: 5, AppendTimeoutSeconds: 5, CloseTimeoutSeconds: 5,
+		StatusTimeoutSeconds: 5, MaintenanceTimeoutSeconds: 5,
+		MaxScanEntries: 512, MaxScanControlBytes: 262144, MaxMutationsPerOperation: 8,
+	}
 }
 
 func reasoningPiProfileTOML(name, runtime string, port int) string {
@@ -627,24 +650,30 @@ func TestPiSessionLogsAreDistinctContainedAndPrivate(t *testing.T) {
 	if err := CreatePiStateTree(state); err != nil {
 		t.Fatal(err)
 	}
-	first, err := openPiSessionLog(state)
+	first, err := openPiSessionLog(context.Background(), state, testPiLifecyclePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.event("pi_started", map[string]any{"pid": 42, "foreground": true})
+	if err := first.event(context.Background(), "pi_started", map[string]any{"pid": 42, "foreground": true}); err != nil {
+		t.Fatal(err)
+	}
 	firstPath := first.path
-	first.close()
-	second, err := openPiSessionLog(state)
+	if err := first.close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := openPiSessionLog(context.Background(), state, testPiLifecyclePolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondPath := second.path
-	second.close()
+	if err := second.close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if firstPath == secondPath {
 		t.Fatalf("per-launch logs collided at %s", firstPath)
 	}
 	for _, path := range []string{firstPath, secondPath} {
-		if filepath.Dir(path) != state.LogsDir {
+		if filepath.Dir(filepath.Dir(path)) != filepath.Join(state.LifecycleLogsRoot, "entries") {
 			t.Fatalf("log escaped contained directory: %s", path)
 		}
 		info, err := os.Stat(path)

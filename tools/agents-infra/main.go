@@ -485,6 +485,9 @@ func runPi(args []string) error {
 	if len(args) > 0 && args[0] == "turn" {
 		return runPiTurnCLI(args[1:])
 	}
+	if len(args) > 0 && args[0] == "lifecycle" {
+		return runPiLifecycleCLI(args[1:])
+	}
 	startDir := os.Getenv(callerCWDEnv)
 	if startDir == "" {
 		var err error
@@ -516,6 +519,71 @@ func runPi(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(plan)
 	}
 	return infra.RunPi(infra.RunPiOptions{ProjectDir: startDir, Args: filtered, Environ: os.Environ(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+}
+
+func runPiLifecycleCLI(args []string) error {
+	if len(args) == 0 {
+		return errors.New("pi lifecycle requires status or retire-legacy")
+	}
+	encode := func(value any, compact bool) error {
+		encoder := json.NewEncoder(os.Stdout)
+		if !compact {
+			encoder.SetIndent("", "  ")
+		}
+		return encoder.Encode(value)
+	}
+	switch args[0] {
+	case "status":
+		fs := flag.NewFlagSet("pi lifecycle status", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		project := fs.String("project", callerProjectDir(), "project directory")
+		profile := fs.String("profile", "", "managed Pi profile")
+		continuation := fs.String("continuation", "", "opaque bounded status continuation")
+		jsonOutput := fs.Bool("json", false, "emit compact JSON")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if len(fs.Args()) != 0 {
+			return fmt.Errorf("pi lifecycle status does not accept positional arguments: %q", fs.Args())
+		}
+		status, err := infra.PiLifecycleOperatorStatus(context.Background(), infra.PiLifecycleOperatorOptions{ProjectDir: *project, Profile: *profile}, *continuation)
+		if encodeErr := encode(status, *jsonOutput); encodeErr != nil {
+			return encodeErr
+		}
+		return err
+	case "retire-legacy":
+		fs := flag.NewFlagSet("pi lifecycle retire-legacy", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		project := fs.String("project", callerProjectDir(), "project directory")
+		profile := fs.String("profile", "", "managed Pi profile")
+		dryRun := fs.Bool("dry-run", false, "emit the exact bounded plan without mutation")
+		confirmation := fs.String("confirm", "", "exact plan_hash emitted by --dry-run")
+		jsonOutput := fs.Bool("json", false, "emit compact JSON")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if len(fs.Args()) != 0 {
+			return fmt.Errorf("pi lifecycle retire-legacy does not accept positional arguments: %q", fs.Args())
+		}
+		if *dryRun == (*confirmation != "") {
+			return errors.New("pi lifecycle retire-legacy requires exactly one of --dry-run or --confirm PLAN_HASH")
+		}
+		options := infra.PiLifecycleOperatorOptions{ProjectDir: *project, Profile: *profile}
+		if *dryRun {
+			plan, err := infra.PiLegacyRetirementOperatorDryRun(context.Background(), options)
+			if err != nil {
+				return err
+			}
+			return encode(plan, *jsonOutput)
+		}
+		result, err := infra.PiLegacyRetirementOperatorConfirm(context.Background(), options, *confirmation)
+		if err != nil {
+			return err
+		}
+		return encode(result, *jsonOutput)
+	default:
+		return fmt.Errorf("unknown pi lifecycle command %q", args[0])
+	}
 }
 
 func runPiStandaloneCLI(entrypoint string, args []string) error {
@@ -1103,6 +1171,8 @@ func usageText() string {
   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
   agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
   agents-infra pi spawn --prompt TEXT [--deadline DURATION] [--print-config]
+  agents-infra pi lifecycle status [--project DIR] [--profile NAME] [--continuation TOKEN] [--json]
+  agents-infra pi lifecycle retire-legacy [--project DIR] [--profile NAME] (--dry-run | --confirm PLAN_HASH) [--json]
   agents-infra runtime status [--project DIR] [--profile NAME] [--json]
   agents-infra runtime stop [--project DIR] [--profile NAME] [--force] [--timeout SECONDS]
   agents-infra target ENTRYPOINT [--print-config] [-- PROVIDER_ARGS...]

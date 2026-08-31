@@ -445,12 +445,60 @@ configured bounded output, samples process RSS, emits one versioned JSON
 report, and reaps the runtime. Treat it as host-capacity evidence, not a model
 quality or production-throughput benchmark.
 
-Every managed Pi launch creates a distinct mode-`0600` lifecycle JSONL under
-the profile's hash-contained `logs/` directory and prints its path before Pi
-starts. Record only orchestration evidence: lifecycle events, PID/PGID,
-readiness, foreground-terminal ownership, exit/signal, and cleanup state. Never
-record environment values, API keys, or prompt/argument contents. Pi's own
-conversation and tool transcript remains separately under `sessions/`.
+Every Pi profile must explicitly configure positive lifecycle retention count,
+committed-byte, logical-envelope-byte, age, create/append/close/status/
+maintenance timeout, scan-entry, scan-control-byte, and mutation caps. There
+are no numeric defaults. Keep the checked minimums aligned with production:
+`max_envelope_bytes >= max_bytes + 4096*max_count`,
+`max_scan_entries >= 5 + 4*(max_count+max_mutations_per_operation)`, and
+`max_scan_control_bytes >= 4096*(max_count+max_mutations_per_operation+4)`.
+
+Exclusive, standalone, and shared launches all append strict three-child
+envelopes under the profile-wide `lifecycle-logs/entries/` aggregate; per-run
+agent/session/lock state remains isolated. Create, append, close, recovery, and
+deterministic pruning are generation-fenced, deadline-bounded, and fail closed.
+Exact atomic control temps remain recoverable only when they match the current
+odd operation. Even generations carry no residual operation authority; odd
+generations have exact kind-specific fields. A completed close binds
+`closed_at` to the issued odd `started_at`, and delete recovery revalidates the
+stored tombstone plus every child device/inode/mode/effective-UID identity
+immediately before unlink. Status takes no writer lock; pagination uses
+generation/policy/directory-bound phase cookies, never caller-carried totals.
+Treat odd, changed, truncated, stale, unreadable,
+foreign, legacy, or exhausted evidence as `unknown`, never absent or healthy;
+continuation pages are lower bounds and cannot claim `within_policy` or
+`soak_ready`.
+
+Inspect and retire legacy lifecycle files only through the explicit
+non-launching operators:
+
+```bash
+agents-infra pi lifecycle status --project "$PWD" --profile PROFILE --json
+agents-infra pi lifecycle status --project "$PWD" --profile PROFILE \
+  --continuation TOKEN --json
+agents-infra pi lifecycle retire-legacy --project "$PWD" --profile PROFILE \
+  --dry-run --json
+agents-infra pi lifecycle retire-legacy --project "$PWD" --profile PROFILE \
+  --confirm PLAN_HASH --json
+```
+
+Status pages are lower bounds. Dry-run must start fresh, finish within the scan
+and mutation/control bounds, preserve every unknown or foreign entry, and emit
+the exact `plan_hash` over policy provenance, generations, directories, and all
+candidate identities; it never hashes a prefix. Confirmation must equal that
+current full-plan hash. Retirement persists an odd legacy generation containing
+the plan, fences each candidate through an operation-bound rename, and
+revalidates both generations, the complete descriptor-relative directory chain,
+and the held candidate path immediately before every rename or unlink. Resume
+requires the same exact hash. Automatic setup, managed launch, and status never
+retire legacy evidence; a launch refuses an odd legacy generation. Only a fresh
+complete post-retirement status scan may publish `within_policy` and
+`soak_ready`.
+
+The mode-`0600` `log.jsonl` records only orchestration evidence: lifecycle
+events, PID/PGID, readiness, foreground-terminal ownership, exit/signal, and
+cleanup state. Never record environment values, API keys, or prompt/argument
+contents. Pi's conversation and tool transcript remains under `sessions/`.
 
 Restore only from the same canonical project directory and logical profile so
 the hash-contained state keys match. Canonical `qwen-infra` provider arguments

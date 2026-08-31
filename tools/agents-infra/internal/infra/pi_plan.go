@@ -22,11 +22,45 @@ type PiLaunchPlanDetails struct {
 	State                 *PiStatePaths        `json:"state,omitempty"`
 	ModelsJSON            PiGeneratedCatalog   `json:"models_json,omitempty"`
 	Settings              *PiSettingsPlan      `json:"settings,omitempty"`
+	LifecycleLogs         *PiLifecycleLogPlan  `json:"lifecycle_logs,omitempty"`
 	PiIdentity            *PiExecutionIdentity `json:"pi_identity,omitempty"`
 	Runtime               *PiRuntimePlan       `json:"runtime,omitempty"`
 	SharedRuntime         *PiSharedRuntimePlan `json:"shared_runtime,omitempty"`
 	Capabilities          *PiCapabilityPlan    `json:"capabilities,omitempty"`
 	DFlash                *PiDFlashPlan        `json:"dflash,omitempty"`
+}
+type PiLifecycleLogPlan struct {
+	PolicySource        string                  `json:"policy_source"`
+	AggregateRoot       string                  `json:"aggregate_root"`
+	Policy              PiLifecycleLogRetention `json:"policy"`
+	AggregateGeneration *uint64                 `json:"aggregate_generation"`
+	LegacyGeneration    *uint64                 `json:"legacy_generation"`
+	Status              string                  `json:"status"`
+	ScanComplete        bool                    `json:"scan_complete"`
+	ScanExhausted       bool                    `json:"scan_exhausted"`
+	Continuation        string                  `json:"continuation,omitempty"`
+	PageScope           string                  `json:"page_scope"`
+	LowerBound          bool                    `json:"lower_bound"`
+	ScanEntries         int                     `json:"scan_entries"`
+	ScanControlBytes    int                     `json:"scan_control_bytes"`
+	ManagedCount        int                     `json:"managed_count"`
+	ManagedBytes        int64                   `json:"managed_committed_bytes"`
+	EnvelopeBytes       int64                   `json:"managed_envelope_bytes"`
+	ActiveCount         int                     `json:"active_count"`
+	ExpiredCount        int                     `json:"expired_count"`
+	LegacyCount         int                     `json:"legacy_count"`
+	LegacyBytes         int64                   `json:"legacy_bytes"`
+	ForeignCount        int                     `json:"foreign_count"`
+	ForeignBytes        int64                   `json:"foreign_bytes"`
+	UnknownCount        int                     `json:"unknown_count"`
+	Oldest              string                  `json:"oldest,omitempty"`
+	Newest              string                  `json:"newest,omitempty"`
+	RecoveryCount       int                     `json:"recovery_count"`
+	PrunedCount         int                     `json:"pruned_count"`
+	DroppedCount        int                     `json:"dropped_count"`
+	Errors              []string                `json:"errors,omitempty"`
+	WithinPolicy        bool                    `json:"within_policy"`
+	SoakReady           bool                    `json:"soak_ready"`
 }
 type PiSettingsPlan struct {
 	Path       string        `json:"path"`
@@ -210,8 +244,9 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	result.Resolved.Sandbox = PrimarySessionResolvedString{Source: "not_applicable"}
 	result.Resolved.Approval = PrimarySessionResolvedString{Source: "not_applicable"}
 	details := &PiLaunchPlanDetails{Managed: true, LogicalProfile: selected, ProfileSource: selectedSource, PiCompatibilitySource: composite.PiPrimarySession.PiCompatibility.Source, State: &state, ModelsJSON: PiGeneratedCatalog{Path: state.ModelsJSON, SHA256: hex.EncodeToString(modelsSum[:])}, PiIdentity: &identity,
-		Runtime:      &PiRuntimePlan{Executable: profile.Runtime.Executable, Argv: append([]string(nil), profile.Runtime.Argv...), Source: profile.Source, Endpoint: profile.BaseURL, ReadinessURL: strings.TrimSuffix(profile.BaseURL, "/v1") + "/v1" + profile.Runtime.ReadinessPath, StartupTimeoutSeconds: profile.Runtime.StartupTimeoutSeconds, ShutdownTimeoutSeconds: profile.Runtime.ShutdownTimeoutSeconds, ExecutableState: execState, Ownership: "direct-child-process-group"},
-		Capabilities: &PiCapabilityPlan{Requested: append([]string(nil), profile.RequestedCapabilities...), Verified: []string{}, Verification: "not-claimed"}}
+		LifecycleLogs: &PiLifecycleLogPlan{PolicySource: profile.Source, AggregateRoot: state.LifecycleLogsRoot, Policy: profile.LifecycleLogRetention, Status: "not-inspected"},
+		Runtime:       &PiRuntimePlan{Executable: profile.Runtime.Executable, Argv: append([]string(nil), profile.Runtime.Argv...), Source: profile.Source, Endpoint: profile.BaseURL, ReadinessURL: strings.TrimSuffix(profile.BaseURL, "/v1") + "/v1" + profile.Runtime.ReadinessPath, StartupTimeoutSeconds: profile.Runtime.StartupTimeoutSeconds, ShutdownTimeoutSeconds: profile.Runtime.ShutdownTimeoutSeconds, ExecutableState: execState, Ownership: "direct-child-process-group"},
+		Capabilities:  &PiCapabilityPlan{Requested: append([]string(nil), profile.RequestedCapabilities...), Verified: []string{}, Verification: "not-claimed"}}
 	if profile.Compaction != nil {
 		compaction := *profile.Compaction
 		details.Settings = &PiSettingsPlan{Path: state.SettingsJSON, Compaction: &compaction}

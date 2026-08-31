@@ -5,6 +5,14 @@
 
 ## 2026-08-31
 
+### 1917 — Accepted Retention Replayed On Fresh Trunk, After The Adapter, With No Widened Overlap
+- MILESTONE: Fresh Story workspace provisioned at exact current `origin/main` (`8caac7f`, the STORY-260831-2829gr landing of the accepted generic Pi adapter). `git merge-recursive 4270549 -- HEAD 913168e4` (plumbing, no commit, no branch move) composed the independently accepted retention delta (`CR-TASK-260830-84z0be-1` rev1) onto that exact trunk instead of onto the rejected replay's stale `4270549` base.
+- SCOPE: `git diff --stat HEAD` on the reconciled result shows exactly the accepted 26-path set — no more, no less — verified byte-for-byte against the accepted patch's own path list. 3 of those 26 paths overlapped the landed adapter's changes (`main.go`, `README.md`, `LOGBOOK.md`); 3 more auto-merged with the adapter cleanly on non-overlapping hunks (`pi_platform_windows.go`, `pi_standalone.go`, `pi_test.go`).
+- COMPOSITION: `main.go` unioned both new `runPi` subcommand dispatches (adapter's `turn`, retention's `lifecycle`). `README.md` unioned the `agents-infra` tool-table row (adapter's `pi turn` examples/outputs kept, retention's `pi lifecycle status`/`retire-legacy` examples/outputs and purpose clause added). `LOGBOOK.md` unioned every non-blank line from both pre-merge sides and re-sorted newest-first within each date section; a set-difference check over non-blank lines confirmed zero lines lost from either side.
+- WHY THIS WAS NOT THE PRIOR REJECTED REPLAY'S MISTAKE: the prior attempt (see the struck `contaminated-replay-semantic-guidance-only.md` evidence) did the same semantic merge correctly but published the Change Request against the stale recorded base `4270549`, so the CR's own metadata widened to 110 paths (every path trunk had touched since that base, not just the 26 actually-differing ones) and integration would have returned to `integration_base_moved`. This run provisions a brand-new workspace whose selected/local/upstream base is `origin/main` from the start, so there is no stale base to publish against.
+- EVIDENCE: full non-race suite exit 0 (`main` 111.7s, `internal/infra` 226.8s); full race suite exit 0 on rerun (first race run's lone failure, `TestModelCheckProductionEntrypoint/deadline_override_terminates_both_owned_process_groups`, reproduced as an isolated-run pass and is untouched by this candidate — a pre-existing environmental flake, not a regression); the two accepted narrowing mutants (`ForeignCount == 0`, `LegacyCount == 0` removed one at a time from `PiLifecycleStatus`'s `WithinPolicy` predicate) both reproduce their accepted red (`ForeignCount:1`/`LegacyCount:1` admitted with `WithinPolicy:true`); linux/amd64, linux/arm64, and windows/amd64 cross-builds exit 0; isolated installed parity (`setup global` + `doctor global` against a fresh `mktemp -d` HOME) exits 0 with installed `README.md`/`SKILL.md`/`LOGBOOK.md` byte-identical to the candidate.
+- SCOPE HELD: no Pi executable, runtime, or live model/provider process was launched; the isolated parity gate's `./setup.sh` full-machine variant was abandoned mid-run (its Homebrew step is not HOME-scoped) in favor of the accepted evidence's narrower `setup global --source-dir --home-dir` invocation, which is fully HOME-scoped. This developer run does not integrate; `task-board worktree integrate` remains the orchestrator's step.
+
 ### 1808 — Revision 3 Mutation Prose Overcounts The Published Harness By One
 - ANOMALY: `TASK-260830-y6infr_mutants.sh` and its published rev3 log contain 17 `run_mutant` attacks, all killed with exit 1, plus one discovery-narrowing control admitted with exit 0; producer and reviewer prose claim 18 killed plus that control.
 - DECISION: Fresh-trunk replay reports the executable evidence as 17 killed + 1 admitted control. No unreviewed eighteenth mutant was invented to make the prose count pass.
@@ -149,6 +157,11 @@
 - METHOD THAT WORKED: grep the verb near the concept (`declares`, `set`, `configured`, `stored`) rather than the rewritten sentence; read the diff's hunk map and treat zero-hunk sections as the suspect set; and for a two-sided invariant, enumerate both sides separately — the side nobody worries about is the side that leaks.
 - ALSO FIXED IN rev3: 3.2 now admits the profile record as a third checked surface and adds **C2**, a launch-time gate refusing a computed class that disagrees with the recorded backend/store (`E_AUTH_CUSTODY_INCONSISTENT`). C2 is labelled checked, not structural: it turns a one-field forgery into a two-field consistent rewrite, which is a reduction and not an elimination, and 6.1 now budgets three halves rather than two. Q13 carries the seal-the-record decision.
 - SCOPE: `.research/260831_extensible-auth-method-lifecycle.design.md` (908 -> 1047). STATUS: rev2 changes requested -> rev3 handed to review.
+### 0807 — Stale Integration Is Replayed, Not Rebased
+- ROOT CAUSE: Integrating accepted `CR-TASK-260830-tvy8q5-6` refused with `integration_base_moved` because trunk advanced `b78498b -> 4270549` and both sides edit `LOGBOOK.md` and `README.md`.
+- FIX: The accepted patch identity was reproduced first (`b78498b` tree `3fd838f` + patch `1ed3531...` = accepted candidate tree `57e2a9f`), then three-way merged onto exact `4270549`. `README.md` auto-merged; `LOGBOOK.md` was resolved as a union and re-sorted newest-first, which the naive union violated.
+- EVIDENCE: All 25 non-`LOGBOOK.md` paths are byte-identical to the three-way merge result. `LOGBOOK.md` deletes zero lines relative to either trunk or the accepted candidate, and `README.md` removes exactly the 10 lines the accepted candidate itself removes.
+- DECISION: A moved integration base is replayed from the accepted patch identity and re-reviewed as one combined candidate. Rebasing the managed branch or re-authoring the delta would discard the independent acceptance the replay is meant to carry forward.
 
 ### 0748 — Correction: `already-absent` Is A Positive Claim, And A Read Failure Can Forge It
 - CORRECTS the 0912 entry below on two points, and records the shape that produced both. Original entries left intact.
@@ -246,6 +259,16 @@
 - REGRESSION: In revision 3's own green run every admitted-path check exited 3 while the suite reported 118 PASS / 0 FAIL. `assert_peak_or_coverage_refusal` and an exit-0-or-3 control absorbed a total loss of the memory dimension, so "refused correctly" and "never scores" were indistinguishable. The comment claiming the wide-band thresholds existed so an honestly measured pair reaches `accepted=true` was true of no check in the file.
 - FIX: The control now requires exit 0, `accepted=true`, no blockers, and a scored memory delta with numeric baseline and candidate on both the process and at least one scenario. The mmap-memory assertions dropped the refusal tolerance entirely and now require `measured` peaks and scored deltas. The refusal branch keeps its own separate fixture in `benchmark-memory-coverage-refusal-probe` rather than living as a tolerance inside the positive checks.
 - EVIDENCE: 119 PASS / 1 FAIL, and every admitted-path check is back at **exit 0**: `a measured pair reaches an accepted decision (exit 0)`, `the accepted control scores resident memory on every delta it reports`, and the four memory probes. The single FAIL was the new series-coverage assertion applied to `warmupMemory`, which is one synchronous point reading rather than a sampled window and is read by no decision; the assertion was scoped to series and re-verified by replaying the exact block against that run's artifacts (exit 0). No production source changed after that run.
+### 1440 — Legacy Evidence Cannot Publish Policy Health
+- ROOT CAUSE: `PiLifecycleStatus` excluded legacy and foreign counts only from `soak_ready`, so a complete pre-retirement scan could publish `within_policy=true` while legacy evidence remained.
+- FIX: `tools/agents-infra/internal/infra/pi_session_log.go` now requires zero legacy and foreign evidence for `within_policy`; `soak_ready` inherits that exact fresh-scan gate.
+- EVIDENCE: `TestRunPiLifecycleOperatorIsNonLaunchingAndProjectsExactPlan` drives `runPi -> runPiLifecycleCLI` and requires pre-retirement refusal plus post-retirement health; `TestRunPiLifecycleStatusRefusesForeignEvidence` independently requires an exact external `foreign_count` with both health claims false and fails when only the production `ForeignCount == 0` clause is narrowed away.
+
+### 1440 — Odd Legacy Resume Binds Policy Provenance
+- ROOT CAUSE: an odd-generation retry compared the confirmed full-plan hash and numeric policy digest but did not persist or compare `policy_source`; a byte-identical policy loaded from a different source could therefore resume old unlink authority and publish healthy status.
+- FIX: odd `legacy-generation.json` now persists `policy_source`, validates it as required retirement authority, and `PiLegacyRetire` refuses a retry unless the current source, policy digest, and plan hash all match before candidate inspection or mutation.
+- EVIDENCE: `TestPiLegacyRetirementResumeRejectsChangedPolicySource` drives `PiLegacyRetire -> resumePiLegacyRetirement`, crashes after the fenced rename, requires source-b to refuse while preserving the operation tombstone and odd source-a authority, then proves source-a remains resumable.
+
 
 ### 1432 — Cache Reuse Comparability Must Execute At The Decision Entry
 - ROOT CAUSE: Revision 2 documented the cache policies and declared one-sided reuse non-comparable, but no structured reuse fact reached `RuntimeBenchmark.decide`; identical prompt-token counts therefore remained scoreable even when only one runtime reused KV state.
@@ -258,12 +281,31 @@
 - FIX: Raw memory samples now carry independent Mach and mapped-file timestamps. Reused mapped values retain their original observation time; `samplingCoverageIssue` evaluates the two series independently, and production appends an explicit failure so insufficient, stale, or gapped mapped coverage is `partial` with no score.
 - PRODUCTION EVIDENCE: The separate file-backed fixture mapped and touched 256 MiB for less than the refresh interval. The direct reader saw 268,645,172 B while the periodic peak retained 82,944 B, but the real `benchmark-mapped-file-sampler-probe` exited 0 because the window refused scoring with `resident-mapped-file-sampling-gap`. The anonymous 128 MiB fixture separately exited 0 after proving the Mach series caught its transient and only the independently stale mapped series caused refusal.
 - SCOPE: Revision 3 instrumentation only. The hour-scale pinned comparison was deliberately not rerun; revision-1 decode, TTFT, and 75k memory numbers remain historical and cannot support the decision.
+### 1345 — Tombstone Retry Persists Rename Authority Before Unlink
+- ROOT CAUSE: after a crash in the rename-to-progress-write window, the tombstone-only retry proved the exact operation-bound tombstone but unlinked it without first persisting `candidate_renamed=true`; a second crash then left legitimate dual absence permanently indistinguishable from external deletion.
+- FIX: `resumePiLegacyRetirement` now persists equivalent rename authority immediately after proving the exact tombstone and before unlink. External dual absence without that proof remains typed unknown.
+- EVIDENCE: `TestPiLegacyRetirementResumesTwoProgressWindowCrashes` composes rename-before-progress and unlink-before-progress crashes through `PiLegacyRetire -> resumePiLegacyRetirement`, then requires the third retry to complete with `Resumed=true`, one retired candidate, and `soak_ready=true`.
+
+### 1320 — External Absence Is Not Legacy Retirement Authority
+- ROOT CAUSE: `resumePiLegacyRetirement` counted an absent source and tombstone as retired even when the odd generation had not persisted `candidate_renamed=true`; external deletion before the operation-bound rename could therefore publish false `within_policy` and `soak_ready`.
+- FIX: `tools/agents-infra/internal/infra/pi_lifecycle_legacy.go` now preserves the odd generation as typed unknown unless persisted rename authority explains the dual absence; a crash after unlink remains resumable only from that persisted authority.
+- EVIDENCE: Production-entry tests cover external removal before rename as a permanent refusal and crash after unlink as an authorized resume; both drive `PiLegacyRetire -> resumePiLegacyRetirement` with no live runtime contact.
+
 
 ### 1254 — Benchmark Refusal Must Reap Its Owned Launcher
 - ROOT CAUSE: `BenchmarkRunCommand.drive` terminated `model-harness` only on selected return paths. A provenance refusal thrown after the runtime became ready bypassed those calls and left the task-owned launcher and synthetic runtime reparented to PID 1.
 - FIX: `BenchmarkRunCommand.swift:510` installs an unconditional scope-exit termination immediately after a successful spawn; the existing explicit shutdown remains idempotent. The production decoy-provenance attack in `benchmark-gate-smoke.sh` now also fails if any process naming its exact task-scoped config survives the exit-5 refusal.
 - EVIDENCE: The full smoke reproduced the leak after the expected provenance refusal; a raw process snapshot was captured before only the exact task-owned process group was terminated. Revision-2 validation drives the shipped `benchmark-run` call site and requires both refusal and cleanup, rather than accepting an exit code while a child remains alive.
 - SCOPE: Launcher lifecycle cleanup and its negative production smoke only. No benchmark admission, attestation, comparison, or memory-scoring clause was weakened.
+### 1253 — Story Merge Cannot Be A Developer Pre-Handoff Gate
+- ANOMALY: `task-board handoff TASK-260830-tvy8q5 --role developer` failed with only checklist item 7 missing because that item requires independent review and final Story PR merge before the developer can transition the implementation to `to-review`.
+- CONSTRAINT: The Story workspace contract assigns integration to the orchestrator and forbids this developer run from switching, merging, or deleting the managed branch. Marking the item complete would fabricate review/merge evidence; performing the merge would violate ownership.
+- REQUIRED DECISION: Move the Story-level review/merge criterion to the reviewer/orchestrator phase, or have that owner complete it and explicitly close the checklist item before rerunning developer handoff. The implementation, tests, documentation, static installed parity, and task-scoped outcome are otherwise ready.
+
+### 1242 — Legacy Retirement Resume Authority Lives In The Full Plan
+- ROOT CAUSE: A persisted `candidate_renamed` flag cannot cover a crash after the descriptor-relative rename but before the odd legacy generation is rewritten; treating the stale flag as filesystem truth either strands the operation or risks deleting unplanned evidence.
+- FIX: `PiLegacyRetire` persists the complete identity-bound plan in an odd generation, recognizes only the operation-bound tombstone on resume, and revalidates generation, aggregate generation, directory chain, held descriptor, and descriptor-relative path immediately before every rename or unlink. Automatic setup, launch, and status paths only fence an odd legacy generation and never complete it.
+- EVIDENCE: `TestPiLegacyRetirementResumesCrashAfterFencedRename` interrupts in the exact rename-to-generation-write gap and resumes only with the original plan hash; narrowed budget and immediate-identity mutants make their production-entry negative tests fail, while the deterministic eight-week crash/lease/reload/pressure simulation and full Go suite pass without wall-clock sleeps or live runtime contact.
 
 ### 1220 — Current Main Invalidates Fast-Mode Preservation Premise
 - BLOCKED: A final fresh fetch advanced `main`, `origin/main`, and `FETCH_HEAD` to `d69a435945758ea1cd5dfa62395ca32498e712c7`; the managed workspace, Story branch, selected base, and CR base remain `fe3818209c9861fcafa1f2e68efe078cc0f96f30`.
@@ -281,6 +323,10 @@
 - EVIDENCE: Production `Setup` tests pass; broadened-trigger, Claude include-bypass, and Codex include-bypass live mutants each exit 1; full Go tests, vet, build, canonical skip-LLDB setup, global verification, and installed parity exit 0.
 - SCOPE: Only `.instructions/INSTRUCTIONS_WORKFLOW.md`, `README.md`, `LOGBOOK.md`, and `tools/agents-infra/internal/infra/infra_test.go` changed; landed Codex-only `fast_mode` configuration remains intact.
 
+### 1138 — Tombstone Presence Is Not Stored Delete Authority
+- ROOT CAUSE: `TestPiLifecycleDeleteRecoveryPreservesNarrowedTombstoneAuthority` changed the tombstone mode, so generic directory validation rejected it without exercising the odd generation's stored device/inode identity at `tools/agents-infra/internal/infra/pi_session_log.go:1230`.
+- FIX: `TestPiLifecycleDeleteRecoveryPreservesModeCorrectTombstoneSubstitution` replaces the tombstone inode while preserving mode, effective UID, and all three stored child identities; production recovery returns typed unknown and preserves the replacement.
+- EVIDENCE: Narrowing `revalidatePiLifecycleDeleteDirectory` to presence plus generic validation makes the new uncached production-entry test fail with an admitted next writer; restoring exact identity makes it pass.
 ### 1125 — Smoke Fixture Must Preserve The Package-Owned Entry Point
 - REGRESSION: After merging bounded-KV attestation into the Story harness, the pristine production smoke exited 1 even though 404 Swift tests and 116 fork tests were green. Five generated config families still launched `baseline-venv/bin/python fake-runtime.py` directly; the new package-owned-entry-point guard correctly treated each as a decoy and refused otherwise-valid controls with exit 5.
 - FIX: Every valid baseline config now launches the RECORD-covered `mlx_lm.server` console script. Its module compiles and executes the same synthetic server body without replacing the entry-point argv, while the explicit decoy deliberately retains the direct-interpreter shape.
@@ -337,15 +383,45 @@
 - ANOMALY: The original local branch backed upstream PR 1791. An initial push briefly appended the task commit there; a task branch was created first, then the old branch was lease-restored exactly to `b0a45b8fdd3bb5d6c390d65a6f8521c296f980ec`. Fork PR `relux-works/mlx-lm#1` now isolates only the bounded-KV delta.
 - EVIDENCE: Old and new commit trees both equal `7378b59c77a2add1dce15de9bf099b399867b761`; `git verify-commit` reports a good signature for `alexis@relux.works`; both task local/remote refs resolve to `0a0452a9`.
 
+### 0547 — Delete Recovery Revalidates The Child At The Unlink Boundary
+- ROOT CAUSE: Revision 1 revalidated the tombstone after opening each child but never repeated the held-child versus path identity proof; substitution in that gap deleted unproven replacement evidence and leaked raw `ENOTEMPTY`.
+- FIX: `tools/agents-infra/internal/infra/pi_session_log.go` uses one child authority helper for initial and pre-unlink checks, repeating type/mode/UID/link/device/inode proof after tombstone validation; final tombstone removal failures are typed unknown.
+- EVIDENCE: Production-entry exact-gap and late-evidence tests both failed uncached before the fix and pass after it while preserving the replacement and odd-generation evidence.
+
 ### 0504 — Aborted Benchmark Passes Can Leave Runtime Children Listening
 - ANOMALY: Repeated `benchmark-gate-smoke.sh` runs found task-owned fake runtimes still listening after `benchmark-run` aborted the decoy provenance pass; reruns on the same ports failed with `EADDRINUSE` and exit 1.
 - EVIDENCE: Exact process commands pointed only into `.temp/TASK-260830-2hc5r2` and prior review artifacts. Those PIDs were terminated explicitly; a fresh-port rerun then passed every smoke check, but its decoy branch again left one listener until explicit cleanup.
 - SCOPE: Not caused by the KV observation change; likely `SpawnedProcess.terminate()`/model-harness descendant cleanup on early-abort paths. Preserve as separate cleanup debt rather than widening the attestation rework.
 
+### 0500 — Lifecycle Dirent Parsing Is Checkptr-Safe
+- REGRESSION: Focused `go test -race` aborted in `pi_lifecycle_dirent_darwin.go:29`; converting a short `ReadDirent` buffer to `*unix.Dirent` straddled allocations under `checkptr`.
+- FIX: Darwin and Linux lifecycle parsers decode inode, cookie, and record length through bounds-checked native-endian byte slices; no directory-record struct pointer is fabricated.
+- EVIDENCE: The focused lifecycle plus pressure race gate changed from exit 1 checkptr abort to exit 0 (`6.939s`); Darwin/Linux builds exit 0.
+
 ### 0456 — Missing Live KV Evidence No Longer Falls Back To Argv
 - ROOT CAUSE: `RuntimeBenchmark.contextPolicy` treated an answered `/v1/models` response without `meta.n_ctx` as permission to reuse caller-requested `--max-kv-size`; production `benchmark-run` therefore accepted a pair whose attestations explicitly said `notReported`.
 - FIX: `RuntimeAttestation.swift` maps runtime facts once to `observed(value)`, `observedAbsent`, or `notObserved`; `RuntimeBenchmark.swift` derives KV only from that observation and refuses both absent and unread states. Prefill and reasoning come from `ProcessObservation.arguments`, so the record carries kernel argv rather than caller-supplied profile argv.
 - EVIDENCE: The exact finite-flag/no-meta admission test was red before the fix and green after it; `benchmark-gate-smoke.sh` now removes `meta.n_ctx` from both live responses while retaining `--max-kv-size 76800`, and production exits 4 with no accepted decision. Full Swift tests (290/24), strict format, macOS arm64 Release build, and smoke (0 failures) exit 0.
+
+### 0455 — Close Recovery Requires Operation-Bound Evidence
+- ROOT CAUSE: `recoverPiLifecycleClose` treated every well-formed `closed_at` with matching counters as completion of the current odd generation.
+- FIX: `tools/agents-infra/internal/infra/pi_session_log.go` accepts only the exact pre-publication record or `closed_at == generation.started_at`; every other close-looking record remains unknown.
+- EVIDENCE: `TestPiLifecycleRecoveryRefusesForgedCloseLookingEvidence` failed on the replayed revision-2 production path and passes after the exact binding.
+
+### 0455 — Delete Recovery Names Were Not Unlink Authority
+- ROOT CAUSE: `recoverPiLifecycleDelete` skipped strict envelope scanning and unlinked recognized names without preserving or revalidating tombstone and child identities.
+- FIX: The odd delete generation carries directory device/inode/mode/UID plus all three child device/inode/mode/UID/link identities; recovery holds descriptors and revalidates path identity immediately before every bounded unlink.
+- EVIDENCE: Production recovery preserves a mode-narrowed tombstone, narrowed record, substituted log inode, and symlink-substituted active lock as typed unknown.
+
+### 0455 — Generation Validation Must Be State-And-Kind Total
+- ROOT CAUSE: Even generations admitted residual timestamps/counters, while odd generations admitted malformed timestamps and impossible operation-specific fields.
+- FIX: `validatePiLifecycleGeneration` now enforces parity, scope, canonical timestamp, name grammar, exact create/append/close/delete fields, trusted delete identities, and zero residual authority for even state.
+- EVIDENCE: `PiLifecycleStatus` and `openPiSessionLog` negatives refuse malformed even and odd records; the focused lifecycle suite exits 0.
+
+### 0455 — Retention Replay Starts From Current Protected Main
+- DECISION: `TASK-260830-2souz0` starts from selected Story base, workspace `HEAD`, fetched `origin/main`, and direct remote main all at `3295c7da7151de128f176cf7560a57d54c8f6c0d`.
+- SCOPE: The preserved revision-2 patch and its 0334–0337 entries remain historical review input; current trunk instruction/config bytes are retained, including the 272K Codex context policy.
+- STATUS: Lifecycle retention is replayed on current protected trunk; no stale Story branch is an integration authority.
 
 ### 0354 — Benchmark Revision Bound To The Observed Python Process
 - ROOT CAUSE: `benchmark-run` derived `mlx-lm` provenance from caller-supplied `--python-bin`, so a decoy server could be measured while an unrelated immutable environment supplied the accepted revision.
@@ -353,6 +429,31 @@
 - EVIDENCE: `scripts/benchmark-gate-smoke.sh` drives the exact decoy setup through `benchmark-run`; it exits 5, attributes no runtime revision, and writes no decision, while the package-owned control remains admissible. Live `/v1/models` metadata supplies `kv=76800`; a failed or malformed read produces `kv=unread` and refuses.
 - SCOPE: The benchmark-only profiles use fork commit `ec9eea0af1d741cd4eb21c8766478a3e79dd44d6` and a 76,800-token KV bound. The deployed default profile is unchanged.
 - AUDIT: Thresholds, prompts, and profile declarations are explicit policy/workload inputs rather than runtime-identity claims. Served model and context remain live runtime reports under the documented non-malicious-runtime trust boundary; no other acceptance fact is pinned from a caller-selected executable.
+
+### 0337 — Story Base Stayed Fixed While Protected Main Advanced
+- ANOMALY: Fresh fetch and `ls-remote` resolve protected `origin/main` to `3295c7da7151de128f176cf7560a57d54c8f6c0d`; the managed Story base and workspace `HEAD` remain the originally proven `5c9b4e4f7a88e1eb937b80851af522e4fa4b066f`.
+- DECISION: Preserve the task delta and reviewer probes without merging or replaying unrelated trunk changes; orchestrator integration must reconcile current-main overlap and rerun affected gates.
+
+### 0336 — Status Pagination Needs A Real Directory Cursor
+- ROOT CAUSE: The revision-1 continuation decoded `Offset` but rescanned from the beginning, discarded partial aggregate results, and returned no legacy cursor; a self-minted token test never drove the exhausted production path.
+- FIX: `tools/agents-infra/internal/infra/pi_session_log.go` now issues generation/policy/directory-bound phase cookies for aggregate, profile legacy, runs, and per-run logs; every continuation page is a lower bound and only a fresh from-start complete scan can publish health.
+- EVIDENCE: Production scans advance across multi-page profile and run legacy logs, reject directory/policy/generation changes, and keep the final continuation page `within_policy=false` and `soak_ready=false`.
+
+### 0335 — Atomic Replacement Temps Need Operation Identity
+- ROOT CAUSE: Random `.record.json.tmp-*` and generation temps were outside strict envelope/root schemas, so a crash after temp fsync stranded an odd generation that the next writer could not inspect or recover.
+- FIX: Fixed strict control-temp names are validated against the exact odd operation; next-writer recovery publishes exact append/close evidence or removes an exact stale completion temp before closing the same generation.
+- EVIDENCE: Production recovery tests cover record temp, pre-odd-rename, pre-even-rename, canonical publication, and pre-final-even phases; ambiguous temps remain preserved and unknown.
+
+### 0334 — Lock-Free Status Must Prove Its Own Filesystem Authority
+- ROOT CAUSE: Writers validated aggregate directories, but `PiLifecycleStatus` omitted root and `entries/` mode/UID plus fd/path revalidation and could attest a mode-`0755` root as healthy.
+- FIX: Status now holds root and entries proof descriptors, validates exact mode/trusted effective UID/device/inode, and revalidates unchanged path identity after final generation reads.
+- EVIDENCE: Production-entry negatives for narrowed root and entries modes return `lifecycle_log_evidence_unknown`; focused lifecycle tests exit 0.
+
+### 0213 — Duplicating A Directory FD Duplicates Its Cursor
+- ROOT CAUSE: `unix.Dup` creates a descriptor for the same open file description, so bounded lifecycle scans shared and advanced the aggregate directory cursor; the next recovery scan could observe an empty root and falsely report missing fixed evidence.
+- FIX: `readAllPiLifecycleNames` reopens `.` descriptor-relatively with `openat(O_DIRECTORY|O_NOFOLLOW)` so every scan has an independent cursor while retaining the already-proven directory authority.
+- EVIDENCE: `TestPiLifecycleOddAppendRecoversExactCommittedBoundary` reproduced the false refusal before the fix and passes after it; the focused lifecycle/race slice and uncached `internal/infra` suite exit 0.
+- DECISION: The profile-wide `lifecycle-logs` aggregate is first-class and generation-fenced; exclusive, standalone, and shared launches keep only agent/session/client-lock state below their per-run roots.
 
 ## 2026-08-29
 

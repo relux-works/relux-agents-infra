@@ -447,6 +447,22 @@ max_tokens = 16384
 thinking = "medium"
 requested_capabilities = ["text", "tools"]
 
+# Required. Every numeric authority and operation deadline is explicit; there
+# are no retention defaults.
+[agents.pi.profiles."qwen-3.8-27b".lifecycle_log_retention]
+max_count = 64
+max_bytes = 67108864
+max_envelope_bytes = 67371008
+max_age_seconds = 4838400
+create_timeout_seconds = 10
+append_timeout_seconds = 5
+close_timeout_seconds = 10
+status_timeout_seconds = 10
+maintenance_timeout_seconds = 30
+max_scan_entries = 325
+max_scan_control_bytes = 299008
+max_mutations_per_operation = 5
+
 # Optional. If present, every field is required. This profile-managed policy
 # is merged into the isolated Pi settings before every launch.
 [agents.pi.profiles."qwen-3.8-27b".compaction]
@@ -498,6 +514,20 @@ context_window = 131072
 max_tokens = 16384
 thinking = "off"
 requested_capabilities = ["dflash", "text", "tools"]
+
+[agents.pi.profiles."muse-glimmer-30b-dflash".lifecycle_log_retention]
+max_count = 64
+max_bytes = 67108864
+max_envelope_bytes = 67371008
+max_age_seconds = 4838400
+create_timeout_seconds = 10
+append_timeout_seconds = 5
+close_timeout_seconds = 10
+status_timeout_seconds = 10
+maintenance_timeout_seconds = 30
+max_scan_entries = 325
+max_scan_control_bytes = 299008
+max_mutations_per_operation = 5
 
 [agents.pi.profiles."muse-glimmer-30b-dflash".compat]
 supports_developer_role = false
@@ -1072,18 +1102,101 @@ Let `profile_bytes` be the exact UTF-8 profile-name bytes. The profile key is
   agent/models.json
   agent/settings.json  # present/managed when profile compaction is configured
   sessions/
-  logs/<UTC-start>-<random>.jsonl
   session.lock
+  lifecycle-logs/
+    foreground.lock
+    retention.lock
+    generation.json
+    legacy-generation.json
+    entries/<UTC-start>-<128-bit-random-id>/
+      record.json
+      active.lock
+      log.jsonl
 ```
 
-Each managed launch creates a distinct mode-`0600` lifecycle log. It records
-session/runtime/Pi start, PID and process-group identity, runtime readiness,
-foreground-terminal ownership, exit or received signal, and bounded cleanup.
-It never records environment values, API keys, or prompt/argument contents.
-Pi's own conversation and tool transcript remains in `sessions/`; the launcher
-log exists to diagnose orchestration failures such as a TUI child stopped by
-terminal job control. The launcher prints the exact log path before starting
-Pi, and `PiRunReport.session_log` carries it for managed callers.
+Exclusive, standalone, and shared launches use that one profile-wide aggregate
+root while their `agent/`, `sessions/`, and `session.lock` state remains
+run-isolated. A managed entry is deletable only when it is a proven no-follow,
+effective-UID-owned, mode-correct three-child envelope. Foreign, legacy,
+linked, unreadable, or identity-changing evidence is preserved and reported.
+The launcher log records orchestration events but never environment values,
+API keys, or prompt/argument contents; Pi's conversation/tool transcript stays
+under `sessions/`. Those events retain PID/PGID, readiness,
+foreground-terminal ownership, exit/signal, and bounded cleanup evidence.
+
+Every profile must state positive `max_count`, committed `max_bytes`, logical
+`max_envelope_bytes`, `max_age_seconds`, all five operation timeouts, and all
+three scan/mutation work caps. Configuration is refused unless, with checked
+arithmetic, `max_envelope_bytes >= max_bytes + 4096*max_count`,
+`max_scan_entries >= 5 + 4*(max_count+max_mutations_per_operation)`, and
+`max_scan_control_bytes >= 4096*(max_count+max_mutations_per_operation+4)`.
+Create, append, close, recovery, and deterministic newest-prefix pruning are
+generation-fenced and bounded. Exact fixed-name atomic control temps are bound
+to the current odd operation and are either converged or preserved as unknown.
+Even generations carry no operation-only fields; odd generations enforce an
+exact operation-kind contract. Close completion is proven only by
+`record.closed_at == generation.started_at`. Delete generations retain the
+exact tombstone and three-child device/inode/mode/effective-UID identities,
+which recovery revalidates descriptor-relatively immediately before each
+bounded unlink; narrowed or substituted evidence remains unknown and intact.
+Continuation tokens carry phase-specific directory cookies plus generation,
+policy, and directory identity; they never carry authoritative totals. A scan
+that is odd, changed, truncated, stale,
+unreadable, foreign, or over budget is `unknown`; continuation pages are only
+lower bounds and cannot publish `within_policy` or `soak_ready`. Only one fresh
+from-start complete scan with identical final even aggregate and legacy
+generations can publish health.
+
+Legacy inspection and retirement are explicit, non-launching operators:
+
+```bash
+# Read one bounded status page. Reuse the returned continuation verbatim until
+# the command returns a final lower-bound page without another continuation.
+agents-infra pi lifecycle status --project "$PWD" --profile PROFILE --json
+agents-infra pi lifecycle status --project "$PWD" --profile PROFILE \
+  --continuation TOKEN --json
+
+# First inspect the exact candidate projection and its stable full-plan hash.
+agents-infra pi lifecycle retire-legacy --project "$PWD" --profile PROFILE --dry-run --json
+
+# Copy the exact plan_hash from that unchanged dry-run. No other confirmation
+# spelling or stale hash authorizes mutation.
+agents-infra pi lifecycle retire-legacy --project "$PWD" --profile PROFILE \
+  --confirm PLAN_HASH --json
+```
+
+Status and dry-run never create state, take writer ownership, look up Pi, or
+contact a configured runtime. A dry-run scans from the beginning, requires
+stable even aggregate and legacy generations, rejects unknown/foreign evidence,
+and either projects the complete bounded candidate set or refuses; it never
+silently hashes a prefix. The `plan_hash` covers policy provenance and digest,
+state keys, both generations, the profile directory, and every profile/run/log
+directory plus candidate file identity. The confirmed operator recomputes that
+same full plan while holding the existing foreground and retention locks. A
+missing, malformed, caller-minted, stale, or case-changed hash is refused before
+the legacy generation changes.
+
+Confirmed retirement publishes an odd `legacy-generation.json` carrying the
+exact bounded plan, then processes each candidate through an operation-bound
+rename and unlink. Immediately before every filesystem mutation it re-reads the
+unchanged odd legacy generation, proves the aggregate generation is still the
+confirmed even value, revalidates the complete profile/runs/run/logs directory
+chain, and compares the held file descriptor with its descriptor-relative path.
+A crash after the fenced rename is resumed only with the same exact plan hash;
+missing or substituted evidence remains odd/unknown and is preserved. Each plan
+is limited by `max_mutations_per_operation` (one rename plus one unlink per
+candidate) and by the 4096-byte control-document bound.
+
+Automatic setup, launch, and status paths never mutate legacy evidence. A
+managed launch encountering an odd legacy generation refuses rather than
+recovering or completing it. Only the explicit confirmed operator can advance
+that generation, and only a new from-start complete status scan after retirement
+may publish `within_policy` and `soak_ready`.
+
+The launcher prints the exact `log.jsonl` path before Pi starts, and
+`PiRunReport` exposes the policy source, aggregate root, generations, configured
+deadlines/work caps, scan state, observed counts/bytes/age bounds,
+recovery/pruning/drop counters, errors, `within_policy`, and `soak_ready`.
 
 Resume from the same canonical project directory so the project/profile state
 keys resolve to the same isolated session directory:
@@ -1690,7 +1803,7 @@ established. The benchmark-only profiles pin both runtimes to a live-reported
 | Tool | Purpose | Command | Outputs |
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
-| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect, stop, quarantine, or unquarantine shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra pi spawn --profile NAME --prompt "Complete the bounded task" --deadline 30m --result-schema 1`, `agents-infra pi turn --prompt "Complete the bounded task" --deadline 30m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30`, `agents-infra runtime quarantine --profile NAME`, `agents-infra runtime unquarantine --profile NAME` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, one bounded schema-1 Pi turn result for machine consumers (or legacy raw JSONL for the operator surface), hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or explicitly retire legacy lifecycle evidence; inspect, stop, quarantine, or unquarantine shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra pi spawn --profile NAME --prompt "Complete the bounded task" --deadline 30m --result-schema 1`, `agents-infra pi turn --prompt "Complete the bounded task" --deadline 30m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra pi lifecycle status --project /path/to/project --profile NAME --json`, `agents-infra pi lifecycle retire-legacy --project /path/to/project --profile NAME --dry-run --json`, `agents-infra pi lifecycle retire-legacy --project /path/to/project --profile NAME --confirm PLAN_HASH --json`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30`, `agents-infra runtime quarantine --profile NAME`, `agents-infra runtime unquarantine --profile NAME` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose, lifecycle status/retirement, or standalone launch-plan JSON, one bounded schema-1 Pi turn result for machine consumers (or legacy raw JSONL for the operator surface), hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
 | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
 | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
 | `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, clocks first-to-last generated deltas across `content`, `reasoning`, and `reasoning_content`, seals per-scenario cached-token telemetry so one-sided reuse or unknown reuse is refused, and samples both runtimes over warm-up, scenario, soak and process windows with the same `peak_resident_memory_upper_bound_bytes`: exact Mach physical footprint plus a conservative upper edge for resident `vmmap` mapped-file bytes, sampling the cheap Mach component at 20 Hz, refreshing mapped-file residency at a bounded 0.2 Hz, and sampling synchronously at window boundaries; raw samples seal independent Mach and mapped-file timestamps, reused mapped values retain their original timestamp, and a scored scenario/process window must prove each component has no timestamp gap above 125 ms, while sparse, stale, untimestamped, absent, failed, partial or malformed series are refused; it seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
