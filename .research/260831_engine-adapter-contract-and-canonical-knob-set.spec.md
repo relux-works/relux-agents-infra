@@ -45,7 +45,7 @@ parallel one:
 | State | Meaning | Adapter consequence |
 | --- | --- | --- |
 | **`reported`** | The live, running process answered the question about itself, on an endpoint built for the purpose. | Trusted. Becomes the pinned value. |
-| **`notReported`** | The live process answered — the endpoint responded, was well-formed — and named no value for this term. A legitimate absence, not a malfunction. | May fall through to a declared default (`unbounded` for a KV bound with no flag) or to argv **only** for the specific terms the study allows this for (§4 below names them per knob). Never silently promoted to a number without saying `notReported` happened. |
+| **`notReported`** | The live process answered — the endpoint responded, was well-formed — and named no value for this term. A legitimate absence, not a malfunction. | For every knob this contract currently names (§3), refused — inadmissible, exactly like `unread` (§2). No knob below carries an active argv fallback for this state; a fallback could only be introduced by a future revision naming a new, explicitly-cited exception (§2). Never silently promoted to a number without saying `notReported` happened. |
 | **`unread`** | The endpoint answered but the gate could not extract a bound: wrong type, non-positive, malformed JSON, non-2xx status, a shape the reader does not recognise. | **Always refused.** `unread` is in every knob's `unpinnableConditions`. It is never treated as `notReported` and never falls through to argv — an `unread` reading is evidence of a bug in the reader or the process, not evidence of absence. |
 
 **A fourth outcome exists at the pair level, not the per-knob level: admission
@@ -69,7 +69,7 @@ shared prefix, which the study explicitly declined to do (§4.3.3).
 
 ---
 
-## 2. The Prime Directive: derive from the live process, never from argv, unless this document names the exception
+## 2. The Prime Directive: derive from the live process, never from argv, with no standing exception
 
 Every knob below is an instance of one rule, stated once here so it is not
 repeated ten times: **a pinned condition is derived from what the running
@@ -79,23 +79,42 @@ with**, because argv is not proof of what the process parsed
 while argv reads 2048 — study §1.2, §6.3, reproduced through production
 `benchmark-run` in `TASK-260830-2hc5r2`'s revision 4 and 5 review rounds).
 
-The exceptions are narrow and named per knob, never general:
+This document has **no standing exception**. An earlier draft of this
+contract carved out Knob 1's `notReported` state as an allowed argv fallback,
+citing an old design on the MLX-Swift-only arm
+(`.research/260828_llamacpp-in-the-benchmark-gate.md:481`). That citation
+describes a revision of `RuntimeContextWindow` that predates
+`STORY-260830-2vrhg1` (which gave the `mlx-lm` fork a `--max-kv-size` flag at
+all) and predates `TASK-260830-2hc5r2`, which found the identical fallback
+live in production `benchmark-run`, root-caused it, and closed it:
+`LOGBOOK.md:310` — *"`RuntimeBenchmark.contextPolicy` treated an answered
+`/v1/models` response without `meta.n_ctx` as permission to reuse
+caller-requested `--max-kv-size`; production `benchmark-run` therefore
+accepted a pair whose attestations explicitly said `notReported`."* The fix
+(same entry, and confirmed unchanged through the final revision by
+`TASK-260830-2hc5r2_rework-rev6-results.md:18-30`, "All six non-value states
+are inadmissible. None falls back to or is decoded from argv.") routes an
+answered omission to `contextBoundNotHonoured` — refusal — not to an
+argv-read value. Standardizing the old fallback as this contract's one named
+exception would reopen the exact bug the project already found and fixed, so
+Knob 1 carries no fallback below and this section names none.
 
-- A knob may read argv **only** when the live process reports `notReported`
-  for that term **and** the specific knob's table below says argv is an
-  allowed fallback for that state (Knob 1 — KV bound — is the only one that
-  currently qualifies; Knobs 2 and 3 do not, because on `llama-server`
-  `notReported` is the *only* state those terms can ever produce, and falling
-  through to argv there is exactly the defect the live-derivation discipline
-  exists to close).
-- When argv is read, it must be read through a **per-engine parsing-precedence
-  registry**, not as literal tokens (§4, Knob 10). Reading argv literally
-  reopens the defect the live derivation closed, one layer down: a registry
-  that assumes `--flag value` wins ignores that `mlx_lm`'s Python `argparse`
-  resolves unique abbreviations and applies last-wins on repetition, while the
-  Swift prototype refuses ambiguous or duplicate flags outright rather than
-  picking one (`TASK-260830-2hc5r2` progress, revision 5 rework and revision 5
-  review rounds).
+The remaining rule on argv is therefore narrower than "when may argv be
+read" — under the engines this contract currently covers, it is never read
+for a pinned `contextPolicy` term. It stays relevant for two reasons this
+document still tracks:
+
+- Knob 10's per-engine parsing-precedence registry remains load-bearing for
+  any *future* engine or state this contract has not yet enumerated — see
+  Knob 10 for the distinction between that forward-looking scope and today's
+  three engines.
+- If argv were ever read for a pinned term, it must be read through a
+  **per-engine parsing-precedence registry**, not as literal tokens (§4,
+  Knob 10), because a registry that assumes `--flag value` wins ignores that
+  `mlx_lm`'s Python `argparse` resolves unique abbreviations and applies
+  last-wins on repetition, while the Swift prototype refuses ambiguous or
+  duplicate flags outright rather than picking one (`TASK-260830-2hc5r2`
+  progress, revision 5 rework and revision 5 review rounds).
 
 ---
 
@@ -113,7 +132,7 @@ adapter concerns the study surfaced around them.
 | **Live report** | `llama-server`: `meta.n_ctx` on `GET /v1/models`, present unconditionally, measured `8192`/`76800`/`32768` across sessions. The pinned `mlx_lm` fork (post `STORY-260830-2vrhg1`): also `meta.n_ctx` on `/v1/models`, but **only after cache construction** — the value is absent on the first `/v1/models` answer after launch and appears only once a real completion has built the `RotatingKVCache` (`TASK-260830-2hc5r2` progress, revision 6 rework: "KV remains live `meta.n_ctx` after cache construction"). `mlx-swift` prototype: reported live in the `kv=unbounded` era (study §4.2). |
 | **Citations** | Study §4.1 ("both records pin `kv=76800`, derived by the gate from each running process's live `/v1/models` `meta.n_ctx`"); `.research/260828_llamacpp-under-the-managed-harness.md:96-110`; `TASK-260830-2hc5r2` progress (revision 6 rework). |
 | **`reported`** | Trusted, becomes the pin. |
-| **`notReported`** | The **only** knob in this set where argv is an allowed fallback: "the runtime answered and named none" → read `--max-kv-size`'s value, else `unbounded` (`.research/260828_llamacpp-in-the-benchmark-gate.md:481`). This is legitimate only because a KV bound with no flag really is unbounded by the runtime's own contract — there is no false-friend endpoint for KV the way there is for prefill chunk and reasoning effort. |
+| **`notReported`** | **No argv fallback.** "The runtime answered and named none" is not evidence of `unbounded` — it is refused, `kv=not-reported` in `unpinnableConditions`, exactly like `unread` (`.task-board/.resources/TASK-260830-2hc5r2/TASK-260830-2hc5r2_rework-rev4-results.md:5-7`: *"`notReported` becomes `kv=not-reported`; `unread` remains `kv=unread`; both are inadmissible and neither can fall back to `--max-kv-size`. An answered omission with `--max-kv-size 76800` is refused as `contextBoundNotHonoured`."*). An earlier draft of this contract named this state as the one standing argv-fallback exception, citing a superseded MLX-Swift-only design (`.research/260828_llamacpp-in-the-benchmark-gate.md:481`, predates `STORY-260830-2vrhg1` and `TASK-260830-2hc5r2`); that fallback was found live in production, root-caused as a bug, and closed (`LOGBOOK.md:310`) — see §2. |
 | **`unread`** | Non-object `meta`, non-integer/non-positive `n_ctx` → refused, `kv=unread` is in `unpinnableConditions` (`.research/260828_llamacpp-in-the-benchmark-gate.md:327-328`). |
 | **Adapter obligation** | An adapter must **not** treat "`/v1/models` answered 200" as sufficient to read the KV pin on the `mlx_lm` fork. It must either drive one real completion first, or poll `/v1/models` again after the first generation, before treating a missing `n_ctx` as `notReported` rather than as "not yet constructed." Conflating those two produces a false `unbounded` pin on a runtime that is in fact bounded, one request away from proving it (§4 Knob 8 covers the general readiness-vs-attestability distinction this is an instance of). |
 
@@ -125,7 +144,7 @@ adapter concerns the study surfaced around them.
 | **Live report** | `mlx_lm` fork (post `STORY-260830-2vrhg1` revision 6): reports via live `meta.runtime_config` after the fix landed. `llama-server` build `b10621-c1d0e7a00`: **never reported, on any of 44 enumerated routes.** `n_ubatch`/`n_batch` appear in `tools/server/*.cpp` only as internal scheduling variables or `SRV_WRN` log format strings — there is no JSON key on any handler, established by pulling the complete route table out of `libllama-server-impl.dylib`'s string table and cross-checking server sources, not from a probe list. |
 | **Citations** | `.research/260828_llamacpp-under-the-managed-harness.md:99`; study §4.1 (route enumeration, lines 380–390); `TASK-260830-2hc5r2` progress (revision 6 rework). |
 | **`reported`** | Trusted (`mlx_lm` fork, `mlx-swift`). |
-| **`notReported`** | On `llama-server` this is the build's **only** possible state for this term — it is structural, not transient. **Argv fallback is explicitly forbidden here**, unlike Knob 1: falling back "reopens the exact defect that the live derivation closed" (study §4.1, option 2, named and rejected). |
+| **`notReported`** | On `llama-server` this is the build's **only** possible state for this term — it is structural, not transient. **Argv fallback is explicitly forbidden here**, same as Knob 1: falling back "reopens the exact defect that the live derivation closed" (study §4.1, option 2, named and rejected). |
 | **`unread`** | N/A on this term for `llama-server` — there is no endpoint to return a malformed answer from. A future build that adds one inherits the general `unread` rule. |
 | **Adapter obligation** | When paired against any engine that reports this term (`mlx_lm` fork, `mlx-swift`), an adapter serving `llama-server` on this build **must cause pair-level admission refusal**, not silently script around it. This is the study's central finding (§4.1, §6.3): it is a migration-risk property of the runtime, not a configuration mistake, and the only clean fix is upstream — `llama-server` gaining a live effective-configuration report (study §4.1 option 1, §7.2 item 4). An adapter that reads argv instead, or wires the false-friend `/props default_generation_settings.params.reasoning_format`-style endpoint (see Knob 3) as a substitute, is a forced fit and must not be built. |
 
@@ -168,7 +187,7 @@ adapter concerns the study surfaced around them.
 | | |
 | --- | --- |
 | **Configuration shape** | `mlx_lm` baseline is deployed with `--prompt-cache-size 1 --prompt-cache-bytes 8GB`. `llama-server` needs no equivalent flag — per-slot KV reuse is automatic and cross-request by default. |
-| **The confusable flag** | `--prompt-cache-bytes`'s own help text reads "Maximum size in bytes of the KV caches," which describes a **stored prefix pool**, not the active generation's KV — exactly the kind of confusion an adapter exists to absorb rather than propagate into a comparison. |
+| **The confusable flag** | `--prompt-cache-bytes`'s own help text reads "Maximum size in bytes of the KV caches" — verified in the pinned fork at `/Users/alexis/src/relux-works/mlx-lm`, `mlx_lm/server.py:1902` (commit `45a472f2d0cda166b7ffe1a80fe50dd9621f4303`, outside this repository, so not reachable from a repo-internal citation) — which describes a **stored prefix pool**, not the active generation's KV — exactly the kind of confusion an adapter exists to absorb rather than propagate into a comparison. |
 | **Measured behaviour** | The baseline's configured cache **did not fire once** across six scenarios and 26 turns — `cached_tokens` is `0` everywhere, corroborated by timing rather than trusted from a reported zero (three `multiturn_prefix_reuse` turns on one shared 7,784-token prefix cost ~three full prefills, 347.6 s, with the third turn still paying 105.2 s). `llama-server`'s per-slot reuse **did** fire, one-sided, in exactly two scenarios: `multiturn_prefix_reuse` (`[5736, 7780, 7809]`) and `stability_soak` (`[18]×20`), warmed by an earlier scenario's traffic before the scenario under test had sent anything. |
 | **Telemetry surface** | Both engines expose the **same field name**, `usage.prompt_tokens_details.cached_tokens`, on every response. No adapter-side name translation is needed for this knob — the divergence is behavioural, not nominal. |
 | **Citations** | Study §4.3.5 (REFUSAL 2), §T3, §7.2 item 6; `.research/260829_llamacpp-against-the-python-baseline.md:69, 189, 389`. |
@@ -211,10 +230,10 @@ adapter concerns the study surfaced around them.
 
 | | |
 | --- | --- |
-| **What it is** | Not a value knob — the parsing discipline that governs the narrow, named argv fallback paths in Knob 1 (and would govern any future one). Different engines resolve duplicate or abbreviated flags differently, and an adapter that reads argv as literal tokens inherits whichever engine's parser it implicitly assumed. |
+| **What it is** | Not a value knob, and **not currently load-bearing for Knob 1** — §2 corrected Knob 1 to carry no argv fallback, so no live engine in this contract's scope (`python-mlx-lm`, `mlx-swift`, `llama-server`) has a case where this registry gates an admitted pin today. It is retained as a **forward-looking specification obligation**: for any future engine this contract does not yet cover that (a) has no live-report path for a pinned term at all and (b) has no `contextBoundNotHonoured`-equivalent refusal guard to fall back on, a per-engine parsing-precedence registry is the minimum discipline before that engine's argv could ever be trusted for anything — because different engines resolve duplicate or abbreviated flags differently, and an adapter that reads argv as literal tokens inherits whichever engine's parser it implicitly assumed. This must not be conflated with today's `mlx_lm` fork, which has a live-report path (Knob 1) and is not the engine this knob is scoped to protect. |
 | **Measured per-engine behaviour** | `python-mlx-lm` (Python `argparse`): **last-wins** on exact-name repetition, **and** resolves unique-prefix abbreviations — `--prefill-step-siz` uniquely abbreviates `--prefill-step-size` and wins over an earlier, fully-spelled occurrence of the same option. `mlx-swift`: **rejects** duplicate flags outright rather than picking one. Anything the registry does not recognise (unknown flag, ambiguous abbreviation matching more than one option): **`unresolved`**. |
 | **Citations** | `TASK-260830-2hc5r2` progress — revision 4 review (production `benchmark-run` accepted a duplicate kernel-observed prefill flag pair while pinning the wrong one — a bypass, not a hypothetical); revision 5 rework ("`RuntimeBenchmark` now decodes observed argv through a per-runtime registry: `python-mlx-lm` argparse last-wins; `mlx-swift` duplicate rejection; unknown/ambiguous unresolved"); revision 5 review (found the registry still ignored a *unique abbreviation* case, `--prefill-step-siz`, and pinned the wrong value — closed in the same revision cycle); study §1.2, §6.3 (the `--prefill-step-size 2048 --prefill-step-siz 999` example, reported as a production negative, not a specification claim). |
-| **Adapter obligation** | Wherever this contract allows an argv fallback (only Knob 1's `notReported` case), the read must go through a **per-engine precedence registry** that models last-wins vs. reject-on-duplicate vs. abbreviation resolution **as measured for that engine's actual parser**, not a generic "last flag wins" assumption. `unresolved` must refuse, exactly like `unread` does for a live report — an adapter must never guess between two argv occurrences it cannot order. This registry is itself a specification obligation on the port task (`TASK-260830-1e9gse`): every engine it ports needs its own measured entry in this table before Knob 1's fallback path may be wired for that engine. |
+| **Adapter obligation** | This contract currently allows **no** argv fallback for any pinned term (§2) — the port task (`TASK-260830-1e9gse`) must not wire one for `python-mlx-lm`, `mlx-swift`, or `llama-server` on the strength of this knob. If a future engine addition genuinely meets both conditions in the row above — no live-report path and no `contextBoundNotHonoured`-equivalent refusal guard — and this document is revised to name that engine an exception, the read must go through a **per-engine precedence registry** that models last-wins vs. reject-on-duplicate vs. abbreviation resolution **as measured for that engine's actual parser**, not a generic "last flag wins" assumption, with `unresolved` refusing exactly like `unread` does for a live report. Until such a revision exists, this knob has no active fallback to gate. |
 
 ---
 
@@ -253,10 +272,11 @@ adapter concerns the study surfaced around them.
   is refusal (pair-level or scenario-level, per knob) or an explicit
   `notReported`/declared-asymmetry — never a silent default and never a
   forced-through score.
-- Knobs 2 and 3's argv fallback is explicitly **forbidden**, not merely
-  undocumented — an adapter implementation that adds it reopens the study's
-  central finding and must be treated as a regression against this
-  specification, not a convenience.
+- Knobs 1, 2, and 3's argv fallback is explicitly **forbidden**, not merely
+  undocumented — an adapter implementation that adds one reopens either the
+  study's central finding (Knobs 2/3) or `TASK-260830-2hc5r2`'s root-caused
+  and closed production bug (Knob 1, `LOGBOOK.md:310`), and must be treated
+  as a regression against this specification, not a convenience.
 - Known false-friend endpoints (`/props default_generation_settings.params
   .reasoning_format` for Knob 3, `/props params["speculative.types"]` for
   Knob 4) must be enumerated in the adapter's own source as endpoints that
