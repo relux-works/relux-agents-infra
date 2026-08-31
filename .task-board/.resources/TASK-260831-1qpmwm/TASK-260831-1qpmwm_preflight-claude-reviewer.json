@@ -1,0 +1,108 @@
+{
+    "active_schedule_window": null,
+    "agent_context": {
+        "config_key": "agent_context",
+        "enabled": true,
+        "profile": "full",
+        "runtime_active": true,
+        "source": "default"
+    },
+    "contexts": {
+        "allowed_secret_classes": [
+            "unrestricted"
+        ],
+        "builder_scope": null,
+        "config_key": "features.context_sharing",
+        "enabled": false,
+        "inheritance_policy": {
+            "pipeline_configured": true,
+            "predecessors": [
+                "solution-architect"
+            ],
+            "supplemental_sources": null
+        },
+        "materialization": "denied",
+        "mode": "none",
+        "payload_capability": "",
+        "payload_mode": "off",
+        "provider": "claude",
+        "reason_codes": [
+            "context_sharing_disabled"
+        ],
+        "registry_capability": "board-v1",
+        "retention": {
+            "building_ttl": "6h",
+            "materialization_idle_ttl": "1d",
+            "max_descendants_per_base": 64,
+            "max_ready_per_binding": 3,
+            "payload_ttl": "7d",
+            "ready_ttl": "30d",
+            "retired_ttl": "1d",
+            "stale_ttl": "7d",
+            "unpublished_materialization_ttl": "1d"
+        }
+    },
+    "enabled": true,
+    "launch_composition": {
+        "enabled": true,
+        "status": "enabled"
+    },
+    "max_parallel": 20,
+    "providers": {
+        "allowed": [
+            "claude",
+            "codex"
+        ],
+        "target": "claude"
+    },
+    "resolved_role_ceiling": {
+        "adjustment_confirmation": "required",
+        "admitted_pairs": {
+            "digest": "sha256:9fe46defcdcdb8c4a344b18cb0468c004405540b449cee6a0382cce7cd21f876",
+            "form": "allowed_models",
+            "models": [
+                {
+                    "efforts": [
+                        "low",
+                        "medium",
+                        "high"
+                    ],
+                    "id": "claude-sonnet-5"
+                }
+            ],
+            "provider": "claude"
+        },
+        "allowed_models": [
+            "claude-sonnet-5"
+        ],
+        "allowed_models_source": "provider",
+        "authority": "explicit_allow_set",
+        "config_key": "spawn.ceilings.claude",
+        "configured": true,
+        "contract_version": "spawn-policy-v4",
+        "provenance": {
+            "adjustment_confirmation": "spawn.ceilings.claude.adjustment_confirmation",
+            "admitted_pairs": "spawn.ceilings.claude.allowed_models",
+            "allowed_models": "spawn.ceilings.claude.allowed_models",
+            "policy": "spawn.ceilings.claude",
+            "reasoning_effort": "spawn.ceilings.claude.reasoning_effort",
+            "reasoning_effort_criterion": "spawn.ceilings.claude.reasoning_effort_criterion",
+            "resolution_model": "spawn.ceilings.claude.resolution_model"
+        },
+        "reasoning_effort": "high",
+        "reasoning_effort_criterion": "less_or_equal",
+        "resolution_model": "claude-sonnet-5"
+    },
+    "resolved_role_default": {
+        "configured": false,
+        "spawns_without_manual_selection": false
+    },
+    "role": "reviewer",
+    "selection_mode": "explicit_override",
+    "workload_class_recommendation": {
+        "class_resolved": false,
+        "config_key": "spawn.workload_classes",
+        "configured": true,
+        "unresolved_reason": "workload_class_derivation_input_required"
+    }
+}

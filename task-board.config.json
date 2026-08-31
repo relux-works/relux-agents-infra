@@ -7,32 +7,165 @@
     "enabled": true,
     "max_parallel": 20,
     "ceilings": {
-      "contract_version": "spawn-policy-v4",
-      "codex": {
-        "entries": [
-          {
-            "criterion": "equal",
-            "model": "gpt-5.6-sol",
-            "reasoning_effort": "high"
-          }
-        ],
-        "resolution_model": "gpt-5.6-sol",
-        "adjustment_confirmation": "none"
-      },
       "claude": {
-        "entries": [
-          {
-            "criterion": "equal",
-            "model": "claude-opus-5",
-            "reasoning_effort": "high"
-          }
+        "adjustment_confirmation": "required",
+        "allowed_models": [
+          "claude-sonnet-5"
         ],
-        "resolution_model": "claude-opus-5",
-        "adjustment_confirmation": "none"
-      }
+        "reasoning_effort": "high",
+        "reasoning_effort_criterion": "less_or_equal",
+        "resolution_model": "claude-sonnet-5"
+      },
+      "codex": {
+        "adjustment_confirmation": "required",
+        "allowed_models": [
+          "gpt-5.6-sol"
+        ],
+        "reasoning_effort": "medium",
+        "reasoning_effort_criterion": "less_or_equal",
+        "resolution_model": "gpt-5.6-sol"
+      },
+      "contract_version": "spawn-policy-v4"
     },
     "preferred_agentic_system": {
-      "exclusive": "claude"
+      "mixed": [
+        "claude",
+        "codex"
+      ]
+    },
+    "workload_classes": {
+      "architecture": [
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        }
+      ],
+      "debugging": [
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        },
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        }
+      ],
+      "documentation": [
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        }
+      ],
+      "implementation": [
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        },
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        }
+      ],
+      "mechanical": [
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        },
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        }
+      ],
+      "migration": [
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        },
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        }
+      ],
+      "operations": [
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        },
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        }
+      ],
+      "research": [
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        }
+      ],
+      "review": [
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        }
+      ],
+      "testing": [
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        },
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        }
+      ],
+      "unified": [
+        {
+          "model": "gpt-5.6-sol",
+          "reasoning_effort": "medium",
+          "runtime": "codex"
+        },
+        {
+          "model": "claude-sonnet-5",
+          "reasoning_effort": "high",
+          "runtime": "claude"
+        }
+      ]
     },
     "worktree_isolation": {
       "validation": {

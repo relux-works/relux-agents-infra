@@ -1,0 +1,110 @@
+{
+    "active_schedule_window": null,
+    "agent_context": {
+        "config_key": "agent_context",
+        "enabled": true,
+        "profile": "full",
+        "runtime_active": true,
+        "source": "default"
+    },
+    "contexts": {
+        "allowed_secret_classes": [
+            "unrestricted"
+        ],
+        "builder_scope": null,
+        "config_key": "features.context_sharing",
+        "enabled": false,
+        "inheritance_policy": {
+            "pipeline_configured": true,
+            "predecessors": [
+                "solution-architect"
+            ],
+            "supplemental_sources": null
+        },
+        "materialization": "denied",
+        "mode": "none",
+        "payload_capability": "",
+        "payload_mode": "off",
+        "provider": "codex",
+        "reason_codes": [
+            "context_sharing_disabled"
+        ],
+        "registry_capability": "board-v1",
+        "retention": {
+            "building_ttl": "6h",
+            "materialization_idle_ttl": "1d",
+            "max_descendants_per_base": 64,
+            "max_ready_per_binding": 3,
+            "payload_ttl": "7d",
+            "ready_ttl": "30d",
+            "retired_ttl": "1d",
+            "stale_ttl": "7d",
+            "unpublished_materialization_ttl": "1d"
+        }
+    },
+    "enabled": true,
+    "launch_composition": {
+        "enabled": true,
+        "status": "enabled"
+    },
+    "max_parallel": 20,
+    "providers": {
+        "allowed": [
+            "claude",
+            "codex"
+        ],
+        "target": "codex"
+    },
+    "resolved_role_ceiling": {
+        "adjustment_confirmation": "required",
+        "admitted_pairs": {
+            "digest": "sha256:e0fe0e85b711a1a0c5b503b98efcc920d17ba28951eb53e4b50e87556026927b",
+            "form": "allowed_models",
+            "models": [
+                {
+                    "efforts": [
+                        "low",
+                        "medium"
+                    ],
+                    "id": "gpt-5.6-sol"
+                }
+            ],
+            "provider": "codex"
+        },
+        "allowed_models": [
+            "gpt-5.6-sol"
+        ],
+        "allowed_models_source": "provider",
+        "authority": "explicit_allow_set",
+        "config_key": "spawn.ceilings.codex",
+        "configured": true,
+        "contract_version": "spawn-policy-v4",
+        "fast_mode": false,
+        "fast_mode_source": "default",
+        "provenance": {
+            "adjustment_confirmation": "spawn.ceilings.codex.adjustment_confirmation",
+            "admitted_pairs": "spawn.ceilings.codex.allowed_models",
+            "allowed_models": "spawn.ceilings.codex.allowed_models",
+            "fast_mode": "spawn.ceilings.codex.fast_mode",
+            "policy": "spawn.ceilings.codex",
+            "reasoning_effort": "spawn.ceilings.codex.reasoning_effort",
+            "reasoning_effort_criterion": "spawn.ceilings.codex.reasoning_effort_criterion",
+            "resolution_model": "spawn.ceilings.codex.resolution_model"
+        },
+        "reasoning_effort": "medium",
+        "reasoning_effort_criterion": "less_or_equal",
+        "resolution_model": "gpt-5.6-sol"
+    },
+    "resolved_role_default": {
+        "configured": false,
+        "spawns_without_manual_selection": false
+    },
+    "role": "developer",
+    "selection_mode": "explicit_override",
+    "workload_class_recommendation": {
+        "class_resolved": false,
+        "config_key": "spawn.workload_classes",
+        "configured": true,
+        "unresolved_reason": "workload_class_derivation_input_required"
+    }
+}
