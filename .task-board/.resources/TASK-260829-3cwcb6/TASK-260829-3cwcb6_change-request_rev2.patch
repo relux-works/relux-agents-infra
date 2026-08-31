@@ -1,0 +1,1843 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index adc2a21..0057190 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,27 @@
+ 
+ ## 2026-08-29
+ 
++### 1610 — One Conservative Resident Bound Restores The Memory Decision Without Reviving Mach-Only Bias
++- REVIEW FINDING: refusing `ri_phys_footprint` for llama.cpp was correct but left the owner's first-class memory criterion wholly undecidable. The existing 1.41 GiB Mach / 26.6 GiB resident-mapped observation showed a platform measurement existed; the quantity merely needed an honest name and symmetric collection.
++- DECISION: both runtimes are scored on `peak_resident_memory_upper_bound_bytes`, defined as exact Mach physical footprint plus the upper edge of `vmmap -summary`'s rounded resident `mapped file` bucket. The record retains the raw Mach reading, literal vmmap token, mapped-file upper component, sample counts, status, and `scoreSemantics=conservative-upper-bound` over warm-up, scenario, soak, and process-peak windows.
++- FAIL-CLOSED CONTRACT: complete output with no mapped-file row is measured zero. OS/tool read failure, incomplete output, malformed row, and any partial window remain distinct; none has a scored value. The legacy `peakPhysicalFootprintBytes` stays raw diagnostic evidence and is never a decision metric.
++- DIRECTION: Mach-only scoring strongly favoured llama.cpp. The replacement can double-count on a runtime whose Mach footprint already charges mapped pages, so its residual direction is runtime-dependent rather than claimed neutral. MTP-off now travels in every generated record and decision with its explicit direction **against llama.cpp**.
++- PRODUCTION EVIDENCE: `benchmark-gate-smoke.sh` drives anonymous and mmap-backed fixture runtimes through `benchmark-run`, requires the same accounting name on both, a positive mapped component on the mmap process, scored warm-up/scenario/soak/process windows, and no fallback to the old metric. The first rework smoke correctly failed because the parser rejected vmmap's two-line header; that read defect was fixed rather than treated as absence.
++- VALIDATION: final Release production smoke exit 0 with 0 failures; `swift test -c release` exit 0 with 400 tests / 32 suites; Xcode macOS arm64 Release build exit 0; strict swift-format, shellcheck warning-level, and `git diff --check` exit 0. Earlier red smoke and lint attempts remain itemized in the task outcome rather than rewritten as passes.
++- SCOPE: `RuntimeMemoryAccounting.swift`, `BenchmarkFootprintSampler.swift`, `BenchmarkPass.swift`, `BenchmarkScenarios.swift`, `RuntimeBenchmark.swift`, `BenchmarkRunCommand.swift`, `BenchmarkRunPins.swift`, contract tests, production smoke, and benchmark documentation.
++
++### 1443 — Cross-Runtime Clocks Need One Generated-Event Definition
++- ROOT CAUSE: `BenchmarkHTTPDriver.stream` recognized `content` and `reasoning` but not llama.cpp's `reasoning_content`, then ended decode on the response tail rather than the last generated event. Field naming moved only llama.cpp's start boundary; post-token framing moved both end boundaries by runtime-specific transport work.
++- FIX: `RuntimeStreamDelta.read` owns the event definition across all three fields; production records TTFT at the first and decode through the last such event. `scripts/benchmark-gate-smoke.sh` drives `reasoning` versus `reasoning_content` through `benchmark-run` and requires both to remain scored.
++- DIRECTION: the omitted llama.cpp field inflated TTFT, understated prefill, and overstated decode — mixed, not uniformly pro-llama.cpp. Response-tail time understated decode for whichever runtime delayed usage or `[DONE]`; direction not established.
++- SCOPE: `RuntimeStreamDelta.swift`, `BenchmarkHTTPDriver.swift`, `BenchmarkScenarios.swift`, `RuntimeStreamDeltaTests.swift`, `scripts/benchmark-gate-smoke.sh`.
++
++### 1443 — Mach Footprint Cannot Score mmap-Loaded GGUF Weights
++- ROOT CAUSE: `ri_phys_footprint` excludes llama.cpp's clean resident file-backed GGUF pages; the observed 1.41 GiB footprint versus 28.09 GiB RSS and 26.6 GiB clean mapped-file residency was a known underestimate, not model memory.
++- DECISION: do not substitute unstable RSS. Exact `llama-server` executables and `.gguf` artifacts use `unmeasurable-mmap-loaded-weights`; every process/scenario/soak/warm-up footprint is `nil`, the record states that the old reading favours that runtime, and decision scoring fails closed.
++- FIX: `RuntimeMemoryAccounting` classifies the reviewed executable/artifact; `BenchmarkFootprintSampler`, `BenchmarkPass`, and `BenchmarkRunCommand` keep every production memory entry on that source. Production-entry smoke requires the llama-shaped pair to exit rejected on unmeasured footprint rather than accepted on the old reading.
++- SCOPE: `RuntimeMemoryAccounting.swift`, `BenchmarkFootprintSampler.swift`, `BenchmarkPass.swift`, `BenchmarkRunCommand.swift`, `RuntimeStreamDeltaTests.swift`, `scripts/benchmark-gate-smoke.sh`.
++
+ ### 1402 — Decode Claim Withdrawn; Authoritative Streamed Usage Reverses The Single-Probe Delta
+ 
+ - REGRESSION: TASK-260828-2wcrph's first `probe-ttft.py` outputs carried `"usage": {}`. Its published paired decode values could only be reconstructed by substituting non-empty SSE frame counts for completion tokens; the claimed slower direction had no token-count evidence and is withdrawn from the report and README.
+diff --git a/README.md b/README.md
+index 3268dda..c74b43d 100644
+--- a/README.md
++++ b/README.md
+@@ -1467,7 +1467,7 @@ rg -n "Primary Parent Goal Actualization" \
+ | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra` and stopped as a process group on `SIGINT`/`SIGTERM`/`SIGHUP`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+ | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
+-| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, samples the Mach physical footprint of the pid it spawned, seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
++| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, clocks first-to-last generated deltas across `content`, `reasoning`, and `reasoning_content`, and samples both runtimes over warm-up, scenario, soak and process windows with the same `peak_resident_memory_upper_bound_bytes`: exact Mach physical footprint plus a conservative upper edge for resident `vmmap` mapped-file bytes, retaining both raw components and refusing absent, failed, partial or malformed reads; it seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+ | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+diff --git a/tools/mlx-swift-runtime-prototype/README.md b/tools/mlx-swift-runtime-prototype/README.md
+index 83f09d2..3cac239 100644
+--- a/tools/mlx-swift-runtime-prototype/README.md
++++ b/tools/mlx-swift-runtime-prototype/README.md
+@@ -604,42 +604,47 @@ and one copy of this model is 28 GB, so overlapping runs would be measuring each
+ other's memory pressure. Both are launched through `model-harness run`, so
+ ownership, readiness polling and shutdown are the production ones.
+ 
+-### Two metric families this gate cannot yet compare across these runtimes
++### Cross-runtime metric corrections
+ 
+ Read this before taking a number out of a `records/*.json` for a llama.cpp pass.
+ Both were found by TASK-260828-2wcrph running the suite, and both are recorded
+ in full in `.research/260829_llamacpp-against-the-python-baseline.md`.
+ 
+-- **`decodeTokensPerSecond`, `prefillTokensPerSecond` and
+-  `timeToFirstTokenSeconds` are not comparable between `mlx_lm.server` and
+-  `llama-server`.** All three derive from the first frame carrying
+-  `delta.content` or `delta.reasoning`. `mlx_lm.server` publishes
+-  `delta.reasoning`; `llama-server` publishes `delta.reasoning_content`, which
+-  this driver does not read. So llama.cpp's clock starts *after* its whole
+-  think block: its TTFT is inflated, its prefill rate understated, and its
+-  decode rate divided by only the content tail. The direction is mixed, not a
+-  uniform bias in llama.cpp's favour. The historical 80.79 tok/s decode is
+-  excluded. A replacement paired probe requested streamed usage explicitly,
+-  verified 7,784 prompt and 106 completion tokens from each runtime, and
+-  measured Python/llama.cpp at 8.449/8.772 tok/s; SSE frame counts were retained
+-  only as diagnostics. That one 1.038x observation does not establish a general
+-  decode direction. On a scenario whose whole token budget is spent thinking
+-  no `content` frame arrives at all and TTFT is simply `nil`, which fails closed.
+-  The production fix and full rerun belong to TASK-260829-3cwcb6; until then all
+-  gate-recorded llama.cpp TTFT, prefill and decode values are excluded from
+-  decisions.
+-- **`peakPhysicalFootprintBytes` does not see `mmap`-loaded weights.** It is
+-  `proc_pid_rusage(...).ri_phys_footprint`, which counts dirty anonymous pages.
++- **TTFT, prefill and decode now share one generated-event definition.** A
++  streamed delta counts when any of `content`, `reasoning`, or
++  `reasoning_content` carries a non-empty string. `mlx_lm.server` publishes the
++  first reasoning spelling and `llama-server` the second. TTFT ends at the first
++  such event; decode is `(completion_tokens - 1)` divided by the interval from
++  that same first event to the last such event. It no longer ends on `[DONE]`
++  or a usage frame. The historical llama.cpp gate readings remain excluded:
++  omitting `reasoning_content` inflated TTFT, understated prefill, and divided
++  decode by only the content tail. TASK-260829-3cwcb6's production-entry smoke
++  drives both spellings and refuses a build that leaves either side unmeasured.
++- **Memory is scored as an explicitly named resident upper bound for both
++  runtimes.** The raw Mach component comes from
++  `proc_pid_rusage(...).ri_phys_footprint`, which counts dirty anonymous pages;
++  the raw mapped-weight component comes from the resident column of a complete
++  `vmmap -summary` `mapped file` row. Because `vmmap` rounds that display, the
++  scorer uses the upper edge of its display bucket and records
++  `scoreSemantics=conservative-upper-bound`. The scored quantity is
++  `residentMemoryUpperBoundBytes`, the sum of those two components — never the
++  legacy `peakPhysicalFootprintBytes` field.
+   `llama-server` maps the GGUF, so those pages are resident and **clean**.
+   Sampled on one process at one moment while holding the 27B model:
+   footprint **1.41 GiB**, `ps` RSS **28.09 GiB**, `vmmap` mapped-file resident
+   **26.6 GiB with 0 dirty**. `maxPeakFootprintRatio` would have scored that
+   runtime at about 0.08x the MLX baseline and called it twelve times more
+-  frugal. MLX reads its weights into anonymous memory and is measured correctly.
+-
+-Neither is a defect in what the gate *refuses*; both are defects in what it
+-*reports*, and a llama.cpp pair has so far always been refused before scoring
+-(see the KV note in `examples/model-harness.benchmark.toml`).
++  frugal. Production now samples the same composite beside both runtimes over
++  warm-up, scenario, soak, and process-peak windows. Complete output with no
++  mapped-file row is a measured zero; launch/read failures, incomplete output,
++  malformed rows, and mixtures of good and bad samples remain distinct and
++  all fail closed. The sum can double-count pages on a runtime whose Mach
++  footprint already charges file-backed residency, so its residual directional
++  bias is runtime-dependent and the raw components remain in every record.
++
++The earlier paired probe's 8.449/8.772 tok/s Python/llama.cpp result remains one
++bounded observation, not a rate hardened into this gate. The withdrawn 8.88,
++9.85, and 80.79 figures remain excluded.
+ 
+ ### Why it is one invocation
+ 
+@@ -716,7 +721,7 @@ Per pass, all of it read first-hand about a process it spawned:
+ | the SHA-256 of the equivalence verdict, and whether it is a decision this repository took | the file named by `--equivalence`, read in the gate's own process and matched against `TrustedEquivalenceDecisions.shipped`, which is compiled into the gate from versioned source |
+ | the digest of each pass's weight artifact | `config.json` plus the safetensors index for a weight directory; the whole file for a `.gguf` |
+ | every request and response | performed by this process, timed by its own clock |
+-| the runtime's physical footprint | `proc_pid_rusage` on that pid, sampled every 0.25 s |
++| the runtime's resident-memory upper bound | the same sample for both runtimes: `proc_pid_rusage` Mach physical footprint plus the upper edge of the complete `vmmap -summary` resident `mapped file` display bucket, sampled through warm-up, scenario, soak and whole-process windows; raw components and exact-vs-bound semantics stay in the record |
+ | when the pass began and ended | the gate's own clock |
+ | which build made these observations | the gate binary's own SHA-256 |
+ 
+@@ -868,19 +873,25 @@ completed it, and the gate scored that 1.094x ratio as "within".
+ 
+ ### Measurement choices worth knowing
+ 
+-- **Size comes from the Mach physical footprint**, never from `ps` RSS. Three
+-  identical loads of this model reported 2 650 / 10 774 / 14 056 MiB resident
+-  while the physical footprint stayed within 16 MiB and MLX's active-bytes
+-  figure was byte-identical.
++- **Size is `peak_resident_memory_upper_bound_bytes`, not physical footprint.**
++  Both runtimes use Mach physical footprint plus the conservative upper edge of
++  resident mapped-file bytes from a complete `vmmap -summary`. The component
++  readings, sample counts, status, and `conservative-upper-bound` semantics are
++  persisted for warm-up, each scenario, soak, and the process peak. `ps` RSS is
++  not substituted: three identical MLX loads reported 2 650 / 10 774 / 14 056
++  MiB RSS while physical footprint stayed within 16 MiB and MLX active bytes
++  were identical. Any absent, failed, partial, or malformed component read
++  blocks scoring instead of falling back to Mach-only data.
+ - **Readiness is "the pinned model answered a completion"**, not "`/v1/models`
+   returned 200". `mlx_lm.server` answers `/v1/models` about a second after
+   launch with no weights resident, and lists every MLX model in the local
+   Hugging Face cache with the configured one appended **last** — so a poller
+   that takes `data[0].id` gets a different model entirely.
+-- **Time to first token counts reasoning.** This model's chat template opens a
+-  `<think>` block, so the first thing generated for any prompt is reasoning.
+-  Waiting for the first *content* delta would report the length of the model's
+-  thinking as runtime latency.
++- **Time to first token counts both reasoning spellings.** This model's chat
++  template opens a `<think>` block, so the first thing generated for any prompt
++  is reasoning. Waiting for the first content delta would report the length of
++  the model's thinking as runtime latency; recognizing only one runtime's
++  reasoning field would move that error to just one side.
+ - **Sampler settings are sent explicitly** on every request. The two runtimes
+   disagree on defaults — `GenerateParameters` starts at `temperature = 0.6`,
+   `mlx_lm.server` at `1.0` — so omitting them would compare two samplers.
+@@ -965,7 +976,9 @@ completed it, and the gate scored that 1.094x ratio as "within".
+   structurally cannot, so a tokens/s measured with drafting on is a different
+   algorithm rather than a faster runtime. Requiring the two sides only to
+   *match* would admit two speculating runtimes, so anything but `off` is
+-  refused. The reading comes from `GET /slots` on the live process — measured:
++  refused. Every generated record and decision carries the direction explicitly:
++  forcing MTP off is **against llama.cpp**, because it removes a capability the
++  incumbent MLX artifact lacks. The reading comes from `GET /slots` on the live process — measured:
+   `--spec-type ngram-mod` flips `speculative` to `true` there while `/props`
+   keeps reporting `"none"`, so `/props` is a proxy that does not move with the
+   launch and is not read. **Both placements of that field are read and neither
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+index 509304c..6fcf93c 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeBenchmark.swift
+@@ -306,7 +306,8 @@ public enum RuntimeBenchmark {
+         public let prefillTokensPerSecond: Double?
+         public let decodeTokensPerSecond: Double?
+         public let wallClockSeconds: Double?
+-        /// Peak physical footprint **within this scenario's window only**.
++        /// Raw Mach component from the sample that produced this scenario's
++        /// resident-memory upper-bound peak. Never scored by itself.
+         ///
+         /// Scenario-local rather than peak-so-far, and the distinction decided
+         /// a verdict. The sampler's running maximum never falls, so once a
+@@ -324,6 +325,13 @@ public enum RuntimeBenchmark {
+         /// the growth of the whole process is still readable. Never scored: it
+         /// is a different quantity and mixing the two is the defect above.
+         public let processPeakSoFarBytes: Int?
++        /// The scored scenario-local quantity, including resident mapped files.
++        /// Its status and raw components make absence, failed reads, malformed
++        /// reads and partial coverage distinguishable and fail-closed.
++        public let peakResidentMemory: RuntimeMemoryPeak
++        /// Process-wide running peak at this scenario boundary, under the same
++        /// accounting and with the same evidence shape.
++        public let processResidentMemoryPeakSoFar: RuntimeMemoryPeak
+         /// The highest 1-minute host load average seen inside this scenario's
+         /// window.
+         ///
+@@ -370,6 +378,8 @@ public enum RuntimeBenchmark {
+             wallClockSeconds: Double? = nil,
+             peakPhysicalFootprintBytes: Int? = nil,
+             processPeakSoFarBytes: Int? = nil,
++            peakResidentMemory: RuntimeMemoryPeak = .absent,
++            processResidentMemoryPeakSoFar: RuntimeMemoryPeak = .absent,
+             hostLoadAverageMax: Double? = nil,
+             transcript: ScenarioTranscript? = nil
+         ) {
+@@ -384,6 +394,8 @@ public enum RuntimeBenchmark {
+             self.wallClockSeconds = wallClockSeconds
+             self.peakPhysicalFootprintBytes = peakPhysicalFootprintBytes
+             self.processPeakSoFarBytes = processPeakSoFarBytes
++            self.peakResidentMemory = peakResidentMemory
++            self.processResidentMemoryPeakSoFar = processResidentMemoryPeakSoFar
+             self.hostLoadAverageMax = hostLoadAverageMax
+             self.transcript = transcript
+         }
+@@ -483,14 +495,17 @@ public enum RuntimeBenchmark {
+         /// the two runs did not overlap on a host that cannot hold both.
+         public let startedAtUnixSeconds: Double
+         public let finishedAtUnixSeconds: Double
+-        /// Whole-process peak, sampled from the Mach physical footprint rather
+-        /// than from `ps` RSS.
++        /// Raw Mach component from the sample that produced the whole-process
++        /// resident-memory upper-bound peak. Never scored by itself.
+         ///
+         /// Resident size is not a usable size for an MLX process: three
+         /// identical loads of this model reported 2 650, 10 774 and 14 056 MiB
+         /// resident while the physical footprint stayed within 16 MiB and MLX's
+         /// own active-bytes figure was byte-identical.
+         public let peakPhysicalFootprintBytes: Int?
++        /// Whole-process scored memory quantity. This is explicitly a
++        /// conservative upper bound, not physical footprint or RSS.
++        public let peakResidentMemory: RuntimeMemoryPeak
+         public let scenarios: [ScenarioResult]
+         /// Runtime-level differences that could not be pinned away, declared by
+         /// the driver so they appear in the report instead of being discovered
+@@ -507,6 +522,7 @@ public enum RuntimeBenchmark {
+             startedAtUnixSeconds: Double,
+             finishedAtUnixSeconds: Double,
+             peakPhysicalFootprintBytes: Int?,
++            peakResidentMemory: RuntimeMemoryPeak = .absent,
+             scenarios: [ScenarioResult],
+             declaredAsymmetries: [String]
+         ) {
+@@ -518,6 +534,7 @@ public enum RuntimeBenchmark {
+             self.startedAtUnixSeconds = startedAtUnixSeconds
+             self.finishedAtUnixSeconds = finishedAtUnixSeconds
+             self.peakPhysicalFootprintBytes = peakPhysicalFootprintBytes
++            self.peakResidentMemory = peakResidentMemory
+             self.scenarios = scenarios
+             self.declaredAsymmetries = declaredAsymmetries
+         }
+@@ -1765,12 +1782,30 @@ extension RuntimeBenchmark {
+     /// Swift prints the shortest representation that round-trips.
+     public static func transcriptDigest(of record: RunRecord) -> String {
+         var lines: [String] = ["runtime=\(record.runtime)"]
++        func appendMemory(_ label: String, _ peak: RuntimeMemoryPeak) {
++            lines.append("\(label).accounting=\(peak.accounting.rawValue)")
++            lines.append("\(label).semantics=\(peak.scoreSemantics)")
++            lines.append("\(label).status=\(peak.status.rawValue)")
++            lines.append("\(label).scored=\(number(peak.scoredBytes))")
++            lines.append("\(label).complete=\(peak.successfulSampleCount)")
++            lines.append("\(label).readFailed=\(peak.readFailureCount)")
++            lines.append("\(label).malformed=\(peak.malformedSampleCount)")
++            lines.append(
++                "\(label).mach=\(number(peak.peakSample?.machPhysicalFootprintBytes))")
++            lines.append(
++                "\(label).mappedRaw=\(peak.peakSample?.vmmapResidentMappedFileRaw ?? "-")")
++            lines.append(
++                "\(label).mappedUpper="
++                    + number(peak.peakSample?.residentMappedFileBytesUpperBound))
++            for issue in peak.issues { lines.append("\(label).issue=\(issue)") }
++        }
+         // Sealed with the measurements since G4, because they stopped being
+         // commentary. A cross-format pair is admitted only while both records
+         // carry every non-equivalence its verdict declared, so an entry deleted
+         // from a record after the pass would otherwise change what a report has
+         // to state without disturbing anything the observer signed.
+         for entry in record.declaredAsymmetries { lines.append("asymmetry=\(entry)") }
++        appendMemory("processMemory", record.peakResidentMemory)
+         for scenario in record.scenarios {
+             lines.append("scenario=\(scenario.name)")
+             lines.append("succeeded=\(scenario.succeeded)")
+@@ -1783,6 +1818,8 @@ extension RuntimeBenchmark {
+             lines.append("wall=\(number(scenario.wallClockSeconds))")
+             lines.append("windowPeak=\(number(scenario.peakPhysicalFootprintBytes))")
+             lines.append("processPeak=\(number(scenario.processPeakSoFarBytes))")
++            appendMemory("scenarioMemory", scenario.peakResidentMemory)
++            appendMemory("scenarioProcessMemory", scenario.processResidentMemoryPeakSoFar)
+             lines.append("hostLoad=\(number(scenario.hostLoadAverageMax))")
+             guard let transcript = scenario.transcript else {
+                 lines.append("transcript=absent")
+@@ -2092,9 +2129,10 @@ extension RuntimeBenchmark {
+             // Scenario-local, so it is the cost of *this* work rather than the
+             // running maximum of everything the process has done so far.
+             appendDelta(
+-                &deltas, &blockers, scenario: name, metric: "peak_physical_footprint_bytes",
+-                baseline: baseline.peakPhysicalFootprintBytes.map(Double.init),
+-                candidate: candidate.peakPhysicalFootprintBytes.map(Double.init),
++                &deltas, &blockers, scenario: name,
++                metric: "peak_resident_memory_upper_bound_bytes",
++                baseline: baseline.peakResidentMemory.validatedScoredBytes.map(Double.init),
++                candidate: candidate.peakResidentMemory.validatedScoredBytes.map(Double.init),
+                 bound: thresholds.maxPeakFootprintRatio, lowerIsBetter: true,
+                 comparable: comparable)
+         }
+@@ -2111,9 +2149,11 @@ extension RuntimeBenchmark {
+             return baseline.succeeded == candidate.succeeded
+         }
+         appendDelta(
+-            &deltas, &blockers, scenario: "process", metric: "peak_physical_footprint_bytes",
+-            baseline: comparison.baseline.peakPhysicalFootprintBytes.map(Double.init),
+-            candidate: comparison.candidate.peakPhysicalFootprintBytes.map(Double.init),
++            &deltas, &blockers, scenario: "process",
++            metric: "peak_resident_memory_upper_bound_bytes",
++            baseline: comparison.baseline.peakResidentMemory.validatedScoredBytes.map(Double.init),
++            candidate: comparison.candidate.peakResidentMemory.validatedScoredBytes.map(
++                Double.init),
+             bound: thresholds.maxPeakFootprintRatio, lowerIsBetter: true,
+             comparable: completedSameWork,
+             outsideDetail:
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeMemoryAccounting.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeMemoryAccounting.swift
+new file mode 100644
+index 0000000..9b86cc9
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeMemoryAccounting.swift
+@@ -0,0 +1,251 @@
++import Foundation
++
++/// The one memory quantity every benchmark runtime is sampled with.
++///
++/// `ri_phys_footprint` is an allocator/dirty-page accounting and does not see
++/// clean resident pages from llama.cpp's mmap-loaded GGUF. The scored quantity
++/// is therefore an explicitly conservative upper bound:
++///
++///     Mach physical footprint + vmmap "mapped file" resident upper bound
++///
++/// Both runtimes use the same sum. The components stay in the record so a
++/// consumer never has to reverse-engineer what the score means, and the old
++/// Mach-only number remains raw evidence rather than silently becoming the
++/// score again.
++public enum RuntimeMemoryAccounting: String, Codable, Equatable, Sendable {
++    case residentMemoryUpperBound =
++        "mach-physical-footprint-plus-vmmap-resident-mapped-file-upper-bound"
++
++    /// Kept at the production profile-resolution call site so tests can prove
++    /// executable/model spelling cannot narrow one runtime back to Mach-only.
++    public static func forExecutable(
++        _: String, modelPath _: String? = nil, launchArgv _: [String] = []
++    ) -> RuntimeMemoryAccounting {
++        .residentMemoryUpperBound
++    }
++
++    public static let scoreSemantics = "conservative-upper-bound"
++}
++
++/// Raw components from one simultaneous memory sample.
++public struct RuntimeMemoryComponents: Codable, Equatable, Sendable {
++    /// Exact kernel `ri_phys_footprint` reading.
++    public let machPhysicalFootprintBytes: Int
++    /// The literal resident token printed on vmmap's `mapped file` row.
++    /// `nil` means a complete summary contained no such row, which is a
++    /// measured zero rather than a failed read.
++    public let vmmapResidentMappedFileRaw: String?
++    /// Upper edge of vmmap's displayed resident-value bucket, in bytes.
++    /// The display is rounded, so treating its centre as exact could make an
++    /// alleged upper bound smaller than the actual resident mapping.
++    public let residentMappedFileBytesUpperBound: Int
++    /// The scored sum. Named as a bound, never as physical footprint or RSS.
++    public let residentMemoryUpperBoundBytes: Int
++
++    public init?(
++        machPhysicalFootprintBytes: Int,
++        vmmapResidentMappedFileRaw: String?,
++        residentMappedFileBytesUpperBound: Int
++    ) {
++        guard machPhysicalFootprintBytes >= 0, residentMappedFileBytesUpperBound >= 0 else {
++            return nil
++        }
++        let (sum, overflow) = machPhysicalFootprintBytes.addingReportingOverflow(
++            residentMappedFileBytesUpperBound)
++        guard !overflow else { return nil }
++        self.machPhysicalFootprintBytes = machPhysicalFootprintBytes
++        self.vmmapResidentMappedFileRaw = vmmapResidentMappedFileRaw
++        self.residentMappedFileBytesUpperBound = residentMappedFileBytesUpperBound
++        residentMemoryUpperBoundBytes = sum
++    }
++}
++
++/// One sampling attempt before it is folded into a window peak.
++public enum RuntimeMemorySampleRead: Equatable, Sendable {
++    case measured(RuntimeMemoryComponents)
++    case readFailed(String)
++    case malformed(String)
++}
++
++/// Whether a window can honestly be scored.
++public enum RuntimeMemoryPeakStatus: String, Codable, Equatable, Sendable {
++    /// Every attempted sample was complete and at least one existed.
++    case measured
++    /// The window ended before any sampling attempt reached it.
++    case absent
++    /// Every attempt failed at the OS/tool boundary.
++    case readFailed = "read-failed"
++    /// Every attempt returned bytes that did not form the required reading.
++    case malformed
++    /// Some evidence existed, but not one uninterrupted complete sample set.
++    case partial
++}
++
++/// A window-local or process-wide peak with the evidence needed to interpret it.
++///
++/// A partial peak retains its highest complete raw sample for diagnosis but has
++/// no `scoredBytes`. That is the fail-closed distinction between "we measured
++/// some of it" and "the whole window was measured".
++public struct RuntimeMemoryPeak: Codable, Equatable, Sendable {
++    public let accounting: RuntimeMemoryAccounting
++    public let scoreSemantics: String
++    public let status: RuntimeMemoryPeakStatus
++    public let scoredBytes: Int?
++    public let peakSample: RuntimeMemoryComponents?
++    public let successfulSampleCount: Int
++    public let readFailureCount: Int
++    public let malformedSampleCount: Int
++    public let issues: [String]
++
++    public static let absent = RuntimeMemoryPeak(summarizing: [])
++
++    public init(summarizing reads: [RuntimeMemorySampleRead]) {
++        var complete: [RuntimeMemoryComponents] = []
++        var readFailures = 0
++        var malformed = 0
++        var issues: [String] = []
++        for read in reads {
++            switch read {
++            case .measured(let sample):
++                complete.append(sample)
++            case .readFailed(let issue):
++                readFailures += 1
++                if !issues.contains(issue) { issues.append(issue) }
++            case .malformed(let issue):
++                malformed += 1
++                if !issues.contains(issue) { issues.append(issue) }
++            }
++        }
++        let peak = complete.max {
++            $0.residentMemoryUpperBoundBytes < $1.residentMemoryUpperBoundBytes
++        }
++        let status: RuntimeMemoryPeakStatus
++        if reads.isEmpty {
++            status = .absent
++        } else if !complete.isEmpty && readFailures == 0 && malformed == 0 {
++            status = .measured
++        } else if !complete.isEmpty || (readFailures > 0 && malformed > 0) {
++            status = .partial
++        } else if malformed > 0 {
++            status = .malformed
++        } else {
++            status = .readFailed
++        }
++        accounting = .residentMemoryUpperBound
++        scoreSemantics = RuntimeMemoryAccounting.scoreSemantics
++        self.status = status
++        scoredBytes = status == .measured ? peak?.residentMemoryUpperBoundBytes : nil
++        peakSample = peak
++        successfulSampleCount = complete.count
++        readFailureCount = readFailures
++        malformedSampleCount = malformed
++        self.issues = issues
++    }
++
++    /// A concise production refusal reason. `nil` only for a scored window.
++    public var refusalReason: String? {
++        guard status != .measured else { return nil }
++        return
++            "resident memory upper bound is \(status.rawValue) "
++            + "(complete=\(successfulSampleCount), read-failed=\(readFailureCount), "
++            + "malformed=\(malformedSampleCount))"
++    }
++
++    /// The only value scoring may consume. A decoded document whose status,
++    /// counts, components and score disagree is malformed evidence, not a
++    /// measured peak, so it returns no value and the decision blocks.
++    public var validatedScoredBytes: Int? {
++        guard accounting == .residentMemoryUpperBound,
++            scoreSemantics == RuntimeMemoryAccounting.scoreSemantics,
++            successfulSampleCount >= 0, readFailureCount >= 0, malformedSampleCount >= 0
++        else { return nil }
++        switch status {
++        case .measured:
++            guard successfulSampleCount > 0, readFailureCount == 0, malformedSampleCount == 0,
++                issues.isEmpty, let peakSample,
++                scoredBytes == peakSample.residentMemoryUpperBoundBytes
++            else { return nil }
++            return scoredBytes
++        case .absent:
++            guard successfulSampleCount == 0, readFailureCount == 0, malformedSampleCount == 0,
++                issues.isEmpty, scoredBytes == nil, peakSample == nil
++            else { return nil }
++            return nil
++        case .readFailed:
++            guard successfulSampleCount == 0, readFailureCount > 0, malformedSampleCount == 0,
++                !issues.isEmpty, scoredBytes == nil, peakSample == nil
++            else { return nil }
++            return nil
++        case .malformed:
++            guard successfulSampleCount == 0, readFailureCount == 0, malformedSampleCount > 0,
++                !issues.isEmpty, scoredBytes == nil, peakSample == nil
++            else { return nil }
++            return nil
++        case .partial:
++            guard scoredBytes == nil,
++                readFailureCount > 0 || malformedSampleCount > 0,
++                (peakSample != nil) == (successfulSampleCount > 0), !issues.isEmpty
++            else { return nil }
++            return nil
++        }
++    }
++}
++
++/// Parses the resident mapped-file component out of a complete `vmmap -summary`.
++public enum RuntimeVMMapSummary {
++    public enum Reading: Equatable, Sendable {
++        /// Complete summary with a mapped-file row.
++        case reported(raw: String, bytesUpperBound: Int)
++        /// Complete summary with no mapped-file row: a measured zero.
++        case notPresent
++        /// Output existed but did not constitute a complete, parseable summary.
++        case malformed(String)
++    }
++
++    public static func read(_ text: String) -> Reading {
++        let lines = text.split(whereSeparator: \Character.isNewline).map(String.init)
++        guard lines.contains(where: { $0.contains("Analysis Tool:") && $0.contains("vmmap") }),
++            lines.contains(where: { $0.contains("VIRTUAL") && $0.contains("RESIDENT") }),
++            lines.contains(where: { $0.hasPrefix("REGION TYPE") }),
++            lines.contains(where: { $0.hasPrefix("TOTAL") })
++        else {
++            return .malformed("vmmap-summary-incomplete")
++        }
++        let mapped = lines.filter { line in
++            line.split(whereSeparator: \Character.isWhitespace).prefix(2).map(String.init)
++                == ["mapped", "file"]
++        }
++        guard mapped.count <= 1 else { return .malformed("vmmap-mapped-file-row-ambiguous") }
++        guard let row = mapped.first else { return .notPresent }
++        let columns = row.split(whereSeparator: \Character.isWhitespace).map(String.init)
++        guard columns.count >= 4 else { return .malformed("vmmap-mapped-file-row-partial") }
++        let raw = columns[3]
++        guard let upperBound = displayBucketUpperBound(raw) else {
++            return .malformed("vmmap-mapped-file-resident-malformed")
++        }
++        return .reported(raw: raw, bytesUpperBound: upperBound)
++    }
++
++    /// vmmap prints human-readable buckets. Add one display quantum so the
++    /// persisted component is truly an upper bound even if vmmap truncates.
++    private static func displayBucketUpperBound(_ raw: String) -> Int? {
++        guard let suffix = raw.last else { return nil }
++        let multiplier: Double
++        switch suffix {
++        case "K": multiplier = 1_024
++        case "M": multiplier = 1_024 * 1_024
++        case "G": multiplier = 1_024 * 1_024 * 1_024
++        case "T": multiplier = 1_024 * 1_024 * 1_024 * 1_024
++        default: return nil
++        }
++        let numberText = String(raw.dropLast())
++        guard let value = Double(numberText), value >= 0, value.isFinite else { return nil }
++        let decimalPlaces =
++            numberText.split(separator: ".", omittingEmptySubsequences: false)
++            .dropFirst().first?.count ?? 0
++        let quantum = multiplier / pow(10, Double(decimalPlaces))
++        let upper = value * multiplier + quantum
++        guard upper.isFinite, upper <= Double(Int.max) else { return nil }
++        return Int(ceil(upper))
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeStreamDelta.swift b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeStreamDelta.swift
+new file mode 100644
+index 0000000..19d808d
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Sources/MLXSwiftRuntimeContract/RuntimeStreamDelta.swift
+@@ -0,0 +1,23 @@
++import Foundation
++
++/// The generated text carried by one OpenAI-compatible streamed delta.
++///
++/// The two deployed runtimes spell reasoning differently: `mlx_lm.server`
++/// uses `reasoning`, while `llama-server` uses `reasoning_content`.  Timing
++/// code must use this reader for both the first and last generated event so a
++/// field-name difference cannot move only one side's clock boundary.
++public struct RuntimeStreamDelta: Equatable, Sendable {
++    public let content: String
++    public let reasoning: String
++
++    public var generatedText: String { content + reasoning }
++    public var carriesGeneratedText: Bool { !generatedText.isEmpty }
++
++    public static func read(_ delta: [String: Any]) -> RuntimeStreamDelta {
++        let content = (delta["content"] as? String) ?? ""
++        let reasoning =
++            ((delta["reasoning"] as? String) ?? "")
++            + ((delta["reasoning_content"] as? String) ?? "")
++        return RuntimeStreamDelta(content: content, reasoning: reasoning)
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift
+index a0277fc..d0ddaf1 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkFootprintSampler.swift
+@@ -1,5 +1,6 @@
+ import Darwin
+ import Foundation
++import MLXSwiftRuntimeContract
+ 
+ /// One other process's physical footprint, or `nil` when it could not be read.
+ ///
+@@ -22,7 +23,60 @@ func physicalFootprintBytes(pid: Int) -> Int? {
+     return Int(usage.ri_phys_footprint)
+ }
+ 
+-/// Samples one pid's physical footprint until stopped, keeping both the
++/// One complete cross-runtime resident-memory reading.
++///
++/// The Mach component is exact. vmmap's resident mapped-file component is a
++/// rounded display bucket, so the parser supplies its upper edge. Adding the
++/// two can double-count some file-backed pages on runtimes whose allocator
++/// already charges them; that is why the resulting score is named and recorded
++/// as a conservative upper bound rather than as RSS or physical footprint.
++func residentMemorySample(pid: Int) -> RuntimeMemorySampleRead {
++    guard let physical = physicalFootprintBytes(pid: pid) else {
++        return .readFailed("mach-physical-footprint-unreadable")
++    }
++    let process = Process()
++    let output = Pipe()
++    process.executableURL = URL(fileURLWithPath: "/usr/bin/vmmap")
++    process.arguments = ["-summary", String(pid)]
++    process.standardOutput = output
++    process.standardError = FileHandle.nullDevice
++    do {
++        try process.run()
++    } catch {
++        return .readFailed("vmmap-launch-failed")
++    }
++    let data = output.fileHandleForReading.readDataToEndOfFile()
++    process.waitUntilExit()
++    guard process.terminationReason == .exit, process.terminationStatus == 0 else {
++        return .readFailed("vmmap-read-failed")
++    }
++    guard let text = String(data: data, encoding: .utf8) else {
++        return .malformed("vmmap-summary-not-utf8")
++    }
++    let raw: String?
++    let mappedUpperBound: Int
++    switch RuntimeVMMapSummary.read(text) {
++    case .reported(let residentToken, let upperBound):
++        raw = residentToken
++        mappedUpperBound = upperBound
++    case .notPresent:
++        raw = nil
++        mappedUpperBound = 0
++    case .malformed(let issue):
++        return .malformed(issue)
++    }
++    guard
++        let components = RuntimeMemoryComponents(
++            machPhysicalFootprintBytes: physical,
++            vmmapResidentMappedFileRaw: raw,
++            residentMappedFileBytesUpperBound: mappedUpperBound)
++    else {
++        return .malformed("resident-memory-component-overflow")
++    }
++    return .measured(components)
++}
++
++/// Samples one pid's resident-memory upper bound until stopped, keeping both the
+ /// process-wide peak and a scenario-local one.
+ ///
+ /// The two are kept apart because conflating them decided a verdict once. A
+@@ -34,22 +88,32 @@ func physicalFootprintBytes(pid: Int) -> Int? {
+ /// work, against 1.399x on the one scenario both runtimes finished.
+ final class BenchmarkFootprintSampler: @unchecked Sendable {
+     private let pid: Int
++    private let accounting: RuntimeMemoryAccounting
+     private let interval: TimeInterval
+     private let lock = NSLock()
+     private var stopped = false
+-    private var processPeak: Int?
+-    private var windowPeak: Int?
+-    private var successfulSamples = 0
+-    private var failedSamples = 0
++    private var processReads: [RuntimeMemorySampleRead] = []
++    private var windowReads: [RuntimeMemorySampleRead] = []
+     private var windowLoadMax: Double?
+     private var passLoadMax: Double?
+     private var thread: Thread?
+ 
+-    init(pid: Int, interval: TimeInterval = 0.25) {
++    init(
++        pid: Int, accounting: RuntimeMemoryAccounting = .residentMemoryUpperBound,
++        interval: TimeInterval = 0.25
++    ) {
+         self.pid = pid
++        self.accounting = accounting
+         self.interval = interval
+     }
+ 
++    func currentMemoryReading() -> RuntimeMemorySampleRead {
++        switch accounting {
++        case .residentMemoryUpperBound:
++            return residentMemorySample(pid: pid)
++        }
++    }
++
+     func start() {
+         let thread = Thread { [weak self] in self?.loop() }
+         thread.name = "benchmark-footprint-\(pid)"
+@@ -63,7 +127,7 @@ final class BenchmarkFootprintSampler: @unchecked Sendable {
+             let done = stopped
+             lock.unlock()
+             if done { return }
+-            let value = physicalFootprintBytes(pid: pid)
++            let reading = currentMemoryReading()
+             // Sampled beside the footprint rather than once per pass: what
+             // matters is whether the machine was busy *while this scenario was
+             // being timed*, and a single reading taken at the end would miss a
+@@ -74,13 +138,8 @@ final class BenchmarkFootprintSampler: @unchecked Sendable {
+                 if windowLoadMax == nil || load > windowLoadMax! { windowLoadMax = load }
+                 if passLoadMax == nil || load > passLoadMax! { passLoadMax = load }
+             }
+-            if let value {
+-                successfulSamples += 1
+-                if processPeak == nil || value > processPeak! { processPeak = value }
+-                if windowPeak == nil || value > windowPeak! { windowPeak = value }
+-            } else {
+-                failedSamples += 1
+-            }
++            processReads.append(reading)
++            windowReads.append(reading)
+             lock.unlock()
+             Thread.sleep(forTimeInterval: interval)
+         }
+@@ -90,6 +149,10 @@ final class BenchmarkFootprintSampler: @unchecked Sendable {
+         lock.lock()
+         stopped = true
+         lock.unlock()
++        // A vmmap read can still be in flight when the stop flag is set. Wait
++        // for this owned thread before taking the final process peak; otherwise
++        // the supposedly final record races one last sample and can omit it.
++        while thread?.isExecuting == true { usleep(10_000) }
+     }
+ 
+     /// Start a fresh scenario-local window.
+@@ -98,27 +161,42 @@ final class BenchmarkFootprintSampler: @unchecked Sendable {
+     /// landing during the reset cannot be counted into both windows.
+     func beginWindow() {
+         lock.lock()
+-        windowPeak = nil
++        windowReads = []
+         windowLoadMax = nil
+         lock.unlock()
+     }
+ 
+     /// Peak within the window opened by the last ``beginWindow()``.
+     ///
+-    /// `nil` when the window caught no successful sample — a scenario short
+-    /// enough to fall between two ticks. That stays `nil`: the comparison treats
+-    /// an unmeasured footprint as a blocker, and substituting the process peak
+-    /// would answer the question with a different quantity's number.
+-    func currentWindowPeak() -> Int? {
++    /// An explicit absent/failed/malformed/partial result when the window did
++    /// not yield one uninterrupted set of complete samples. The comparison
++    /// refuses every such state instead of substituting a different window's
++    /// reading.
++    func currentWindowPeak() -> RuntimeMemoryPeak {
+         lock.lock()
+         defer { lock.unlock() }
+-        return windowPeak
++        return RuntimeMemoryPeak(summarizing: windowReads)
+     }
+ 
+-    func processPeakSoFar() -> Int? {
++    func processPeakSoFar() -> RuntimeMemoryPeak {
+         lock.lock()
+         defer { lock.unlock() }
+-        return processPeak
++        return RuntimeMemoryPeak(summarizing: processReads)
++    }
++
++    /// Take the end-of-window sample synchronously and return both peaks from
++    /// the same completed read set. This gives even a sub-interval scenario a
++    /// real attempt while the periodic sampler continues to catch transient
++    /// peaks during longer work.
++    func capturePeaks() -> (window: RuntimeMemoryPeak, process: RuntimeMemoryPeak) {
++        let reading = currentMemoryReading()
++        lock.lock()
++        processReads.append(reading)
++        windowReads.append(reading)
++        let window = RuntimeMemoryPeak(summarizing: windowReads)
++        let process = RuntimeMemoryPeak(summarizing: processReads)
++        lock.unlock()
++        return (window, process)
+     }
+ 
+     /// Highest 1-minute load average inside the window opened by the last
+@@ -135,10 +213,14 @@ final class BenchmarkFootprintSampler: @unchecked Sendable {
+         return passLoadMax
+     }
+ 
+-    func sampleCounts() -> (successful: Int, failed: Int) {
++    func sampleCounts() -> (successful: Int, readFailed: Int, malformed: Int) {
+         lock.lock()
+         defer { lock.unlock() }
+-        return (successfulSamples, failedSamples)
++        let peak = RuntimeMemoryPeak(summarizing: processReads)
++        return (
++            peak.successfulSampleCount, peak.readFailureCount,
++            peak.malformedSampleCount
++        )
+     }
+ }
+ 
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkHTTPDriver.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkHTTPDriver.swift
+index d628510..620cb90 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkHTTPDriver.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkHTTPDriver.swift
+@@ -25,6 +25,9 @@ enum BenchmarkHTTPDriver {
+         /// reasoning. Waiting for the first *content* delta would report the
+         /// length of the model's thinking as runtime latency.
+         var timeToFirstTokenSeconds: Double?
++        /// Seconds to the last frame carrying generated text, under the same
++        /// event definition as ``timeToFirstTokenSeconds``.
++        var timeToLastTokenSeconds: Double?
+         var totalSeconds: Double
+         var promptTokens: Int?
+         var completionTokens: Int?
+@@ -130,6 +133,7 @@ enum BenchmarkHTTPDriver {
+         var raw = Data()
+         var firstByteAt: Double?
+         var timeToFirstToken: Double?
++        var timeToLastToken: Double?
+         var promptTokens: Int?
+         var completionTokens: Int?
+         var content = ""
+@@ -145,7 +149,8 @@ enum BenchmarkHTTPDriver {
+                     responseDigest: digest(of: raw), responseByteCount: raw.count,
+                     sentAtUnixSeconds: sentAt, firstByteAtUnixSeconds: firstByteAt,
+                     lastByteAtUnixSeconds: lastByteAt),
+-                timeToFirstTokenSeconds: timeToFirstToken, totalSeconds: lastByteAt - sentAt,
++                timeToFirstTokenSeconds: timeToFirstToken,
++                timeToLastTokenSeconds: timeToLastToken, totalSeconds: lastByteAt - sentAt,
+                 promptTokens: promptTokens, completionTokens: completionTokens,
+                 content: content, finishReason: finishReason, failure: failure)
+         }
+@@ -181,13 +186,13 @@ enum BenchmarkHTTPDriver {
+                 }
+                 for choice in (frame["choices"] as? [[String: Any]]) ?? [] {
+                     let delta = (choice["delta"] as? [String: Any]) ?? [:]
+-                    let text =
+-                        ((delta["content"] as? String) ?? "")
+-                        + ((delta["reasoning"] as? String) ?? "")
+-                    if !text.isEmpty, timeToFirstToken == nil {
+-                        timeToFirstToken = Date().timeIntervalSince1970 - sentAt
++                    let generated = RuntimeStreamDelta.read(delta)
++                    if generated.carriesGeneratedText {
++                        let eventTime = Date().timeIntervalSince1970 - sentAt
++                        if timeToFirstToken == nil { timeToFirstToken = eventTime }
++                        timeToLastToken = eventTime
+                     }
+-                    content += (delta["content"] as? String) ?? ""
++                    content += generated.content
+                     if let reason = choice["finish_reason"] as? String { finishReason = reason }
+                 }
+             }
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkPass.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkPass.swift
+index 9a253ea..18484fd 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkPass.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkPass.swift
+@@ -30,6 +30,8 @@ final class BenchmarkPass {
+     /// soak runner for why the aggregate is not a decode rate.
+     private(set) var soakDetail: [String: Double?] = [:]
+     private(set) var lifecycle: [String: Double?] = [:]
++    private(set) var warmupMemory: RuntimeMemoryPeak = .absent
++    private(set) var soakMemory: RuntimeMemoryPeak = .absent
+ 
+     init(
+         runtime: String,
+@@ -53,6 +55,10 @@ final class BenchmarkPass {
+ 
+     func beginScenarioWindow() { sampler.beginWindow() }
+ 
++    /// The same memory source the sampler uses. Warm-up and soak cannot fall
++    /// back to the old Mach-only reading through a separate call path.
++    func currentMemoryReading() -> RuntimeMemorySampleRead { sampler.currentMemoryReading() }
++
+     func stream(body: Data) async -> BenchmarkHTTPDriver.StreamedCompletion {
+         await BenchmarkHTTPDriver.stream(
+             session: session, endpoint: endpoint.appendingPathComponent("chat/completions"),
+@@ -90,10 +96,19 @@ final class BenchmarkPass {
+ 
+     func recordLifecycle(_ key: String, _ value: Double?) { lifecycle[key] = value }
+ 
++    func recordWarmupMemory(_ reading: RuntimeMemorySampleRead) {
++        warmupMemory = RuntimeMemoryPeak(summarizing: [reading])
++    }
++
+     func recordSoak(
+         iterations: Int, elapsed: Double, completionTokens: Int, latencies: [Double],
+-        footprints: [Int]
++        memoryReads: [RuntimeMemorySampleRead]
+     ) {
++        soakMemory = RuntimeMemoryPeak(summarizing: memoryReads)
++        let memoryValues = memoryReads.compactMap { reading -> Int? in
++            guard case .measured(let components) = reading else { return nil }
++            return components.residentMemoryUpperBoundBytes
++        }
+         let sorted = latencies.sorted()
+         soakDetail = [
+             "iterations": Double(iterations),
+@@ -102,10 +117,10 @@ final class BenchmarkPass {
+             "first_latency_seconds": latencies.first,
+             "last_latency_seconds": latencies.last,
+             "median_latency_seconds": sorted.isEmpty ? nil : sorted[sorted.count / 2],
+-            "first_footprint_bytes": footprints.first.map(Double.init),
+-            "last_footprint_bytes": footprints.last.map(Double.init),
+-            "footprint_drift_bytes": footprints.count >= 2
+-                ? Double(footprints[footprints.count - 1] - footprints[0]) : nil,
++            "first_resident_memory_upper_bound_bytes": memoryValues.first.map(Double.init),
++            "last_resident_memory_upper_bound_bytes": memoryValues.last.map(Double.init),
++            "resident_memory_upper_bound_drift_bytes": memoryValues.count >= 2
++                ? Double(memoryValues[memoryValues.count - 1] - memoryValues[0]) : nil,
+         ]
+     }
+ 
+@@ -118,10 +133,15 @@ final class BenchmarkPass {
+         _ name: String, _ failureMode: String,
+         exchanges: [BenchmarkHTTPDriver.Exchange], wallClock: Double? = nil
+     ) -> RuntimeBenchmark.ScenarioResult {
+-        RuntimeBenchmark.ScenarioResult(
++        let memory = sampler.capturePeaks()
++        let windowMemory = memory.window
++        let processMemory = memory.process
++        return RuntimeBenchmark.ScenarioResult(
+             name: name, succeeded: false, failureMode: failureMode, wallClockSeconds: wallClock,
+-            peakPhysicalFootprintBytes: sampler.currentWindowPeak(),
+-            processPeakSoFarBytes: sampler.processPeakSoFar(),
++            peakPhysicalFootprintBytes: windowMemory.peakSample?.machPhysicalFootprintBytes,
++            processPeakSoFarBytes: processMemory.peakSample?.machPhysicalFootprintBytes,
++            peakResidentMemory: windowMemory,
++            processResidentMemoryPeakSoFar: processMemory,
+             hostLoadAverageMax: sampler.currentWindowLoadMax(),
+             transcript: RuntimeBenchmark.ScenarioTranscript(exchanges: exchanges))
+     }
+@@ -136,13 +156,18 @@ final class BenchmarkPass {
+         decode: Double?,
+         wallClock: Double
+     ) -> RuntimeBenchmark.ScenarioResult {
+-        RuntimeBenchmark.ScenarioResult(
++        let memory = sampler.capturePeaks()
++        let windowMemory = memory.window
++        let processMemory = memory.process
++        return RuntimeBenchmark.ScenarioResult(
+             name: name, succeeded: true, failureMode: nil, promptTokens: promptTokens,
+             completionTokens: completionTokens, timeToFirstTokenSeconds: timeToFirstToken,
+             prefillTokensPerSecond: prefill, decodeTokensPerSecond: decode,
+             wallClockSeconds: wallClock,
+-            peakPhysicalFootprintBytes: sampler.currentWindowPeak(),
+-            processPeakSoFarBytes: sampler.processPeakSoFar(),
++            peakPhysicalFootprintBytes: windowMemory.peakSample?.machPhysicalFootprintBytes,
++            processPeakSoFarBytes: processMemory.peakSample?.machPhysicalFootprintBytes,
++            peakResidentMemory: windowMemory,
++            processResidentMemoryPeakSoFar: processMemory,
+             hostLoadAverageMax: sampler.currentWindowLoadMax(),
+             transcript: RuntimeBenchmark.ScenarioTranscript(exchanges: exchanges))
+     }
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift
+index 060b5c6..5c0384b 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunCommand.swift
+@@ -290,8 +290,33 @@ enum BenchmarkRunCommand {
+                 mandated.append(entry)
+             }
+         }
++        let fixedOrderLimitation =
++            "pass order is fixed baseline then candidate: residual heat or unreleased host "
++            + "pressure can disadvantage the candidate, while shared host cache state can "
++            + "favour it; direction is indeterminate and the per-pass host load is diagnostic, "
++            + "not an admission gate"
++        let parityPolicyDirection =
++            "parity policy is intentionally one-way: baseline success plus candidate failure "
++            + "blocks, while the reverse does not; direction favours the incumbent, and this is "
++            + "a migration acceptance policy rather than a measured performance metric"
++        let mtpOffDirection =
++            "MTP/speculative decoding is forced off for algorithmic parity because the MLX "
++            + "incumbent drops the MTP head: direction is against llama.cpp, which cannot use "
++            + "a product capability the incumbent lacks"
++        let residentMemoryBoundDirection =
++            "memory is scored as a conservative upper bound: Mach physical footprint plus the "
++            + "upper edge of vmmap resident mapped-file bytes; double-counting can overstate a "
++            + "runtime whose footprint already charges mapped pages, so residual direction is "
++            + "runtime-dependent and the raw components are retained"
+         func declared(_ caller: [String]) -> [String] {
+             var entries = mandated
++            for limitation in [
++                fixedOrderLimitation, parityPolicyDirection, mtpOffDirection,
++                residentMemoryBoundDirection,
++            ]
++            where !entries.contains(limitation) {
++                entries.append(limitation)
++            }
+             for entry in caller where !entries.contains(entry) { entries.append(entry) }
+             return entries
+         }
+@@ -451,13 +476,15 @@ enum BenchmarkRunCommand {
+         let attestation: RuntimeAttestation
+         let lifecycle: [String: Double?]
+         let soak: [String: Double?]
++        let warmupMemory: RuntimeMemoryPeak
++        let soakMemory: RuntimeMemoryPeak
+         /// Highest 1-minute host load average seen anywhere in this pass.
+         ///
+         /// Reported beside the decision, never scored. A pass measured while
+         /// something else owned the machine is a measurement of that something
+         /// else, and the first revision-4 attempt was exactly that.
+         let hostLoadAverageMax: Double?
+-        let footprintSamples: (successful: Int, failed: Int)
++        let memorySamples: (successful: Int, readFailed: Int, malformed: Int)
+         let harnessExitStatus: Int32?
+     }
+ 
+@@ -484,6 +511,8 @@ enum BenchmarkRunCommand {
+         let host = "127.0.0.1"
+         let profile = try BenchmarkLaunchConfig.profile(
+             named: profileName, in: configPath, host: host, port: port)
++        let memoryAccounting = RuntimeMemoryAccounting.forExecutable(
++            profile.executable, modelPath: model.path, launchArgv: profile.argv)
+         guard profile.argv.contains(model.path) else {
+             throw RunError.unusableInput(
+                 "profile \(profileName.debugDescription) does not pass "
+@@ -543,7 +572,8 @@ enum BenchmarkRunCommand {
+         }
+         let openedAt = Date().timeIntervalSince1970
+ 
+-        let sampler = BenchmarkFootprintSampler(pid: Int(runtimePID))
++        let sampler = BenchmarkFootprintSampler(
++            pid: Int(runtimePID), accounting: memoryAccounting)
+         sampler.start()
+         let session = BenchmarkHTTPDriver.session(requestTimeout: requestTimeout)
+         let pass = BenchmarkPass(
+@@ -652,7 +682,8 @@ enum BenchmarkRunCommand {
+                 launchExecutableDigest: observedExecutableDigest,
+                 launchArgv: profile.argv, runtimeProcessID: Int(runtimePID)),
+             pins: pins, startedAtUnixSeconds: startedAt, finishedAtUnixSeconds: finishedAt,
+-            peakPhysicalFootprintBytes: processPeak, scenarios: scenarios,
++            peakPhysicalFootprintBytes: processPeak.peakSample?.machPhysicalFootprintBytes,
++            peakResidentMemory: processPeak, scenarios: scenarios,
+             declaredAsymmetries: declaredAsymmetries)
+ 
+         // The seal, computed here and nowhere else, over the record this
+@@ -684,8 +715,9 @@ enum BenchmarkRunCommand {
+ 
+         return PassOutcome(
+             record: record, attestation: attestation, lifecycle: pass.lifecycle,
+-            soak: pass.soakDetail, hostLoadAverageMax: passLoadMax,
+-            footprintSamples: sampleCounts, harnessExitStatus: harnessExit)
++            soak: pass.soakDetail, warmupMemory: pass.warmupMemory,
++            soakMemory: pass.soakMemory, hostLoadAverageMax: passLoadMax,
++            memorySamples: sampleCounts, harnessExitStatus: harnessExit)
+     }
+ 
+     /// Wait until the *pinned* model answers a completion.
+@@ -739,9 +771,7 @@ enum BenchmarkRunCommand {
+                     + String(decoding: warmup.body.prefix(400), as: UTF8.self))
+         }
+         pass.recordLifecycle("first_completion_seconds", Date().timeIntervalSince(started))
+-        pass.recordLifecycle(
+-            "footprint_after_warmup_bytes",
+-            physicalFootprintBytes(pid: pass.runtimeProcessID).map(Double.init))
++        pass.recordWarmupMemory(pass.currentMemoryReading())
+     }
+ 
+     /// What one `GET /v1/models` against the live runtime said.
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunPins.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunPins.swift
+index 3994fb2..40ac94a 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunPins.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkRunPins.swift
+@@ -326,7 +326,14 @@ extension BenchmarkRunCommand {
+     /// soak's aggregate output rate, which is not a decode rate — belongs where
+     /// it cannot be mistaken for one.
+     static func writeSession(path: String, baseline: PassOutcome, candidate: PassOutcome) throws {
+-        func block(_ outcome: PassOutcome) -> [String: Any] {
++        func memoryObject(_ peak: RuntimeMemoryPeak) throws -> Any {
++            let data = try JSONEncoder().encode(peak)
++            guard let object = try? JSONSerialization.jsonObject(with: data) else {
++                throw RunError.aborted("failed to encode a session memory reading")
++            }
++            return object
++        }
++        func block(_ outcome: PassOutcome) throws -> [String: Any] {
+             var soak: [String: Any] = [:]
+             for (key, value) in outcome.soak { soak[key] = value ?? NSNull() }
+             var lifecycle: [String: Any] = [:]
+@@ -335,16 +342,19 @@ extension BenchmarkRunCommand {
+                 "runtime": outcome.record.runtime,
+                 "lifecycle": lifecycle,
+                 "soak": soak,
++                "warmupMemory": try memoryObject(outcome.warmupMemory),
++                "soakMemory": try memoryObject(outcome.soakMemory),
+                 "hostLoadAverageMax": outcome.hostLoadAverageMax ?? NSNull(),
+-                "footprintSamplesSuccessful": outcome.footprintSamples.successful,
+-                "footprintSamplesFailed": outcome.footprintSamples.failed,
++                "memorySamplesSuccessful": outcome.memorySamples.successful,
++                "memorySamplesReadFailed": outcome.memorySamples.readFailed,
++                "memorySamplesMalformed": outcome.memorySamples.malformed,
+                 "harnessExitStatus": outcome.harnessExitStatus.map { Int($0) } ?? NSNull(),
+                 "transcriptSealed": outcome.attestation.transcriptDigest ?? NSNull(),
+             ]
+         }
+         let document: [String: Any] = [
+-            "baseline": block(baseline),
+-            "candidate": block(candidate),
++            "baseline": try block(baseline),
++            "candidate": try block(candidate),
+         ]
+         guard
+             let data = try? JSONSerialization.data(
+diff --git a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkScenarios.swift b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkScenarios.swift
+index bd61f6e..83fad6d 100644
+--- a/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkScenarios.swift
++++ b/tools/mlx-swift-runtime-prototype/Sources/mlx-swift-runtime-prototype/BenchmarkScenarios.swift
+@@ -119,9 +119,10 @@ enum BenchmarkScenarios {
+             prefill = Double(prompt) / ttft
+         }
+         if let completion = stream.completionTokens, completion > 1,
+-            let ttft = stream.timeToFirstTokenSeconds, stream.totalSeconds > ttft
++            let first = stream.timeToFirstTokenSeconds,
++            let last = stream.timeToLastTokenSeconds, last > first
+         {
+-            decode = Double(completion - 1) / (stream.totalSeconds - ttft)
++            decode = Double(completion - 1) / (last - first)
+         }
+         return (prefill, decode)
+     }
+@@ -326,7 +327,7 @@ enum BenchmarkScenarios {
+     ) async -> RuntimeBenchmark.ScenarioResult {
+         var exchanges: [BenchmarkHTTPDriver.Exchange] = []
+         var latencies: [Double] = []
+-        var footprints: [Int] = []
++        var memoryReads: [RuntimeMemorySampleRead] = []
+         var promptTokens = 0
+         var completionTokens = 0
+         var failures: [String] = []
+@@ -363,9 +364,7 @@ enum BenchmarkScenarios {
+             }
+             promptTokens += stream.promptTokens ?? 0
+             completionTokens += stream.completionTokens ?? 0
+-            if let value = physicalFootprintBytes(pid: pass.runtimeProcessID) {
+-                footprints.append(value)
+-            }
++            memoryReads.append(pass.currentMemoryReading())
+         }
+         let elapsed = Date().timeIntervalSince1970 - startedAll
+         if !failures.isEmpty {
+@@ -382,7 +381,7 @@ enum BenchmarkScenarios {
+         // goes into the session's soak block under its own name.
+         pass.recordSoak(
+             iterations: iterations, elapsed: elapsed, completionTokens: completionTokens,
+-            latencies: latencies, footprints: footprints)
++            latencies: latencies, memoryReads: memoryReads)
+         return pass.succeeded(
+             name, exchanges: exchanges, promptTokens: promptTokens,
+             completionTokens: completionTokens, timeToFirstToken: nil, prefill: nil, decode: nil,
+diff --git a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkTests.swift b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkTests.swift
+index 185a583..c973904 100644
+--- a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkTests.swift
++++ b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeBenchmarkTests.swift
+@@ -110,6 +110,16 @@ struct RuntimeBenchmarkTests {
+         ])
+     }
+ 
++    static func memory(_ bytes: Int?) -> RuntimeMemoryPeak {
++        guard let bytes,
++            let components = RuntimeMemoryComponents(
++                machPhysicalFootprintBytes: bytes,
++                vmmapResidentMappedFileRaw: nil,
++                residentMappedFileBytesUpperBound: 0)
++        else { return .absent }
++        return RuntimeMemoryPeak(summarizing: [.measured(components)])
++    }
++
+     static func scenario(
+         _ name: String,
+         succeeded: Bool = true,
+@@ -119,6 +129,8 @@ struct RuntimeBenchmarkTests {
+         decode: Double? = 10,
+         promptTokens: Int? = 512,
+         footprint: Int? = 29_000_000_000,
++        residentMemory: RuntimeMemoryPeak? = nil,
++        processResidentMemory: RuntimeMemoryPeak? = nil,
+         transcript: RuntimeBenchmark.ScenarioTranscript? = nil
+     ) -> RuntimeBenchmark.ScenarioResult {
+         RuntimeBenchmark.ScenarioResult(
+@@ -128,6 +140,8 @@ struct RuntimeBenchmarkTests {
+             decodeTokensPerSecond: decode, wallClockSeconds: 7,
+             peakPhysicalFootprintBytes: footprint,
+             processPeakSoFarBytes: 29_000_000_000,
++            peakResidentMemory: residentMemory ?? memory(footprint),
++            processResidentMemoryPeakSoFar: processResidentMemory ?? memory(29_000_000_000),
+             transcript: transcript ?? Self.transcript(at: 0))
+     }
+ 
+@@ -163,6 +177,8 @@ struct RuntimeBenchmarkTests {
+             wallClockSeconds: scenario.wallClockSeconds,
+             peakPhysicalFootprintBytes: scenario.peakPhysicalFootprintBytes,
+             processPeakSoFarBytes: scenario.processPeakSoFarBytes,
++            peakResidentMemory: scenario.peakResidentMemory,
++            processResidentMemoryPeakSoFar: scenario.processResidentMemoryPeakSoFar,
+             transcript: RuntimeBenchmark.ScenarioTranscript(exchanges: moved))
+     }
+ 
+@@ -172,6 +188,7 @@ struct RuntimeBenchmarkTests {
+         startedAt: Double,
+         finishedAt: Double,
+         footprint: Int? = 29_000_000_000,
++        residentMemory: RuntimeMemoryPeak? = nil,
+         scenarios: [RuntimeBenchmark.ScenarioResult] = [scenario("short_prompt")],
+         asymmetries: [String] = [],
+         revisions: [String: String] = ["runtime": "x"],
+@@ -188,6 +205,7 @@ struct RuntimeBenchmarkTests {
+             provenance: bound, pins: pins,
+             startedAtUnixSeconds: startedAt, finishedAtUnixSeconds: finishedAt,
+             peakPhysicalFootprintBytes: footprint,
++            peakResidentMemory: residentMemory ?? memory(footprint),
+             scenarios: scenarios.map { anchored($0, at: startedAt + 1) },
+             declaredAsymmetries: asymmetries)
+     }
+@@ -537,7 +555,7 @@ struct RuntimeBenchmarkTests {
+             ("time_to_first_token_seconds", 1.5, 100.0, 10.0, 29_000_000_000),
+             ("prefill_tokens_per_second", 1.0, 50.0, 10.0, 29_000_000_000),
+             ("decode_tokens_per_second", 1.0, 100.0, 5.0, 29_000_000_000),
+-            ("peak_physical_footprint_bytes", 1.0, 100.0, 10.0, 40_000_000_000),
++            ("peak_resident_memory_upper_bound_bytes", 1.0, 100.0, 10.0, 40_000_000_000),
+         ] as [(String, Double, Double, Double, Int)])
+     func rejectsOutsideThreshold(
+         metric: String, ttft: Double, prefill: Double, decode: Double, footprint: Int
+@@ -587,7 +605,7 @@ struct RuntimeBenchmarkTests {
+         }
+     }
+ 
+-    @Test("an unmeasured process footprint is a blocker, not a pass")
++    @Test("an unmeasured process resident-memory bound is a blocker, not a pass")
+     func refusesUnmeasuredFootprint() throws {
+         let candidate = Self.record(
+             runtime: "mlx-swift", startedAt: 300, finishedAt: 400, footprint: nil)
+@@ -598,10 +616,47 @@ struct RuntimeBenchmarkTests {
+         #expect(!decision.accepted)
+         #expect(
+             decision.blockers.contains {
+-                $0.contains("peak_physical_footprint_bytes") && $0.contains("not measured")
++                $0.contains("peak_resident_memory_upper_bound_bytes")
++                    && $0.contains("not measured")
+             })
+     }
+ 
++    @Test("failed, malformed and partial resident-memory reads all fail closed")
++    func refusesIncompleteResidentMemoryEvidence() throws {
++        let components = try #require(
++            RuntimeMemoryComponents(
++                machPhysicalFootprintBytes: 29_000_000_000,
++                vmmapResidentMappedFileRaw: "1.0G",
++                residentMappedFileBytesUpperBound: 1_073_741_825))
++        let incomplete: [RuntimeMemoryPeak] = [
++            RuntimeMemoryPeak(summarizing: [.readFailed("vmmap-read-failed")]),
++            RuntimeMemoryPeak(summarizing: [.malformed("vmmap-summary-incomplete")]),
++            RuntimeMemoryPeak(
++                summarizing: [.measured(components), .readFailed("vmmap-read-failed")]),
++        ]
++        for peak in incomplete {
++            let candidate = Self.record(
++                runtime: "mlx-swift", startedAt: 300, finishedAt: 400,
++                residentMemory: peak,
++                scenarios: [
++                    Self.scenario(
++                        "short_prompt", residentMemory: peak,
++                        processResidentMemory: peak)
++                ])
++            let comparison = try Self.admit(
++                baseline: Self.baseline, candidate: candidate, requiredScenarios: [])
++            let decision = RuntimeBenchmark.decide(
++                comparison: comparison, thresholds: Self.thresholds)
++            #expect(!decision.accepted, "\(peak.status) evidence was scored")
++            #expect(
++                decision.blockers.contains {
++                    $0.contains("peak_resident_memory_upper_bound_bytes")
++                        && $0.contains("not measured")
++                },
++                "\(peak.status) did not produce a memory blocker")
++        }
++    }
++
+     @Test("a zero baseline yields no ratio and blocks rather than reading as infinite headroom")
+     func refusesZeroBaseline() throws {
+         let baseline = Self.record(
+@@ -618,7 +673,7 @@ struct RuntimeBenchmarkTests {
+         // reading was the zero.
+         #expect(
+             decision.deltas.allSatisfy {
+-                $0.ratio == nil || $0.metric.contains("footprint") || $0.metric == "prompt_tokens"
++                $0.ratio == nil || $0.metric.contains("memory") || $0.metric == "prompt_tokens"
+             })
+     }
+ 
+@@ -984,7 +1039,7 @@ struct RuntimeBenchmarkTests {
+         #expect(!decision.accepted)
+     }
+ 
+-    @Test("scenario-local footprints are scored, and a scenario-local blow-out is caught")
++    @Test("scenario-local resident-memory bounds are scored and catch a blow-out")
+     func scoresScenarioLocalFootprint() throws {
+         // Whole-process maxima that pass the band, scenario-local ones that do
+         // not: 44.01 GiB against 31.47 GiB is 1.399x on the one scenario both
+@@ -1005,7 +1060,8 @@ struct RuntimeBenchmarkTests {
+             comparison: comparison, thresholds: Self.thresholds)
+         let scenarioDelta = try #require(
+             decision.deltas.first {
+-                $0.scenario == "short_prompt" && $0.metric == "peak_physical_footprint_bytes"
++                $0.scenario == "short_prompt"
++                    && $0.metric == "peak_resident_memory_upper_bound_bytes"
+             })
+         #expect(scenarioDelta.verdict == "outside")
+         #expect((scenarioDelta.ratio ?? 0) > 1.39)
+@@ -1016,7 +1072,7 @@ struct RuntimeBenchmarkTests {
+         #expect(!decision.accepted)
+     }
+ 
+-    @Test("an unmeasured scenario-local footprint blocks rather than falling back")
++    @Test("an unmeasured scenario-local resident bound blocks rather than falling back")
+     func refusesUnmeasuredScenarioFootprint() throws {
+         let candidate = Self.record(
+             runtime: "mlx-swift", startedAt: 300, finishedAt: 400,
+@@ -1029,7 +1085,7 @@ struct RuntimeBenchmarkTests {
+         #expect(!decision.accepted)
+         #expect(
+             decision.blockers.contains {
+-                $0.contains("short_prompt/peak_physical_footprint_bytes")
++                $0.contains("short_prompt/peak_resident_memory_upper_bound_bytes")
+                     && $0.contains("not measured")
+             })
+     }
+@@ -1488,7 +1544,9 @@ struct RuntimeBenchmarkTranscriptTests {
+             command: Fixture.provenance(executableDigest: Fixture.digest("12")).harnessCommand,
+             provenance: Fixture.provenance(executableDigest: Fixture.digest("12")),
+             pins: Fixture.pins, startedAtUnixSeconds: 300, finishedAtUnixSeconds: 400,
+-            peakPhysicalFootprintBytes: 29_000_000_000, scenarios: candidateScenarios,
++            peakPhysicalFootprintBytes: 29_000_000_000,
++            peakResidentMemory: Fixture.memory(29_000_000_000),
++            scenarios: candidateScenarios,
+             declaredAsymmetries: [])
+         return (candidate, Fixture.attestation(for: candidate, transcriptDigest: seal))
+     }
+@@ -1538,6 +1596,8 @@ struct RuntimeBenchmarkTranscriptTests {
+             decodeTokensPerSecond: 10, wallClockSeconds: 7,
+             peakPhysicalFootprintBytes: 29_000_000_000,
+             processPeakSoFarBytes: 29_000_000_000,
++            peakResidentMemory: Fixture.memory(29_000_000_000),
++            processResidentMemoryPeakSoFar: Fixture.memory(29_000_000_000),
+             transcript: exchanges.map { RuntimeBenchmark.ScenarioTranscript(exchanges: $0) })
+     }
+ 
+@@ -1697,6 +1757,8 @@ struct RuntimeBenchmarkTranscriptTests {
+         wallClock: Double?? = nil,
+         windowPeak: Int?? = nil,
+         processPeak: Int?? = nil,
++        windowResidentMemory: RuntimeMemoryPeak? = nil,
++        processResidentMemory: RuntimeMemoryPeak? = nil,
+         hostLoad: Double?? = nil
+     ) -> RuntimeBenchmark.ScenarioResult {
+         RuntimeBenchmark.ScenarioResult(
+@@ -1710,6 +1772,9 @@ struct RuntimeBenchmarkTranscriptTests {
+             wallClockSeconds: wallClock ?? base.wallClockSeconds,
+             peakPhysicalFootprintBytes: windowPeak ?? base.peakPhysicalFootprintBytes,
+             processPeakSoFarBytes: processPeak ?? base.processPeakSoFarBytes,
++            peakResidentMemory: windowResidentMemory ?? base.peakResidentMemory,
++            processResidentMemoryPeakSoFar: processResidentMemory
++                ?? base.processResidentMemoryPeakSoFar,
+             hostLoadAverageMax: hostLoad ?? base.hostLoadAverageMax,
+             transcript: base.transcript)
+     }
+@@ -1736,6 +1801,14 @@ struct RuntimeBenchmarkTranscriptTests {
+             ("wallClockSeconds", Self.replacing(base, wallClock: .some(0.001))),
+             ("peakPhysicalFootprintBytes", Self.replacing(base, windowPeak: .some(1))),
+             ("processPeakSoFarBytes", Self.replacing(base, processPeak: .some(1))),
++            (
++                "peakResidentMemory",
++                Self.replacing(base, windowResidentMemory: .absent)
++            ),
++            (
++                "processResidentMemoryPeakSoFar",
++                Self.replacing(base, processResidentMemory: .absent)
++            ),
+             ("hostLoadAverageMax", Self.replacing(base, hostLoad: .some(41.0))),
+         ]
+         for (field, variant) in variants {
+diff --git a/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeStreamDeltaTests.swift b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeStreamDeltaTests.swift
+new file mode 100644
+index 0000000..13f7b68
+--- /dev/null
++++ b/tools/mlx-swift-runtime-prototype/Tests/MLXSwiftRuntimeContractTests/RuntimeStreamDeltaTests.swift
+@@ -0,0 +1,120 @@
++import Foundation
++import Testing
++
++@testable import MLXSwiftRuntimeContract
++
++@Suite("Cross-runtime stream timing boundary")
++struct RuntimeStreamDeltaTests {
++    @Test(
++        "both deployed reasoning spellings carry generated text",
++        arguments: ["reasoning", "reasoning_content"])
++    func bothReasoningSpellingsCarryGeneratedText(field: String) {
++        let reading = RuntimeStreamDelta.read([field: "thinking"])
++        #expect(reading.content.isEmpty)
++        #expect(reading.reasoning == "thinking")
++        #expect(reading.generatedText == "thinking")
++        #expect(reading.carriesGeneratedText)
++    }
++
++    @Test("content and both reasoning spellings share one event definition")
++    func allGeneratedFieldsShareOneEventDefinition() {
++        let reading = RuntimeStreamDelta.read([
++            "content": "answer",
++            "reasoning": "first",
++            "reasoning_content": "second",
++        ])
++        #expect(reading.content == "answer")
++        #expect(reading.reasoning == "firstsecond")
++        #expect(reading.generatedText == "answerfirstsecond")
++    }
++
++    @Test("absent, empty, and malformed fields do not mint a timing event")
++    func noGeneratedTextMeansNoTimingEvent() {
++        for delta: [String: Any] in [
++            [:],
++            ["content": "", "reasoning": "", "reasoning_content": ""],
++            ["content": NSNull(), "reasoning": 7, "reasoning_content": false],
++        ] {
++            #expect(!RuntimeStreamDelta.read(delta).carriesGeneratedText)
++        }
++    }
++}
++
++@Suite("Runtime memory accounting")
++struct RuntimeMemoryAccountingTests {
++    @Test(
++        "every runtime shape uses the same resident upper bound",
++        arguments: [
++            ("/opt/homebrew/bin/llama-server", "/models/qwen.gguf", ["--model", "q.gguf"]),
++            ("/tmp/runtime-wrapper", "/models/qwen.gguf", ["--model", "q.gguf"]),
++            ("/Users/test/bin/mlx_lm-relux.server", "/models/mlx", ["--model", "mlx"]),
++            ("/Applications/mlx-swift-runtime-prototype", "/models/mlx", ["serve"]),
++        ])
++    func runtimeNamesAndArtifactsCannotNarrowTheAccounting(
++        executable: String, model: String, argv: [String]
++    ) {
++        #expect(
++            RuntimeMemoryAccounting.forExecutable(
++                executable, modelPath: model, launchArgv: argv)
++                == .residentMemoryUpperBound)
++    }
++
++    @Test("a complete vmmap mapped-file row produces a rounded upper component")
++    func parsesMappedFileResidencyAsAnUpperBound() {
++        let summary = """
++            Analysis Tool:   /usr/bin/vmmap
++                                                VIRTUAL RESIDENT DIRTY
++            REGION TYPE                        SIZE     SIZE     SIZE
++            mapped file                       26.8G    26.6G       0K
++            TOTAL                             30.0G    28.0G       1G
++            """
++        #expect(
++            RuntimeVMMapSummary.read(summary)
++                == .reported(raw: "26.6G", bytesUpperBound: 28_668_906_701))
++    }
++
++    @Test("complete absence differs from partial and malformed vmmap output")
++    func vmmapAbsenceDoesNotLaunderReadDefects() {
++        let noMappedFiles = """
++            Analysis Tool: /usr/bin/vmmap
++            VIRTUAL RESIDENT DIRTY
++            REGION TYPE SIZE SIZE
++            MALLOC 1M 1M
++            TOTAL 1M 1M
++            """
++        #expect(RuntimeVMMapSummary.read(noMappedFiles) == .notPresent)
++        #expect(
++            RuntimeVMMapSummary.read(noMappedFiles.replacingOccurrences(of: "TOTAL", with: ""))
++                == .malformed("vmmap-summary-incomplete"))
++        #expect(
++            RuntimeVMMapSummary.read(
++                noMappedFiles.replacingOccurrences(of: "MALLOC 1M 1M", with: "mapped file"))
++                == .malformed("vmmap-mapped-file-row-partial"))
++    }
++
++    @Test("failed, malformed, partial and absent windows all refuse a score")
++    func incompleteWindowsFailClosedByName() throws {
++        let components = try #require(
++            RuntimeMemoryComponents(
++                machPhysicalFootprintBytes: 100,
++                vmmapResidentMappedFileRaw: "1K",
++                residentMappedFileBytesUpperBound: 2_048))
++        let cases: [(RuntimeMemoryPeakStatus, RuntimeMemoryPeak)] = [
++            (.absent, RuntimeMemoryPeak(summarizing: [])),
++            (.readFailed, RuntimeMemoryPeak(summarizing: [.readFailed("vmmap-read-failed")])),
++            (.malformed, RuntimeMemoryPeak(summarizing: [.malformed("vmmap-summary-incomplete")])),
++            (
++                .partial,
++                RuntimeMemoryPeak(summarizing: [
++                    .measured(components), .readFailed("vmmap-read-failed"),
++                ])
++            ),
++        ]
++        for (status, peak) in cases {
++            #expect(peak.status == status)
++            #expect(peak.scoredBytes == nil)
++            #expect(peak.validatedScoredBytes == nil)
++            #expect(peak.refusalReason?.contains(status.rawValue) == true)
++        }
++    }
++}
+diff --git a/tools/mlx-swift-runtime-prototype/scripts/benchmark-gate-smoke.sh b/tools/mlx-swift-runtime-prototype/scripts/benchmark-gate-smoke.sh
+index 9b0c505..6a1076e 100755
+--- a/tools/mlx-swift-runtime-prototype/scripts/benchmark-gate-smoke.sh
++++ b/tools/mlx-swift-runtime-prototype/scripts/benchmark-gate-smoke.sh
+@@ -68,7 +68,7 @@ JSON
+ # One serves; one only lists. The second is the process review used to obtain
+ # `accepted=true` from the previous revision in 7.2 seconds.
+ cat > "$OUT/fake-runtime.py" <<'PY'
+-import json, sys, time
++import json, mmap, os, sys, time
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ 
+ PORT = int(sys.argv[1])
+@@ -105,6 +105,27 @@ if "--slots" in sys.argv:
+ SLOTS_STATUS = None
+ if "--slots-status" in sys.argv:
+     SLOTS_STATUS = int(sys.argv[sys.argv.index("--slots-status") + 1])
++# The two field spellings this task has to put on one clock boundary. The
++# default remains ordinary content so every pre-existing smoke case keeps its
++# response shape.
++REASONING_FIELD = None
++if "--reasoning-field" in sys.argv:
++    REASONING_FIELD = sys.argv[sys.argv.index("--reasoning-field") + 1]
++    assert REASONING_FIELD in ("reasoning", "reasoning_content")
++
++# Keep a real file mapping resident for the life of the process. This is the
++# component `ri_phys_footprint` misses and the production memory sampler must
++# carry beside it. Touch every page so a mere virtual mapping cannot satisfy the
++# assertion on resident mapped-file bytes below.
++MAPPED_FILE = None
++MAPPED_BYTES = None
++if "--mmap-artifact" in sys.argv:
++    path = sys.argv[sys.argv.index("--mmap-artifact") + 1]
++    MAPPED_FILE = open(path, "rb")
++    MAPPED_BYTES = mmap.mmap(MAPPED_FILE.fileno(), 0, access=mmap.ACCESS_READ)
++    _mapped_checksum = 0
++    for offset in range(0, len(MAPPED_BYTES), os.sysconf("SC_PAGE_SIZE")):
++        _mapped_checksum ^= MAPPED_BYTES[offset]
+ 
+ 
+ class Handler(BaseHTTPRequestHandler):
+@@ -193,8 +214,13 @@ class Handler(BaseHTTPRequestHandler):
+         time.sleep(0.35)
+         tokens = ["ok", " then", " more", " text"]
+         for index, token in enumerate(tokens):
++            # Three reasoning events and one content event. A reader that knows
++            # only the other runtime's spelling starts on the final event,
++            # leaving no first-to-last decode interval and making the real gate
++            # refuse the run below.
++            field = REASONING_FIELD if REASONING_FIELD and index < 3 else "content"
+             frame = {"id": "cmpl-fake", "object": "chat.completion.chunk", "model": MODEL,
+-                     "choices": [{"index": 0, "delta": {"content": token},
++                     "choices": [{"index": 0, "delta": {field: token},
+                                   "finish_reason": "stop" if index == len(tokens) - 1 else None}]}
+             self.wfile.write(f"data: {json.dumps(frame)}\n\n".encode())
+             self.wfile.flush()
+@@ -294,6 +320,16 @@ for record in (baseline, candidate):
+     # The differences the verdict did not dissolve travel with the record, so no
+     # report of this decision can be written without stating them.
+     assert mtp in record["declaredAsymmetries"], record["declaredAsymmetries"]
++    assert any(
++        "direction is against llama.cpp" in note and "MTP/speculative decoding" in note
++        for note in record["declaredAsymmetries"]
++    ), record["declaredAsymmetries"]
++
++decision = json.load(open(os.path.join(session, "decision.json")))
++assert any(
++    "direction is against llama.cpp" in note and "MTP/speculative decoding" in note
++    for note in decision["declaredAsymmetries"]
++), decision["declaredAsymmetries"]
+ 
+ # The two artifacts really are different, which is what makes the shared source
+ # of record the only thing they could have been compared on.
+@@ -342,8 +378,8 @@ JSON
+ cat > "$OUT/thresholds.json" <<'JSON'
+ {
+   "maxTimeToFirstTokenRatio": 3.0,
+-  "minPrefillThroughputRatio": 0.3,
+-  "minDecodeThroughputRatio": 0.3,
++  "minPrefillThroughputRatio": 0.1,
++  "minDecodeThroughputRatio": 0.1,
+   "maxPeakFootprintRatio": 3.0,
+   "maxPromptTokenSkewRatio": 1.5,
+   "paritySuccessScenarios": ["short_prompt", "tool_call", "stability_soak"],
+@@ -721,12 +757,12 @@ expect_refusal "hand-minted records with no provenance are inadmissible" \
+     "$OUT/minted-baseline.json" "$OUT/minted-candidate.json" "$ATTEST" "$OUT/minted.log"
+ 
+ info "a scenario whose measurements carry no transcript"
+-edit_record "$CAND_RECORD" "$OUT/notranscript-candidate.json" \
+-    '{"scenarios": [{"name": "short_prompt", "succeeded": true, "promptTokens": 512,
+-      "completionTokens": 64, "timeToFirstTokenSeconds": 1.0,
+-      "prefillTokensPerSecond": 100.0, "decodeTokensPerSecond": 10.0,
+-      "wallClockSeconds": 1.0, "peakPhysicalFootprintBytes": 29000000000,
+-      "processPeakSoFarBytes": 29000000000, "transcript": null}]}'
++python3 - "$CAND_RECORD" "$OUT/notranscript-candidate.json" <<'PY'
++import json, sys
++record = json.load(open(sys.argv[1]))
++record["scenarios"][0]["transcript"] = None
++json.dump(record, open(sys.argv[2], "w"), indent=2, sort_keys=True)
++PY
+ expect_refusal "a measurement with no transcript is refused" \
+     "no transcript" \
+     "$BASE_RECORD" "$OUT/notranscript-candidate.json" "$ATTEST" "$OUT/notranscript.log"
+@@ -940,6 +976,26 @@ expect_run() {
+     pass "$label"
+ }
+ 
++# `expect_admitted_run <label> <config> <session> <log> <port>`
++#
++# Admission and threshold acceptance are different claims. Exit 0 means the
++# measured pair was admitted and inside its bands; exit 3 means it was admitted
++# and outside at least one band. These cases attack an admission predicate, so
++# scheduler noise in the fake runtimes must not turn them into a flaky speed
++# test. A real admission refusal remains exit 4 and still fails this helper.
++expect_admitted_run() {
++    local label="$1" config="$2" session="$3" log="$4" port="$5"
++    local status
++    status="$(run_benchmark "$config" "$session" "$log" "$port")"
++    if { [ "$status" != "0" ] && [ "$status" != "3" ]; } \
++        || [ ! -s "$session/decision.json" ]; then
++        fail "$label: expected an admitted decision (exit 0 or 3), got $status"
++        tail -15 "$log"
++        return
++    fi
++    pass "$label (admitted, exit $status)"
++}
++
+ info "THE ACCEPTANCE QUESTION: a bounded candidate against an unbounded baseline"
+ # The baseline reports no bound and pins none, so `unbounded` is a true reading
+ # of it. The candidate reports 32768 and pins no context flag at all -- the
+@@ -1371,8 +1427,7 @@ write_kv_config "$OUT/spec-off.toml" \
+     '"--prefill-step-size", "2048", "--max-kv-size", "8192",' \
+     '"--ctx-size", "8192", "--ubatch-size", "2048",' 8192 \
+     '"--slots", "false",' '"--slots", "false",'
+-expect_run "a runtime reporting no speculation is admitted" \
+-    0 '"accepted" : true' \
++expect_admitted_run "a runtime reporting no speculation is admitted" \
+     "$OUT/spec-off.toml" "$OUT/session-spec-off" "$OUT/spec-off.log" "$((PORT + 18))"
+ 
+ info "F3 THE ACCEPTANCE QUESTION: /slots answers HTTP 500 and the launch says nothing"
+@@ -1423,8 +1478,7 @@ info "a 404 from /slots is still an absence, and still reaches the argv reading"
+ write_kv_config "$OUT/spec-silent.toml" \
+     '"--prefill-step-size", "2048", "--max-kv-size", "8192",' \
+     '"--ctx-size", "8192", "--ubatch-size", "2048",' 8192
+-expect_run "a runtime that does not serve /slots at all is still admitted" \
+-    0 '"accepted" : true' \
++expect_admitted_run "a runtime that does not serve /slots at all is still admitted" \
+     "$OUT/spec-silent.toml" "$OUT/session-spec-silent" "$OUT/spec-silent.log" \
+     "$((PORT + 24))"
+ 
+@@ -1671,6 +1725,155 @@ else
+     tail -15 "$OUT/f5-shipped.log"
+ fi
+ 
++# ============================================================================
++# 7. TASK-260829-3cwcb6: cross-runtime timing and mmap memory, through the
++#    production benchmark-run entry point.
++# ============================================================================
++
++info "reasoning and reasoning_content must start and end the same clock"
++cat > "$OUT/reasoning-fields.toml" <<TOML
++[profiles.gate-smoke-baseline]
++mode = "local"
++executable = "$BASELINE_PYTHON"
++argv = [
++    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
++    "--reasoning-field", "reasoning",
++    "--host", "{host}",
++    "--model", "$MODEL",
++    "--prefill-step-size", "2048",
++    "--reasoning-effort", "medium",
++]
++
++[profiles.gate-smoke-candidate]
++mode = "local"
++executable = "$CANDIDATE_PYTHON"
++argv = [
++    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
++    "--reasoning-field", "reasoning_content",
++    "--host", "{host}",
++    "--model", "$MODEL",
++    "--prefill-step-size", "2048",
++    "--reasoning-effort", "medium",
++]
++TOML
++expect_run "both reasoning spellings produce a scored production decision" \
++    0 '"accepted" : true' \
++    "$OUT/reasoning-fields.toml" "$OUT/session-reasoning-fields" \
++    "$OUT/reasoning-fields.log" "$((PORT + 24))"
++
++# The decision alone proves the fields were non-nil; inspect the records to
++# prove where the production clock actually landed. Under the old reader the
++# candidate starts on the fourth/final event, so decode is unmeasured. The
++# corrected reader starts on the first reasoning event and ends on the final
++# content event for both spellings. Absolute and cross-process timing are not
++# asserted here because concurrent vmmap sampling can delay either fixture;
++# the production property is that both spellings yield the same four generated
++# events and a first-to-last decode interval.
++python3 - "$OUT/session-reasoning-fields" <<'REASONPY'
++import json, pathlib, sys
++records = pathlib.Path(sys.argv[1]) / "records"
++base = json.load(open(records / "gate-smoke-baseline.json"))["scenarios"]
++cand = json.load(open(records / "gate-smoke-candidate.json"))["scenarios"]
++base = next(s for s in base if s["name"] == "short_prompt")
++cand = next(s for s in cand if s["name"] == "short_prompt")
++assert base["timeToFirstTokenSeconds"] is not None, base
++assert cand["timeToFirstTokenSeconds"] is not None, cand
++assert base["completionTokens"] == 4, base
++assert cand["completionTokens"] == 4, cand
++assert base["decodeTokensPerSecond"] is not None, base
++assert cand["decodeTokensPerSecond"] is not None, cand
++print("OK")
++REASONPY
++REASON_STATUS=$?
++if [ "$REASON_STATUS" -eq 0 ]; then
++    pass "production records clock first-to-last generated events identically"
++else
++    fail "production timing retained the field-name asymmetry"
++fi
++
++info "both runtime shapes score the same resident-memory upper bound"
++python3 - "$OUT/fake-weights.gguf" <<'MAPPEDFIXTURE'
++import pathlib, sys
++pathlib.Path(sys.argv[1]).write_bytes(b"mapped-weight-fixture" * 524288)
++MAPPEDFIXTURE
++cat > "$OUT/mmap-memory.toml" <<TOML
++[profiles.gate-smoke-baseline]
++mode = "local"
++executable = "$BASELINE_PYTHON"
++argv = [
++    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
++    "--host", "{host}",
++    "--model", "$MODEL",
++    "--max-kv-size", "8192",
++    "--prefill-step-size", "2048",
++    "--reasoning-effort", "medium",
++]
++
++[profiles.gate-smoke-candidate]
++mode = "local"
++executable = "$CANDIDATE_PYTHON"
++argv = [
++    "$OUT/fake-runtime.py", "{port}", "$MODEL", "serving",
++    "--mmap-artifact", "$OUT/fake-weights.gguf",
++    "--n-ctx", "8192",
++    "--slots", "false",
++    "--host", "{host}",
++    "--model", "$MODEL",
++    "--ctx-size", "8192",
++    "--ubatch-size", "2048",
++    "--reasoning-effort", "medium",
++    "--spec-type", "none",
++]
++TOML
++expect_run "mmap-loaded and anonymous runtime shapes carry the same scored quantity" \
++    0 '"accepted" : true' \
++    "$OUT/mmap-memory.toml" "$OUT/session-mmap-memory" "$OUT/mmap-memory.log" \
++    "$((PORT + 25))"
++
++python3 - "$OUT/session-mmap-memory" <<'MEMPY'
++import json, pathlib, sys
++session = pathlib.Path(sys.argv[1])
++records = session / "records"
++baseline = json.load(open(records / "gate-smoke-baseline.json"))
++candidate = json.load(open(records / "gate-smoke-candidate.json"))
++summary = json.load(open(session / "session.json"))
++decision = json.load(open(session / "decision.json"))
++
++def assert_peak(peak):
++    assert peak["accounting"] == "mach-physical-footprint-plus-vmmap-resident-mapped-file-upper-bound", peak
++    assert peak["scoreSemantics"] == "conservative-upper-bound", peak
++    assert peak["status"] == "measured", peak
++    assert peak["scoredBytes"] > 0, peak
++    sample = peak["peakSample"]
++    assert sample["machPhysicalFootprintBytes"] > 0, sample
++    assert sample["residentMappedFileBytesUpperBound"] >= 0, sample
++    assert sample["residentMemoryUpperBoundBytes"] == peak["scoredBytes"], peak
++
++for record in (baseline, candidate):
++    assert record["peakPhysicalFootprintBytes"] > 0, record["peakPhysicalFootprintBytes"]
++    assert_peak(record["peakResidentMemory"])
++    for scenario in record["scenarios"]:
++        assert_peak(scenario["peakResidentMemory"])
++        assert_peak(scenario["processResidentMemoryPeakSoFar"])
++for role in ("baseline", "candidate"):
++    assert_peak(summary[role]["warmupMemory"])
++    assert_peak(summary[role]["soakMemory"])
++    assert summary[role]["memorySamplesReadFailed"] == 0, summary[role]
++    assert summary[role]["memorySamplesMalformed"] == 0, summary[role]
++
++assert candidate["peakResidentMemory"]["peakSample"]["residentMappedFileBytesUpperBound"] > 0, candidate["peakResidentMemory"]
++metrics = [delta["metric"] for delta in decision["deltas"]]
++assert "peak_resident_memory_upper_bound_bytes" in metrics, metrics
++assert "peak_physical_footprint_bytes" not in metrics, metrics
++print("OK")
++MEMPY
++MEM_STATUS=$?
++if [ "$MEM_STATUS" -eq 0 ] && grep -qF '"accepted" : true' "$OUT/mmap-memory.log"; then
++    pass "both records carry scored resident upper bounds and raw components"
++else
++    fail "cross-runtime resident-memory accounting was absent, partial, or scored under the old name"
++fi
++
+ printf '\n%s\n' "----------------------------------------"
+ if [ "$FAILURES" -eq 0 ]; then
+     printf 'BENCHMARK GATE SMOKE OK (0 failures)\n'

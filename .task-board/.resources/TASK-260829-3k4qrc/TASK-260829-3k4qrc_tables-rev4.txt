@@ -1,0 +1,352 @@
+# session: .temp/TASK-260829-3k4qrc/rev4/session-rev4
+
+## sealed pass intervals (non-overlap is an admission condition)
+  baseline  python-mlx-lm  1788113670.052570 .. 1788115795.126375  (2125.074s)
+  candidate llamacpp       1788115816.214009 .. 1788117186.393213  (1370.179s)
+  overlap seconds: -21.088 (positive would be refused)
+
+## baseline: python-mlx-lm
+  profile        : qwen-benchmark-python
+  launch argv    : /opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python /Users/alexis/.local/bin/mlx_lm-kv76800-45a472f.server --model /Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit --host 127.0.0.1 --port 18341 --prompt-cache-size 1 --prompt-cache-bytes 8GB --prefill-step-size 2048 --max-kv-size 76800 --chat-template-args {"reasoning_effort": "medium"}
+  contextPolicy  : kv=76800;prefill-step=2048;reasoning=medium
+  speculation    : off
+  modelOfRecord  : source:hf:orcarouter/Qwen3.8-27B-Uncensored-BF16
+  modelDigest    : 1b10f3fe1c1097c909fa35e112b943255c44be4a5f332f45e0af57a96188460b
+  quantization   : 8bit/group64/affine
+  promptSuiteDigest: bba8867f4300f343b15960fb2cf8f821c653b96f538cf87287d0dacd36275d41
+  maxOutputTokens: 256
+  temperature    : 0
+  topP           : 1
+  seed           : 1234
+  hostIdentity   : MacBookPro18,2/68719476736/25F80/arm64
+  revisions      : {"mlx": "0.32.2", "mlx_lm": "0.32.0", "mlx_lm_commit": "45a472f2d0cda166b7ffe1a80fe50dd9621f4303", "mlx_lm_direct_url": "{\"url\":\"https://github.com/relux-works/mlx-lm.git\",\"vcs_info\":{\"commit_id\":\"45a472f2d0cda166b7ffe1a80fe50dd9621f4303\",\"requested_revision\":\"45a472f2d0cda166b7ffe1a80fe50dd9621f4303\",\"vcs\":\"git\"}}", "mlx_metal": "0.32.2", "model_harness": "model-harness v1.6.1-1
+  process peak   : status=partial
+      scored=unmeasured
+      mach=48,431,289,344 B (45.11 GiB)
+      mapped<=2,343,936 B (0.00 GiB) raw='2288K'
+      samples ok/failed/malformed=36740/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  legacy footprint (NOT scored): 48,431,289,344 B (45.11 GiB)
+
+## candidate: llamacpp
+  profile        : qwen-benchmark-llamacpp
+  launch argv    : /opt/homebrew/bin/llama-server --model /Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-GGUF-Q8_0/Qwen3.8-27B-Uncensored-OrcaRouter-Q8_0.gguf --host 127.0.0.1 --port 18341 --ctx-size 76800 --ubatch-size 2048 --reasoning-effort medium --no-webui --spec-type none
+  contextPolicy  : kv=76800;prefill-step=not-reported;reasoning=not-reported
+  speculation    : off
+  modelOfRecord  : source:hf:orcarouter/Qwen3.8-27B-Uncensored-BF16
+  modelDigest    : 31756fca94beca71ea4b8706d6fdc896dab2a3c6376ab0c1863b98512a24f8d6
+  quantization   : Q8_0
+  promptSuiteDigest: bba8867f4300f343b15960fb2cf8f821c653b96f538cf87287d0dacd36275d41
+  maxOutputTokens: 256
+  temperature    : 0
+  topP           : 1
+  seed           : 1234
+  hostIdentity   : MacBookPro18,2/68719476736/25F80/arm64
+  revisions      : {"model_harness": "model-harness v1.6.1-103-g4270549 (4270549, 2026-08-30T10:01:14Z)"}
+  process peak   : status=partial
+      scored=unmeasured
+      mach=16,162,537,728 B (15.05 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=23942/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  legacy footprint (NOT scored): 16,162,537,728 B (15.05 GiB)
+
+## prompt-token parity, before any latency number
+scenario                     baseline  candidate     skew  verdict
+short_prompt                       41         41   1.0000  comparable
+long_prompt_8k                  7,784      7,784   1.0000  comparable
+tool_call                         313        313   1.0000  comparable
+multiturn_prefix_reuse          7,784      7,784   1.0000  comparable
+stability_soak                    910        910   1.0000  comparable
+context_75k                    73,016     73,016   1.0000  comparable
+
+## sealed cached-token telemetry (one-sided hit = non-comparable)
+  short_prompt               baseline={"cachedPromptTokens": [0], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "miss"} candidate={"cachedPromptTokens": [0], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "miss"}
+  long_prompt_8k             baseline={"cachedPromptTokens": [0], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "miss"} candidate={"cachedPromptTokens": [0], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "miss"}
+  tool_call                  baseline={"cachedPromptTokens": [0], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "miss"} candidate={"cachedPromptTokens": [0], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "miss"}
+  multiturn_prefix_reuse     baseline={"cachedPromptTokens": [0, 0, 0], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "miss"} candidate={"cachedPromptTokens": [5736, 7780, 7809], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "hit"}
+  stability_soak             baseline={"cachedPromptTokens": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "miss"} candidate={"cachedPromptTokens": [18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "hit"}
+  context_75k                baseline={"cachedPromptTokens": [0], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "miss"} candidate={"cachedPromptTokens": [0], "source": "openai-usage.prompt_tokens_details.cached_tokens", "state": "miss"}
+
+## per-scenario measurements
+
+### short_prompt
+metric                                        python-mlx-lm                   llamacpp
+succeeded                                              True                       True
+failureMode                                               -                          -
+promptTokens                                             41                         41
+completionTokens                                         54                         57
+TTFT seconds (lower better)                          2.531s                     2.143s
+prefill tok/s (higher better)                        16.197                     19.133
+decode tok/s (higher better)                          6.781                      8.145
+wall clock seconds                                  10.450s                     9.105s
+host load max                                         5.110                      6.855
+  scenario memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=29,393,851,320 B (27.38 GiB)
+      mapped<=3,490,816 B (0.00 GiB) raw='3408K'
+      samples ok/failed/malformed=228/1/0
+      mappedLimit=7s
+      issues=['resident-mapped-file-sampling-gap']
+  scenario memory candidate:
+      status=measured
+      scored=34,731,153,644 B (32.35 GiB)
+      mach=6,491,743,672 B (6.05 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=195/0/0
+      mappedLimit=7s
+  process-so-far memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=29,393,851,320 B (27.38 GiB)
+      mapped<=3,490,816 B (0.00 GiB) raw='3408K'
+      samples ok/failed/malformed=605/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  process-so-far memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=6,491,743,672 B (6.05 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=483/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+
+### long_prompt_8k
+metric                                        python-mlx-lm                   llamacpp
+succeeded                                              True                       True
+failureMode                                               -                          -
+promptTokens                                          7,784                      7,784
+completionTokens                                        106                        106
+TTFT seconds (lower better)                        107.216s                    67.427s
+prefill tok/s (higher better)                        72.601                    115.443
+decode tok/s (higher better)                          6.670                      7.724
+wall clock seconds                                 123.064s                    81.113s
+host load max                                         4.940                      8.881
+  scenario memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=33,488,786,360 B (31.19 GiB)
+      mapped<=3,589,120 B (0.00 GiB) raw='3504K'
+      samples ok/failed/malformed=2190/1/0
+      mappedLimit=7s
+      issues=['resident-mapped-file-sampling-gap']
+  scenario memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=7,279,159,264 B (6.78 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=1459/1/0
+      mappedLimit=7s
+      issues=['resident-mapped-file-sampling-gap']
+  process-so-far memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=33,488,786,360 B (31.19 GiB)
+      mapped<=3,589,120 B (0.00 GiB) raw='3504K'
+      samples ok/failed/malformed=2836/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  process-so-far memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=7,279,159,264 B (6.78 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=1976/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+
+### tool_call
+metric                                        python-mlx-lm                   llamacpp
+succeeded                                              True                       True
+failureMode                                               -                          -
+promptTokens                                            313                        313
+completionTokens                                         64                         51
+TTFT seconds (lower better)                      unmeasured                 unmeasured
+prefill tok/s (higher better)                    unmeasured                 unmeasured
+decode tok/s (higher better)                     unmeasured                 unmeasured
+wall clock seconds                                  13.179s                    11.052s
+host load max                                         3.428                      6.948
+  scenario memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=30,489,891,768 B (28.40 GiB)
+      mapped<=3,638,272 B (0.00 GiB) raw='3552K'
+      samples ok/failed/malformed=278/1/0
+      mappedLimit=7s
+      issues=['resident-mapped-file-sampling-gap']
+  scenario memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=8,427,727,632 B (7.85 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=231/1/0
+      mappedLimit=7s
+      issues=['resident-mapped-file-sampling-gap']
+  process-so-far memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=33,488,786,360 B (31.19 GiB)
+      mapped<=3,589,120 B (0.00 GiB) raw='3504K'
+      samples ok/failed/malformed=3158/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  process-so-far memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=8,427,727,632 B (7.85 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=2242/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+
+### multiturn_prefix_reuse
+metric                                        python-mlx-lm                   llamacpp
+succeeded                                              True                       True
+failureMode                                               -                          -
+promptTokens                                          7,784                      7,784
+completionTokens                                        192                        192
+TTFT seconds (lower better)                        105.206s                     0.726s
+prefill tok/s (higher better)                        73.379                    423.607
+decode tok/s (higher better)                     unmeasured                 unmeasured
+wall clock seconds                                 347.591s                    46.017s
+host load max                                         6.222                      6.459
+  scenario memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=34,156,319,720 B (31.81 GiB)
+      mapped<=3,638,272 B (0.00 GiB) raw='3552K'
+      samples ok/failed/malformed=6099/1/0
+      mappedLimit=7s
+      issues=['resident-mapped-file-sampling-gap']
+  scenario memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=8,766,336,024 B (8.16 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=846/1/0
+      mappedLimit=7s
+      issues=['resident-mapped-file-sampling-gap']
+  process-so-far memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=34,156,319,720 B (31.81 GiB)
+      mapped<=3,638,272 B (0.00 GiB) raw='3552K'
+      samples ok/failed/malformed=9298/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  process-so-far memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=8,766,336,024 B (8.16 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=3125/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+
+### stability_soak
+metric                                        python-mlx-lm                   llamacpp
+succeeded                                              True                       True
+failureMode                                               -                          -
+promptTokens                                            910                        910
+completionTokens                                      1,280                      1,248
+TTFT seconds (lower better)                      unmeasured                 unmeasured
+prefill tok/s (higher better)                    unmeasured                 unmeasured
+decode tok/s (higher better)                     unmeasured                 unmeasured
+wall clock seconds                                 291.304s                   221.906s
+host load max                                         4.361                      5.936
+  scenario memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=30,459,286,504 B (28.37 GiB)
+      mapped<=3,638,272 B (0.00 GiB) raw='3552K'
+      samples ok/failed/malformed=5077/1/0
+      mappedLimit=7s
+      issues=['resident-mapped-file-sampling-gap']
+  scenario memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=16,113,926,376 B (15.01 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=3923/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  process-so-far memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=34,156,319,720 B (31.81 GiB)
+      mapped<=3,638,272 B (0.00 GiB) raw='3552K'
+      samples ok/failed/malformed=14417/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  process-so-far memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=16,113,926,376 B (15.01 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=7086/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+
+### context_75k
+metric                                        python-mlx-lm                   llamacpp
+succeeded                                              True                       True
+failureMode                                               -                          -
+promptTokens                                         73,016                     73,016
+completionTokens                                         16                         16
+TTFT seconds (lower better)                       1279.892s                   950.853s
+prefill tok/s (higher better)                        57.049                     76.790
+decode tok/s (higher better)                          8.027                      8.776
+wall clock seconds                                1281.780s                   952.563s
+host load max                                        13.995                      6.290
+  scenario memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=48,431,289,344 B (45.11 GiB)
+      mapped<=2,343,936 B (0.00 GiB) raw='2288K'
+      samples ok/failed/malformed=22164/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  scenario memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=16,162,537,728 B (15.05 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=16714/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  process-so-far memory baseline:
+      status=partial
+      scored=unmeasured
+      mach=48,431,289,344 B (45.11 GiB)
+      mapped<=2,343,936 B (0.00 GiB) raw='2288K'
+      samples ok/failed/malformed=36620/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+  process-so-far memory candidate:
+      status=partial
+      scored=unmeasured
+      mach=16,162,537,728 B (15.05 GiB)
+      mapped<=28,239,409,972 B (26.30 GiB) raw='26.2G'
+      samples ok/failed/malformed=23840/1/0
+      mappedLimit=7s
+      issues=['mach-physical-footprint-sampling-gap']
+
+## declared asymmetries carried by both records
+  - the MLX build drops the MTP head the GGUF carries as blk.64: 8 quantized tensors, 451319808 bytes on disk, skipped at load
+  - the vision tower is placed differently -- 333 bf16 tensors inside the MLX safetensors shards against a separate 931145984-byte GGUF mmproj -- and is resident in neither on the default text path
+  - GGUF upcasts norms and 1-D tensors to F32 where the MLX build keeps the source bf16: 10686464 bytes of extra resident memory, no fidelity difference
+  - pass order is fixed baseline then candidate: residual heat or unreleased host pressure can disadvantage the candidate, while shared host cache state can favour it; direction is indeterminate and the per-pass host load is diagnostic, not an admission gate
+  - parity policy is intentionally one-way: baseline success plus candidate failure blocks, while the reverse does not; direction favours the incumbent, and this is a migration acceptance policy rather than a measured performance metric
+  - MTP/speculative decoding is forced off for algorithmic parity because the MLX incumbent drops the MTP head: direction is against llama.cpp, which cannot use a product capability the incumbent lacks
+  - memory is scored as a conservative upper bound: Mach physical footprint plus the upper edge of vmmap resident mapped-file bytes; double-counting can overstate a runtime whose footprint already charges mapped pages, so residual direction is runtime-dependent and the raw components are retained
+  - baseline cache policy: --prompt-cache-size 1 --prompt-cache-bytes 8GB; a reuse hit can reduce repeated-prefix TTFT and retained cache can increase memory; direction is unknown without an observed hit
+  - candidate cache policy: llama.cpp per-slot KV reuse; a reuse hit can reduce repeated-prefix TTFT and retained slot state can increase memory; direction is unknown without an observed hit
+  - cache comparability: a scenario with an observed reuse hit on only one runtime is non-comparable and must be refused rather than scored
+  - Python-only prompt cache: launched with --prompt-cache-size 1 --prompt-cache-bytes 8GB; it can reduce TTFT on a repeated prompt and can retain up to the configured cache budget. Direction for a cold, unique prompt is unknown.
+
+## gate decision
+  NO decision.json - the gate refused the pair before scoring it.
