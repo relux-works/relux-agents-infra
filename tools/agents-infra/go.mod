@@ -8,4 +8,4 @@ require (
 	golang.org/x/sys v0.30.0
 )
 
-require github.com/relux-works/skill-agents-management v0.5.1-0.20260830114459-046baef11790
+require github.com/relux-works/skill-agents-management v0.5.2
