@@ -7,8 +7,8 @@ import Testing
 struct RuntimeBenchmarkTests {
     static let modelPath = "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit"
 
-    /// A launch that requests the same KV bound the fake live observation
-    /// reports, plus explicit prefill and reasoning conditions.
+    /// A launch that requests the same KV bound and generation settings the
+    /// fake live observation reports.
     static let launchArgv = [
         "serve", "--model", modelPath, "--host", "127.0.0.1", "--port", "18031",
         "--model-factory", "text-only", "--max-kv-size", "76800",
@@ -52,19 +52,55 @@ struct RuntimeBenchmarkTests {
             runtimeProcessID: 4242)
     }
 
+    static let modelDigest = "9f2c1a"
+
     static let pins = RuntimeBenchmark.Pins(
         hostIdentity: "MacBookPro18,2/68719476736/25F80",
+        // The same-format form, and it is the artifact digest: a pair with no
+        // equivalence evidence still has to be byte-identical to compare equal.
+        modelOfRecord: "artifact:\(modelDigest)",
         modelPath: modelPath,
-        modelDigest: "9f2c1a",
+        modelDigest: modelDigest,
         quantization: "8bit/group64/affine",
         promptSuiteDigest: "aa11bb",
         contextPolicy: RuntimeBenchmark.contextPolicy(
             observing: .reported(76_800),
             generationConfiguration: generationConfiguration),
+        // Neither MLX runtime serves `/slots` and neither launch asks for
+        // speculation, so this is their measured case.
+        speculation: "off",
         maxOutputTokens: 256,
         temperature: 0.0,
         topP: 1.0,
         seed: 1234)
+
+    /// A copy of a pins block with named fields replaced.
+    ///
+    /// Written once so a test that attacks one pin restates one argument. A
+    /// site that spelled all twelve out would silently pick up whatever a later
+    /// field addition defaulted to, which is exactly how a pin stops being
+    /// checked without anybody deciding to stop checking it.
+    static func variantPins(
+        from base: RuntimeBenchmark.Pins = RuntimeBenchmarkTests.pins,
+        modelOfRecord: String? = nil,
+        modelPath: String? = nil,
+        modelDigest: String? = nil,
+        quantization: String? = nil,
+        contextPolicy: String? = nil,
+        speculation: String? = nil
+    ) -> RuntimeBenchmark.Pins {
+        RuntimeBenchmark.Pins(
+            hostIdentity: base.hostIdentity,
+            modelOfRecord: modelOfRecord ?? base.modelOfRecord,
+            modelPath: modelPath ?? base.modelPath,
+            modelDigest: modelDigest ?? base.modelDigest,
+            quantization: quantization ?? base.quantization,
+            promptSuiteDigest: base.promptSuiteDigest,
+            contextPolicy: contextPolicy ?? base.contextPolicy,
+            speculation: speculation ?? base.speculation,
+            maxOutputTokens: base.maxOutputTokens, temperature: base.temperature,
+            topP: base.topP, seed: base.seed)
+    }
 
     /// A transcript that looks like one served completion.
     ///
@@ -85,6 +121,16 @@ struct RuntimeBenchmarkTests {
         ])
     }
 
+    static func memory(_ bytes: Int?) -> RuntimeMemoryPeak {
+        guard let bytes,
+            let components = RuntimeMemoryComponents(
+                machPhysicalFootprintBytes: bytes,
+                vmmapResidentMappedFileRaw: nil,
+                residentMappedFileBytesUpperBound: 0)
+        else { return .absent }
+        return RuntimeMemoryPeak(summarizing: [.measured(components)])
+    }
+
     static func scenario(
         _ name: String,
         succeeded: Bool = true,
@@ -94,6 +140,9 @@ struct RuntimeBenchmarkTests {
         decode: Double? = 10,
         promptTokens: Int? = 512,
         footprint: Int? = 29_000_000_000,
+        residentMemory: RuntimeMemoryPeak? = nil,
+        processResidentMemory: RuntimeMemoryPeak? = nil,
+        cacheReuse: RuntimeBenchmark.CacheReuseObservation = .notApplicable,
         transcript: RuntimeBenchmark.ScenarioTranscript? = nil
     ) -> RuntimeBenchmark.ScenarioResult {
         RuntimeBenchmark.ScenarioResult(
@@ -103,6 +152,9 @@ struct RuntimeBenchmarkTests {
             decodeTokensPerSecond: decode, wallClockSeconds: 7,
             peakPhysicalFootprintBytes: footprint,
             processPeakSoFarBytes: 29_000_000_000,
+            peakResidentMemory: residentMemory ?? memory(footprint),
+            processResidentMemoryPeakSoFar: processResidentMemory ?? memory(29_000_000_000),
+            cacheReuse: cacheReuse,
             transcript: transcript ?? Self.transcript(at: 0))
     }
 
@@ -138,6 +190,9 @@ struct RuntimeBenchmarkTests {
             wallClockSeconds: scenario.wallClockSeconds,
             peakPhysicalFootprintBytes: scenario.peakPhysicalFootprintBytes,
             processPeakSoFarBytes: scenario.processPeakSoFarBytes,
+            peakResidentMemory: scenario.peakResidentMemory,
+            processResidentMemoryPeakSoFar: scenario.processResidentMemoryPeakSoFar,
+            cacheReuse: scenario.cacheReuse,
             transcript: RuntimeBenchmark.ScenarioTranscript(exchanges: moved))
     }
 
@@ -147,6 +202,7 @@ struct RuntimeBenchmarkTests {
         startedAt: Double,
         finishedAt: Double,
         footprint: Int? = 29_000_000_000,
+        residentMemory: RuntimeMemoryPeak? = nil,
         scenarios: [RuntimeBenchmark.ScenarioResult] = [scenario("short_prompt")],
         asymmetries: [String] = [],
         revisions: [String: String] = ["runtime": "x"],
@@ -164,6 +220,7 @@ struct RuntimeBenchmarkTests {
             provenance: bound, pins: pins,
             startedAtUnixSeconds: startedAt, finishedAtUnixSeconds: finishedAt,
             peakPhysicalFootprintBytes: footprint,
+            peakResidentMemory: residentMemory ?? memory(footprint),
             scenarios: scenarios.map { anchored($0, at: startedAt + 1) },
             declaredAsymmetries: asymmetries)
     }
@@ -192,14 +249,16 @@ struct RuntimeBenchmarkTests {
         openedAt: Double? = nil,
         closedAt: Double?? = nil,
         servedModelID: String?? = nil,
+        contextWindow: RuntimeContextWindow? = nil,
+        generationConfiguration: RuntimeGenerationConfiguration? = nil,
+        speculation: RuntimeSpeculation? = nil,
+        equivalence: ModelEquivalenceReading? = nil,
         gateBinaryDigest: String? = nil,
         processID: Int? = nil,
         executableDigest: String? = nil,
         configDigest: String? = nil,
         profile: String? = nil,
         processStart: Double? = nil,
-        contextWindow: RuntimeContextWindow? = nil,
-        generationConfiguration: RuntimeGenerationConfiguration? = nil,
         transcriptDigest: String?? = nil
     ) -> RuntimeAttestation {
         RuntimeAttestation(
@@ -218,6 +277,13 @@ struct RuntimeBenchmarkTests {
             observedContextWindow: contextWindow ?? .reported(76_800),
             observedGenerationConfiguration: generationConfiguration
                 ?? Self.generationConfiguration,
+            // Also the MLX case: neither runtime serves `/slots`, so neither
+            // answers the question, and the argv reading applies.
+            observedSpeculation: speculation ?? .notReported,
+            // No verdict named. The same-format case, which pins the artifact
+            // digest exactly as the pre-G4 `modelDigest` pin did. Tests about a
+            // cross-format pair pass their own.
+            observedModelEquivalence: equivalence ?? .noneDeclared,
             gateBinaryDigest: gateBinaryDigest ?? gateDigest,
             // Sealed over the record it is being minted for, which is what the
             // observing invocation does in production. A test that attacks the
@@ -308,7 +374,9 @@ struct RuntimeBenchmarkTests {
     @Test(
         "a difference in any pinned condition refuses the comparison",
         arguments: mismatchedPins)
-    func refusesAnyPinMismatch(field: String, pins: RuntimeBenchmark.Pins) {
+    func refusesAnyPinMismatch(
+        field: String, pins: RuntimeBenchmark.Pins, refusal: PinRefusal
+    ) {
         let candidate = Self.record(
             runtime: "mlx-swift", pins: pins, startedAt: 300, finishedAt: 400)
         do {
@@ -316,11 +384,16 @@ struct RuntimeBenchmarkTests {
                 baseline: Self.baseline, candidate: candidate, requiredScenarios: [])
             Issue.record("pin \(field) mismatch was admitted")
         } catch let error as RuntimeBenchmark.AdmissionError {
-            guard case .pinMismatch(let named, _, _) = error else {
-                Issue.record("expected a pin mismatch for \(field), got \(error)")
-                return
+            switch (refusal, error) {
+            case (.pinMismatch, .pinMismatch(let named, _, _)):
+                #expect(named == field)
+            case (.notDerived, .modelOfRecordNotDerived):
+                break
+            case (.launchDoesNotCarryModel, .launchDoesNotCarryModel):
+                break
+            default:
+                Issue.record("pin \(field) expected \(refusal), got \(error)")
             }
-            #expect(named == field)
         } catch {
             Issue.record("unexpected error \(error)")
         }
@@ -497,7 +570,7 @@ struct RuntimeBenchmarkTests {
             ("time_to_first_token_seconds", 1.5, 100.0, 10.0, 29_000_000_000),
             ("prefill_tokens_per_second", 1.0, 50.0, 10.0, 29_000_000_000),
             ("decode_tokens_per_second", 1.0, 100.0, 5.0, 29_000_000_000),
-            ("peak_physical_footprint_bytes", 1.0, 100.0, 10.0, 40_000_000_000),
+            ("peak_resident_memory_upper_bound_bytes", 1.0, 100.0, 10.0, 40_000_000_000),
         ] as [(String, Double, Double, Double, Int)])
     func rejectsOutsideThreshold(
         metric: String, ttft: Double, prefill: Double, decode: Double, footprint: Int
@@ -547,7 +620,7 @@ struct RuntimeBenchmarkTests {
         }
     }
 
-    @Test("an unmeasured process footprint is a blocker, not a pass")
+    @Test("an unmeasured process resident-memory bound is a blocker, not a pass")
     func refusesUnmeasuredFootprint() throws {
         let candidate = Self.record(
             runtime: "mlx-swift", startedAt: 300, finishedAt: 400, footprint: nil)
@@ -558,7 +631,92 @@ struct RuntimeBenchmarkTests {
         #expect(!decision.accepted)
         #expect(
             decision.blockers.contains {
-                $0.contains("peak_physical_footprint_bytes") && $0.contains("not measured")
+                $0.contains("peak_resident_memory_upper_bound_bytes")
+                    && $0.contains("not measured")
+            })
+    }
+
+    @Test("failed, malformed and partial resident-memory reads all fail closed")
+    func refusesIncompleteResidentMemoryEvidence() throws {
+        let components = try #require(
+            RuntimeMemoryComponents(
+                machPhysicalFootprintBytes: 29_000_000_000,
+                vmmapResidentMappedFileRaw: "1.0G",
+                residentMappedFileBytesUpperBound: 1_073_741_825))
+        let incomplete: [RuntimeMemoryPeak] = [
+            RuntimeMemoryPeak(summarizing: [.readFailed("vmmap-read-failed")]),
+            RuntimeMemoryPeak(summarizing: [.malformed("vmmap-summary-incomplete")]),
+            RuntimeMemoryPeak(
+                summarizing: [.measured(components), .readFailed("vmmap-read-failed")]),
+        ]
+        for peak in incomplete {
+            let candidate = Self.record(
+                runtime: "mlx-swift", startedAt: 300, finishedAt: 400,
+                residentMemory: peak,
+                scenarios: [
+                    Self.scenario(
+                        "short_prompt", residentMemory: peak,
+                        processResidentMemory: peak)
+                ])
+            let comparison = try Self.admit(
+                baseline: Self.baseline, candidate: candidate, requiredScenarios: [])
+            let decision = RuntimeBenchmark.decide(
+                comparison: comparison, thresholds: Self.thresholds)
+            #expect(!decision.accepted, "\(peak.status) evidence was scored")
+            #expect(
+                decision.blockers.contains {
+                    $0.contains("peak_resident_memory_upper_bound_bytes")
+                        && $0.contains("not measured")
+                },
+                "\(peak.status) did not produce a memory blocker")
+        }
+    }
+
+    @Test("a decoded Mach-only composite cannot reach the decision consumer")
+    func refusesDecodedMachOnlyComposite() throws {
+        let components = try #require(
+            RuntimeMemoryComponents(
+                machPhysicalFootprintBytes: 100,
+                vmmapResidentMappedFileRaw: "1K",
+                residentMappedFileBytesUpperBound: 2_048))
+        let measured = RuntimeMemoryPeak(summarizing: [.measured(components)])
+        var document = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(measured))
+                as? [String: Any])
+        var peakSample = try #require(document["peakSample"] as? [String: Any])
+
+        // This is the old reading, forged into both derived fields while the
+        // non-zero mapped component remains in the raw evidence. Comparing the
+        // two derived fields to each other would admit it.
+        peakSample["residentMemoryUpperBoundBytes"] = 100
+        document["peakSample"] = peakSample
+        document["scoredBytes"] = 100
+        let forged = try JSONDecoder().decode(
+            RuntimeMemoryPeak.self,
+            from: JSONSerialization.data(withJSONObject: document))
+
+        #expect(forged.validatedScoredBytes == nil)
+
+        // Production scoring call site: RuntimeBenchmark.decide. The decoded
+        // peak must arrive as unmeasured, not as the old Mach-only decision.
+        let candidate = Self.record(
+            runtime: "mlx-swift", startedAt: 300, finishedAt: 400,
+            residentMemory: forged,
+            scenarios: [
+                Self.scenario(
+                    "short_prompt", residentMemory: forged,
+                    processResidentMemory: forged)
+            ])
+        let comparison = try Self.admit(
+            baseline: Self.baseline, candidate: candidate, requiredScenarios: [])
+        let decision = RuntimeBenchmark.decide(
+            comparison: comparison, thresholds: Self.thresholds)
+
+        #expect(!decision.accepted)
+        #expect(
+            decision.blockers.contains {
+                $0.contains("peak_resident_memory_upper_bound_bytes")
+                    && $0.contains("not measured")
             })
     }
 
@@ -578,7 +736,7 @@ struct RuntimeBenchmarkTests {
         // reading was the zero.
         #expect(
             decision.deltas.allSatisfy {
-                $0.ratio == nil || $0.metric.contains("footprint") || $0.metric == "prompt_tokens"
+                $0.ratio == nil || $0.metric.contains("memory") || $0.metric == "prompt_tokens"
             })
     }
 
@@ -654,90 +812,27 @@ struct RuntimeBenchmarkTests {
 
     // MARK: - Provenance: a record has to be tied to a run
 
-    @Test("live effective configuration is sufficient without argv parsing")
-    func derivesContextPolicyFromLiveConfiguration() {
+    @Test("the context policy is read out of the launch, not out of the record")
+    func derivesContextPolicyFromLaunch() {
         #expect(
             RuntimeBenchmark.contextPolicy(
-                observing: .reported(76_800),
-                generationConfiguration: .reported(
-                    prefillStepSize: 999, reasoningEffort: "medium"))
-                == "kv=76800;prefill-step=999;reasoning=medium")
-    }
-
-    @Test("a live context window overrides argv and malformed live values stay unread")
-    func derivesContextPolicyFromLiveRuntime() {
+                derivedFrom: [
+                    "serve", "--model", Self.modelPath, "--prefill-step-size", "2048",
+                    "--reasoning-effort", "medium",
+                ], observing: .notReported) == "kv=unbounded;prefill-step=2048;reasoning=medium")
         #expect(
             RuntimeBenchmark.contextPolicy(
-                observing: .reported(76_800),
-                generationConfiguration: Self.generationConfiguration)
-                == "kv=76800;prefill-step=2048;reasoning=medium")
+                derivedFrom: [
+                    "serve", "--max-kv-size", "4096", "--prefill-step-size=512",
+                    "--reasoning-effort=low",
+                ], observing: .notReported) == "kv=4096;prefill-step=512;reasoning=low")
+        // Absence of a prefill flag is not a value. The two runtimes default it
+        // differently, so reading absence as either default would silently
+        // compare 512-token chunks against 2048-token ones.
         #expect(
             RuntimeBenchmark.contextPolicy(
-                observing: .unread,
-                generationConfiguration: Self.generationConfiguration)
-                == "kv=unread;prefill-step=2048;reasoning=medium")
-        #expect(
-            RuntimeBenchmark.contextPolicy(
-                observing: .notReported,
-                generationConfiguration: Self.generationConfiguration)
-                == "kv=not-reported;prefill-step=2048;reasoning=medium")
-        #expect(
-            RuntimeContextWindow.read(fromModelsEntry: ["meta": ["n_ctx": "76800"]])
-                == .unread)
-        #expect(
-            RuntimeContextWindow.read(fromModelsEntry: ["meta": ["n_ctx": 76_800]])
-                == .reported(76_800))
-        #expect(RuntimeContextWindow.reported(76_800).observation == .observed(76_800))
-        #expect(RuntimeContextWindow.notReported.observation == .observedAbsent)
-        #expect(RuntimeContextWindow.unread.observation == .notObserved)
-        #expect(
-            RuntimeGenerationConfiguration.read(fromModelsEntry: [
-                "meta": [
-                    "runtime_config": [
-                        "prefill_step_size": 2_048, "reasoning_effort": "medium",
-                    ]
-                ]
-            ]) == Self.generationConfiguration)
-        #expect(
-            RuntimeGenerationConfiguration.read(fromModelsEntry: [
-                "meta": ["runtime_config": ["prefill_step_size": "2048"]]
-            ]).prefillStepSize == .unread)
-    }
-
-    @Test("admission refuses a failed live context read instead of falling back to argv")
-    func refusesUnreadLiveContextAtProductionAdmission() {
-        #expect(
-            throws: RuntimeBenchmark.AdmissionError.contextPolicyNotDerived(
-                runtime: "python-mlx-lm",
-                declared: "kv=76800;prefill-step=2048;reasoning=medium",
-                derived: "kv=unread;prefill-step=2048;reasoning=medium")
-        ) {
-            try RuntimeBenchmark.admit(
-                baseline: Self.baseline,
-                baselineAttestation: Self.attestation(
-                    for: Self.baseline, contextWindow: .unread),
-                candidate: Self.candidate,
-                candidateAttestation: Self.attestation(for: Self.candidate),
-                requiredScenarios: [], gateBinaryDigest: Self.gateDigest)
-        }
-    }
-
-    @Test("admission refuses an omitted live context bound despite any argv assertion")
-    func refusesAbsentLiveContextBoundAtProductionAdmission() {
-        #expect(
-            throws: RuntimeBenchmark.AdmissionError.contextPolicyNotDerived(
-                runtime: "python-mlx-lm",
-                declared: "kv=76800;prefill-step=2048;reasoning=medium",
-                derived: "kv=not-reported;prefill-step=2048;reasoning=medium")
-        ) {
-            try RuntimeBenchmark.admit(
-                baseline: Self.baseline,
-                baselineAttestation: Self.attestation(
-                    for: Self.baseline, contextWindow: .notReported),
-                candidate: Self.candidate,
-                candidateAttestation: Self.attestation(for: Self.candidate),
-                requiredScenarios: [], gateBinaryDigest: Self.gateDigest)
-        }
+                derivedFrom: ["serve", "--model", Self.modelPath], observing: .notReported)
+                == "kv=unbounded;prefill-step=unpinned;reasoning=unpinned")
     }
 
     @Test("a caller-authored context policy the server did not report is refused")
@@ -766,13 +861,7 @@ struct RuntimeBenchmarkTests {
         let policy = RuntimeBenchmark.contextPolicy(
             observing: .reported(76_800),
             generationConfiguration: .notReported)
-        var pins = Self.pins
-        pins = RuntimeBenchmark.Pins(
-            hostIdentity: pins.hostIdentity, modelPath: pins.modelPath,
-            modelDigest: pins.modelDigest, quantization: pins.quantization,
-            promptSuiteDigest: pins.promptSuiteDigest, contextPolicy: policy,
-            maxOutputTokens: pins.maxOutputTokens, temperature: pins.temperature,
-            topP: pins.topP, seed: pins.seed)
+        let pins = Self.variantPins(contextPolicy: policy)
         let baseline = Self.record(
             runtime: "python-mlx-lm", pins: pins, startedAt: 100, finishedAt: 200,
             provenance: Self.provenance(launchArgv: launch))
@@ -982,6 +1071,107 @@ struct RuntimeBenchmarkTests {
         #expect(decision.blockers.contains { $0.contains("not a comparison") })
     }
 
+    @Test("identical prompt tokens do not hide a one-sided cache reuse hit")
+    func refusesOneSidedCacheReuseAtDecisionCallSite() throws {
+        let name = "multiturn_prefix_reuse"
+        let baseline = Self.record(
+            runtime: "python-mlx-lm", startedAt: 100, finishedAt: 200,
+            scenarios: [
+                Self.scenario(
+                    name, promptTokens: 7_784,
+                    cacheReuse: .reported(cachedPromptTokens: [0, 0, 0]))
+            ])
+        let candidate = Self.record(
+            runtime: "mlx-swift", startedAt: 300, finishedAt: 400,
+            scenarios: [
+                Self.scenario(
+                    name, promptTokens: 7_784,
+                    cacheReuse: .reported(cachedPromptTokens: [0, 7_700, 7_729]))
+            ],
+            provenance: Self.provenance(executableDigest: Self.digest("12")))
+        let comparison = try Self.admit(
+            baseline: baseline, candidate: candidate, requiredScenarios: [name])
+        let thresholds = RuntimeBenchmark.Thresholds(
+            maxTimeToFirstTokenRatio: 1.10, minPrefillThroughputRatio: 0.90,
+            minDecodeThroughputRatio: 0.90, maxPeakFootprintRatio: 1.10,
+            maxPromptTokenSkewRatio: 1.10, paritySuccessScenarios: [name],
+            scoredScenarios: [name])
+        let decision = RuntimeBenchmark.decide(comparison: comparison, thresholds: thresholds)
+
+        #expect(!decision.accepted)
+        #expect(decision.blockers.contains { $0.contains("cache_reuse is one-sided") })
+        #expect(
+            decision.deltas.first { $0.scenario == name && $0.metric == "prompt_tokens" }?
+                .verdict == "within")
+        #expect(
+            decision.deltas.first {
+                $0.scenario == name && $0.metric == "time_to_first_token_seconds"
+            }?.verdict == "non-comparable")
+    }
+
+    @Test("symmetric cache facts remain scoreable while unknown refuses")
+    func cacheReuseControlsNarrowTheRefusal() throws {
+        let name = "multiturn_prefix_reuse"
+        let thresholds = RuntimeBenchmark.Thresholds(
+            maxTimeToFirstTokenRatio: 1.10, minPrefillThroughputRatio: 0.90,
+            minDecodeThroughputRatio: 0.90, maxPeakFootprintRatio: 1.10,
+            maxPromptTokenSkewRatio: 1.10, paritySuccessScenarios: [name],
+            scoredScenarios: [name])
+
+        for observation in [
+            RuntimeBenchmark.CacheReuseObservation.reported(cachedPromptTokens: [0, 0, 0]),
+            RuntimeBenchmark.CacheReuseObservation.reported(cachedPromptTokens: [0, 128, 256]),
+        ] {
+            let baseline = Self.record(
+                runtime: "python-mlx-lm", startedAt: 100, finishedAt: 200,
+                scenarios: [Self.scenario(name, cacheReuse: observation)])
+            let candidate = Self.record(
+                runtime: "mlx-swift", startedAt: 300, finishedAt: 400,
+                scenarios: [Self.scenario(name, cacheReuse: observation)],
+                provenance: Self.provenance(executableDigest: Self.digest("12")))
+            let comparison = try Self.admit(
+                baseline: baseline, candidate: candidate, requiredScenarios: [name])
+            #expect(
+                RuntimeBenchmark.decide(comparison: comparison, thresholds: thresholds).accepted)
+        }
+
+        let unknown = RuntimeBenchmark.CacheReuseObservation.unknown(
+            "cached-token telemetry was not reported for every turn")
+        let baseline = Self.record(
+            runtime: "python-mlx-lm", startedAt: 100, finishedAt: 200,
+            scenarios: [Self.scenario(name, cacheReuse: unknown)])
+        let candidate = Self.record(
+            runtime: "mlx-swift", startedAt: 300, finishedAt: 400,
+            scenarios: [Self.scenario(name, cacheReuse: unknown)],
+            provenance: Self.provenance(executableDigest: Self.digest("12")))
+        let comparison = try Self.admit(
+            baseline: baseline, candidate: candidate, requiredScenarios: [name])
+        let decision = RuntimeBenchmark.decide(comparison: comparison, thresholds: thresholds)
+        #expect(!decision.accepted)
+        #expect(decision.blockers.contains { $0.contains("cache_reuse is unknown") })
+    }
+
+    @Test("cache reuse observation is part of the sealed transcript digest")
+    func cacheReuseFactChangesSeal() {
+        let miss = Self.record(
+            runtime: "python-mlx-lm", startedAt: 100, finishedAt: 200,
+            scenarios: [
+                Self.scenario(
+                    "multiturn_prefix_reuse",
+                    cacheReuse: .reported(cachedPromptTokens: [0, 0]))
+            ])
+        let hit = Self.record(
+            runtime: "python-mlx-lm", startedAt: 100, finishedAt: 200,
+            scenarios: [
+                Self.scenario(
+                    "multiturn_prefix_reuse",
+                    cacheReuse: .reported(cachedPromptTokens: [0, 128]))
+            ])
+        #expect(
+            RuntimeBenchmark.transcriptDigest(of: miss)
+                != RuntimeBenchmark.transcriptDigest(of: hit))
+    }
+
     // MARK: - Memory is scored on work both runtimes completed
 
     @Test("the whole-process peak is not scored when the two passes did different work")
@@ -1016,7 +1206,7 @@ struct RuntimeBenchmarkTests {
         #expect(!decision.accepted)
     }
 
-    @Test("scenario-local footprints are scored, and a scenario-local blow-out is caught")
+    @Test("scenario-local resident-memory bounds are scored and catch a blow-out")
     func scoresScenarioLocalFootprint() throws {
         // Whole-process maxima that pass the band, scenario-local ones that do
         // not: 44.01 GiB against 31.47 GiB is 1.399x on the one scenario both
@@ -1037,7 +1227,8 @@ struct RuntimeBenchmarkTests {
             comparison: comparison, thresholds: Self.thresholds)
         let scenarioDelta = try #require(
             decision.deltas.first {
-                $0.scenario == "short_prompt" && $0.metric == "peak_physical_footprint_bytes"
+                $0.scenario == "short_prompt"
+                    && $0.metric == "peak_resident_memory_upper_bound_bytes"
             })
         #expect(scenarioDelta.verdict == "outside")
         #expect((scenarioDelta.ratio ?? 0) > 1.39)
@@ -1048,7 +1239,7 @@ struct RuntimeBenchmarkTests {
         #expect(!decision.accepted)
     }
 
-    @Test("an unmeasured scenario-local footprint blocks rather than falling back")
+    @Test("an unmeasured scenario-local resident bound blocks rather than falling back")
     func refusesUnmeasuredScenarioFootprint() throws {
         let candidate = Self.record(
             runtime: "mlx-swift", startedAt: 300, finishedAt: 400,
@@ -1061,7 +1252,7 @@ struct RuntimeBenchmarkTests {
         #expect(!decision.accepted)
         #expect(
             decision.blockers.contains {
-                $0.contains("short_prompt/peak_physical_footprint_bytes")
+                $0.contains("short_prompt/peak_resident_memory_upper_bound_bytes")
                     && $0.contains("not measured")
             })
     }
@@ -1078,11 +1269,13 @@ struct RuntimeBenchmarkTests {
 private func mutate(
     _ pins: RuntimeBenchmark.Pins,
     hostIdentity: String? = nil,
+    modelOfRecord: String? = nil,
     modelPath: String? = nil,
     modelDigest: String? = nil,
     quantization: String? = nil,
     promptSuiteDigest: String? = nil,
     contextPolicy: String? = nil,
+    speculation: String? = nil,
     maxOutputTokens: Int? = nil,
     temperature: Double? = nil,
     topP: Double? = nil,
@@ -1090,36 +1283,71 @@ private func mutate(
 ) -> RuntimeBenchmark.Pins {
     RuntimeBenchmark.Pins(
         hostIdentity: hostIdentity ?? pins.hostIdentity,
+        modelOfRecord: modelOfRecord ?? pins.modelOfRecord,
         modelPath: modelPath ?? pins.modelPath,
         modelDigest: modelDigest ?? pins.modelDigest,
         quantization: quantization ?? pins.quantization,
         promptSuiteDigest: promptSuiteDigest ?? pins.promptSuiteDigest,
         contextPolicy: contextPolicy ?? pins.contextPolicy,
+        speculation: speculation ?? pins.speculation,
         maxOutputTokens: maxOutputTokens ?? pins.maxOutputTokens,
         temperature: temperature ?? pins.temperature,
         topP: topP ?? pins.topP,
         seed: seed ?? pins.seed)
 }
 
-/// One entry per pinned field: the field's name, and a copy of the pins that
-/// differs from ``RuntimeBenchmarkTests/pins`` in that field alone.
+/// Which clause is expected to refuse a given one-field mutation.
+///
+/// Named per entry rather than assumed, because G4 moved three of these fields
+/// out of ``RuntimeBenchmark/Pins/firstMismatch(against:)`` and a table that
+/// still asserted `pinMismatch` for all of them would have passed while saying
+/// something false about where the refusal comes from.
+enum PinRefusal: Sendable {
+    /// Refused by the equality comparison, naming the field.
+    case pinMismatch
+    /// Refused because the pin is no longer what the gate's own reading
+    /// derives for this record.
+    case notDerived
+    /// Refused because the launch argv never mentions the artifact the record
+    /// claims to have served.
+    case launchDoesNotCarryModel
+}
+
+/// One entry per pinned field: the field's name, a copy of the pins that
+/// differs from ``RuntimeBenchmarkTests/pins`` in that field alone, and the
+/// clause that must refuse it.
 ///
 /// A field missing from this table is a field the suite never checks, so the
 /// table is the coverage claim: it must name every property of
 /// ``RuntimeBenchmark/Pins``.
-private let mismatchedPins: [(String, RuntimeBenchmark.Pins)] = {
+private let mismatchedPins: [(String, RuntimeBenchmark.Pins, PinRefusal)] = {
     let base = RuntimeBenchmarkTests.pins
     return [
-        ("hostIdentity", mutate(base, hostIdentity: "Mac16,6/137438953472/25F80")),
-        ("modelPath", mutate(base, modelPath: "/Users/alexis/src/local-models/other")),
-        ("modelDigest", mutate(base, modelDigest: "deadbeef")),
-        ("quantization", mutate(base, quantization: "6bit/group64/affine")),
-        ("promptSuiteDigest", mutate(base, promptSuiteDigest: "cc22dd")),
-        ("contextPolicy", mutate(base, contextPolicy: "kv-4096")),
-        ("maxOutputTokens", mutate(base, maxOutputTokens: 512)),
-        ("temperature", mutate(base, temperature: 0.6)),
-        ("topP", mutate(base, topP: 0.95)),
-        ("seed", mutate(base, seed: 4321)),
+        (
+            "hostIdentity", mutate(base, hostIdentity: "Mac16,6/137438953472/25F80"),
+            .pinMismatch
+        ),
+        ("modelOfRecord", mutate(base, modelOfRecord: "source:some-other-model"), .pinMismatch),
+        // The launch argv still names the artifact the unmutated pin does, so
+        // this is refused for serving a model the recorded launch never
+        // mentioned rather than for differing from the other run.
+        (
+            "modelPath", mutate(base, modelPath: "/Users/alexis/src/local-models/other"),
+            .launchDoesNotCarryModel
+        ),
+        // Not `pinMismatch` since G4 and not weaker for it: the digest is what
+        // `modelOfRecord` is derived from for a pair with no equivalence
+        // evidence, so changing it alone puts the record's own pin out of step
+        // with the gate's reading.
+        ("modelDigest", mutate(base, modelDigest: "deadbeef"), .notDerived),
+        ("quantization", mutate(base, quantization: "6bit/group64/affine"), .pinMismatch),
+        ("promptSuiteDigest", mutate(base, promptSuiteDigest: "cc22dd"), .pinMismatch),
+        ("contextPolicy", mutate(base, contextPolicy: "kv-4096"), .pinMismatch),
+        ("speculation", mutate(base, speculation: "on"), .pinMismatch),
+        ("maxOutputTokens", mutate(base, maxOutputTokens: 512), .pinMismatch),
+        ("temperature", mutate(base, temperature: 0.6), .pinMismatch),
+        ("topP", mutate(base, topP: 0.95), .pinMismatch),
+        ("seed", mutate(base, seed: 4321), .pinMismatch),
     ]
 }()
 
@@ -1274,9 +1502,9 @@ struct RuntimeBenchmarkAttestationTests {
             configDigest: Self.candidate.provenance.configDigest,
             profile: Self.candidate.provenance.profile,
             openedAtUnixSeconds: 300, closedAtUnixSeconds: 400,
-            servedModelID: Fixture.modelPath,
-            observedContextWindow: .reported(76_800),
+            servedModelID: Fixture.modelPath, observedContextWindow: .reported(76_800),
             observedGenerationConfiguration: Fixture.generationConfiguration,
+            observedSpeculation: .notReported, observedModelEquivalence: .noneDeclared,
             gateBinaryDigest: Fixture.gateDigest,
             transcriptDigest: RuntimeBenchmark.transcriptDigest(of: Self.candidate))
         Self.expectRefusal(
@@ -1387,27 +1615,19 @@ struct RuntimeBenchmarkReasoningPolicyTests {
             "--reasoning-effort", "medium",
         ]
         func pins(reasoning: String) -> RuntimeBenchmark.Pins {
-            RuntimeBenchmark.Pins(
-                hostIdentity: "MacBookPro18,2/68719476736/25F80",
-                modelPath: RuntimeBenchmarkTests.modelPath,
-                modelDigest: "9f2c1a", quantization: "8bit/group64/affine",
-                promptSuiteDigest: "aa11bb",
+            Fixture.variantPins(
                 contextPolicy: RuntimeBenchmark.contextPolicy(
                     observing: .reported(76_800),
                     generationConfiguration: .reported(
-                        prefillStepSize: 2_048, reasoningEffort: reasoning)),
-                maxOutputTokens: 256, temperature: 0, topP: 1, seed: 1234)
+                        prefillStepSize: 2_048, reasoningEffort: reasoning)))
         }
         let baseline = RuntimeBenchmarkTests.record(
-            runtime: "python-mlx-lm",
-            pins: pins(reasoning: "xhigh"),
+            runtime: "python-mlx-lm", pins: pins(reasoning: "xhigh"),
             startedAt: 100, finishedAt: 200,
             provenance: RuntimeBenchmarkTests.provenance(
                 launchArgv: baselineArgv, executableDigest: RuntimeBenchmarkTests.digest("cd")))
         let candidate = RuntimeBenchmarkTests.record(
-            runtime: "mlx-swift",
-            pins: pins(reasoning: "medium"),
-            startedAt: 300, finishedAt: 400,
+            runtime: "mlx-swift", pins: pins(reasoning: "medium"), startedAt: 300, finishedAt: 400,
             provenance: RuntimeBenchmarkTests.provenance(
                 launchArgv: candidateArgv, executableDigest: RuntimeBenchmarkTests.digest("12")))
         #expect(
@@ -1464,7 +1684,9 @@ struct RuntimeBenchmarkTranscriptTests {
             command: Fixture.provenance(executableDigest: Fixture.digest("12")).harnessCommand,
             provenance: Fixture.provenance(executableDigest: Fixture.digest("12")),
             pins: Fixture.pins, startedAtUnixSeconds: 300, finishedAtUnixSeconds: 400,
-            peakPhysicalFootprintBytes: 29_000_000_000, scenarios: candidateScenarios,
+            peakPhysicalFootprintBytes: 29_000_000_000,
+            peakResidentMemory: Fixture.memory(29_000_000_000),
+            scenarios: candidateScenarios,
             declaredAsymmetries: [])
         return (candidate, Fixture.attestation(for: candidate, transcriptDigest: seal))
     }
@@ -1514,6 +1736,8 @@ struct RuntimeBenchmarkTranscriptTests {
             decodeTokensPerSecond: 10, wallClockSeconds: 7,
             peakPhysicalFootprintBytes: 29_000_000_000,
             processPeakSoFarBytes: 29_000_000_000,
+            peakResidentMemory: Fixture.memory(29_000_000_000),
+            processResidentMemoryPeakSoFar: Fixture.memory(29_000_000_000),
             transcript: exchanges.map { RuntimeBenchmark.ScenarioTranscript(exchanges: $0) })
     }
 
@@ -1673,6 +1897,8 @@ struct RuntimeBenchmarkTranscriptTests {
         wallClock: Double?? = nil,
         windowPeak: Int?? = nil,
         processPeak: Int?? = nil,
+        windowResidentMemory: RuntimeMemoryPeak? = nil,
+        processResidentMemory: RuntimeMemoryPeak? = nil,
         hostLoad: Double?? = nil
     ) -> RuntimeBenchmark.ScenarioResult {
         RuntimeBenchmark.ScenarioResult(
@@ -1686,6 +1912,9 @@ struct RuntimeBenchmarkTranscriptTests {
             wallClockSeconds: wallClock ?? base.wallClockSeconds,
             peakPhysicalFootprintBytes: windowPeak ?? base.peakPhysicalFootprintBytes,
             processPeakSoFarBytes: processPeak ?? base.processPeakSoFarBytes,
+            peakResidentMemory: windowResidentMemory ?? base.peakResidentMemory,
+            processResidentMemoryPeakSoFar: processResidentMemory
+                ?? base.processResidentMemoryPeakSoFar,
             hostLoadAverageMax: hostLoad ?? base.hostLoadAverageMax,
             transcript: base.transcript)
     }
@@ -1712,6 +1941,14 @@ struct RuntimeBenchmarkTranscriptTests {
             ("wallClockSeconds", Self.replacing(base, wallClock: .some(0.001))),
             ("peakPhysicalFootprintBytes", Self.replacing(base, windowPeak: .some(1))),
             ("processPeakSoFarBytes", Self.replacing(base, processPeak: .some(1))),
+            (
+                "peakResidentMemory",
+                Self.replacing(base, windowResidentMemory: .absent)
+            ),
+            (
+                "processResidentMemoryPeakSoFar",
+                Self.replacing(base, processResidentMemory: .absent)
+            ),
             ("hostLoadAverageMax", Self.replacing(base, hostLoad: .some(41.0))),
         ]
         for (field, variant) in variants {
@@ -1719,6 +1956,28 @@ struct RuntimeBenchmarkTranscriptTests {
                 of: Self.pair(candidateScenarios: [variant]).0)
             #expect(digest != sealed, "the seal does not cover \(field)")
         }
+    }
+
+    @Test("the seal covers the timestamped raw memory series")
+    func sealCoversRawMemorySeries() throws {
+        func peak(at timestamp: Double) throws -> RuntimeMemoryPeak {
+            let sample = try #require(
+                RuntimeMemoryComponents(
+                    machPhysicalFootprintBytes: 10_000,
+                    vmmapResidentMappedFileRaw: "2K",
+                    residentMappedFileBytesUpperBound: 3_072,
+                    sampledAtUnixSeconds: timestamp))
+            return RuntimeMemoryPeak(summarizing: [.measured(sample)])
+        }
+
+        let base = Self.scenario(exchanges: [Self.exchange()])
+        let first = Self.replacing(base, windowResidentMemory: try peak(at: 100))
+        let second = Self.replacing(base, windowResidentMemory: try peak(at: 101))
+        #expect(
+            RuntimeBenchmark.transcriptDigest(
+                of: Self.pair(candidateScenarios: [first]).0)
+                != RuntimeBenchmark.transcriptDigest(
+                    of: Self.pair(candidateScenarios: [second]).0))
     }
 
     @Test("the seal covers every field of every exchange, one at a time")

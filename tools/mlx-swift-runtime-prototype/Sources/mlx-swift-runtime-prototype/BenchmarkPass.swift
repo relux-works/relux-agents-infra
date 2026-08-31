@@ -30,6 +30,8 @@ final class BenchmarkPass {
     /// soak runner for why the aggregate is not a decode rate.
     private(set) var soakDetail: [String: Double?] = [:]
     private(set) var lifecycle: [String: Double?] = [:]
+    private(set) var warmupMemory: RuntimeMemoryPeak = .absent
+    private(set) var soakMemory: RuntimeMemoryPeak = .absent
 
     init(
         runtime: String,
@@ -53,6 +55,10 @@ final class BenchmarkPass {
 
     func beginScenarioWindow() { sampler.beginWindow() }
 
+    /// The same memory source the sampler uses. Warm-up and soak cannot fall
+    /// back to the old Mach-only reading through a separate call path.
+    func currentMemoryReading() -> RuntimeMemorySampleRead { sampler.currentMemoryReading() }
+
     func stream(body: Data) async -> BenchmarkHTTPDriver.StreamedCompletion {
         await BenchmarkHTTPDriver.stream(
             session: session, endpoint: endpoint.appendingPathComponent("chat/completions"),
@@ -72,12 +78,37 @@ final class BenchmarkPass {
             session: session, url: endpoint.appendingPathComponent("models"), timeout: timeout)
     }
 
+    /// `GET /slots`, at the *server root* rather than under `/v1`.
+    ///
+    /// `llama-server` serves it there and it is the only endpoint on that build
+    /// whose answer moves with the launch's speculative configuration; the
+    /// OpenAI-shaped `/v1` surface has no route for the question and neither
+    /// MLX runtime serves one at all. Status `0` from
+    /// ``BenchmarkHTTPDriver/get(session:url:timeout:)`` still means the
+    /// question could not be asked, and the caller keeps that apart from a
+    /// runtime that answered and named nothing.
+    func slots(timeout: TimeInterval = 10) async -> (status: Int, body: Data) {
+        await BenchmarkHTTPDriver.get(
+            session: session,
+            url: endpoint.deletingLastPathComponent().appendingPathComponent("slots"),
+            timeout: timeout)
+    }
+
     func recordLifecycle(_ key: String, _ value: Double?) { lifecycle[key] = value }
+
+    func recordWarmupMemory(_ reading: RuntimeMemorySampleRead) {
+        warmupMemory = RuntimeMemoryPeak(summarizing: [reading])
+    }
 
     func recordSoak(
         iterations: Int, elapsed: Double, completionTokens: Int, latencies: [Double],
-        footprints: [Int]
+        memoryReads: [RuntimeMemorySampleRead]
     ) {
+        soakMemory = RuntimeMemoryPeak(summarizing: memoryReads)
+        let memoryValues = memoryReads.compactMap { reading -> Int? in
+            guard case .measured(let components) = reading else { return nil }
+            return components.residentMemoryUpperBoundBytes
+        }
         let sorted = latencies.sorted()
         soakDetail = [
             "iterations": Double(iterations),
@@ -86,10 +117,10 @@ final class BenchmarkPass {
             "first_latency_seconds": latencies.first,
             "last_latency_seconds": latencies.last,
             "median_latency_seconds": sorted.isEmpty ? nil : sorted[sorted.count / 2],
-            "first_footprint_bytes": footprints.first.map(Double.init),
-            "last_footprint_bytes": footprints.last.map(Double.init),
-            "footprint_drift_bytes": footprints.count >= 2
-                ? Double(footprints[footprints.count - 1] - footprints[0]) : nil,
+            "first_resident_memory_upper_bound_bytes": memoryValues.first.map(Double.init),
+            "last_resident_memory_upper_bound_bytes": memoryValues.last.map(Double.init),
+            "resident_memory_upper_bound_drift_bytes": memoryValues.count >= 2
+                ? Double(memoryValues[memoryValues.count - 1] - memoryValues[0]) : nil,
         ]
     }
 
@@ -100,13 +131,21 @@ final class BenchmarkPass {
     /// are different facts and the decision treats them differently.
     func failed(
         _ name: String, _ failureMode: String,
-        exchanges: [BenchmarkHTTPDriver.Exchange], wallClock: Double? = nil
+        exchanges: [BenchmarkHTTPDriver.Exchange], wallClock: Double? = nil,
+        cacheReuse: RuntimeBenchmark.CacheReuseObservation = .unknown(
+            "scenario produced no complete cached-token telemetry")
     ) -> RuntimeBenchmark.ScenarioResult {
-        RuntimeBenchmark.ScenarioResult(
+        let memory = sampler.capturePeaks()
+        let windowMemory = memory.window
+        let processMemory = memory.process
+        return RuntimeBenchmark.ScenarioResult(
             name: name, succeeded: false, failureMode: failureMode, wallClockSeconds: wallClock,
-            peakPhysicalFootprintBytes: sampler.currentWindowPeak(),
-            processPeakSoFarBytes: sampler.processPeakSoFar(),
+            peakPhysicalFootprintBytes: windowMemory.peakSample?.machPhysicalFootprintBytes,
+            processPeakSoFarBytes: processMemory.peakSample?.machPhysicalFootprintBytes,
+            peakResidentMemory: windowMemory,
+            processResidentMemoryPeakSoFar: processMemory,
             hostLoadAverageMax: sampler.currentWindowLoadMax(),
+            cacheReuse: cacheReuse,
             transcript: RuntimeBenchmark.ScenarioTranscript(exchanges: exchanges))
     }
 
@@ -118,16 +157,24 @@ final class BenchmarkPass {
         timeToFirstToken: Double?,
         prefill: Double?,
         decode: Double?,
-        wallClock: Double
+        wallClock: Double,
+        cacheReuse: RuntimeBenchmark.CacheReuseObservation = .unknown(
+            "scenario produced no complete cached-token telemetry")
     ) -> RuntimeBenchmark.ScenarioResult {
-        RuntimeBenchmark.ScenarioResult(
+        let memory = sampler.capturePeaks()
+        let windowMemory = memory.window
+        let processMemory = memory.process
+        return RuntimeBenchmark.ScenarioResult(
             name: name, succeeded: true, failureMode: nil, promptTokens: promptTokens,
             completionTokens: completionTokens, timeToFirstTokenSeconds: timeToFirstToken,
             prefillTokensPerSecond: prefill, decodeTokensPerSecond: decode,
             wallClockSeconds: wallClock,
-            peakPhysicalFootprintBytes: sampler.currentWindowPeak(),
-            processPeakSoFarBytes: sampler.processPeakSoFar(),
+            peakPhysicalFootprintBytes: windowMemory.peakSample?.machPhysicalFootprintBytes,
+            processPeakSoFarBytes: processMemory.peakSample?.machPhysicalFootprintBytes,
+            peakResidentMemory: windowMemory,
+            processResidentMemoryPeakSoFar: processMemory,
             hostLoadAverageMax: sampler.currentWindowLoadMax(),
+            cacheReuse: cacheReuse,
             transcript: RuntimeBenchmark.ScenarioTranscript(exchanges: exchanges))
     }
 }

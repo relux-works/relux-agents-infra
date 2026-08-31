@@ -65,6 +65,67 @@ public enum RuntimeContextWindow: Sendable, Equatable, Codable {
     }
 }
 
+/// Whether the running runtime reported speculative decoding as active.
+/// Route absence is distinct from a failed or malformed observation.
+public enum RuntimeSpeculation: Sendable, Equatable, Codable {
+    case reported(Bool)
+    case notReported
+    case unread
+
+    private enum CodingKeys: String, CodingKey { case state, active }
+    private enum State: String, Codable { case reported, notReported, unread }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(State.self, forKey: .state) {
+        case .reported:
+            self = .reported(try container.decode(Bool.self, forKey: .active))
+        case .notReported:
+            self = .notReported
+        case .unread:
+            self = .unread
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .reported(let active):
+            try container.encode(State.reported, forKey: .state)
+            try container.encode(active, forKey: .active)
+        case .notReported:
+            try container.encode(State.notReported, forKey: .state)
+        case .unread:
+            try container.encode(State.unread, forKey: .state)
+        }
+    }
+
+    static let routeAbsentStatuses = [404, 501]
+
+    /// Decode the production `/slots` response. Any active slot settles the
+    /// observation; a present route that cannot name the fact is unread.
+    public static func read(slotsStatus status: Int, body: Data) -> RuntimeSpeculation {
+        guard status == 200 else {
+            return routeAbsentStatuses.contains(status) ? .notReported : .unread
+        }
+        guard let slots = try? JSONSerialization.jsonObject(with: body) as? [[String: Any]]
+        else { return .unread }
+        guard !slots.isEmpty else { return .notReported }
+        var named = false
+        for slot in slots {
+            var readings: [Bool] = []
+            if let direct = slot["speculative"] as? Bool { readings.append(direct) }
+            if let nested = (slot["params"] as? [String: Any])?["speculative"] as? Bool {
+                readings.append(nested)
+            }
+            guard !readings.isEmpty else { continue }
+            named = true
+            if readings.contains(true) { return .reported(true) }
+        }
+        return named ? .reported(false) : .unread
+    }
+}
+
 /// One effective generation parameter reported by the running server.
 ///
 /// The three states deliberately mirror ``RuntimeContextWindow``: an answered
@@ -274,6 +335,10 @@ public struct RuntimeAttestation: Sendable, Equatable, Codable {
     public let observedContextWindow: RuntimeContextWindow
     /// Effective prefill and reasoning settings read from that same entry.
     public let observedGenerationConfiguration: RuntimeGenerationConfiguration?
+    /// Speculation state read from the running server's `/slots` endpoint.
+    public let observedSpeculation: RuntimeSpeculation
+    /// Digest-bound cross-format equivalence evidence observed by the gate.
+    public let observedModelEquivalence: ModelEquivalenceReading
     /// SHA-256 of the gate binary that wrote this document.
     public let gateBinaryDigest: String
     /// ``RuntimeBenchmark/transcriptDigest(of:)`` over the record this same
@@ -301,6 +366,8 @@ public struct RuntimeAttestation: Sendable, Equatable, Codable {
         servedModelID: String?,
         observedContextWindow: RuntimeContextWindow = .notReported,
         observedGenerationConfiguration: RuntimeGenerationConfiguration? = nil,
+        observedSpeculation: RuntimeSpeculation = .notReported,
+        observedModelEquivalence: ModelEquivalenceReading = .noneDeclared,
         gateBinaryDigest: String,
         transcriptDigest: String?
     ) {
@@ -317,6 +384,8 @@ public struct RuntimeAttestation: Sendable, Equatable, Codable {
         self.servedModelID = servedModelID
         self.observedContextWindow = observedContextWindow
         self.observedGenerationConfiguration = observedGenerationConfiguration
+        self.observedSpeculation = observedSpeculation
+        self.observedModelEquivalence = observedModelEquivalence
         self.gateBinaryDigest = gateBinaryDigest
         self.transcriptDigest = transcriptDigest
     }

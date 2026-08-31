@@ -1,0 +1,64 @@
+# TASK-260829-3k4qrc revision 4: the corrected llama.cpp comparison against the
+# Python mlx-lm baseline, on the merged bounded-KV instrumentation.
+#
+# Derived from tools/mlx-swift-runtime-prototype/examples/model-harness.benchmark.toml.
+# The only difference from that file is that the unused Swift candidate profile
+# is omitted, so this document describes exactly the two runtimes that ran.
+#
+# Why the incumbent can now be pinned at all: STORY-260830-2vrhg1 delivered
+# `--max-kv-size` in the immutable isolated `mlx-lm` fork at
+# 45a472f2d0cda166b7ffe1a80fe50dd9621f4303. Before it, the Python baseline had
+# no KV bound flag of any spelling and `llama-server` has no unbounded mode, so
+# `contextPolicy` was `kv=unbounded` against `kv=<n>` and the pair could not be
+# scored by any argv on either side. The pin is still taken from the running
+# process's `/v1/models` `meta.n_ctx`, never from these flags.
+
+# The incumbent, in its deployed configuration plus the benchmark-only finite KV
+# window. The deployed `qwen-local` profile is not declared here and is
+# unchanged by this file.
+[profiles.qwen-benchmark-python]
+mode = "local"
+executable = "/Users/alexis/.local/bin/mlx_lm-kv76800-45a472f.server"
+argv = [
+    "--model", "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+    "--host", "{host}",
+    "--port", "{port}",
+    # The deployed incumbent's prompt cache, kept rather than tuned away: the
+    # decision is whether to replace the Python runtime *as deployed*. The
+    # resulting asymmetry is declared into both run records.
+    "--prompt-cache-size", "1",
+    "--prompt-cache-bytes", "8GB",
+    # Explicit at its own default value. `mlx_lm.server` defaults this to 2048
+    # and `llama-server` defaults `--ubatch-size` to 512, so leaving it unstated
+    # compares a 4x prefill chunk difference and calls it a runtime difference.
+    "--prefill-step-size", "2048",
+    # The bound that makes this pair pinnable. Asserted here, read off the
+    # running process by the gate.
+    "--max-kv-size", "76800",
+    # This model's chat template defaults `reasoning_effort` to `xhigh` and
+    # injects an extra system instruction at that setting, which renders a
+    # different prompt. Pinned to `medium` on both sides.
+    "--chat-template-args", "{\"reasoning_effort\": \"medium\"}",
+]
+
+# The candidate: `llama-server` from pinned Homebrew llama.cpp 0.3.0, build
+# b10621-c1d0e7a00. `--ctx-size 76800` matches the baseline's window: 2027
+# filler repeats plus the tail, rounded up to a multiple of the 2048 prefill
+# chunk. llama.cpp allocates its whole KV arena at load, so this is a resident
+# cost paid before the first token and is part of every memory number here.
+[profiles.qwen-benchmark-llamacpp]
+mode = "local"
+executable = "/opt/homebrew/bin/llama-server"
+argv = [
+    "--model", "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-GGUF-Q8_0/Qwen3.8-27B-Uncensored-OrcaRouter-Q8_0.gguf",
+    "--host", "{host}",
+    "--port", "{port}",
+    "--ctx-size", "76800",
+    # llama.cpp's spelling of the pinned physical prefill chunk.
+    "--ubatch-size", "2048",
+    "--reasoning-effort", "medium",
+    "--no-webui",
+    # MTP off, stated rather than left to the default. The gate reads the state
+    # off the running process's `GET /slots`, not off this flag.
+    "--spec-type", "none",
+]

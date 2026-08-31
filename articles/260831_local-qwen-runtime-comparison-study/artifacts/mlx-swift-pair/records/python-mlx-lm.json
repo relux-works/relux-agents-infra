@@ -1,0 +1,544 @@
+{
+  "command" : [
+    "\/Users\/alexis\/.local\/bin\/model-harness",
+    "run",
+    "qwen-benchmark-python",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18031",
+    "--config",
+    "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/TASK-260827-2v13w8-rev4\/model-harness.benchmark.toml"
+  ],
+  "declaredAsymmetries" : [
+    "prompt cache enabled as deployed: --prompt-cache-size 1 --prompt-cache-bytes 8GB, the incumbent's installed configuration, kept rather than tuned away",
+    "\/health is a static 200 in the deployed revision 9150698; the generation-thread liveness fix is in the fork checkout but not installed",
+    "\/v1\/models answers 200 about a second after launch with no weights resident; the model loads on first completion"
+  ],
+  "finishedAtUnixSeconds" : 1787933779.10256,
+  "peakPhysicalFootprintBytes" : 48534787000,
+  "pins" : {
+    "contextPolicy" : "kv=unbounded;prefill-step=2048;reasoning=medium",
+    "hostIdentity" : "MacBookPro18,2\/68719476736\/25F80\/arm64",
+    "maxOutputTokens" : 256,
+    "modelDigest" : "1b10f3fe1c1097c909fa35e112b943255c44be4a5f332f45e0af57a96188460b",
+    "modelPath" : "\/Users\/alexis\/src\/local-models\/Qwen3.8-27B-Uncensored-MLX-8bit",
+    "promptSuiteDigest" : "bba8867f4300f343b15960fb2cf8f821c653b96f538cf87287d0dacd36275d41",
+    "quantization" : "8bit\/group64\/affine",
+    "seed" : 1234,
+    "temperature" : 0,
+    "topP" : 1
+  },
+  "provenance" : {
+    "configDigest" : "d063af2ecc77eb9fd440d11ff14cc692b23f48cdf86a0117a08c128b82a36620",
+    "configPath" : "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/TASK-260827-2v13w8-rev4\/model-harness.benchmark.toml",
+    "driverCommand" : [
+      ".\/DerivedData\/Build\/Products\/Release\/mlx-swift-runtime-prototype",
+      "benchmark-run",
+      "--config",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/TASK-260827-2v13w8-rev4\/model-harness.benchmark.toml",
+      "--model",
+      "\/Users\/alexis\/src\/local-models\/Qwen3.8-27B-Uncensored-MLX-8bit",
+      "--prompts",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260827-m30k8z\/worktree\/tools\/mlx-swift-runtime-prototype\/examples\/benchmark-prompts.json",
+      "--thresholds",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260827-m30k8z\/worktree\/tools\/mlx-swift-runtime-prototype\/examples\/benchmark-thresholds.json",
+      "--session",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/TASK-260827-2v13w8-rev4\/session",
+      "--harness",
+      "\/Users\/alexis\/.local\/bin\/model-harness",
+      "--baseline-runtime",
+      "python-mlx-lm",
+      "--baseline-profile",
+      "qwen-benchmark-python",
+      "--candidate-runtime",
+      "mlx-swift",
+      "--candidate-profile",
+      "qwen-benchmark-swift",
+      "--port",
+      "18031",
+      "--python-bin",
+      "\/Users\/alexis\/.local\/pipx\/venvs\/mlx-lm-relux\/bin\/python",
+      "--candidate-binary",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260827-m30k8z\/worktree\/tools\/mlx-swift-runtime-prototype\/DerivedData\/Build\/Products\/Release\/mlx-swift-runtime-prototype",
+      "--baseline-declare",
+      "prompt cache enabled as deployed: --prompt-cache-size 1 --prompt-cache-bytes 8GB, the incumbent's installed configuration, kept rather than tuned away",
+      "--baseline-declare",
+      "\/health is a static 200 in the deployed revision 9150698; the generation-thread liveness fix is in the fork checkout but not installed",
+      "--baseline-declare",
+      "\/v1\/models answers 200 about a second after launch with no weights resident; the model loads on first completion",
+      "--candidate-declare",
+      "no prompt cache across requests: every request builds a fresh KV cache, so a shared multi-turn prefix is re-prefilled every turn",
+      "--candidate-declare",
+      "one generation at a time: GenerationEngine is an actor, so requests serialize even though the profile allows concurrent leases",
+      "--candidate-declare",
+      "readiness is gated on a resident model: \/v1\/models answers 503 until the weights are loaded, and advertises only the configured model",
+      "--candidate-declare",
+      "served by MLXLLM.LLMModelFactory (text-only); the vision tower is not loaded and the HTTP contract refuses image and audio content"
+    ],
+    "driverDigest" : "8a517b10e6a74793dd47d33d07b1b08275863f3fb7e8cfb11880a14b71014f91",
+    "harnessCommand" : [
+      "\/Users\/alexis\/.local\/bin\/model-harness",
+      "run",
+      "qwen-benchmark-python",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "18031",
+      "--config",
+      "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/TASK-260827-2v13w8-rev4\/model-harness.benchmark.toml"
+    ],
+    "launchArgv" : [
+      "--model",
+      "\/Users\/alexis\/src\/local-models\/Qwen3.8-27B-Uncensored-MLX-8bit",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "18031",
+      "--prompt-cache-size",
+      "1",
+      "--prompt-cache-bytes",
+      "8GB",
+      "--prefill-step-size",
+      "2048",
+      "--chat-template-args",
+      "{\"reasoning_effort\": \"medium\"}"
+    ],
+    "launchExecutable" : "\/opt\/homebrew\/Cellar\/python@3.14\/3.14.7\/Frameworks\/Python.framework\/Versions\/3.14\/Resources\/Python.app\/Contents\/MacOS\/Python",
+    "launchExecutableDigest" : "e89d60f8ccee9db684801330198797723db2ac378cd53e5cfe523128feb76599",
+    "profile" : "qwen-benchmark-python",
+    "runtimeProcessID" : 75260
+  },
+  "revisions" : {
+    "mlx" : "0.32.2",
+    "mlx_lm" : "0.32.0",
+    "mlx_lm_direct_url" : "{\"url\": \"file:\/\/\/Users\/alexis\/src\/relux-works\/mlx-lm\/.git\", \"vcs_info\": {\"commit_id\": \"91506981056172f937e7bdca4ab0d3b7459c7fab\", \"requested_revision\": \"91506981056172f937e7bdca4ab0d3b7459c7fab\", \"vcs\": \"git\"}}",
+    "mlx_metal" : "0.32.2",
+    "model_harness" : "model-harness v1.6.1-44-gd91d6fc (d91d6fc, 2026-08-27T06:58:43Z)",
+    "python" : "3.14.7",
+    "transformers" : "5.16.1"
+  },
+  "runtime" : "python-mlx-lm",
+  "scenarios" : [
+    {
+      "completionTokens" : 54,
+      "decodeTokensPerSecond" : 10.271074675413033,
+      "hostLoadAverageMax" : 10.08984375,
+      "name" : "short_prompt",
+      "peakPhysicalFootprintBytes" : 29399274400,
+      "prefillTokensPerSecond" : 41.63012362200416,
+      "processPeakSoFarBytes" : 29399274400,
+      "promptTokens" : 41,
+      "succeeded" : true,
+      "timeToFirstTokenSeconds" : 0.9848637580871582,
+      "transcript" : {
+        "exchanges" : [
+          {
+            "firstByteAtUnixSeconds" : 1787932220.4422178,
+            "lastByteAtUnixSeconds" : 1787932226.413924,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "33d55c37bb6d43010e428f2b2a84652422d5cc1384575240bfe0bec1eddf138b",
+            "responseByteCount" : 21043,
+            "responseDigest" : "f08a68e334c494b898552aabd3de3b5865d0c3027674fc23d9c9203d45da284b",
+            "sentAtUnixSeconds" : 1787932220.268938,
+            "status" : 200
+          }
+        ]
+      },
+      "wallClockSeconds" : 6.145160675048828
+    },
+    {
+      "completionTokens" : 106,
+      "decodeTokensPerSecond" : 9.723226817584736,
+      "hostLoadAverageMax" : 10.18408203125,
+      "name" : "long_prompt_8k",
+      "peakPhysicalFootprintBytes" : 33705153440,
+      "prefillTokensPerSecond" : 83.74405464492025,
+      "processPeakSoFarBytes" : 33705153440,
+      "promptTokens" : 7784,
+      "succeeded" : true,
+      "timeToFirstTokenSeconds" : 92.94988203048706,
+      "transcript" : {
+        "exchanges" : [
+          {
+            "firstByteAtUnixSeconds" : 1787932226.630409,
+            "lastByteAtUnixSeconds" : 1787932330.1735392,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 44058,
+            "requestDigest" : "8676b9a7a866bfca6822a9b09c5448cf96a511e3a49d80bd25ea4787bb8b5f85",
+            "responseByteCount" : 41308,
+            "responseDigest" : "ad0c927cdc796cd89005229c494527c7f8fa11eca47c2521f7535193f50f8b88",
+            "sentAtUnixSeconds" : 1787932226.424773,
+            "status" : 200
+          }
+        ]
+      },
+      "wallClockSeconds" : 103.74938917160034
+    },
+    {
+      "completionTokens" : 64,
+      "hostLoadAverageMax" : 9.36865234375,
+      "name" : "tool_call",
+      "peakPhysicalFootprintBytes" : 30492005280,
+      "processPeakSoFarBytes" : 33705153440,
+      "promptTokens" : 313,
+      "succeeded" : true,
+      "transcript" : {
+        "exchanges" : [
+          {
+            "firstByteAtUnixSeconds" : 1787932341.2288651,
+            "lastByteAtUnixSeconds" : 1787932341.2288651,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 631,
+            "requestDigest" : "f0f691b5c33035cb4714f2da202ac279a6cd7090e88496199273c72873f0fa10",
+            "responseByteCount" : 828,
+            "responseDigest" : "10804af346d1b5f62c475412b0b802beac3f43ff6acf32e3ed019b71381ff9b6",
+            "sentAtUnixSeconds" : 1787932330.176317,
+            "status" : 200
+          }
+        ]
+      },
+      "wallClockSeconds" : 11.052548170089722
+    },
+    {
+      "completionTokens" : 192,
+      "hostLoadAverageMax" : 28.9423828125,
+      "name" : "multiturn_prefix_reuse",
+      "peakPhysicalFootprintBytes" : 35272446880,
+      "prefillTokensPerSecond" : 74.76703038666062,
+      "processPeakSoFarBytes" : 35272446880,
+      "promptTokens" : 7784,
+      "succeeded" : true,
+      "timeToFirstTokenSeconds" : 95.33097505569458,
+      "transcript" : {
+        "exchanges" : [
+          {
+            "firstByteAtUnixSeconds" : 1787932341.41032,
+            "lastByteAtUnixSeconds" : 1787932451.9734259,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 44055,
+            "requestDigest" : "5d0e0db5bab6f5599ec7da6c67cb8f01c9a74c3be2d99befcf607f0c15c935ca",
+            "responseByteCount" : 25840,
+            "responseDigest" : "64665aa9cb1efccf2bd2c5a52841c10feb9813dc5733102e3c5761a2b28ea0c9",
+            "sentAtUnixSeconds" : 1787932341.2329102,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932452.1844091,
+            "lastByteAtUnixSeconds" : 1787932556.725826,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 44197,
+            "requestDigest" : "a4a444f425104644339ead43a536a540078ae48ffb46ed8d9d2f2469e882071e",
+            "responseByteCount" : 25832,
+            "responseDigest" : "3db1159b55b4cbbdf6de980ea12109f1ef43acffe329e03e00c406e160439f80",
+            "sentAtUnixSeconds" : 1787932451.973835,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932556.9209208,
+            "lastByteAtUnixSeconds" : 1787932658.378531,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 44338,
+            "requestDigest" : "be00fbfd831d479d0a3df8aa7fa25efa2ddf6c7d0acaa64061c9d2ade5a83585",
+            "responseByteCount" : 25806,
+            "responseDigest" : "408aaa0230a237315c05118ae710d3bfc408e775277c4bb74cbcbeeda6a4528d",
+            "sentAtUnixSeconds" : 1787932556.7261539,
+            "status" : 200
+          }
+        ]
+      },
+      "wallClockSeconds" : 317.14549112319946
+    },
+    {
+      "completionTokens" : 1280,
+      "hostLoadAverageMax" : 25.30322265625,
+      "name" : "stability_soak",
+      "peakPhysicalFootprintBytes" : 30436316064,
+      "processPeakSoFarBytes" : 35272446880,
+      "promptTokens" : 910,
+      "succeeded" : true,
+      "transcript" : {
+        "exchanges" : [
+          {
+            "firstByteAtUnixSeconds" : 1787932658.633065,
+            "lastByteAtUnixSeconds" : 1787932665.692843,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "7549aab1f11b7b90c199dbf6ea70eb2b43519c11d6a2fd34b709bf5d50e48497",
+            "responseByteCount" : 24892,
+            "responseDigest" : "224a8b721eca7d4879bd7c329782772c70afd026fa59122a8c1c3595e8b3994d",
+            "sentAtUnixSeconds" : 1787932658.383338,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932665.88032,
+            "lastByteAtUnixSeconds" : 1787932672.9630342,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "ec4d3bda304d962802019c40d39cf1fa6bf6e6806800990f4c30113b93d423d7",
+            "responseByteCount" : 24890,
+            "responseDigest" : "0625940b41fbd92bfa6b7c3210c76e13774cb4031f27058ad89717b4f0325e40",
+            "sentAtUnixSeconds" : 1787932665.693172,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932673.1449652,
+            "lastByteAtUnixSeconds" : 1787932680.2630792,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "c6c6c17b6df061c2c0c3ab20face429baaa4b34be0b2350ec165633f9e772f61",
+            "responseByteCount" : 24890,
+            "responseDigest" : "373596023aaef63a6d2480437cc20e28a9f9f42e464f862ccbe6ea52c959267d",
+            "sentAtUnixSeconds" : 1787932672.963297,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932680.488419,
+            "lastByteAtUnixSeconds" : 1787932687.583177,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "82a5edce8b56a429a412103a91398b5422c70989e6da9fd00e20fe0a73772173",
+            "responseByteCount" : 24890,
+            "responseDigest" : "0123b15fee0be4047320ed0b4362f552f1cebb29816a09c9996fbc3736785c87",
+            "sentAtUnixSeconds" : 1787932680.263387,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932687.78936,
+            "lastByteAtUnixSeconds" : 1787932694.906265,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "652f67220ab4c74639f567a3a145d036bff2140cd74c49ec76aba711aa4a53b5",
+            "responseByteCount" : 24890,
+            "responseDigest" : "03bd073eedeed682a3e972b4612057f85bba98d3d680d851ad1e5f92c19dd634",
+            "sentAtUnixSeconds" : 1787932687.583431,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932695.07756,
+            "lastByteAtUnixSeconds" : 1787932702.175159,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "b80b09697d7f0c917fc858459335257a97f5fb2c0cce648515179eb236dfbe7e",
+            "responseByteCount" : 24890,
+            "responseDigest" : "bf4ee515ceea0cc4ac2effd0ee902f883f2068d0d4217872ef1f1d143de197c3",
+            "sentAtUnixSeconds" : 1787932694.906534,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932702.351616,
+            "lastByteAtUnixSeconds" : 1787932709.432461,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "7134f16ee83b0350d0ed7d8b132d8902e2059249a6c974c3363fac53f2e7ae30",
+            "responseByteCount" : 24890,
+            "responseDigest" : "f613d06a11af5816e40d35369ebf9637643640070a03b19786f8e2edd89ea7d6",
+            "sentAtUnixSeconds" : 1787932702.1754131,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932709.644421,
+            "lastByteAtUnixSeconds" : 1787932716.889355,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "db3c0d9598799f083e31efa4dd48edfd14e7ca9fd04b938f0c5936ebffb259b3",
+            "responseByteCount" : 24900,
+            "responseDigest" : "c43b2886656f005b817cb6b7005097435573be33f79896351868608f2287269c",
+            "sentAtUnixSeconds" : 1787932709.4328542,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932717.0828052,
+            "lastByteAtUnixSeconds" : 1787932725.210531,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "f00b14465edf30cb56008698a797cec8ce532ec414aefa618843aa0b45070b0f",
+            "responseByteCount" : 24900,
+            "responseDigest" : "b2d5760f581ed3547b53ef36451b33c6e1f21242e16bf16dc2bc8e0890af85d7",
+            "sentAtUnixSeconds" : 1787932716.8895888,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932725.4385371,
+            "lastByteAtUnixSeconds" : 1787932733.198759,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 407,
+            "requestDigest" : "aa1da9337059014e59d6f076613959dc826cffae1008dfe5f1e39f7634908113",
+            "responseByteCount" : 24499,
+            "responseDigest" : "3cc4d3ca6b5540f22dac5171103a95d878885b017713e65948d206019d18c51d",
+            "sentAtUnixSeconds" : 1787932725.2108788,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932733.40762,
+            "lastByteAtUnixSeconds" : 1787932740.800963,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 408,
+            "requestDigest" : "69bb5ddd9c786b2177544b519d9deb3bd9ea90781e7187d9c806a2e49e89dd73",
+            "responseByteCount" : 24900,
+            "responseDigest" : "30e2b736fe3fcf7059b6f963708777ffdddc1e7599e6f1a117c31593d702bd70",
+            "sentAtUnixSeconds" : 1787932733.199105,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932740.989929,
+            "lastByteAtUnixSeconds" : 1787932748.012803,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 408,
+            "requestDigest" : "e584c0f1aa5f35f4a09c2e57fb31adbcae8e8a44615a358ba07f4e74f00aab33",
+            "responseByteCount" : 24900,
+            "responseDigest" : "b053c120fd4f8bb12b18b7fd4f92d51bf7e38d29cc1ebc36f426bb3fe40af32b",
+            "sentAtUnixSeconds" : 1787932740.801372,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932748.164124,
+            "lastByteAtUnixSeconds" : 1787932755.202317,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 408,
+            "requestDigest" : "cbf2e1765514018bf57ffec71f05d2cf5569771fd1f1f4a8050a83b8e35e23be",
+            "responseByteCount" : 24900,
+            "responseDigest" : "62086f8c10201bcb6b8c19f57e46a789d2a88e1bfb7ef0b49b6f1c7289ed0c76",
+            "sentAtUnixSeconds" : 1787932748.013008,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932755.3714461,
+            "lastByteAtUnixSeconds" : 1787932762.4817939,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 408,
+            "requestDigest" : "3aad71c9b69b7cc97b0e5f9c24cd014b4ea0e25f04f960a30ee14371a36f9861",
+            "responseByteCount" : 24900,
+            "responseDigest" : "1164437edf1c61891bacfc2e431b80d63a7e3ee7a84aa12b8c3fdb5f257ed7c0",
+            "sentAtUnixSeconds" : 1787932755.2025352,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932762.68708,
+            "lastByteAtUnixSeconds" : 1787932769.800817,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 408,
+            "requestDigest" : "d8a47217a6ac418f2f4c3faab28caddc7cf41450ef553d487443457c9355c01b",
+            "responseByteCount" : 24900,
+            "responseDigest" : "fb1563384f9728f916756324498ad1fb01bf4d6d0c44cc764008c7c2b8931550",
+            "sentAtUnixSeconds" : 1787932762.482099,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932769.955003,
+            "lastByteAtUnixSeconds" : 1787932776.929564,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 408,
+            "requestDigest" : "636ff9e3598701216e054a16d0a412013d4b71cc2613b4f29f307a8d6a080b9c",
+            "responseByteCount" : 24900,
+            "responseDigest" : "16f43d1b208d11969280670a18be7e1c3d9da95351b62ea25da5f4da707bd3f5",
+            "sentAtUnixSeconds" : 1787932769.801025,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932777.113858,
+            "lastByteAtUnixSeconds" : 1787932784.074523,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 408,
+            "requestDigest" : "9ae4cc44e332d9b345b99347ef65117aede8bf5a9709a214e862c161debffb82",
+            "responseByteCount" : 24900,
+            "responseDigest" : "2563d20425a26429cfc98801a9247692a4aa057703e298542398f62b7f33e301",
+            "sentAtUnixSeconds" : 1787932776.929833,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932784.2395658,
+            "lastByteAtUnixSeconds" : 1787932791.239715,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 408,
+            "requestDigest" : "43cb117070be6e21c01c418f1be0af88203880f7314f0009f6380225b0897df6",
+            "responseByteCount" : 24900,
+            "responseDigest" : "553987317395f1bb0b539163b5ff5938670e1f23cd43c30cc45763e39006b9a7",
+            "sentAtUnixSeconds" : 1787932784.074768,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932791.40269,
+            "lastByteAtUnixSeconds" : 1787932798.3992128,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 408,
+            "requestDigest" : "4611b631a11533bff9dddcf78bc6748dec12eda5fca64c3b77517e0781d74b73",
+            "responseByteCount" : 24900,
+            "responseDigest" : "e007131ab995ca6b53bfc95fc1c6673caa220cfeb4e9c8fc488df62573abff31",
+            "sentAtUnixSeconds" : 1787932791.239928,
+            "status" : 200
+          },
+          {
+            "firstByteAtUnixSeconds" : 1787932798.567035,
+            "lastByteAtUnixSeconds" : 1787932805.575396,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 408,
+            "requestDigest" : "5da1eb4e1e65561056dd2da147b32460076cb5f3a9db713f93492ff724600e31",
+            "responseByteCount" : 24900,
+            "responseDigest" : "0bcd89d7d1f1bd5fd06852e241b7240c19503d28d2329a293c52b24ab528f877",
+            "sentAtUnixSeconds" : 1787932798.399493,
+            "status" : 200
+          }
+        ]
+      },
+      "wallClockSeconds" : 147.19230890274048
+    },
+    {
+      "completionTokens" : 16,
+      "decodeTokensPerSecond" : 7.932751884128434,
+      "hostLoadAverageMax" : 18.58740234375,
+      "name" : "context_75k",
+      "peakPhysicalFootprintBytes" : 48534787000,
+      "prefillTokensPerSecond" : 75.16470864410014,
+      "processPeakSoFarBytes" : 48534787000,
+      "promptTokens" : 73016,
+      "succeeded" : true,
+      "timeToFirstTokenSeconds" : 971.4133310317993,
+      "transcript" : {
+        "exchanges" : [
+          {
+            "firstByteAtUnixSeconds" : 1787932805.866714,
+            "lastByteAtUnixSeconds" : 1787933778.881957,
+            "method" : "POST",
+            "path" : "\/v1\/chat\/completions",
+            "requestByteCount" : 411893,
+            "requestDigest" : "c4022addf134e107e618f5bea983e0a462612331dc68af0e41bdbaa8ee0296df",
+            "responseByteCount" : 7977,
+            "responseDigest" : "8799bee8a5451637ed6dbe59fea95ee7f9d34f1f91771fabea3764101922e872",
+            "sentAtUnixSeconds" : 1787932805.5777311,
+            "status" : 200
+          }
+        ]
+      },
+      "wallClockSeconds" : 973.3047511577606
+    }
+  ],
+  "startedAtUnixSeconds" : 1787932209.0755548
+}

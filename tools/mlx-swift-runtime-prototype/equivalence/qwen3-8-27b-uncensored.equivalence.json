@@ -1,0 +1,21 @@
+{
+  "sourceOfRecord": "hf:orcarouter/Qwen3.8-27B-Uncensored-BF16",
+  "verdict": "comparable",
+  "artifacts": [
+    {
+      "path": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+      "digest": "1b10f3fe1c1097c909fa35e112b943255c44be4a5f332f45e0af57a96188460b",
+      "quantization": "8bit/group64/affine"
+    },
+    {
+      "path": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-GGUF-Q8_0/Qwen3.8-27B-Uncensored-OrcaRouter-Q8_0.gguf",
+      "digest": "31756fca94beca71ea4b8706d6fdc896dab2a3c6376ab0c1863b98512a24f8d6",
+      "quantization": "Q8_0"
+    }
+  ],
+  "declaredNonEquivalences": [
+    "the MLX build drops the MTP head the GGUF carries as blk.64: 8 quantized tensors, 451319808 bytes on disk, skipped at load",
+    "the vision tower is placed differently -- 333 bf16 tensors inside the MLX safetensors shards against a separate 931145984-byte GGUF mmproj -- and is resident in neither on the default text path",
+    "GGUF upcasts norms and 1-D tensors to F32 where the MLX build keeps the source bf16: 10686464 bytes of extra resident memory, no fidelity difference"
+  ]
+}

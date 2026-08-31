@@ -1,0 +1,526 @@
+{
+  "baseline" : {
+    "harnessExitStatus" : 15,
+    "hostLoadAverageMax" : 13.99462890625,
+    "lifecycle" : {
+      "first_completion_seconds" : 16.836391925811768,
+      "models_listing_seconds" : 0.8124920129776001
+    },
+    "memorySamplesMalformed" : 0,
+    "memorySamplesReadFailed" : 0,
+    "memorySamplesSuccessful" : 36740,
+    "runtime" : "python-mlx-lm",
+    "soak" : {
+      "aggregate_output_tokens_per_second" : 4.3940282371018746,
+      "first_latency_seconds" : 10.313844919204712,
+      "first_resident_memory_upper_bound_bytes" : 29827094504,
+      "iterations" : 20,
+      "last_latency_seconds" : 12.377151966094971,
+      "last_resident_memory_upper_bound_bytes" : 29317158912,
+      "median_latency_seconds" : 12.338475227355957,
+      "resident_memory_upper_bound_drift_bytes" : -509935592
+    },
+    "soakMemory" : {
+      "accounting" : "mach-physical-footprint-plus-vmmap-resident-mapped-file-upper-bound",
+      "issues" : [
+
+      ],
+      "malformedSampleCount" : 0,
+      "mappedFileObservabilityNote" : "mapped-file resident transients shorter than 7.0s are not observable; the mapped-file component is read by an external vmmap fork costing ~1.0s per call at a 5.0s cadence. Anonymous growth is covered separately by the Mach series at 0.05s.",
+      "mappedFileObservationLimitSeconds" : 7,
+      "peakSample" : {
+        "machPhysicalFootprintBytes" : 29823456232,
+        "machSampledAtUnixSeconds" : 1788114220.322623,
+        "mappedFileSampledAtUnixSeconds" : 1788114220.322614,
+        "residentMappedFileBytesUpperBound" : 3638272,
+        "residentMemoryUpperBoundBytes" : 29827094504,
+        "sampledAtUnixSeconds" : 1788114220.322623,
+        "vmmapResidentMappedFileRaw" : "3552K"
+      },
+      "rawSamples" : [
+        {
+          "machPhysicalFootprintBytes" : 29823456232,
+          "machSampledAtUnixSeconds" : 1788114220.322623,
+          "mappedFileSampledAtUnixSeconds" : 1788114220.322614,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29827094504,
+          "sampledAtUnixSeconds" : 1788114220.322623,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29312766952,
+          "machSampledAtUnixSeconds" : 1788114234.185091,
+          "mappedFileSampledAtUnixSeconds" : 1788114234.185082,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29316405224,
+          "sampledAtUnixSeconds" : 1788114234.185091,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29312652264,
+          "machSampledAtUnixSeconds" : 1788114248.826288,
+          "mappedFileSampledAtUnixSeconds" : 1788114248.826277,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29316290536,
+          "sampledAtUnixSeconds" : 1788114248.826288,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29313897448,
+          "machSampledAtUnixSeconds" : 1788114263.7459378,
+          "mappedFileSampledAtUnixSeconds" : 1788114263.745929,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29317535720,
+          "sampledAtUnixSeconds" : 1788114263.7459378,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29310178304,
+          "machSampledAtUnixSeconds" : 1788114278.1721501,
+          "mappedFileSampledAtUnixSeconds" : 1788114278.172142,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29313816576,
+          "sampledAtUnixSeconds" : 1788114278.1721501,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29316338688,
+          "machSampledAtUnixSeconds" : 1788114293.0122561,
+          "mappedFileSampledAtUnixSeconds" : 1788114293.0122519,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29319976960,
+          "sampledAtUnixSeconds" : 1788114293.0122561,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29316387840,
+          "machSampledAtUnixSeconds" : 1788114307.6812639,
+          "mappedFileSampledAtUnixSeconds" : 1788114307.6812549,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29320026112,
+          "sampledAtUnixSeconds" : 1788114307.6812639,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29316420632,
+          "machSampledAtUnixSeconds" : 1788114322.4272141,
+          "mappedFileSampledAtUnixSeconds" : 1788114322.4272051,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29320058904,
+          "sampledAtUnixSeconds" : 1788114322.4272141,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29311603736,
+          "machSampledAtUnixSeconds" : 1788114336.898428,
+          "mappedFileSampledAtUnixSeconds" : 1788114336.8984189,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29315242008,
+          "sampledAtUnixSeconds" : 1788114336.898428,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29311702040,
+          "machSampledAtUnixSeconds" : 1788114352.0150609,
+          "mappedFileSampledAtUnixSeconds" : 1788114352.015054,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29315340312,
+          "sampledAtUnixSeconds" : 1788114352.0150609,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29316322328,
+          "machSampledAtUnixSeconds" : 1788114366.893374,
+          "mappedFileSampledAtUnixSeconds" : 1788114366.8933659,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29319960600,
+          "sampledAtUnixSeconds" : 1788114366.893374,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29316305944,
+          "machSampledAtUnixSeconds" : 1788114381.5785351,
+          "mappedFileSampledAtUnixSeconds" : 1788114381.578526,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29319944216,
+          "sampledAtUnixSeconds" : 1788114381.5785351,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29311538200,
+          "machSampledAtUnixSeconds" : 1788114396.161629,
+          "mappedFileSampledAtUnixSeconds" : 1788114396.1616189,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29315176472,
+          "sampledAtUnixSeconds" : 1788114396.161629,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29311538200,
+          "machSampledAtUnixSeconds" : 1788114410.8316751,
+          "mappedFileSampledAtUnixSeconds" : 1788114410.831665,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29315176472,
+          "sampledAtUnixSeconds" : 1788114410.8316751,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29316420632,
+          "machSampledAtUnixSeconds" : 1788114425.648989,
+          "mappedFileSampledAtUnixSeconds" : 1788114425.648977,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29320058904,
+          "sampledAtUnixSeconds" : 1788114425.648989,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29316420632,
+          "machSampledAtUnixSeconds" : 1788114440.3626719,
+          "mappedFileSampledAtUnixSeconds" : 1788114440.362663,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29320058904,
+          "sampledAtUnixSeconds" : 1788114440.3626719,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29316453400,
+          "machSampledAtUnixSeconds" : 1788114455.044775,
+          "mappedFileSampledAtUnixSeconds" : 1788114455.0447721,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29320091672,
+          "sampledAtUnixSeconds" : 1788114455.044775,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29316420632,
+          "machSampledAtUnixSeconds" : 1788114469.695061,
+          "mappedFileSampledAtUnixSeconds" : 1788114469.6950521,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29320058904,
+          "sampledAtUnixSeconds" : 1788114469.695061,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29311636480,
+          "machSampledAtUnixSeconds" : 1788114484.2197871,
+          "mappedFileSampledAtUnixSeconds" : 1788114484.2197781,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29315274752,
+          "sampledAtUnixSeconds" : 1788114484.2197871,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        },
+        {
+          "machPhysicalFootprintBytes" : 29313520640,
+          "machSampledAtUnixSeconds" : 1788114498.929213,
+          "mappedFileSampledAtUnixSeconds" : 1788114498.9292049,
+          "residentMappedFileBytesUpperBound" : 3638272,
+          "residentMemoryUpperBoundBytes" : 29317158912,
+          "sampledAtUnixSeconds" : 1788114498.929213,
+          "vmmapResidentMappedFileRaw" : "3552K"
+        }
+      ],
+      "readFailureCount" : 0,
+      "scoredBytes" : 29827094504,
+      "scoreSemantics" : "conservative-upper-bound",
+      "status" : "measured",
+      "successfulSampleCount" : 20
+    },
+    "transcriptSealed" : "6cd04f381844677e471ae3c8fa35ba74420b8d85553391996e54e14510bb8b74",
+    "warmupMemory" : {
+      "accounting" : "mach-physical-footprint-plus-vmmap-resident-mapped-file-upper-bound",
+      "issues" : [
+
+      ],
+      "malformedSampleCount" : 0,
+      "mappedFileObservabilityNote" : "mapped-file resident transients shorter than 7.0s are not observable; the mapped-file component is read by an external vmmap fork costing ~1.0s per call at a 5.0s cadence. Anonymous growth is covered separately by the Mach series at 0.05s.",
+      "mappedFileObservationLimitSeconds" : 7,
+      "peakSample" : {
+        "machPhysicalFootprintBytes" : 29117027256,
+        "machSampledAtUnixSeconds" : 1788113691.164206,
+        "mappedFileSampledAtUnixSeconds" : 1788113691.1641979,
+        "residentMappedFileBytesUpperBound" : 3490816,
+        "residentMemoryUpperBoundBytes" : 29120518072,
+        "sampledAtUnixSeconds" : 1788113691.164206,
+        "vmmapResidentMappedFileRaw" : "3408K"
+      },
+      "rawSamples" : [
+        {
+          "machPhysicalFootprintBytes" : 29117027256,
+          "machSampledAtUnixSeconds" : 1788113691.164206,
+          "mappedFileSampledAtUnixSeconds" : 1788113691.1641979,
+          "residentMappedFileBytesUpperBound" : 3490816,
+          "residentMemoryUpperBoundBytes" : 29120518072,
+          "sampledAtUnixSeconds" : 1788113691.164206,
+          "vmmapResidentMappedFileRaw" : "3408K"
+        }
+      ],
+      "readFailureCount" : 0,
+      "scoredBytes" : 29120518072,
+      "scoreSemantics" : "conservative-upper-bound",
+      "status" : "measured",
+      "successfulSampleCount" : 1
+    }
+  },
+  "candidate" : {
+    "harnessExitStatus" : 15,
+    "hostLoadAverageMax" : 8.88134765625,
+    "lifecycle" : {
+      "first_completion_seconds" : 12.568498969078064,
+      "models_listing_seconds" : 11.892706990242004
+    },
+    "memorySamplesMalformed" : 0,
+    "memorySamplesReadFailed" : 0,
+    "memorySamplesSuccessful" : 23942,
+    "runtime" : "llamacpp",
+    "soak" : {
+      "aggregate_output_tokens_per_second" : 5.6239978105642212,
+      "first_latency_seconds" : 9.0147240161895752,
+      "first_resident_memory_upper_bound_bytes" : 38145057404,
+      "iterations" : 20,
+      "last_latency_seconds" : 8.1043229103088379,
+      "last_resident_memory_upper_bound_bytes" : 44346176540,
+      "median_latency_seconds" : 8.6245689392089844,
+      "resident_memory_upper_bound_drift_bytes" : 6201119136
+    },
+    "soakMemory" : {
+      "accounting" : "mach-physical-footprint-plus-vmmap-resident-mapped-file-upper-bound",
+      "issues" : [
+
+      ],
+      "malformedSampleCount" : 0,
+      "mappedFileObservabilityNote" : "mapped-file resident transients shorter than 7.0s are not observable; the mapped-file component is read by an external vmmap fork costing ~1.0s per call at a 5.0s cadence. Anonymous growth is covered separately by the Mach series at 0.05s.",
+      "mappedFileObservationLimitSeconds" : 7,
+      "peakSample" : {
+        "machPhysicalFootprintBytes" : 16106766568,
+        "machSampledAtUnixSeconds" : 1788116220.661201,
+        "mappedFileSampledAtUnixSeconds" : 1788116220.661191,
+        "residentMappedFileBytesUpperBound" : 28239409972,
+        "residentMemoryUpperBoundBytes" : 44346176540,
+        "sampledAtUnixSeconds" : 1788116220.661201,
+        "vmmapResidentMappedFileRaw" : "26.2G"
+      },
+      "rawSamples" : [
+        {
+          "machPhysicalFootprintBytes" : 9905647432,
+          "machSampledAtUnixSeconds" : 1788116009.9661841,
+          "mappedFileSampledAtUnixSeconds" : 1788116009.9661779,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 38145057404,
+          "sampledAtUnixSeconds" : 1788116009.9661841,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 10390892696,
+          "machSampledAtUnixSeconds" : 1788116020.9751558,
+          "mappedFileSampledAtUnixSeconds" : 1788116020.9751501,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 38630302668,
+          "sampledAtUnixSeconds" : 1788116020.9751558,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 11018875512,
+          "machSampledAtUnixSeconds" : 1788116031.7582989,
+          "mappedFileSampledAtUnixSeconds" : 1788116031.7582879,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 39258285484,
+          "sampledAtUnixSeconds" : 1788116031.7582989,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 11661128768,
+          "machSampledAtUnixSeconds" : 1788116042.446528,
+          "mappedFileSampledAtUnixSeconds" : 1788116042.446523,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 39900538740,
+          "sampledAtUnixSeconds" : 1788116042.446528,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 12289062408,
+          "machSampledAtUnixSeconds" : 1788116053.362442,
+          "mappedFileSampledAtUnixSeconds" : 1788116053.3624361,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 40528472380,
+          "sampledAtUnixSeconds" : 1788116053.362442,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 12931348456,
+          "machSampledAtUnixSeconds" : 1788116063.809319,
+          "mappedFileSampledAtUnixSeconds" : 1788116063.8093119,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 41170758428,
+          "sampledAtUnixSeconds" : 1788116063.809319,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 13559282096,
+          "machSampledAtUnixSeconds" : 1788116075.043014,
+          "mappedFileSampledAtUnixSeconds" : 1788116075.0430031,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 41798692068,
+          "sampledAtUnixSeconds" : 1788116075.043014,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 14201535352,
+          "machSampledAtUnixSeconds" : 1788116085.1844859,
+          "mappedFileSampledAtUnixSeconds" : 1788116085.1844759,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 42440945324,
+          "sampledAtUnixSeconds" : 1788116085.1844859,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 14852226368,
+          "machSampledAtUnixSeconds" : 1788116097.1225262,
+          "mappedFileSampledAtUnixSeconds" : 1788116097.1225171,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 43091636340,
+          "sampledAtUnixSeconds" : 1788116097.1225262,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 15486861064,
+          "machSampledAtUnixSeconds" : 1788116110.2513199,
+          "mappedFileSampledAtUnixSeconds" : 1788116110.251313,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 43726271036,
+          "sampledAtUnixSeconds" : 1788116110.2513199,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 15659368320,
+          "machSampledAtUnixSeconds" : 1788116121.0566449,
+          "mappedFileSampledAtUnixSeconds" : 1788116121.0566421,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 43898778292,
+          "sampledAtUnixSeconds" : 1788116121.0566449,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 15652224896,
+          "machSampledAtUnixSeconds" : 1788116133.2228122,
+          "mappedFileSampledAtUnixSeconds" : 1788116133.2228041,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 43891634868,
+          "sampledAtUnixSeconds" : 1788116133.2228122,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 14822129008,
+          "machSampledAtUnixSeconds" : 1788116144.198451,
+          "mappedFileSampledAtUnixSeconds" : 1788116144.1984439,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 43061538980,
+          "sampledAtUnixSeconds" : 1788116144.198451,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 15450029832,
+          "machSampledAtUnixSeconds" : 1788116155.0810361,
+          "mappedFileSampledAtUnixSeconds" : 1788116155.0810261,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 43689439804,
+          "sampledAtUnixSeconds" : 1788116155.0810361,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 15621341056,
+          "machSampledAtUnixSeconds" : 1788116166.100837,
+          "mappedFileSampledAtUnixSeconds" : 1788116166.1008301,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 43860751028,
+          "sampledAtUnixSeconds" : 1788116166.100837,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 15778316280,
+          "machSampledAtUnixSeconds" : 1788116176.5534611,
+          "mappedFileSampledAtUnixSeconds" : 1788116176.553452,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 44017726252,
+          "sampledAtUnixSeconds" : 1788116176.5534611,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 15785492472,
+          "machSampledAtUnixSeconds" : 1788116186.972748,
+          "mappedFileSampledAtUnixSeconds" : 1788116186.9727411,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 44024902444,
+          "sampledAtUnixSeconds" : 1788116186.972748,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 15778332664,
+          "machSampledAtUnixSeconds" : 1788116198.8889651,
+          "mappedFileSampledAtUnixSeconds" : 1788116198.888952,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 44017742636,
+          "sampledAtUnixSeconds" : 1788116198.8889651,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 15949758576,
+          "machSampledAtUnixSeconds" : 1788116210.3081698,
+          "mappedFileSampledAtUnixSeconds" : 1788116210.3081632,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 44189168548,
+          "sampledAtUnixSeconds" : 1788116210.3081698,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        },
+        {
+          "machPhysicalFootprintBytes" : 16106766568,
+          "machSampledAtUnixSeconds" : 1788116220.661201,
+          "mappedFileSampledAtUnixSeconds" : 1788116220.661191,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 44346176540,
+          "sampledAtUnixSeconds" : 1788116220.661201,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        }
+      ],
+      "readFailureCount" : 0,
+      "scoredBytes" : 44346176540,
+      "scoreSemantics" : "conservative-upper-bound",
+      "status" : "measured",
+      "successfulSampleCount" : 20
+    },
+    "transcriptSealed" : "2e9e75c56a11e6b5857c237596c18b0dd60a80d848e08f37b319f7abf3abeb2e",
+    "warmupMemory" : {
+      "accounting" : "mach-physical-footprint-plus-vmmap-resident-mapped-file-upper-bound",
+      "issues" : [
+
+      ],
+      "malformedSampleCount" : 0,
+      "mappedFileObservabilityNote" : "mapped-file resident transients shorter than 7.0s are not observable; the mapped-file component is read by an external vmmap fork costing ~1.0s per call at a 5.0s cadence. Anonymous growth is covered separately by the Mach series at 0.05s.",
+      "mappedFileObservationLimitSeconds" : 7,
+      "peakSample" : {
+        "machPhysicalFootprintBytes" : 6008743016,
+        "machSampledAtUnixSeconds" : 1788115831.510766,
+        "mappedFileSampledAtUnixSeconds" : 1788115831.510757,
+        "residentMappedFileBytesUpperBound" : 28239409972,
+        "residentMemoryUpperBoundBytes" : 34248152988,
+        "sampledAtUnixSeconds" : 1788115831.510766,
+        "vmmapResidentMappedFileRaw" : "26.2G"
+      },
+      "rawSamples" : [
+        {
+          "machPhysicalFootprintBytes" : 6008743016,
+          "machSampledAtUnixSeconds" : 1788115831.510766,
+          "mappedFileSampledAtUnixSeconds" : 1788115831.510757,
+          "residentMappedFileBytesUpperBound" : 28239409972,
+          "residentMemoryUpperBoundBytes" : 34248152988,
+          "sampledAtUnixSeconds" : 1788115831.510766,
+          "vmmapResidentMappedFileRaw" : "26.2G"
+        }
+      ],
+      "readFailureCount" : 0,
+      "scoredBytes" : 34248152988,
+      "scoreSemantics" : "conservative-upper-bound",
+      "status" : "measured",
+      "successfulSampleCount" : 1
+    }
+  }
+}

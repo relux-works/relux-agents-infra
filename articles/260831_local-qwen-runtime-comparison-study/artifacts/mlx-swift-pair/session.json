@@ -1,0 +1,48 @@
+{
+  "baseline" : {
+    "footprintSamplesFailed" : 0,
+    "footprintSamplesSuccessful" : 6145,
+    "harnessExitStatus" : 15,
+    "hostLoadAverageMax" : 28.9423828125,
+    "lifecycle" : {
+      "first_completion_seconds" : 10.971127986907959,
+      "footprint_after_warmup_bytes" : 29111882656,
+      "models_listing_seconds" : 2.9130349159240723
+    },
+    "runtime" : "python-mlx-lm",
+    "soak" : {
+      "aggregate_output_tokens_per_second" : 8.6961065394101471,
+      "first_footprint_bytes" : 29798536096,
+      "first_latency_seconds" : 7.3097243309020996,
+      "footprint_drift_bytes" : -495403008,
+      "iterations" : 20,
+      "last_footprint_bytes" : 29303133088,
+      "last_latency_seconds" : 7.1760950088500977,
+      "median_latency_seconds" : 7.2794721126556396
+    },
+    "transcriptSealed" : "85d1a985a69ec46033fa21f5dff42ab9deaa7bdafa1132fddbe9075277162008"
+  },
+  "candidate" : {
+    "footprintSamplesFailed" : 0,
+    "footprintSamplesSuccessful" : 8079,
+    "harnessExitStatus" : 15,
+    "hostLoadAverageMax" : 35.2119140625,
+    "lifecycle" : {
+      "first_completion_seconds" : 7.0178579092025757,
+      "footprint_after_warmup_bytes" : 28980335376,
+      "models_listing_seconds" : 5.2248779535293579
+    },
+    "runtime" : "mlx-swift",
+    "soak" : {
+      "aggregate_output_tokens_per_second" : 9.5751911674013872,
+      "first_footprint_bytes" : 47866729256,
+      "first_latency_seconds" : 7.0945467948913574,
+      "footprint_drift_bytes" : 75726848,
+      "iterations" : 20,
+      "last_footprint_bytes" : 47942456104,
+      "last_latency_seconds" : 6.6360311508178711,
+      "median_latency_seconds" : 6.6229052543640137
+    },
+    "transcriptSealed" : "2e1b665d80cf83c09d039ffbbbdccd4970d5c658cb67352f32b43dd08cd52bd3"
+  }
+}

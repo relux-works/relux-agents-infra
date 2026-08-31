@@ -65,15 +65,28 @@ enum BenchmarkRunCommand {
 
     static let usage = """
         usage: mlx-swift-runtime-prototype benchmark-run \
-        --config <model-harness.toml> --model <dir> --prompts <suite.json> \
+        --config <model-harness.toml> --model <dir-or-gguf> --prompts <suite.json> \
         --thresholds <thresholds.json> --session <dir> --harness <model-harness> \
         --baseline-runtime <id> --baseline-profile <name> \
         --candidate-runtime <id> --candidate-profile <name> \
+        [--candidate-model <dir-or-gguf>] [--equivalence <verdict.json>] \
         [--port <n>] [--python-bin <path>] [--candidate-binary <path>] \
         [--skip <scenario>]... [--baseline-declare <text>]... \
         [--candidate-declare <text>]... [--startup-timeout <s>] \
         [--request-timeout <s>] [--settle-seconds <s>]
         """
+
+    /// Environment variables that configure a runtime's speculative decoding
+    /// without appearing in any argv this gate records.
+    ///
+    /// `llama-server` reads all of these; `--help` for the pinned build lists
+    /// the variable beside every speculative flag. They are refused rather than
+    /// stripped because this process's environment is what it hands the
+    /// launcher, so an inherited `LLAMA_ARG_SPEC_TYPE` would put the runtime
+    /// under test into speculative decoding while the recorded launch showed
+    /// nothing — the same "absent flag read as a policy" defect the KV bound
+    /// was rebuilt to remove, one condition along.
+    private static let speculativeEnvironmentPrefixes = ["LLAMA_ARG_SPEC", "LLAMA_ARG_DRAFT"]
 
     private static let repeatable: Set<String> = [
         "--skip", "--baseline-declare", "--candidate-declare",
@@ -87,6 +100,7 @@ enum BenchmarkRunCommand {
             "--baseline-runtime", "--baseline-profile", "--candidate-runtime",
             "--candidate-profile", "--port", "--python-bin", "--candidate-binary",
             "--startup-timeout", "--request-timeout", "--settle-seconds",
+            "--candidate-model", "--equivalence",
         ]
         known.formUnion(repeatable)
         var index = 0
@@ -136,6 +150,10 @@ enum BenchmarkRunCommand {
     ) async throws -> Int32 {
         let configPath = single["--config"]!
         let modelPath = single["--model"]!
+        // Defaults to the baseline's artifact, so a same-format comparison is
+        // spelled exactly as it was before G4 and pins byte identity exactly as
+        // it did.
+        let candidateModelPath = single["--candidate-model"] ?? modelPath
         let promptsPath = single["--prompts"]!
         let thresholdsPath = single["--thresholds"]!
         let sessionPath = single["--session"]!
@@ -174,25 +192,143 @@ enum BenchmarkRunCommand {
                 atPath: directory, withIntermediateDirectories: true)
         }
 
+        // Refused before anything is launched, and refused rather than scrubbed.
+        // Silently unsetting it would make the gate's environment differ from
+        // the operator's for reasons no record shows; refusing says which
+        // variable, so the operator fixes the shell that would have changed the
+        // decoding algorithm under test.
+        for (name, value) in ProcessInfo.processInfo.environment
+        where speculativeEnvironmentPrefixes.contains(where: name.hasPrefix) {
+            throw RunError.unusableInput(
+                "the environment this gate would hand the launcher sets \(name)="
+                    + "\(value.debugDescription); that configures speculative decoding without "
+                    + "appearing in any recorded argv, and speculation is not a condition the "
+                    + "two runtimes can share -- unset it and run again")
+        }
+
+        // Read before the pins, because the artifact's quantization label may
+        // have to come out of it, and read once for both passes: a cross-format
+        // comparison rests on one verdict about both artifacts.
+        let equivalence = equivalenceReading(path: single["--equivalence"])
+        if case .unread(let path) = equivalence {
+            throw RunError.unusableInput(
+                "equivalence verdict \(path.debugDescription) could not be read or decoded; a "
+                    + "verdict the gate cannot read is a failed read rather than an absence of "
+                    + "one, and this run has no model of record")
+        }
+        // F1. The document read and decoded perfectly and is not one of the
+        // equivalence decisions this repository took. Refused here, before any
+        // launch, and refused for what it is: not unreadable, not absent, but
+        // authored by the invocation that is asking to be believed.
+        if case .untrusted(let path, let documentDigest) = equivalence {
+            throw RunError.unusableInput(
+                "equivalence verdict \(path.debugDescription) read cleanly at digest "
+                    + "\(documentDigest.debugDescription) and is not an equivalence decision this "
+                    + "repository took; admission is bound to the decisions compiled into this "
+                    + "gate from versioned source, because a verdict this invocation supplies is "
+                    + "one this invocation could have written -- add the decision to "
+                    + "TrustedEquivalenceDecisions.shipped and rebuild, or pass the document that "
+                    + "decision names")
+        }
         let common = CommonPins(
-            hostIdentity: hostIdentity(),
-            modelPath: modelPath,
-            modelDigest: try modelDigest(directory: modelPath),
-            quantization: try quantizationLabel(directory: modelPath),
+            hostIdentity: try hostIdentity(),
             promptSuiteDigest: promptSuiteDigest,
-            maxOutputTokens: BenchmarkScenarios.defaultMaxOutputTokens)
+            maxOutputTokens: BenchmarkScenarios.defaultMaxOutputTokens,
+            equivalence: equivalence)
+        let baselineModel = try modelPins(artifact: modelPath, equivalence: equivalence)
+        let candidateModel =
+            candidateModelPath == modelPath
+            ? baselineModel : try modelPins(artifact: candidateModelPath, equivalence: equivalence)
+        // Said here, at the production entry, before any weights are loaded.
+        // `RuntimeBenchmark.admitModelIdentity` refuses the same pair after the
+        // fact; saying it now costs an hour less.
+        if baselineModel.digest != candidateModel.digest, equivalence.equivalence == nil {
+            throw RunError.unusableInput(
+                "the two passes would serve \(modelPath.debugDescription) and "
+                    + "\(candidateModelPath.debugDescription), which are different weight "
+                    + "artifacts; pass --equivalence with a verdict naming the upstream model "
+                    + "they share, because two different files are comparable only under declared "
+                    + "equivalence and never by default")
+        }
+
+        // Every non-equivalence the verdict declared, on both passes, before
+        // whatever the caller declared. `RuntimeBenchmark.admitModelIdentity`
+        // refuses a cross-format pair whose records do not carry all of them,
+        // so this is what makes them travel rather than an act of politeness --
+        // and putting them in here rather than at admission is what makes them
+        // land in `decision.json` and in every report taken from it.
+        // The union of what the document declared and what the trusted decision
+        // requires. They coincide for a document that matches its anchor; the
+        // anchor's list is taken as well so the three measured differences
+        // travel even under a trust store whose document drifted, and
+        // `RuntimeBenchmark.admitModelIdentity` demands both lists back out of
+        // both records.
+        var mandated = equivalence.equivalence?.declaredNonEquivalences ?? []
+        if let documentDigest = equivalence.evidenceDigest,
+            let anchor = TrustedEquivalenceDecisions.decision(documentDigest: documentDigest)
+        {
+            for entry in anchor.requiredNonEquivalences where !mandated.contains(entry) {
+                mandated.append(entry)
+            }
+        }
+        let fixedOrderLimitation =
+            "pass order is fixed baseline then candidate: residual heat or unreleased host "
+            + "pressure can disadvantage the candidate, while shared host cache state can "
+            + "favour it; direction is indeterminate and the per-pass host load is diagnostic, "
+            + "not an admission gate"
+        let parityPolicyDirection =
+            "parity policy is intentionally one-way: baseline success plus candidate failure "
+            + "blocks, while the reverse does not; direction favours the incumbent, and this is "
+            + "a migration acceptance policy rather than a measured performance metric"
+        let mtpOffDirection =
+            "MTP/speculative decoding is forced off for algorithmic parity because the MLX "
+            + "incumbent drops the MTP head: direction is against llama.cpp, which cannot use "
+            + "a product capability the incumbent lacks"
+        let residentMemoryBoundDirection =
+            "memory is scored as a conservative upper bound: Mach physical footprint plus the "
+            + "upper edge of vmmap resident mapped-file bytes; double-counting can overstate a "
+            + "runtime whose footprint already charges mapped pages, so residual direction is "
+            + "runtime-dependent and the raw components are retained"
+        let baselinePromptCachePolicy =
+            "baseline cache policy: --prompt-cache-size 1 --prompt-cache-bytes 8GB; a reuse hit "
+            + "can reduce repeated-prefix TTFT and retained cache can increase memory; direction "
+            + "is unknown without an observed hit"
+        let candidateSlotCachePolicy =
+            "candidate cache policy: llama.cpp per-slot KV reuse; a reuse hit can reduce "
+            + "repeated-prefix TTFT and retained slot state can increase memory; direction is "
+            + "unknown without an observed hit"
+        let cacheComparabilityRule =
+            "cache comparability: a scenario with an observed reuse hit on only one runtime is "
+            + "non-comparable and must be refused rather than scored"
+        func declared(_ caller: [String]) -> [String] {
+            var entries = mandated
+            for limitation in [
+                fixedOrderLimitation, parityPolicyDirection, mtpOffDirection,
+                residentMemoryBoundDirection, baselinePromptCachePolicy,
+                candidateSlotCachePolicy, cacheComparabilityRule,
+            ]
+            where !entries.contains(limitation) {
+                entries.append(limitation)
+            }
+            for entry in caller where !entries.contains(entry) { entries.append(entry) }
+            return entries
+        }
 
         var passes: [String: PassOutcome] = [:]
-        var order: [(role: String, runtime: String, profile: String, declare: [String])] = [
-            (
-                "baseline", single["--baseline-runtime"]!, single["--baseline-profile"]!,
-                multiple["--baseline-declare"] ?? []
-            ),
-            (
-                "candidate", single["--candidate-runtime"]!, single["--candidate-profile"]!,
-                multiple["--candidate-declare"] ?? []
-            ),
-        ]
+        var order:
+            [(
+                role: String, runtime: String, profile: String, declare: [String],
+                model: ModelPins
+            )] = [
+                (
+                    "baseline", single["--baseline-runtime"]!, single["--baseline-profile"]!,
+                    declared(multiple["--baseline-declare"] ?? []), baselineModel
+                ),
+                (
+                    "candidate", single["--candidate-runtime"]!, single["--candidate-profile"]!,
+                    declared(multiple["--candidate-declare"] ?? []), candidateModel
+                ),
+            ]
         guard order[0].runtime != order[1].runtime else {
             throw RunError.unusableInput(
                 "both passes name runtime \(order[0].runtime.debugDescription); a runtime "
@@ -206,8 +342,8 @@ enum BenchmarkRunCommand {
                 assertedPython: single["--python-bin"],
                 assertedCandidateBinary: single["--candidate-binary"], configPath: configPath,
                 configDigest: configDigest, harness: harness, port: port, suite: suite,
-                skip: skip, common: common, declaredAsymmetries: pass.declare,
-                gateDigest: gateDigest,
+                skip: skip, common: common, model: pass.model,
+                declaredAsymmetries: pass.declare, gateDigest: gateDigest,
                 startupTimeout: startupTimeout, requestTimeout: requestTimeout,
                 logPath: (logsDirectory as NSString)
                     .appendingPathComponent("\(pass.runtime)-runtime.log"))
@@ -266,13 +402,42 @@ enum BenchmarkRunCommand {
         return decision.accepted ? ExitCode.accepted.rawValue : ExitCode.rejected.rawValue
     }
 
+    /// The pins that are the same for both passes by construction.
+    ///
+    /// The model left this struct at G4. It is per-pass now, because a
+    /// cross-format comparison serves two different artifacts and pinning them
+    /// jointly was exactly the assumption that made llama.cpp inadmissible.
     struct CommonPins {
         let hostIdentity: String
-        let modelPath: String
-        let modelDigest: String
-        let quantization: String
         let promptSuiteDigest: String
         let maxOutputTokens: Int
+        /// The one equivalence verdict, read once, carried into both
+        /// attestations so admission can require both sides to cite the same
+        /// document by digest.
+        let equivalence: ModelEquivalenceReading
+    }
+
+    /// One pass's weight artifact, as the gate read it.
+    struct ModelPins {
+        let path: String
+        let digest: String
+        let quantization: String
+        /// ``RuntimeBenchmark/modelOfRecord(artifactDigest:observing:)`` over
+        /// the two, computed here so the pin and the attestation the gate
+        /// writes beside it cannot be built from different readings.
+        let ofRecord: String
+    }
+
+    static func modelPins(
+        artifact path: String, equivalence: ModelEquivalenceReading
+    ) throws -> ModelPins {
+        let digest = try modelDigest(artifact: path)
+        return ModelPins(
+            path: path, digest: digest,
+            quantization: try quantizationLabel(
+                artifact: path, equivalence: equivalence, digest: digest),
+            ofRecord: RuntimeBenchmark.modelOfRecord(
+                artifactDigest: digest, observing: equivalence))
     }
 
     struct PassOutcome {
@@ -280,13 +445,15 @@ enum BenchmarkRunCommand {
         let attestation: RuntimeAttestation
         let lifecycle: [String: Double?]
         let soak: [String: Double?]
+        let warmupMemory: RuntimeMemoryPeak
+        let soakMemory: RuntimeMemoryPeak
         /// Highest 1-minute host load average seen anywhere in this pass.
         ///
         /// Reported beside the decision, never scored. A pass measured while
         /// something else owned the machine is a measurement of that something
         /// else, and the first revision-4 attempt was exactly that.
         let hostLoadAverageMax: Double?
-        let footprintSamples: (successful: Int, failed: Int)
+        let memorySamples: (successful: Int, readFailed: Int, malformed: Int)
         let harnessExitStatus: Int32?
     }
 
@@ -305,6 +472,7 @@ enum BenchmarkRunCommand {
         suite: BenchmarkScenarios.Suite,
         skip: Set<String>,
         common: CommonPins,
+        model: ModelPins,
         declaredAsymmetries: [String],
         gateDigest: String,
         startupTimeout: TimeInterval,
@@ -314,10 +482,12 @@ enum BenchmarkRunCommand {
         let host = "127.0.0.1"
         let profile = try BenchmarkLaunchConfig.profile(
             named: profileName, in: configPath, host: host, port: port)
-        guard profile.argv.contains(common.modelPath) else {
+        let memoryAccounting = RuntimeMemoryAccounting.forExecutable(
+            profile.executable, modelPath: model.path, launchArgv: profile.argv)
+        guard profile.argv.contains(model.path) else {
             throw RunError.unusableInput(
                 "profile \(profileName.debugDescription) does not pass "
-                    + "\(common.modelPath.debugDescription) to the runtime; the modelPath pin "
+                    + "\(model.path.debugDescription) to the runtime; the modelPath pin "
                     + "would not be bound to the process under test")
         }
         let harnessCommand = [
@@ -332,6 +502,12 @@ enum BenchmarkRunCommand {
         else {
             throw RunError.aborted("could not spawn \(harnessCommand.joined(separator: " "))")
         }
+        // Every refusal below owns this launch just as surely as the happy path
+        // does. In particular, Python provenance is resolved late in the pass
+        // and can throw after the runtime has served every scenario; without a
+        // scope guard that error leaves model-harness and its model child in
+        // their detached session after benchmark-run has already returned.
+        defer { _ = launcher.terminate() }
 
         // The runtime under test, not the launcher that owns it.
         var runtimePID: pid_t = 0
@@ -377,34 +553,34 @@ enum BenchmarkRunCommand {
         }
         let openedAt = Date().timeIntervalSince1970
 
-        let sampler = BenchmarkFootprintSampler(pid: Int(runtimePID))
+        let sampler = BenchmarkFootprintSampler(
+            pid: Int(runtimePID), accounting: memoryAccounting)
         sampler.start()
         let session = BenchmarkHTTPDriver.session(requestTimeout: requestTimeout)
         let pass = BenchmarkPass(
-            runtime: runtime, suite: suite, modelID: common.modelPath,
+            runtime: runtime, suite: suite, modelID: model.path,
             runtimeProcessID: Int(runtimePID),
             endpoint: URL(string: "http://\(host):\(port)/v1")!, requestTimeout: requestTimeout,
             session: session, sampler: sampler)
 
         var scenarios: [RuntimeBenchmark.ScenarioResult] = []
-        var serving = ServingAnswer(
-            modelID: nil, contextWindow: .unread, generationConfiguration: .unread)
         do {
             try await awaitReady(
-                pass: pass, launcher: launcher, modelID: common.modelPath,
+                pass: pass, launcher: launcher, modelID: model.path,
                 startupTimeout: startupTimeout)
             for name in BenchmarkScenarios.order {
-                guard !skip.contains(name), let spec = suite.scenarios[name],
-                    let kind = spec["kind"] as? String
-                else { continue }
+                // The only two reasons a scenario is not run: the caller asked
+                // for it to be skipped, or the suite does not define it. A
+                // scenario the suite *does* define is always driven, because
+                // every field of it was understood before this loop existed --
+                // the previous `kind` cast could drop a defined scenario here
+                // without a word.
+                guard !skip.contains(name), let scenario = suite.scenarios[name] else { continue }
                 StandardOutput.shared.log("[\(runtime)] \(name) ...")
                 // Opened here and nowhere else: the window has to start when the
                 // scenario starts, or its peak is the previous scenario's.
                 pass.beginScenarioWindow()
-                guard
-                    let result = await BenchmarkScenarios.run(
-                        kind: kind, pass: pass, name: name, spec: spec)
-                else { continue }
+                let result = await BenchmarkScenarios.run(pass: pass, scenario: scenario)
                 StandardOutput.shared.log(
                     "[\(runtime)] \(name): "
                         + (result.succeeded
@@ -431,12 +607,10 @@ enum BenchmarkRunCommand {
         // observation the gate declined to close. Review's placeholder is
         // exactly this case: two processes that answered `/v1/models` happily
         // and never served a completion, and the refusal they deserve says so.
-        serving = await servingAnswer(pass: pass, expecting: common.modelPath)
+        let serving = await servingAnswer(pass: pass, expecting: model.path)
 
-        // Resolve executable and implementation only after the process has
-        // served. Script runtimes may pass through more than one executable
-        // image during startup; a pre-read can attest the launcher image while
-        // a different Python image answers the benchmark.
+        // Resolve provenance from the process that actually served. Caller
+        // paths are assertions only and cannot mint runtime evidence.
         guard let observation = ProcessObservation.settled(pid: Int(runtimePID)),
             observation.startUnixSeconds == openingObservation.startUnixSeconds
         else {
@@ -446,8 +620,7 @@ enum BenchmarkRunCommand {
         }
         guard let observedLaunchArgv = observation.arguments else {
             _ = launcher.terminate()
-            throw RunError.aborted(
-                "the process that served exposed no observable runtime argv")
+            throw RunError.aborted("the process that served exposed no observable runtime argv")
         }
         guard let observedExecutableDigest = fileDigest(observation.executablePath) else {
             _ = launcher.terminate()
@@ -482,8 +655,7 @@ enum BenchmarkRunCommand {
                     "--candidate-binary is not the executable observed serving the candidate; "
                         + "refusing caller-supplied runtime provenance")
             }
-            let observed = swiftRevisions(
-                binary: observation.executablePath, model: common.modelPath)
+            let observed = swiftRevisions(binary: observation.executablePath, model: model.path)
             guard !observed.isEmpty else {
                 _ = launcher.terminate()
                 throw RunError.unusableInput(
@@ -507,13 +679,20 @@ enum BenchmarkRunCommand {
         session.invalidateAndCancel()
         let finishedAt = Date().timeIntervalSince1970
 
+        // Built here rather than before the launch, because the KV bound is the
+        // runtime's answer and not the launch's. `contextPolicy` reads the same
+        // window the attestation below carries, which is what lets admission
+        // re-derive this pin from a document the record did not author.
         let pins = RuntimeBenchmark.Pins(
-            hostIdentity: common.hostIdentity, modelPath: common.modelPath,
-            modelDigest: common.modelDigest, quantization: common.quantization,
+            hostIdentity: common.hostIdentity, modelOfRecord: model.ofRecord,
+            modelPath: model.path,
+            modelDigest: model.digest, quantization: model.quantization,
             promptSuiteDigest: common.promptSuiteDigest,
             contextPolicy: RuntimeBenchmark.contextPolicy(
                 observing: serving.contextWindow,
                 generationConfiguration: serving.generationConfiguration),
+            speculation: RuntimeBenchmark.speculationPolicy(
+                derivedFrom: profile.argv, observing: serving.speculation),
             maxOutputTokens: common.maxOutputTokens,
             temperature: BenchmarkScenarios.temperature, topP: BenchmarkScenarios.topP,
             seed: BenchmarkScenarios.seed)
@@ -538,7 +717,8 @@ enum BenchmarkRunCommand {
                 launchExecutableDigest: observedExecutableDigest,
                 launchArgv: observedLaunchArgv, runtimeProcessID: Int(runtimePID)),
             pins: pins, startedAtUnixSeconds: startedAt, finishedAtUnixSeconds: finishedAt,
-            peakPhysicalFootprintBytes: processPeak, scenarios: scenarios,
+            peakPhysicalFootprintBytes: processPeak.peakSample?.machPhysicalFootprintBytes,
+            peakResidentMemory: processPeak, scenarios: scenarios,
             declaredAsymmetries: declaredAsymmetries)
 
         // The seal, computed here and nowhere else, over the record this
@@ -559,13 +739,21 @@ enum BenchmarkRunCommand {
             closedAtUnixSeconds: stillTheSameProcess ? closedAt : nil,
             servedModelID: serving.modelID, observedContextWindow: serving.contextWindow,
             observedGenerationConfiguration: serving.generationConfiguration,
+            observedSpeculation: serving.speculation,
+            // The verdict the gate read for itself, carried onto the document
+            // the gate authored. `admitProvenance` re-derives `modelOfRecord`
+            // from it and `admitModelIdentity` requires both sides to cite the
+            // same bytes, so the record never gets to claim its own model
+            // identity.
+            observedModelEquivalence: common.equivalence,
             gateBinaryDigest: gateDigest,
             transcriptDigest: sealed)
 
         return PassOutcome(
             record: record, attestation: attestation, lifecycle: pass.lifecycle,
-            soak: pass.soakDetail, hostLoadAverageMax: passLoadMax,
-            footprintSamples: sampleCounts, harnessExitStatus: harnessExit)
+            soak: pass.soakDetail, warmupMemory: pass.warmupMemory,
+            soakMemory: pass.soakMemory, hostLoadAverageMax: passLoadMax,
+            memorySamples: sampleCounts, harnessExitStatus: harnessExit)
     }
 
     /// Wait until the *pinned* model answers a completion.
@@ -619,23 +807,41 @@ enum BenchmarkRunCommand {
                     + String(decoding: warmup.body.prefix(400), as: UTF8.self))
         }
         pass.recordLifecycle("first_completion_seconds", Date().timeIntervalSince(started))
-        pass.recordLifecycle(
-            "footprint_after_warmup_bytes",
-            physicalFootprintBytes(pid: pass.runtimeProcessID).map(Double.init))
+        pass.recordWarmupMemory(pass.currentMemoryReading())
     }
 
-    /// The model the runtime says it is serving, asked over the wire.
-    ///
-    /// `nil` when the question could not be asked or the answer did not contain
-    /// the pinned model. An unread answer is not an answer, and it is never
-    /// read as one: a `nil` here leaves the attestation unclosed, which the
-    /// comparison refuses.
+    /// What one `GET /v1/models` against the live runtime said.
     struct ServingAnswer {
+        /// The pinned model, if the runtime listed it. `nil` when the question
+        /// could not be asked or the answer did not contain it.
         let modelID: String?
+        /// The context bound that same answer named.
         let contextWindow: RuntimeContextWindow
+        /// Effective prefill and reasoning parameters from the same answer.
         let generationConfiguration: RuntimeGenerationConfiguration
+        /// Whether the process said it was speculating, from `GET /slots`.
+        let speculation: RuntimeSpeculation
     }
 
+    /// What the runtime says it is serving, and under what context bound, asked
+    /// over the wire while the process is still up.
+    ///
+    /// One exchange produces both readings on purpose. A `nil` ``modelID``
+    /// leaves the attestation unclosed and the pair refused, and the window
+    /// that goes with it is ``RuntimeContextWindow/unread`` rather than
+    /// ``RuntimeContextWindow/notReported``: an unread answer is not an answer,
+    /// and a bound nobody could read is not a runtime without one.
+    ///
+    /// `meta.n_ctx` is `llama-server`'s spelling and is measured, not assumed —
+    /// build `b10621-c1d0e7a00` reports 8192 under `--ctx-size 8192` and 32768
+    /// with no context flag. Unbounded MLX launches emit no `meta` block and
+    /// answer ``RuntimeContextWindow/notReported``. The bounded Python benchmark
+    /// reports its active cache bound after construction, so its KV pin comes
+    /// from this live answer rather than argv.
+    ///
+    /// A malformed field is not an absent field, and the two are separated in
+    /// ``RuntimeContextWindow/read(fromModelsEntry:)`` — see there for the F2
+    /// finding this shape exists to close.
     private static func servingAnswer(pass: BenchmarkPass, expecting modelID: String) async
         -> ServingAnswer
     {
@@ -646,12 +852,41 @@ enum BenchmarkRunCommand {
             let entry = entries.first(where: { ($0["id"] as? String) == modelID })
         else {
             return ServingAnswer(
-                modelID: nil, contextWindow: .unread, generationConfiguration: .unread)
+                modelID: nil, contextWindow: .unread,
+                generationConfiguration: .unread, speculation: .unread)
         }
+        let speculation = await speculationAnswer(pass: pass)
+        // The reading itself lives in `RuntimeContextWindow` so it can be
+        // attacked directly by the contract suite; this is its only production
+        // call site, and it is inside the one exchange that also produces
+        // `servedModelID`.
         return ServingAnswer(
-            modelID: modelID,
-            contextWindow: RuntimeContextWindow.read(fromModelsEntry: entry),
+            modelID: modelID, contextWindow: RuntimeContextWindow.read(fromModelsEntry: entry),
             generationConfiguration: RuntimeGenerationConfiguration.read(
-                fromModelsEntry: entry))
+                fromModelsEntry: entry),
+            speculation: speculation)
+    }
+
+    /// Whether the runtime says it is speculating, asked over the wire while it
+    /// is still up.
+    ///
+    /// `GET /slots` and deliberately not `GET /props`. Measured on
+    /// `llama.cpp 0.3.0` build `b10621-c1d0e7a00` with a `Qwen2.5-0.5B-Instruct`
+    /// Q8_0 fixture: launched with `--spec-type ngram-mod`, `/slots` reports
+    /// `params.speculative` **true** and `/props` still reports
+    /// `default_generation_settings.params["speculative.types"]` as `"none"`.
+    /// `/props` describes the compiled default and does not move with the
+    /// launch, so reading it would report a speculating server as quiet — a
+    /// property inferred from a proxy signal, which a caller then acts on.
+    ///
+    /// A failed observation is not a negative observation, and the two are
+    /// separated in ``RuntimeSpeculation/read(slotsStatus:body:)`` — see there
+    /// for the F3 finding this shape exists to close.
+    private static func speculationAnswer(pass: BenchmarkPass) async -> RuntimeSpeculation {
+        let answer = await pass.slots(timeout: 30)
+        // As with the context window: the reading lives in `RuntimeSpeculation`
+        // where the contract suite can drive every branch of it, and this is
+        // its only production call site.
+        return RuntimeSpeculation.read(slotsStatus: answer.status, body: answer.body)
     }
 }

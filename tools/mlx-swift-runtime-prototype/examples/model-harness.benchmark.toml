@@ -102,3 +102,112 @@ argv = [
 # what it does when it runs out of allocator. A `fatal_output_substrings` policy
 # would replace the process at the first marker and the pass would measure the
 # replacement instead of the failure.
+
+# A third candidate: `llama-server` from the pinned Homebrew `llama.cpp 0.3.0`,
+# build `b10621-c1d0e7a00`.
+#
+# Every flag here is a condition `RuntimeBenchmark.contextPolicy` reads, and
+# each one is spelled the way this runtime spells it. None of them was added by
+# relaxing an admission clause.
+#
+# `--ctx-size` is NOT what pins the KV bound. This runtime has no unbounded
+# mode -- measured, it reports `n_ctx` 32768 from the model with no context flag
+# at all and 8192 under `--ctx-size 8192` -- so the bound is read from the
+# running server's `/v1/models` `meta.n_ctx` by the gate, inside its own
+# observation window. The flag is still stated because admission refuses a
+# launch that pins a bound the process did not honour: ask for 8192 and run
+# 4096 and the pair is refused by name.
+#
+# WHAT THIS PROFILE CANNOT BE COMPARED AGAINST, corrected by TASK-260828-2wcrph
+# after running it. An earlier revision of this comment told the operator to
+# "match it to the baseline's `--max-kv-size`". **The Python baseline has no
+# such flag.** `mlx_lm-relux.server --help` on the pinned build lists no KV
+# bound option at all, which TASK-260828-2jbufw had already measured -- its
+# table reads "KV bound: no flag; unbounded" for `mlx_lm.server` -- and this
+# runtime never reports `unbounded`, measured. So the two contextPolicy pins
+# are `kv=unbounded` against `kv=<n>` for every n, the pair is refused
+# `pinMismatch(field: "contextPolicy")`, and no argv on either side can fix it.
+#
+# That refusal is correct and is not a configuration mistake to work around:
+# `llama-server` allocates its whole KV arena at load, so `--ctx-size` is a
+# resident cost paid before the first token, while `mlx_lm.server` grows its
+# cache per request. They are genuinely not the same condition. A llama.cpp
+# candidate can only be admitted against a baseline that CAN state the same
+# bound -- `mlx-swift-runtime-prototype serve --max-kv-size <n>`, the profile
+# above -- and `RuntimeBenchmarkContextBoundTests` pins both directions.
+[profiles.qwen-benchmark-llamacpp]
+mode = "local"
+executable = "/opt/homebrew/bin/llama-server"
+argv = [
+    "--model", "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-GGUF-Q8_0/Qwen3.8-27B-Uncensored-OrcaRouter-Q8_0.gguf",
+    "--host", "{host}",
+    "--port", "{port}",
+    # The bound the launch asks for. Checked against what the process reports;
+    # it is not the source of the pin.
+    "--ctx-size", "76800",
+    # The physical prompt-evaluation chunk, and the third spelling of the same
+    # pinned condition the other two profiles state as `--prefill-step-size`.
+    # `llama-server` defaults it to 512 where `mlx_lm.server` defaults its own
+    # to 2048, so leaving it unstated compares a 4x difference in chunk size and
+    # calls it a difference between runtimes. Admission refuses a launch that
+    # leaves it out; `--batch-size` is the logical batch and does not pin it.
+    "--ubatch-size", "2048",
+    # The same reasoning policy, in the spelling this runtime shares with the
+    # Swift one.
+    "--reasoning-effort", "medium",
+    # The bundled web UI is on by default and a managed runtime should not
+    # serve one.
+    "--no-webui",
+    # Speculative decoding, off, stated rather than left to the default.
+    #
+    # NOT what pins the condition -- the gate reads `params.speculative` off
+    # this server's `GET /slots` inside its own observation window, measured to
+    # flip to `true` under `--spec-type ngram-mod` on build b10621-c1d0e7a00
+    # while `/props` keeps reporting "none". The flag is stated because it is
+    # the one condition that makes this pair genuinely non-comparable: this
+    # runtime can draft off the model's MTP head and the MLX baseline has no
+    # MTP head to match it, so a tokens/s measured with drafting on is a
+    # different decoding algorithm rather than a faster runtime.
+    # TASK-260828-3g87i4's equivalence verdict names it as condition 1, and
+    # admission refuses any reading but `off` -- including a launch that asks
+    # for drafting from a runtime that will not confirm the state, and
+    # including an inherited `LLAMA_ARG_SPEC_TYPE`, which `benchmark-run`
+    # refuses before it launches anything.
+    "--spec-type", "none",
+]
+
+# How to run this profile as the candidate.
+#
+# The two runtimes cannot be pointed at one weight file: `mlx_lm.server` reads
+# an MLX weight *directory* and `llama-server` reads a single `.gguf`. So the
+# model pin is not the local artifact -- it is the upstream model both were
+# quantized from -- and the two are admitted as one model only under a verdict
+# that names both of the digests the gate computed for them:
+#
+#   mlx-swift-runtime-prototype benchmark-run \
+#     --config model-harness.benchmark.toml \
+#     --model      /Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit \
+#     --candidate-model /Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-GGUF-Q8_0/Qwen3.8-27B-Uncensored-OrcaRouter-Q8_0.gguf \
+#     --equivalence equivalence/qwen3-8-27b-uncensored.equivalence.json \
+#     --baseline-runtime python-mlx-lm --baseline-profile qwen-benchmark-python \
+#     --candidate-runtime llamacpp --candidate-profile qwen-benchmark-llamacpp \
+#     ...
+#
+# `--equivalence` names a document; it does not decide that the document counts.
+# The only documents that admit are the ones whose SHA-256 already appears in
+# `TrustedEquivalenceDecisions.shipped`, compiled into the gate from versioned
+# repository source, and the file above is the one entry that list holds. A
+# verdict the caller wrote for itself reads and decodes perfectly and is refused
+# before anything is launched, because hashing and sealing bytes the caller
+# authored proves only that they did not change between the read and the seal.
+#
+# Without `--equivalence` at all the run is refused before launch too, and a
+# verdict the gate cannot read is refused as a *failed read* rather than spent
+# as an absence of one -- three different facts, three different refusals. The
+# verdict's shape is `ModelEquivalence` in
+# `Sources/MLXSwiftRuntimeContract/ModelEquivalence.swift`; its content for this
+# pair is TASK-260828-3g87i4's report, whose three declared non-equivalences --
+# the dropped MTP head, the vision-tower placement, and F32 versus bf16 norms --
+# are named in the trusted decision itself and copied into both run records, so
+# no report of the decision can omit them and no document may replace them with
+# one generic note.

@@ -566,6 +566,78 @@ zero exit is never restarted. `restart_on_failure` additionally covers an
 unexpected non-zero child exit. Supervision is configured on the remote
 machine's local profile rather than on the local SSH forwarding profile.
 
+`model-harness run` owns the stop as well as the start. It places the runtime
+in its own process group, forwards `SIGINT`, `SIGTERM` and `SIGHUP` to that
+whole group, escalates to `SIGKILL` if the group has not exited within ten
+seconds, writes a lifecycle record to stderr in both directions, and exits `0`
+when a signalled stop completes. "The group has exited" is asked of the kernel
+rather than inferred from the direct child: a runtime helper started into the
+same group that redirected its inherited stdout/stderr away is
+reaped-child-invisible and would otherwise leave the harness reporting a
+stopped group while that helper still held the port. The stopped record and the
+`0` exit are written only once the group is empty, and a group whose state
+cannot be established after the kill escalation is reported as a failure rather
+than as a stop. A signalled stop is never treated as a restartable failure, so
+a supervisor's `stop` does not relaunch the runtime through
+`restart_on_failure`. Before this the harness took a directed `SIGTERM` and
+died with zero bytes written while the runtime was reparented to pid 1 and kept
+holding its port; an interactive Ctrl-C happened to work only because the
+terminal signals the whole foreground group. On Windows there is no process
+group here and only the direct child is stopped.
+
+#### llama.cpp profile
+
+`llama-server` runs as a managed child under the same local profile shape. The
+flags below are the pinned conditions, not decoration: `--ctx-size` is the KV
+bound, `--batch-size`/`--ubatch-size` are the logical and physical prompt-
+evaluation chunks, and `--reasoning-effort` is spelled exactly as the Swift
+runtime spells it.
+
+```toml
+[profiles.llamacpp-local]
+mode = "local"
+executable = "/opt/homebrew/bin/llama-server"
+argv = [
+    "--model", "/absolute/path/to/model.gguf",
+    "--host", "{host}",
+    "--port", "{port}",
+    "--ctx-size", "8192",
+    "--batch-size", "2048",
+    "--ubatch-size", "2048",
+    "--reasoning-effort", "medium",
+    "--no-webui",
+]
+```
+
+Readiness and health match the contract the other managed runtimes are held to.
+`GET /v1/models` answers `503` until the weights are resident and `200`
+afterwards, so `readiness_path = "/models"` needs no change, and the listed
+model is the configured one rather than a cache listing. `GET /health` answers
+`200` with `{"status":"ok"}`.
+
+What the harness can observe of a `llama-server` runtime differs from the MLX
+runtimes and is stated rather than assumed:
+
+| Channel | `llama-server` |
+| --- | --- |
+| stdout | empty; every line is on stderr |
+| HTTP access line (method, path, status) | **none at any verbosity** |
+| per-request engine record | present at the default verbosity: `launch_slot_`, `print_timing` and `release` lines keyed by a `task` id and a slot id, with prompt/eval token counts |
+| prompt or assembled message array | never on the captured stream |
+| completion text and tool calls | on stderr from `-lv 5` upward, as one `Parsed message` record |
+| tool schema | on stderr from `-lv 5` upward, as the compiled GBNF grammar |
+| caller correlation header, engine response id | never on the captured stream |
+
+The `task` id makes concurrent requests distinguishable in captured output,
+which `mlx_lm.server` cannot do, but it never leaves the engine: the HTTP
+response carries no slot or task field, so captured engine records still cannot
+be joined to the caller's turn. A runtime killed with a response in flight
+leaves a `launch_slot_` line with no matching `release`; unlike an access log
+that reports `200` at header-write time, that is an unknown outcome rather than
+a false success, and it must be read as unknown. `-lv 5` is not a default here:
+it puts completions and tool calls into whatever sink the caller pointed the
+harness at, and the runtime log is unrotated and uncapped.
+
 As of 2026-08-27, the released `mlx-lm 0.31.3` predates the upstream fix for
 the Qwen3.5 `ArraysCache` Metal buffer-object leak. A reproducible temporary
 installation can pin the merged upstream fix without replacing the released
@@ -1578,15 +1650,29 @@ established. The benchmark-only profiles pin both runtimes to a live-reported
 | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect, stop, quarantine, or unquarantine shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30`, `agents-infra runtime quarantine --profile NAME`, `agents-infra runtime unquarantine --profile NAME` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
 | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
 | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
-| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, samples the Mach physical footprint of the pid it spawned, seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
+| `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, clocks first-to-last generated deltas across `content`, `reasoning`, and `reasoning_content`, seals per-scenario cached-token telemetry so one-sided reuse or unknown reuse is refused, and samples both runtimes over warm-up, scenario, soak and process windows with the same `peak_resident_memory_upper_bound_bytes`: exact Mach physical footprint plus a conservative upper edge for resident `vmmap` mapped-file bytes, sampling the cheap Mach component at 20 Hz, refreshing mapped-file residency at a bounded 0.2 Hz, and sampling synchronously at window boundaries; raw samples seal independent Mach and mapped-file timestamps, reused mapped values retain their original timestamp, and a scored scenario/process window must prove each component has no timestamp gap above 125 ms, while sparse, stale, untimestamped, absent, failed, partial or malformed series are refused; it seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
 | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
 | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use `agents-infra compose --mode primary-session --entrypoint NAME --project DIR --schema-version 1 --json` | Alias launch, standalone Pi JSONL result stream plus deterministic process status, or non-launching schema-v1 plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
 | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
 | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
 | `task-board` | Track project work, checklist state, and outcome resources | `task-board q --format compact 'get(TASK-ID) { full }'`, `task-board m 'set_status(TASK-ID, status=development)'` | `.task-board/` and `.task-board/.resources/` |
+| `articles/<YYMMDD>_*/reproduce.zsh` | Verify a published research article against its own checksummed artifacts: checksums, then a full recomputation of every cited figure from the sealed records, then the structural claims the article's decision rests on. Does not re-run any measurement | `cd articles/260831_local-qwen-runtime-comparison-study && ./reproduce.zsh` | `PASS: local Qwen runtime comparison study reproduced` on success; a named failing check and exit 1 otherwise |
 | `git` | Inspect repo state and validate diff hygiene | `git status --short`, `git diff --check` | No repo artifact; task-scoped command logs should be written under `.temp/` |
 | `ssh` / `scp` / `tar` | Validate and document host-agnostic remote agent worker handoff patterns | `ssh "$REMOTE_SSH" 'hostname'`, `scp prompt.md "$REMOTE_SSH:/tmp/run/prompt.md"`, `tar -czf source.tgz .` | Remote task copies and local scratch artifacts under `.temp/remote-agent/` |
+
+## Research and Articles
+
+| Path | What it holds |
+|------|---------------|
+| `.research/` | Dated research documents, `YYMMDD_` prefixed. Working papers, specs and measurement reports for the local-model, harness and benchmark programme. |
+| `articles/` | Dated, checksummed article snapshots — `ARTICLE.md`, `README.md`, `SHA256SUMS`, `artifacts/` and `reproduce.zsh`. A snapshot carries the raw evidence its article cites and a script that reproduces every cited figure from it. |
+
+The current runtime decision lives in
+`articles/260831_local-qwen-runtime-comparison-study/` (also published as
+`.research/260831_local-qwen-runtime-comparison-study.md`): **NO-GO on both MLX Swift and
+llama.cpp; Python `mlx-lm` remains the default local Qwen runtime**, with the reopening
+conditions stated in its §7.
 
 ## Structure
 

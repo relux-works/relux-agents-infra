@@ -1,0 +1,16 @@
+python-mlx-lm (~27-45 GiB anonymous)
+  mapped observations over the pass : 289
+  inter-observation gap  min/median/max : 0.102 / 7.569 / 9.145 s
+  derived vmmap -summary cost (gap - 5.0s sleep):
+      min/median/max : -4.898 / 2.569 / 4.145 s
+  gaps exceeding the 7.0 s contract bound : 268 / 288
+
+llamacpp (~26.3 GiB mapped + 6-16 GiB anonymous)
+  mapped observations over the pass : 201
+  inter-observation gap  min/median/max : 0.508 / 7.221 / 10.823 s
+  derived vmmap -summary cost (gap - 5.0s sleep):
+      min/median/max : -4.492 / 2.221 / 5.823 s
+  gaps exceeding the 7.0 s contract bound : 179 / 200
+
+Contract bound = samplingIntervalSeconds (5.0) + 2 x observedMappedFileReadCostSeconds (1.0) = 7.0 s
+It was derived from 0.608-0.850 s reads against <=0.9 GiB targets (LOGBOOK 2026-08-30 1746).

@@ -1,0 +1,58 @@
+=== PRE-RUN SWEEP @ 2026-08-30T18:14:11Z epoch=1788113651 ===
+--- uptime ---
+21:14  up 22 days,  4:30, 2 users, load averages: 5.06 4.66 5.36
+--- vm_stat ---
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                  1524812.
+Pages active:                                 970934.
+Pages inactive:                               929501.
+Pages speculative:                             61682.
+Pages throttled:                                   0.
+Pages wired down:                             370021.
+Pages purgeable:                              126686.
+"Translation faults":                    21176716582.
+Pages copy-on-write:                      2093666638.
+Pages zero filled:                       10711292711.
+Pages reactivated:                         111541288.
+Pages purged:                              134901246.
+File-backed pages:                            441634.
+Anonymous pages:                             1520483.
+Pages stored in compressor:                  2056105.
+Pages occupied by compressor:                 216641.
+Decompressions:                            665090357.
+Compressions:                              816205755.
+Pageins:                                   727679165.
+Pageouts:                                     361310.
+Swapins:                                    65149202.
+Swapouts:                                  100863492.
+--- runtime processes ---
+(none)
+=== POST-RUN SWEEP @ 2026-08-30T19:13:06Z epoch=1788117186 ===
+--- uptime ---
+22:13  up 22 days,  5:29, 2 users, load averages: 2.95 3.05 3.65
+--- vm_stat ---
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                  1004273.
+Pages active:                                 461555.
+Pages inactive:                              1958076.
+Pages speculative:                              3401.
+Pages throttled:                                   0.
+Pages wired down:                             314969.
+Pages purgeable:                               16187.
+"Translation faults":                    21226122972.
+Pages copy-on-write:                      2094721991.
+Pages zero filled:                       10754264613.
+Pages reactivated:                         115728106.
+Pages purged:                              136285324.
+File-backed pages:                           1920324.
+Anonymous pages:                              502708.
+Pages stored in compressor:                  2662125.
+Pages occupied by compressor:                 331361.
+Decompressions:                            670268292.
+Compressions:                              824587630.
+Pageins:                                   733729901.
+Pageouts:                                     368018.
+Swapins:                                    65172494.
+Swapouts:                                  101045904.
+--- runtime processes ---
+(none)

@@ -34,6 +34,18 @@ struct Main {
         if arguments.first == BenchmarkRunCommand.name {
             exit(await BenchmarkRunCommand.run(arguments: Array(arguments.dropFirst())))
         }
+        if arguments.first == BenchmarkMemorySamplerProbe.name {
+            exit(BenchmarkMemorySamplerProbe.run())
+        }
+        if arguments.first == BenchmarkMappedFileSamplerProbe.name {
+            exit(BenchmarkMappedFileSamplerProbe.run())
+        }
+        if arguments.first == BenchmarkMemoryCoverageRefusalProbe.name {
+            exit(BenchmarkMemoryCoverageRefusalProbe.run())
+        }
+        if arguments.first == BenchmarkStopCoverageProbe.name {
+            exit(BenchmarkStopCoverageProbe.run())
+        }
 
         let subcommand: RuntimeOptions.Subcommand
         let options: RuntimeOptions

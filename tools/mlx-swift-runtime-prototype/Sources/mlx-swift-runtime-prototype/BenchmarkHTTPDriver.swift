@@ -14,6 +14,12 @@ import MLXSwiftRuntimeContract
 enum BenchmarkHTTPDriver {
     typealias Exchange = RuntimeBenchmark.ScenarioTranscript.Exchange
 
+    enum CacheReuseRead: Equatable {
+        case reported(Int)
+        case notReported
+        case malformed
+    }
+
     /// A driven streaming completion: what came back, and the receipt.
     struct StreamedCompletion {
         var exchange: Exchange
@@ -25,9 +31,13 @@ enum BenchmarkHTTPDriver {
         /// reasoning. Waiting for the first *content* delta would report the
         /// length of the model's thinking as runtime latency.
         var timeToFirstTokenSeconds: Double?
+        /// Seconds to the last frame carrying generated text, under the same
+        /// event definition as ``timeToFirstTokenSeconds``.
+        var timeToLastTokenSeconds: Double?
         var totalSeconds: Double
         var promptTokens: Int?
         var completionTokens: Int?
+        var cacheReuse: CacheReuseRead
         var content: String
         var finishReason: String?
         var failure: String?
@@ -39,6 +49,7 @@ enum BenchmarkHTTPDriver {
         var totalSeconds: Double
         var status: Int
         var body: Data
+        var cacheReuse: CacheReuseRead
         var failure: String?
     }
 
@@ -96,6 +107,7 @@ enum BenchmarkHTTPDriver {
                     sentAtUnixSeconds: sentAt, firstByteAtUnixSeconds: data.isEmpty ? nil : now,
                     lastByteAtUnixSeconds: now),
                 totalSeconds: now - sentAt, status: status, body: data,
+                cacheReuse: cacheReuseRead(fromResponseData: data),
                 failure: status == 200 ? nil : "HTTP \(status)")
         } catch {
             let now = Date().timeIntervalSince1970
@@ -107,6 +119,7 @@ enum BenchmarkHTTPDriver {
                     sentAtUnixSeconds: sentAt, firstByteAtUnixSeconds: nil,
                     lastByteAtUnixSeconds: now),
                 totalSeconds: now - sentAt, status: 0, body: Data(),
+                cacheReuse: .notReported,
                 failure: String(describing: error))
         }
     }
@@ -130,8 +143,10 @@ enum BenchmarkHTTPDriver {
         var raw = Data()
         var firstByteAt: Double?
         var timeToFirstToken: Double?
+        var timeToLastToken: Double?
         var promptTokens: Int?
         var completionTokens: Int?
+        var cacheReuse: CacheReuseRead = .notReported
         var content = ""
         var finishReason: String?
         var failure: String?
@@ -145,8 +160,10 @@ enum BenchmarkHTTPDriver {
                     responseDigest: digest(of: raw), responseByteCount: raw.count,
                     sentAtUnixSeconds: sentAt, firstByteAtUnixSeconds: firstByteAt,
                     lastByteAtUnixSeconds: lastByteAt),
-                timeToFirstTokenSeconds: timeToFirstToken, totalSeconds: lastByteAt - sentAt,
+                timeToFirstTokenSeconds: timeToFirstToken,
+                timeToLastTokenSeconds: timeToLastToken, totalSeconds: lastByteAt - sentAt,
                 promptTokens: promptTokens, completionTokens: completionTokens,
+                cacheReuse: cacheReuse,
                 content: content, finishReason: finishReason, failure: failure)
         }
 
@@ -178,16 +195,17 @@ enum BenchmarkHTTPDriver {
                 if let usage = frame["usage"] as? [String: Any] {
                     promptTokens = usage["prompt_tokens"] as? Int ?? promptTokens
                     completionTokens = usage["completion_tokens"] as? Int ?? completionTokens
+                    cacheReuse = cacheReuseRead(usage)
                 }
                 for choice in (frame["choices"] as? [[String: Any]]) ?? [] {
                     let delta = (choice["delta"] as? [String: Any]) ?? [:]
-                    let text =
-                        ((delta["content"] as? String) ?? "")
-                        + ((delta["reasoning"] as? String) ?? "")
-                    if !text.isEmpty, timeToFirstToken == nil {
-                        timeToFirstToken = Date().timeIntervalSince1970 - sentAt
+                    let generated = RuntimeStreamDelta.read(delta)
+                    if generated.carriesGeneratedText {
+                        let eventTime = Date().timeIntervalSince1970 - sentAt
+                        if timeToFirstToken == nil { timeToFirstToken = eventTime }
+                        timeToLastToken = eventTime
                     }
-                    content += (delta["content"] as? String) ?? ""
+                    content += generated.content
                     if let reason = choice["finish_reason"] as? String { finishReason = reason }
                 }
             }
@@ -200,5 +218,22 @@ enum BenchmarkHTTPDriver {
             failure = String(describing: error)
         }
         return finish(Date().timeIntervalSince1970)
+    }
+
+    private static func cacheReuseRead(_ usage: [String: Any]) -> CacheReuseRead {
+        guard let rawDetails = usage["prompt_tokens_details"] else { return .notReported }
+        guard let details = rawDetails as? [String: Any],
+            let rawCached = details["cached_tokens"]
+        else { return .malformed }
+        guard let cached = rawCached as? Int, cached >= 0 else { return .malformed }
+        return .reported(cached)
+    }
+
+    private static func cacheReuseRead(fromResponseData data: Data) -> CacheReuseRead {
+        guard
+            let document = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let usage = document["usage"] as? [String: Any]
+        else { return .notReported }
+        return cacheReuseRead(usage)
     }
 }

@@ -1,0 +1,57 @@
+{
+  "closedAtUnixSeconds" : 1788115792.2048202,
+  "configDigest" : "bb1aee25e808ce9c7243b342ec9c6bfe0d7f19020f87134269b954d11554df3b",
+  "configPath" : "\/Users\/alexis\/src\/relux-works\/relux-agents-infra\/.temp\/STORY-260828-2faxgm\/worktree\/.temp\/TASK-260829-3k4qrc\/rev4\/TASK-260829-3k4qrc-rev4.benchmark.toml",
+  "gateBinaryDigest" : "36318014afae06bec693779ac3de6426c356ce678ed0882ff3aeb413a089d055",
+  "observedContextWindow" : {
+    "length" : 76800,
+    "state" : "reported"
+  },
+  "observedExecutableDigest" : "e89d60f8ccee9db684801330198797723db2ac378cd53e5cfe523128feb76599",
+  "observedExecutablePath" : "\/opt\/homebrew\/Cellar\/python@3.14\/3.14.7\/Frameworks\/Python.framework\/Versions\/3.14\/Resources\/Python.app\/Contents\/MacOS\/Python",
+  "observedGenerationConfiguration" : {
+    "prefillStepSize" : {
+      "state" : "reported",
+      "value" : "2048"
+    },
+    "reasoningEffort" : {
+      "state" : "reported",
+      "value" : "medium"
+    }
+  },
+  "observedModelEquivalence" : {
+    "digest" : "106edbf472177b055a149dda5cff3c8c86e13d1278a8ec508789f1197f09f962",
+    "equivalence" : {
+      "artifacts" : [
+        {
+          "digest" : "1b10f3fe1c1097c909fa35e112b943255c44be4a5f332f45e0af57a96188460b",
+          "path" : "\/Users\/alexis\/src\/local-models\/Qwen3.8-27B-Uncensored-MLX-8bit",
+          "quantization" : "8bit\/group64\/affine"
+        },
+        {
+          "digest" : "31756fca94beca71ea4b8706d6fdc896dab2a3c6376ab0c1863b98512a24f8d6",
+          "path" : "\/Users\/alexis\/src\/local-models\/Qwen3.8-27B-Uncensored-GGUF-Q8_0\/Qwen3.8-27B-Uncensored-OrcaRouter-Q8_0.gguf",
+          "quantization" : "Q8_0"
+        }
+      ],
+      "declaredNonEquivalences" : [
+        "the MLX build drops the MTP head the GGUF carries as blk.64: 8 quantized tensors, 451319808 bytes on disk, skipped at load",
+        "the vision tower is placed differently -- 333 bf16 tensors inside the MLX safetensors shards against a separate 931145984-byte GGUF mmproj -- and is resident in neither on the default text path",
+        "GGUF upcasts norms and 1-D tensors to F32 where the MLX build keeps the source bf16: 10686464 bytes of extra resident memory, no fidelity difference"
+      ],
+      "sourceOfRecord" : "hf:orcarouter\/Qwen3.8-27B-Uncensored-BF16",
+      "verdict" : "comparable"
+    },
+    "state" : "read"
+  },
+  "observedSpeculation" : {
+    "state" : "notReported"
+  },
+  "openedAtUnixSeconds" : 1788113671.250863,
+  "processID" : 88255,
+  "processStartUnixSeconds" : 1788113670.07564,
+  "profile" : "qwen-benchmark-python",
+  "runtime" : "python-mlx-lm",
+  "servedModelID" : "\/Users\/alexis\/src\/local-models\/Qwen3.8-27B-Uncensored-MLX-8bit",
+  "transcriptDigest" : "6cd04f381844677e471ae3c8fa35ba74420b8d85553391996e54e14510bb8b74"
+}

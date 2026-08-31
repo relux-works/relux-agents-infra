@@ -625,6 +625,121 @@ and one copy of this model is 28 GB, so overlapping runs would be measuring each
 other's memory pressure. Both are launched through `model-harness run`, so
 ownership, readiness polling and shutdown are the production ones.
 
+### Cross-runtime metric corrections
+
+Read this before taking a number out of a `records/*.json` for a llama.cpp pass.
+Both were found by TASK-260828-2wcrph running the suite, and both are recorded
+in full in `.research/260829_llamacpp-against-the-python-baseline.md`.
+
+- **TTFT, prefill and decode now share one generated-event definition.** A
+  streamed delta counts when any of `content`, `reasoning`, or
+  `reasoning_content` carries a non-empty string. `mlx_lm.server` publishes the
+  first reasoning spelling and `llama-server` the second. TTFT ends at the first
+  such event; decode is `(completion_tokens - 1)` divided by the interval from
+  that same first event to the last such event. It no longer ends on `[DONE]`
+  or a usage frame. The historical llama.cpp gate readings remain excluded:
+  omitting `reasoning_content` inflated TTFT, understated prefill, and divided
+  decode by only the content tail. TASK-260829-3cwcb6's production-entry smoke
+  drives both spellings and refuses a build that leaves either side unmeasured.
+- **Memory is scored as an explicitly named resident upper bound for both
+  runtimes.** The raw Mach component comes from
+  `proc_pid_rusage(...).ri_phys_footprint`, which counts dirty anonymous pages;
+  the raw mapped-weight component comes from the resident column of a complete
+  `vmmap -summary` `mapped file` row. Because `vmmap` rounds that display, the
+  scorer uses the upper edge of its display bucket and records
+  `scoreSemantics=conservative-upper-bound`. The scored quantity is
+  `residentMemoryUpperBoundBytes`, the sum of those two components — never the
+  legacy `peakPhysicalFootprintBytes` field.
+  `llama-server` maps the GGUF, so those pages are resident and **clean**.
+  Sampled on one process at one moment while holding the 27B model:
+  footprint **1.41 GiB**, `ps` RSS **28.09 GiB**, `vmmap` mapped-file resident
+  **26.6 GiB with 0 dirty**. `maxPeakFootprintRatio` would have scored that
+  runtime at about 0.08x the MLX baseline and called it twelve times more
+  frugal. Production takes synchronous full samples at each window boundary,
+  samples the cheap Mach component at 20 Hz, and refreshes the expensive
+  mapped-file component at a bounded 0.2 Hz. Every composite sample retains
+  independent `machSampledAtUnixSeconds` and
+  `mappedFileSampledAtUnixSeconds` values in `rawSamples`; reusing a mapped
+  value preserves its original timestamp and never creates another mapped-file
+  observation. A scored window must prove coverage for both components
+  independently, and each bound is sized to the reader that produces it: 125 ms
+  for the in-process Mach series, and `samplingIntervalSeconds + 2 x` the
+  measured `vmmap` cost — **7.0 s** — for the mapped-file series. That second
+  bound is derived, not asserted. One production `vmmap -summary` fork costs
+  0.608-0.672 s against a ~3 MB target and 0.783-0.850 s against a ~0.9 GiB
+  target on this host (eight consecutive calls each), so two mapped
+  observations can never be 125 ms apart. Revisions 1-3 claimed 125 ms there
+  anyway, which gave the memory dimension an **empty admissible set**: every
+  window was refused and every memory delta came back `unmeasured`. The
+  consequence of the wider bound is stated rather than implied — every emitted
+  peak carries `mappedFileObservationLimitSeconds` and a
+  `mappedFileObservabilityNote` saying that mapped-file transients shorter than
+  that cadence are not observable, and a peak that does not carry them cannot be
+  scored. Sub-cadence *anonymous* growth is a different risk and stays covered
+  by the Mach series at 20 Hz under its own 125 ms bound. A window whose mapped
+  observations are farther apart than the stated cadence is still explicitly
+  partial and inadmissible rather than scored from a stale value. Complete output with
+  no mapped-file row is a measured zero; launch/read failures, incomplete
+  output, malformed rows, and mixtures of good and bad samples remain distinct
+  and all fail closed. The sum can double-count pages on a runtime whose Mach
+  footprint already charges file-backed residency, so its residual directional
+  bias is runtime-dependent and the raw components remain in every record.
+- **Cache policies are a paired asymmetry, not a candidate-only footnote.** The
+  Python baseline alone launches with `--prompt-cache-size 1
+  --prompt-cache-bytes 8GB`; llama.cpp can reuse KV state per slot. Either can
+  improve repeated-prefix TTFT and retain memory. Every scenario seals the
+  runtime-reported `usage.prompt_tokens_details.cached_tokens` observations as
+  `hit`, `miss`, or `unknown`; timing is never used as a proxy. A one-sided hit
+  makes that scenario non-comparable, and absent, partial, or malformed
+  telemetry becomes `unknown` and is likewise refused. Symmetric hits and
+  symmetric reported misses remain scoreable.
+- **`llama-server` cannot be pinned against this baseline, and the reason is not KV.**
+  Measured on build `b10621-c1d0e7a00` by TASK-260829-3k4qrc, which ran the full pair:
+  `kv=76800` now agrees on both sides, because the pinned `mlx-lm` fork gained
+  `--max-kv-size`. `contextPolicy` also pins the prefill chunk and the reasoning effort,
+  and this runtime reports neither anywhere live. Probed under
+  `--ubatch-size 2048 --reasoning-effort medium`: `/v1/models` `meta` carries
+  `vocab_type`, `n_vocab`, `n_ctx`, `n_ctx_train`, `n_embd`, `n_params`, `size`, `ftype`
+  and no batch field; `/props` carries none either, and its
+  `default_generation_settings.params.reasoning_format` read `"none"` under that launch,
+  so it is the response-format setting and does not track the flag — the same `/props`
+  trap already recorded for speculation. Because the gate derives all three terms from the
+  live listing and never from argv, the pair refuses with exit `4` and writes no
+  `decision.json`. Reading these two off argv for a runtime that cannot report them would
+  reopen the defect the live derivation closed, so the gate does not.
+- **The mapped-file coverage bound is calibrated below what a 28 GB target costs.**
+  `maximumMappedFileSampleGapSeconds` is 7.0 s, derived from 0.608-0.850 s
+  `vmmap -summary` reads against ~3 MB and ~0.9 GiB targets. Against the 26-45 GiB
+  processes the real comparison measures, the same read costs a median 2.2-2.6 s and up
+  to 5.8 s, so 268 of 288 baseline and 179 of 200 candidate mapped observations exceeded
+  the bound and **every scenario window and both process-wide peaks of that pair were
+  refused except one** (`short_prompt` on the candidate). The gate fails safe and never
+  scores from a stale value, but the memory axis produced no comparison. Re-derive the
+  reader cost against a target the size of the runtime under test before reading a scored
+  memory number off this gate.
+- **Four windows carry a score without ever facing that gate, and the claim above is not
+  true of them.** `warmupMemory` and `soakMemory` on both runtimes come back
+  `status=measured`, `issues=[]`, with populated `scoredBytes`, because
+  `BenchmarkPass.recordWarmupMemory` and `BenchmarkPass.recordSoak` construct them by
+  direct `RuntimeMemoryPeak(summarizing:)`. The coverage gate lives in
+  `BenchmarkFootprintSampler.coveredPeak` and is reached only from `currentWindowPeak()`,
+  `processPeakSoFar()` and `capturePeaks()`; `RuntimeMemoryPeak.init(summarizing:)` sets
+  `.measured` on "all reads complete" alone and makes no coverage judgement, so
+  `validatedScoredBytes` returns a value for them. On the pinned pair these were the
+  worst-covered series in the run — both `soakMemory` windows are 20 stamps with 10.1-15.1 s
+  gaps, 19 of 19 outside both the 7.0 s mapped bound and the 125 ms Mach bound, and both
+  `warmupMemory` windows are a single point that `coveredPeak` would refuse as
+  `resident-memory-sampling-coverage-insufficient`. `RuntimeBenchmark.decide` reads neither
+  window — neither name appears in `Sources/MLXSwiftRuntimeContract/` — so no scored
+  comparison consumes them and no admission outcome depends on them. **Any number quoted
+  off `soakMemory` or `warmupMemory` carries no coverage guarantee and must be labelled as
+  such.** Routing both construction sites through `coveredPeak` is open instrumentation
+  debt.
+
+The earlier paired probe's 8.449/8.772 tok/s Python/llama.cpp result remains one
+bounded observation, not a rate hardened into this gate. The withdrawn 8.88,
+9.85, and 80.79 figures remain excluded.
+
 ### Why it is one invocation
 
 Three review rounds found the same defect in three different constructions, and
@@ -696,17 +811,58 @@ Per pass, all of it read first-hand about a process it spawned:
 | the SHA-256 of the launcher config | the file on disk |
 | the effective prefill and reasoning settings | live `GET /v1/models` `meta.runtime_config`, emitted after each runtime has parsed its own configuration |
 | the model ID the runtime is serving | a live `GET /v1/models` before teardown |
+| the context bound the runtime is running under | the same live `GET /v1/models`: `data[].meta.n_ctx` where the runtime reports one |
+| whether the runtime is speculating | a live `GET /slots`: `params.speculative`. Measured, and deliberately not `/props`: on build `b10621-c1d0e7a00`, `--spec-type ngram-mod` flips `/slots` to `true` while `/props` keeps reporting `"none"` |
+| the SHA-256 of the equivalence verdict, and whether it is a decision this repository took | the file named by `--equivalence`, read in the gate's own process and matched against `TrustedEquivalenceDecisions.shipped`, which is compiled into the gate from versioned source |
+| the digest of each pass's weight artifact | `config.json` plus the safetensors index for a weight directory; the whole file for a `.gguf` |
 | every request and response | performed by this process, timed by its own clock |
-| the runtime's physical footprint | `proc_pid_rusage` on that pid, sampled every 0.25 s |
+| the runtime's resident-memory upper bound | the same sample for both runtimes: `proc_pid_rusage` Mach physical footprint plus the upper edge of the complete `vmmap -summary` resident `mapped file` display bucket, sampled through warm-up, scenario, soak and whole-process windows; raw components and exact-vs-bound semantics stay in the record |
 | when the pass began and ended | the gate's own clock |
 | which build made these observations | the gate binary's own SHA-256 |
 
-`examples/model-harness.benchmark.toml` carries both profiles; the Swift
+`examples/model-harness.benchmark.toml` carries all three profiles — the Python
+incumbent, the Swift candidate and a `llama-server` candidate; the Swift
 `executable` must be the **`xcodebuild`** Release product, because a
 `swift build` binary has no Metal shader library and refuses to serve.
 `examples/benchmark-prompts.json` is the pinned prompt suite and its SHA-256 is
 recorded in both run records, so a comparison across two different suites is
 refused rather than reported.
+
+**The suite is validated in full before either runtime is launched.**
+`PromptSuiteSchema.validate(data:knownScenarioNames:)` in the contract library
+decodes it into `JSONValue` — which distinguishes a JSON string from a number
+from a boolean exactly — checks every field of every scenario, and either
+produces typed `Scenario` values or reports every fault at once. The scenario
+drivers then perform no casts at all. This exists because a required
+`context_75k` scenario carrying `"prefix_repeats": "2027"` — the count as a
+*string* — used to fall through `as? Int` into the absence branch, so the
+16,232-token prefix was never built, a **15-token** prompt was measured, and
+`benchmark-run` exited 0 with `accepted: true`. Both records sealed honestly and
+both transcripts faithfully recorded the wrong request: sealing does not help
+when the gate is measuring the wrong thing.
+
+The rules, and the distinction that matters:
+
+| shape | disposition |
+| --- | --- |
+| a field that is simply absent and is listed in `PromptSuiteSchema.supportedAbsences` | supported, and there are five: `max_tokens`, `single`/`multiturn` `prefix_repeats`, and the two documentation fields |
+| a field that is *present* and wrongly typed, or a count that is zero or negative | refused, and the message quotes the value so `"2027"` and `2027` are distinguishable |
+| a field name the gate does not read, **at the document object or at a scenario object** | refused — `prefix_repeat` for `prefix_repeats` produces the same hollow prompt as a type error, and nothing downstream can tell them apart |
+| a field belonging to another scenario kind | refused: `iterations` on a `single` scenario is a field this driver would never read |
+| `prompt`, `turns`, `iterations`, `prompt_template`, `tools`, `kind`, `filler_paragraph`, `system_prompt` absent | refused. Each of these used to default to `""`, `[]` or `0`, and each default produces a scenario that measures nothing and reports success |
+| a tool declaration's `type`, `function`, `function.name`, `function.parameters` or `function.parameters.required` absent or malformed | refused. `required` is **mandatory**: a misspelled `parameters.require` used to read as the supported *absence* of `required`, the parity check then demanded no arguments back, and `benchmark-run` printed `accepted: true`. A tool that takes no mandatory arguments writes an explicit `"required": []` |
+| any other key inside a tool declaration, above all the JSON-Schema parameter block | **not validated, by design** — forwarded to the runtime verbatim. `PromptSuiteSchema.validatedToolFields` lists what is checked and `unvalidatedByDesign` lists what is not, both pinned by tests. An allowlist over arbitrary JSON Schema is a promise this gate cannot keep, so it does not make one; the cost is that a misspelling *elsewhere* inside `parameters` still reaches the runtime unremarked |
+| a `soak` template with no `{index}` | refused: every iteration would send one prompt and the prompt cache would serve the repeats the scenario exists to prevent |
+| an empty `filler_paragraph` | refused: `prefix(repeats:)` multiplies it, so an empty filler hollows out every prefix with no malformed field anywhere |
+| bytes that are not a JSON object | reported as *unreadable*, which is a different fact from *malformed* |
+
+A refused suite creates no session directory and emits no decision, because the
+validation runs before either is reached.
+`equivalence/` holds the equivalence decision documents this repository trusts —
+one file, TASK-260828-3g87i4's verdict for the Qwen3.8-27B pair. It is versioned
+source, and `TrustedEquivalenceDecisions.shipped` in the contract library
+carries its SHA-256, so a document that is not byte-identical to it is not
+evidence however well-shaped it is.
 
 ### What the gate refuses
 
@@ -720,7 +876,23 @@ Both entry points apply the same admission. It refuses:
 | the record does not digest to what the observation sealed | these measurements are not the ones the gate watched being taken |
 | the observation seals no transcript | it witnesses that a process existed, which is not a witness to what was measured |
 | an exchange sits outside the window it was observed in | the work reported is not the work watched |
-| any of the ten pinned fields differs | host, model path, model digest, quantization, prompt-suite digest, context policy, scored output bound, temperature, top-p, seed. The refusal names the field |
+| any of the nine pinned fields differs | host, **model of record**, prompt-suite digest, context policy, **speculation**, scored output bound, temperature, top-p, seed. The refusal names the field |
+| two passes served different weight artifacts and no equivalence verdict was read | with no verdict, `modelOfRecord` derives to `artifact:<digest>` on both sides, so two files are two models and the pin comparison refuses them. There is deliberately no separate "evidence absent" clause: it could never fire, and a clause that cannot fail only makes a gate look more careful than it is |
+| an equivalence verdict was named and could not be read or decoded | derived as `modelOfRecord=unread` and refused. A failed read is not an absence, and spending it as one would turn an unreadable file into a same-format pass over two different models |
+| an equivalence verdict read and decoded cleanly and is **not one of the decisions this repository took** | derived as `modelOfRecord=untrusted` and refused before any launch. `--equivalence` names a document; it does not decide that the document counts. Review minted a verdict naming the real upstream, both gate-computed artifact digests, `comparable` and one note, and got exit 0 — hashing and observer-sealing bytes the caller authored proves only that they did not change between the read and the seal. Absence, failed read and untrusted are three different facts with three different refusals |
+| a trusted decision and the document offered under its digest disagree | the decision states its measured non-equivalences where a reviewer reads them, so a document that hashes to it and declares something else is a drift rather than evidence |
+| the runtime's `meta.n_ctx` is present and unusable — a string, a boolean, a float, zero or negative | `kv=unread`, which is unpinnable and refused. A malformed field is not an absent field: review ran a finite 32 768-token window that answered the string `"32768"`, and under the old reading it derived `kv=unbounded` and *matched* a genuinely unbounded baseline |
+| `GET /slots` failed rather than saying the route is absent — status 0, a 5xx other than 501, an authorization failure, a 200 that will not parse, or slots that name no `speculative` | `speculation=unread` and refused. Only 404 and 501 mean the route is not served; every other failure is one the gate could not read. Review ran a speculative fixture whose `/slots` answered HTTP 500 and it was scored as MTP-off |
+| a launch carries a context flag whose value the gate cannot read — `--ctx-size abc`, `-c 0`, a trailing `--ctx-size` | a failed read of what the launch asked for, refused rather than read as "nothing was asked for"; that reading is the only thing that lets a launch reach the argv fallback unchecked |
+| a launch carries a speculative flag whose value the gate cannot read | reported as a declaration, which refuses. The conservative direction, for the same reason |
+| `sysctl` could not name the host, the launcher would not report its version, or `--python-bin`/`--candidate-binary` named something whose stack could not be read | a placeholder is not a reading, and two hosts that both failed `hw.model` would carry the byte-identical pin and compare *equal* |
+| the two passes cite different equivalence verdicts | matched by the SHA-256 the gate computed over the document, so "the same evidence" is a fact about bytes rather than two documents that happen to agree |
+| the verdict is not `comparable`, or names no artifact at a pass's gate-computed digest | a verdict binds to the files it was measured on by their digests and to nothing else, so it cannot be aimed at a pair it does not describe |
+| the verdict declares no non-equivalences, or a record does not carry all of them | two differently quantized artifacts found identical in every respect is an analysis that did not look; and the differences it did find travel with both records, so no report of the decision can be written without stating them |
+| a same-artifact pair cites an equivalence verdict | there is nothing for the two to be equivalent to, and an unused verdict is a claim nobody checked |
+| a record's `modelOfRecord` is not what the verdict the gate read derives | a record cannot claim that two different weight files are the same model by writing a string |
+| either runtime was speculating, or the gate could not read whether it was | `llama-server` can draft off this model's MTP head and the MLX baseline has none, so a tokens/s measured with drafting on is a different decoding algorithm rather than a faster runtime. Refused rather than merely required to match: two speculating runtimes would agree on the pin and still not be a result. `LLAMA_ARG_SPEC_TYPE` or `LLAMA_ARG_DRAFT_*` in the gate's own environment refuses the run before it launches anything, because that environment is what it hands the launcher |
+| a launch asked for speculation and the process reported it was not speculating | the launch and the process disagree about which algorithm ran, and neither reading can be preferred over the other |
 | both records name the same runtime | a runtime compared against itself cannot decide a migration |
 | a record carries no `provenance` block | it does not decode at all; a hand-minted document never reaches a comparison |
 | a record declares no `revisions` | a record that cannot name the code that ran is not evidence about a runtime |
@@ -803,19 +975,39 @@ completed it, and the gate scored that 1.094x ratio as "within".
 
 ### Measurement choices worth knowing
 
-- **Size comes from the Mach physical footprint**, never from `ps` RSS. Three
-  identical loads of this model reported 2 650 / 10 774 / 14 056 MiB resident
-  while the physical footprint stayed within 16 MiB and MLX's active-bytes
-  figure was byte-identical.
+- **Size is `peak_resident_memory_upper_bound_bytes`, not physical footprint.**
+  Both runtimes use Mach physical footprint plus the conservative upper edge of
+  resident mapped-file bytes from a complete `vmmap -summary`. The component
+  readings, independently timestamped raw series, sample counts, status, and
+  `conservative-upper-bound` semantics are persisted for warm-up, each
+  scenario, soak, and the process peak. Scenario and process peaks independently
+  refuse fewer than two fresh Mach or mapped-file observations, missing
+  component timestamps, a Mach gap above 125 ms, or a mapped-file gap above the
+  7.0 s cadence its `vmmap` reader can actually deliver. Four production-entry
+  probes cover that gate from both sides: `benchmark-memory-sampler-probe`
+  requires the Mach path to catch a 150 ms anonymous transient **and** the
+  window to score; `benchmark-mapped-file-sampler-probe` requires a sustained
+  256 MiB file-backed region to reach the scored mapped-file component;
+  `benchmark-memory-coverage-refusal-probe` drives the same production sampler
+  with the bound narrowed to the old 125 ms claim and requires it to refuse
+  while the unnarrowed control on the same shape scores; and
+  `benchmark-memory-stop-coverage-probe` stops the sampler with a `vmmap` read
+  in flight and requires the finalised process-wide peak to remain scoreable.
+  `ps` RSS is
+  not substituted: three identical MLX loads reported 2 650 / 10 774 / 14 056
+  MiB RSS while physical footprint stayed within 16 MiB and MLX active bytes
+  were identical. Any absent, failed, partial, or malformed component read
+  blocks scoring instead of falling back to Mach-only data.
 - **Readiness is "the pinned model answered a completion"**, not "`/v1/models`
   returned 200". `mlx_lm.server` answers `/v1/models` about a second after
   launch with no weights resident, and lists every MLX model in the local
   Hugging Face cache with the configured one appended **last** — so a poller
   that takes `data[0].id` gets a different model entirely.
-- **Time to first token counts reasoning.** This model's chat template opens a
-  `<think>` block, so the first thing generated for any prompt is reasoning.
-  Waiting for the first *content* delta would report the length of the model's
-  thinking as runtime latency.
+- **Time to first token counts both reasoning spellings.** This model's chat
+  template opens a `<think>` block, so the first thing generated for any prompt
+  is reasoning. Waiting for the first content delta would report the length of
+  the model's thinking as runtime latency; recognizing only one runtime's
+  reasoning field would move that error to just one side.
 - **Sampler settings are sent explicitly** on every request. The two runtimes
   disagree on defaults — `GenerateParameters` starts at `temperature = 0.6`,
   `mlx_lm.server` at `1.0` — so omitting them would compare two samplers.
@@ -835,6 +1027,90 @@ completed it, and the gate scored that 1.094x ratio as "within".
   in the suite. Revision 2 of the migration decision reported that as a 1.93x
   runtime skew. Both profiles now state `medium` and the gate refuses a pair
   that left it to the template.
+- **The KV bound is read off the running process, not off the launch.** The
+  derivation used to read the absence of `--max-kv-size` as `unbounded`, on the
+  grounds that absence meant the same thing on both sides. It does for the two
+  MLX runtimes and not for a third: `llama-server` has no unbounded mode at all.
+  Measured on Homebrew `llama.cpp 0.3.0`, build `b10621-c1d0e7a00`, it reports
+  `n_ctx` **32768** — the model's `n_ctx_train` — with no context flag, and
+  **8192** under `--ctx-size 8192`. A record derived from argv would have
+  carried `kv=unbounded` while running against a finite cache, and because the
+  pin comparison demands equality it would have *matched* a genuinely unbounded
+  MLX baseline: the gate would have stayed green over a 32k window compared
+  against no window. There is no additive argv spelling that repairs this —
+  absence still means "finite, from the model" for llama.cpp and "no bound" for
+  `mlx_lm.server` — so the gate asks the process. A runtime that names its bound
+  pins that number; one that answers and names none falls back to
+  `--max-kv-size` or `unbounded`, which is what both MLX runtimes measurably
+  are; a bound the gate could not read is `kv=unread` and is refused. A launch
+  that pins `--ctx-size` and a server that will not confirm it is a
+  contradiction and is refused too, so a llama.cpp launch never reaches the argv
+  fallback.
+- **The model pin is the shared source of record, not the local file.** The two
+  runtimes cannot be pointed at one weight file: `mlx_lm.server` loads an MLX
+  weight *directory* at `8bit/group64/affine` and `llama-server` loads a single
+  `Q8_0` `.gguf`. While `modelPath` and `modelDigest` were pins compared for
+  equality, that comparison was refused forever — not because it was unsound,
+  but because the pin had been written about the local artifact rather than
+  about the model. TASK-260828-3g87i4 measured what the two actually share:
+  both schemes cost **8.5 bits per weight**, their quantized-tensor sets match
+  apart from the MTP block, and mean relative RMS against the shared BF16 source
+  is **0.766**, with the GGUF side marginally the more faithful. So
+  `modelOfRecord` is what two runs must agree on. With no verdict named it is
+  `artifact:<digest>`, which pins byte identity exactly as before and is what a
+  same-format pair still has to satisfy. With a verdict read it is
+  `source:<upstream model>`, and the pair then has to survive strictly more than
+  the equality it replaced: the same verdict document on both sides *by the
+  digest the gate computed over it*, a `comparable` verdict, both artifacts
+  named at the digests the gate computed for *them*, agreeing quantization
+  labels, and every declared non-equivalence carried in both records. Absence of
+  the evidence refuses structurally rather than by a clause — with no verdict
+  the two derive different `artifact:` pins — and a verdict the gate could not
+  read is a *failed read*, refused by its own name and never spent as an
+  absence.
+- **The verdict has to be a decision this repository took.** `--equivalence`
+  names a document; it does not decide that the document counts. Review minted
+  one naming the real upstream model, both artifact digests the gate had itself
+  computed, `comparable`, and a single generic note, and the shipped entry
+  accepted it with exit 0 — every step of the read was correct and none of it
+  authenticated anything, because hashing attacker-authored bytes proves only
+  that they did not change between the read and the seal. So admission is bound
+  to `TrustedEquivalenceDecisions.shipped`: a fixed list, compiled into the gate
+  from versioned repository source, of the equivalence decisions actually taken.
+  It holds one entry, TASK-260828-3g87i4's, whose document is
+  `equivalence/qwen3-8-27b-uncensored.equivalence.json` and whose three measured
+  non-equivalences are stated in the store itself so no document may replace
+  them with one note. Adding a decision means editing that file and rebuilding,
+  which is the same class boundary the rest of this gate rests on: producing a
+  false acceptance requires modifying the gate rather than using it. The store
+  deliberately holds no fixture entry — an anchor written so a smoke script
+  could reach an acceptance would be a decision nobody took, sitting in the
+  production trust store.
+- **Speculative decoding is refused, not pinned.** It is the one condition the
+  equivalence verdict names as making this pair genuinely non-comparable:
+  `llama-server` can draft off the model's MTP head and the MLX baseline
+  structurally cannot, so a tokens/s measured with drafting on is a different
+  algorithm rather than a faster runtime. Requiring the two sides only to
+  *match* would admit two speculating runtimes, so anything but `off` is
+  refused. Every generated record and decision carries the direction explicitly:
+  forcing MTP off is **against llama.cpp**, because it removes a capability the
+  incumbent MLX artifact lacks. The reading comes from `GET /slots` on the live process — measured:
+  `--spec-type ngram-mod` flips `speculative` to `true` there while `/props`
+  keeps reporting `"none"`, so `/props` is a proxy that does not move with the
+  launch and is not read. **Both placements of that field are read and neither
+  shadows the other** — `slot.speculative` and `slot.params.speculative`.
+  TASK-260828-2wcrph measured the reason: on build `b10621-c1d0e7a00` the field
+  is top-level, and `params` appears on a slot only *after* it has served a
+  request and carries sampling settings that never name it. Consulting `params`
+  first and the slot only when `params` was absent therefore went blind as soon
+  as traffic had touched every slot, and a 20-iteration soak did exactly that:
+  a llama.cpp pass that was provably not speculating recorded
+  `speculation=unread` and was refused for a reading the gate had in its hands. A runtime that serves no `/slots` answers
+  nothing, and there the launch argv decides: `--spec-type` other than `none`,
+  or any of `--spec-draft-model` / `--model-draft` / `-md`, refuses the pass by
+  name. `LLAMA_ARG_SPEC_*` and `LLAMA_ARG_DRAFT_*` in the gate's own environment
+  refuse the run before it launches anything, because that environment is what
+  it hands the launcher.
 - **The text-only factory is the one under test**, and it is the runtime's
   default. See below.
 

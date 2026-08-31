@@ -1,0 +1,1901 @@
+{
+  "crossCampaign": {
+    "comparable": false,
+    "incumbentLlamacppEraOverSwiftEraRatios": {
+      "context_75k": {
+        "decodeTokensPerSecond": 1.011864,
+        "prefillTokensPerSecond": 0.758981,
+        "ttftSeconds": 1.317556
+      },
+      "long_prompt_8k": {
+        "decodeTokensPerSecond": 0.686033,
+        "prefillTokensPerSecond": 0.866938,
+        "ttftSeconds": 1.153485
+      },
+      "multiturn_prefix_reuse": {
+        "prefillTokensPerSecond": 0.981433,
+        "ttftSeconds": 1.103588
+      },
+      "short_prompt": {
+        "decodeTokensPerSecond": 0.660197,
+        "prefillTokensPerSecond": 0.389066,
+        "ttftSeconds": 2.570257
+      },
+      "stability_soak": {},
+      "tool_call": {}
+    },
+    "reason": "different incumbent build and KV pin (kv=unbounded at 9150698 versus kv=76800 at the 45a472f fork), a different memory instrument (peakPhysicalFootprintBytes versus the mapped-file-inclusive resident upper bound), and two campaigns two days apart on a host that was not idle-locked"
+  },
+  "llamacppPair": {
+    "baselineScenarios": {
+      "context_75k": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            0
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "miss"
+        },
+        "completionTokens": 16,
+        "decodeTokensPerSecond": 8.026868,
+        "hostLoadAverageMax": 13.994629,
+        "peakPhysicalFootprintBytes": 48431289344,
+        "prefillTokensPerSecond": 57.048568,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 36619,
+          "machGapMax": 0.617862,
+          "machGapsOverBound": 3,
+          "machStamps": 36620,
+          "mappedGapCount": 287,
+          "mappedGapMax": 9.144845,
+          "mappedGapMedian": 7.569299,
+          "mappedGapMin": 0.101866,
+          "mappedGapsOverBound": 268,
+          "mappedStamps": 288,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 36620
+        },
+        "promptTokens": 73016,
+        "scenarioMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 22163,
+          "machGapMax": 0.617862,
+          "machGapsOverBound": 2,
+          "machStamps": 22164,
+          "mappedGapCount": 165,
+          "mappedGapMax": 9.144845,
+          "mappedGapMedian": 7.835149,
+          "mappedGapMin": 5.227883,
+          "mappedGapsOverBound": 163,
+          "mappedStamps": 166,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 22164
+        },
+        "succeeded": true,
+        "ttftSeconds": 1279.8919,
+        "wallClockSeconds": 1281.779506
+      },
+      "long_prompt_8k": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            0
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "miss"
+        },
+        "completionTokens": 106,
+        "decodeTokensPerSecond": 6.670457,
+        "hostLoadAverageMax": 4.94043,
+        "peakPhysicalFootprintBytes": 33488786360,
+        "prefillTokensPerSecond": 72.60092,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 2835,
+          "machGapMax": 0.234387,
+          "machGapsOverBound": 1,
+          "machStamps": 2836,
+          "mappedGapCount": 25,
+          "mappedGapMax": 7.788476,
+          "mappedGapMedian": 7.528458,
+          "mappedGapMin": 0.871112,
+          "mappedGapsOverBound": 19,
+          "mappedStamps": 26,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 2836
+        },
+        "promptTokens": 7784,
+        "scenarioMemory": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 2189,
+          "machGapMax": 0.062921,
+          "machGapsOverBound": 0,
+          "machStamps": 2190,
+          "mappedGapCount": 18,
+          "mappedGapMax": 7.618408,
+          "mappedGapMedian": 7.53321,
+          "mappedGapMin": 0.871112,
+          "mappedGapsOverBound": 16,
+          "mappedStamps": 19,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 2190
+        },
+        "succeeded": true,
+        "ttftSeconds": 107.216272,
+        "wallClockSeconds": 123.063594
+      },
+      "multiturn_prefix_reuse": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            0,
+            0,
+            0
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "miss"
+        },
+        "completionTokens": 192,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 6.222168,
+        "peakPhysicalFootprintBytes": 34156319720,
+        "prefillTokensPerSecond": 73.378835,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 9297,
+          "machGapMax": 0.234387,
+          "machGapsOverBound": 1,
+          "machStamps": 9298,
+          "mappedGapCount": 78,
+          "mappedGapMax": 7.788476,
+          "mappedGapMedian": 7.527583,
+          "mappedGapMin": 0.101866,
+          "mappedGapsOverBound": 66,
+          "mappedStamps": 79,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 9298
+        },
+        "promptTokens": 7784,
+        "scenarioMemory": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 6098,
+          "machGapMax": 0.06881,
+          "machGapsOverBound": 0,
+          "machStamps": 6099,
+          "mappedGapCount": 47,
+          "mappedGapMax": 7.629139,
+          "mappedGapMedian": 7.537779,
+          "mappedGapMin": 5.191717,
+          "mappedGapsOverBound": 45,
+          "mappedStamps": 48,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 6099
+        },
+        "succeeded": true,
+        "ttftSeconds": 105.206136,
+        "wallClockSeconds": 347.591125
+      },
+      "short_prompt": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            0
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "miss"
+        },
+        "completionTokens": 54,
+        "decodeTokensPerSecond": 6.780937,
+        "hostLoadAverageMax": 5.109863,
+        "peakPhysicalFootprintBytes": 29393851320,
+        "prefillTokensPerSecond": 16.196866,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 604,
+          "machGapMax": 0.234387,
+          "machGapsOverBound": 1,
+          "machStamps": 605,
+          "mappedGapCount": 6,
+          "mappedGapMax": 7.788476,
+          "mappedGapMedian": 6.867352,
+          "mappedGapMin": 1.225879,
+          "mappedGapsOverBound": 3,
+          "mappedStamps": 7,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 605
+        },
+        "promptTokens": 41,
+        "scenarioMemory": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 227,
+          "machGapMax": 0.061444,
+          "machGapsOverBound": 0,
+          "machStamps": 228,
+          "mappedGapCount": 3,
+          "mappedGapMax": 7.479461,
+          "mappedGapMedian": 4.168164,
+          "mappedGapMin": 1.225879,
+          "mappedGapsOverBound": 1,
+          "mappedStamps": 4,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 228
+        },
+        "succeeded": true,
+        "ttftSeconds": 2.531354,
+        "wallClockSeconds": 10.449584
+      },
+      "stability_soak": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "miss"
+        },
+        "completionTokens": 1280,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 4.36084,
+        "peakPhysicalFootprintBytes": 30459286504,
+        "prefillTokensPerSecond": null,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 14416,
+          "machGapMax": 0.234387,
+          "machGapsOverBound": 1,
+          "machStamps": 14417,
+          "mappedGapCount": 120,
+          "mappedGapMax": 7.788476,
+          "mappedGapMedian": 7.465432,
+          "mappedGapMin": 0.101866,
+          "mappedGapsOverBound": 105,
+          "mappedStamps": 121,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 14417
+        },
+        "promptTokens": 910,
+        "scenarioMemory": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 5076,
+          "machGapMax": 0.114716,
+          "machGapsOverBound": 0,
+          "machStamps": 5077,
+          "mappedGapCount": 40,
+          "mappedGapMax": 7.569299,
+          "mappedGapMedian": 7.353677,
+          "mappedGapMin": 6.518094,
+          "mappedGapsOverBound": 39,
+          "mappedStamps": 41,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 5077
+        },
+        "succeeded": true,
+        "ttftSeconds": null,
+        "wallClockSeconds": 291.304455
+      },
+      "tool_call": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            0
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "miss"
+        },
+        "completionTokens": 64,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 3.427734,
+        "peakPhysicalFootprintBytes": 30489891768,
+        "prefillTokensPerSecond": null,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 3157,
+          "machGapMax": 0.234387,
+          "machGapsOverBound": 1,
+          "machStamps": 3158,
+          "mappedGapCount": 29,
+          "mappedGapMax": 7.788476,
+          "mappedGapMedian": 7.492747,
+          "mappedGapMin": 0.842619,
+          "mappedGapsOverBound": 21,
+          "mappedStamps": 30,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 3158
+        },
+        "promptTokens": 313,
+        "scenarioMemory": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 277,
+          "machGapMax": 0.060896,
+          "machGapsOverBound": 0,
+          "machStamps": 278,
+          "mappedGapCount": 3,
+          "mappedGapMax": 7.561615,
+          "mappedGapMedian": 7.414865,
+          "mappedGapMin": 0.842619,
+          "mappedGapsOverBound": 2,
+          "mappedStamps": 4,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 278
+        },
+        "succeeded": true,
+        "ttftSeconds": null,
+        "wallClockSeconds": 13.17919
+      }
+    },
+    "breakEven": {
+      "long_prompt_8k": {
+        "crossoverOutputTokens": -1946.620421,
+        "deltaInverseRateSecondsPerToken": -0.02044,
+        "deltaTtftSeconds": 39.788931,
+        "exists": false,
+        "reason": "one runtime leads both TTFT and decode, so the candidate curve is below the baseline curve at every positive response length"
+      },
+      "short_prompt": {
+        "crossoverOutputTokens": -15.727667,
+        "deltaInverseRateSecondsPerToken": -0.024698,
+        "deltaTtftSeconds": 0.388437,
+        "exists": false,
+        "reason": "one runtime leads both TTFT and decode, so the candidate curve is below the baseline curve at every positive response length"
+      }
+    },
+    "candidateOverBaselineRatios": {
+      "context_75k": {
+        "decodeTokensPerSecond": 1.093384,
+        "prefillTokensPerSecond": 1.346047,
+        "promptTokenSkew": 1.0,
+        "ttftSeconds": 0.742916,
+        "wallClockSeconds": 0.743157
+      },
+      "long_prompt_8k": {
+        "decodeTokensPerSecond": 1.157869,
+        "prefillTokensPerSecond": 1.590101,
+        "promptTokenSkew": 1.0,
+        "ttftSeconds": 0.628891,
+        "wallClockSeconds": 0.659112
+      },
+      "multiturn_prefix_reuse": {
+        "prefillTokensPerSecond": 5.772876,
+        "promptTokenSkew": 1.0,
+        "ttftSeconds": 0.006904,
+        "wallClockSeconds": 0.132387
+      },
+      "short_prompt": {
+        "decodeTokensPerSecond": 1.201163,
+        "prefillTokensPerSecond": 1.181265,
+        "promptTokenSkew": 1.0,
+        "ttftSeconds": 0.84655,
+        "wallClockSeconds": 0.871373
+      },
+      "stability_soak": {
+        "promptTokenSkew": 1.0,
+        "wallClockSeconds": 0.761767
+      },
+      "tool_call": {
+        "promptTokenSkew": 1.0,
+        "wallClockSeconds": 0.838613
+      }
+    },
+    "candidateScenarios": {
+      "context_75k": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            0
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "miss"
+        },
+        "completionTokens": 16,
+        "decodeTokensPerSecond": 8.776446,
+        "hostLoadAverageMax": 6.289551,
+        "peakPhysicalFootprintBytes": 16162537728,
+        "prefillTokensPerSecond": 76.790029,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 23839,
+          "machGapMax": 0.291906,
+          "machGapsOverBound": 8,
+          "machStamps": 23840,
+          "mappedGapCount": 199,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.221519,
+          "mappedGapMin": 0.508173,
+          "mappedGapsOverBound": 179,
+          "mappedStamps": 200,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 23840
+        },
+        "promptTokens": 73016,
+        "scenarioMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 16713,
+          "machGapMax": 0.136258,
+          "machGapsOverBound": 1,
+          "machStamps": 16714,
+          "mappedGapCount": 132,
+          "mappedGapMax": 7.562909,
+          "mappedGapMedian": 7.221817,
+          "mappedGapMin": 6.432931,
+          "mappedGapsOverBound": 130,
+          "mappedStamps": 133,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 16714
+        },
+        "succeeded": true,
+        "ttftSeconds": 950.852614,
+        "wallClockSeconds": 952.563387
+      },
+      "long_prompt_8k": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            0
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "miss"
+        },
+        "completionTokens": 106,
+        "decodeTokensPerSecond": 7.723513,
+        "hostLoadAverageMax": 8.881348,
+        "peakPhysicalFootprintBytes": 7279159264,
+        "prefillTokensPerSecond": 115.442785,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 1975,
+          "machGapMax": 0.267402,
+          "machGapsOverBound": 2,
+          "machStamps": 1976,
+          "mappedGapCount": 19,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.101963,
+          "mappedGapMin": 1.179308,
+          "mappedGapsOverBound": 12,
+          "mappedStamps": 20,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 1976
+        },
+        "promptTokens": 7784,
+        "scenarioMemory": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 1458,
+          "machGapMax": 0.064065,
+          "machGapsOverBound": 0,
+          "machStamps": 1459,
+          "mappedGapCount": 13,
+          "mappedGapMax": 7.238345,
+          "mappedGapMedian": 7.109172,
+          "mappedGapMin": 1.878532,
+          "mappedGapsOverBound": 11,
+          "mappedStamps": 14,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 1459
+        },
+        "succeeded": true,
+        "ttftSeconds": 67.427341,
+        "wallClockSeconds": 81.112684
+      },
+      "multiturn_prefix_reuse": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            5736,
+            7780,
+            7809
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "hit"
+        },
+        "completionTokens": 192,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 6.458984,
+        "peakPhysicalFootprintBytes": 8766336024,
+        "prefillTokensPerSecond": 423.606945,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 3124,
+          "machGapMax": 0.274404,
+          "machGapsOverBound": 4,
+          "machStamps": 3125,
+          "mappedGapCount": 32,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.105376,
+          "mappedGapMin": 0.6417,
+          "mappedGapsOverBound": 19,
+          "mappedStamps": 33,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 3125
+        },
+        "promptTokens": 7784,
+        "scenarioMemory": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 845,
+          "machGapMax": 0.068175,
+          "machGapsOverBound": 0,
+          "machStamps": 846,
+          "mappedGapCount": 8,
+          "mappedGapMax": 7.275344,
+          "mappedGapMedian": 7.230742,
+          "mappedGapMin": 0.6417,
+          "mappedGapsOverBound": 6,
+          "mappedStamps": 9,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 846
+        },
+        "succeeded": true,
+        "ttftSeconds": 0.726302,
+        "wallClockSeconds": 46.016553
+      },
+      "short_prompt": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            0
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "miss"
+        },
+        "completionTokens": 57,
+        "decodeTokensPerSecond": 8.14501,
+        "hostLoadAverageMax": 6.85498,
+        "peakPhysicalFootprintBytes": 6491743672,
+        "prefillTokensPerSecond": 19.132797,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 482,
+          "machGapMax": 0.138519,
+          "machGapsOverBound": 1,
+          "machStamps": 483,
+          "mappedGapCount": 5,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 5.784224,
+          "mappedGapMin": 1.179308,
+          "mappedGapsOverBound": 1,
+          "mappedStamps": 6,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 483
+        },
+        "promptTokens": 41,
+        "scenarioMemory": {
+          "issues": [],
+          "machGapCount": 194,
+          "machGapMax": 0.060065,
+          "machGapsOverBound": 0,
+          "machStamps": 195,
+          "mappedGapCount": 3,
+          "mappedGapMax": 6.989967,
+          "mappedGapMedian": 2.920006,
+          "mappedGapMin": 1.179308,
+          "mappedGapsOverBound": 0,
+          "mappedStamps": 4,
+          "readFailureCount": 0,
+          "scoredBytes": 34731153644,
+          "status": "measured",
+          "successfulSampleCount": 195
+        },
+        "succeeded": true,
+        "ttftSeconds": 2.142917,
+        "wallClockSeconds": 9.105482
+      },
+      "stability_soak": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18,
+            18
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "hit"
+        },
+        "completionTokens": 1248,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 5.936035,
+        "peakPhysicalFootprintBytes": 16113926376,
+        "prefillTokensPerSecond": null,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 7085,
+          "machGapMax": 0.291906,
+          "machGapsOverBound": 7,
+          "machStamps": 7086,
+          "mappedGapCount": 65,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.208291,
+          "mappedGapMin": 0.542653,
+          "mappedGapsOverBound": 49,
+          "mappedStamps": 66,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 7086
+        },
+        "promptTokens": 910,
+        "scenarioMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 3922,
+          "machGapMax": 0.291906,
+          "machGapsOverBound": 2,
+          "machStamps": 3923,
+          "mappedGapCount": 32,
+          "mappedGapMax": 7.677466,
+          "mappedGapMedian": 7.272322,
+          "mappedGapMin": 0.542653,
+          "mappedGapsOverBound": 30,
+          "mappedStamps": 33,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 3923
+        },
+        "succeeded": true,
+        "ttftSeconds": null,
+        "wallClockSeconds": 221.906203
+      },
+      "tool_call": {
+        "cacheReuse": {
+          "cachedPromptTokens": [
+            0
+          ],
+          "source": "openai-usage.prompt_tokens_details.cached_tokens",
+          "state": "miss"
+        },
+        "completionTokens": 51,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 6.948242,
+        "peakPhysicalFootprintBytes": 8427727632,
+        "prefillTokensPerSecond": null,
+        "processPeakSoFarMemory": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 2241,
+          "machGapMax": 0.274404,
+          "machGapsOverBound": 3,
+          "machStamps": 2242,
+          "mappedGapCount": 23,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.092735,
+          "mappedGapMin": 1.179308,
+          "mappedGapsOverBound": 13,
+          "mappedStamps": 24,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 2242
+        },
+        "promptTokens": 313,
+        "scenarioMemory": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 230,
+          "machGapMax": 0.063124,
+          "machGapsOverBound": 0,
+          "machStamps": 231,
+          "mappedGapCount": 3,
+          "mappedGapMax": 7.120081,
+          "mappedGapMedian": 4.135941,
+          "mappedGapMin": 1.868294,
+          "mappedGapsOverBound": 1,
+          "mappedStamps": 4,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 231
+        },
+        "succeeded": true,
+        "ttftSeconds": null,
+        "wallClockSeconds": 11.052244
+      }
+    },
+    "decisionWritten": false,
+    "declaredAsymmetries": {
+      "baseline": [
+        "the MLX build drops the MTP head the GGUF carries as blk.64: 8 quantized tensors, 451319808 bytes on disk, skipped at load",
+        "the vision tower is placed differently -- 333 bf16 tensors inside the MLX safetensors shards against a separate 931145984-byte GGUF mmproj -- and is resident in neither on the default text path",
+        "GGUF upcasts norms and 1-D tensors to F32 where the MLX build keeps the source bf16: 10686464 bytes of extra resident memory, no fidelity difference",
+        "pass order is fixed baseline then candidate: residual heat or unreleased host pressure can disadvantage the candidate, while shared host cache state can favour it; direction is indeterminate and the per-pass host load is diagnostic, not an admission gate",
+        "parity policy is intentionally one-way: baseline success plus candidate failure blocks, while the reverse does not; direction favours the incumbent, and this is a migration acceptance policy rather than a measured performance metric",
+        "MTP/speculative decoding is forced off for algorithmic parity because the MLX incumbent drops the MTP head: direction is against llama.cpp, which cannot use a product capability the incumbent lacks",
+        "memory is scored as a conservative upper bound: Mach physical footprint plus the upper edge of vmmap resident mapped-file bytes; double-counting can overstate a runtime whose footprint already charges mapped pages, so residual direction is runtime-dependent and the raw components are retained",
+        "baseline cache policy: --prompt-cache-size 1 --prompt-cache-bytes 8GB; a reuse hit can reduce repeated-prefix TTFT and retained cache can increase memory; direction is unknown without an observed hit",
+        "candidate cache policy: llama.cpp per-slot KV reuse; a reuse hit can reduce repeated-prefix TTFT and retained slot state can increase memory; direction is unknown without an observed hit",
+        "cache comparability: a scenario with an observed reuse hit on only one runtime is non-comparable and must be refused rather than scored",
+        "Python-only prompt cache: launched with --prompt-cache-size 1 --prompt-cache-bytes 8GB; it can reduce TTFT on a repeated prompt and can retain up to the configured cache budget. Direction for a cold, unique prompt is unknown."
+      ],
+      "candidate": [
+        "the MLX build drops the MTP head the GGUF carries as blk.64: 8 quantized tensors, 451319808 bytes on disk, skipped at load",
+        "the vision tower is placed differently -- 333 bf16 tensors inside the MLX safetensors shards against a separate 931145984-byte GGUF mmproj -- and is resident in neither on the default text path",
+        "GGUF upcasts norms and 1-D tensors to F32 where the MLX build keeps the source bf16: 10686464 bytes of extra resident memory, no fidelity difference",
+        "pass order is fixed baseline then candidate: residual heat or unreleased host pressure can disadvantage the candidate, while shared host cache state can favour it; direction is indeterminate and the per-pass host load is diagnostic, not an admission gate",
+        "parity policy is intentionally one-way: baseline success plus candidate failure blocks, while the reverse does not; direction favours the incumbent, and this is a migration acceptance policy rather than a measured performance metric",
+        "MTP/speculative decoding is forced off for algorithmic parity because the MLX incumbent drops the MTP head: direction is against llama.cpp, which cannot use a product capability the incumbent lacks",
+        "memory is scored as a conservative upper bound: Mach physical footprint plus the upper edge of vmmap resident mapped-file bytes; double-counting can overstate a runtime whose footprint already charges mapped pages, so residual direction is runtime-dependent and the raw components are retained",
+        "baseline cache policy: --prompt-cache-size 1 --prompt-cache-bytes 8GB; a reuse hit can reduce repeated-prefix TTFT and retained cache can increase memory; direction is unknown without an observed hit",
+        "candidate cache policy: llama.cpp per-slot KV reuse; a reuse hit can reduce repeated-prefix TTFT and retained slot state can increase memory; direction is unknown without an observed hit",
+        "cache comparability: a scenario with an observed reuse hit on only one runtime is non-comparable and must be refused rather than scored",
+        "llama.cpp per-slot KV reuse: it can reduce TTFT when a slot reuses a matching prefix and can retain slot-local KV state across requests and therefore across scenarios. Direction without an observed reuse hit is unknown.",
+        "llama-server allocates its whole --ctx-size KV arena at load, so the 76800-token window is a resident cost paid before the first token rather than a limit"
+      ]
+    },
+    "decodeAdmissibleScenarios": [
+      "long_prompt_8k",
+      "short_prompt"
+    ],
+    "driverExitCode": 4,
+    "gatedMemoryWindows": {
+      "baseline": {
+        "processPeakSoFar:context_75k": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 36619,
+          "machGapMax": 0.617862,
+          "machGapsOverBound": 3,
+          "machStamps": 36620,
+          "mappedGapCount": 287,
+          "mappedGapMax": 9.144845,
+          "mappedGapMedian": 7.569299,
+          "mappedGapMin": 0.101866,
+          "mappedGapsOverBound": 268,
+          "mappedStamps": 288,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 36620
+        },
+        "processPeakSoFar:long_prompt_8k": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 2835,
+          "machGapMax": 0.234387,
+          "machGapsOverBound": 1,
+          "machStamps": 2836,
+          "mappedGapCount": 25,
+          "mappedGapMax": 7.788476,
+          "mappedGapMedian": 7.528458,
+          "mappedGapMin": 0.871112,
+          "mappedGapsOverBound": 19,
+          "mappedStamps": 26,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 2836
+        },
+        "processPeakSoFar:multiturn_prefix_reuse": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 9297,
+          "machGapMax": 0.234387,
+          "machGapsOverBound": 1,
+          "machStamps": 9298,
+          "mappedGapCount": 78,
+          "mappedGapMax": 7.788476,
+          "mappedGapMedian": 7.527583,
+          "mappedGapMin": 0.101866,
+          "mappedGapsOverBound": 66,
+          "mappedStamps": 79,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 9298
+        },
+        "processPeakSoFar:short_prompt": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 604,
+          "machGapMax": 0.234387,
+          "machGapsOverBound": 1,
+          "machStamps": 605,
+          "mappedGapCount": 6,
+          "mappedGapMax": 7.788476,
+          "mappedGapMedian": 6.867352,
+          "mappedGapMin": 1.225879,
+          "mappedGapsOverBound": 3,
+          "mappedStamps": 7,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 605
+        },
+        "processPeakSoFar:stability_soak": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 14416,
+          "machGapMax": 0.234387,
+          "machGapsOverBound": 1,
+          "machStamps": 14417,
+          "mappedGapCount": 120,
+          "mappedGapMax": 7.788476,
+          "mappedGapMedian": 7.465432,
+          "mappedGapMin": 0.101866,
+          "mappedGapsOverBound": 105,
+          "mappedStamps": 121,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 14417
+        },
+        "processPeakSoFar:tool_call": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 3157,
+          "machGapMax": 0.234387,
+          "machGapsOverBound": 1,
+          "machStamps": 3158,
+          "mappedGapCount": 29,
+          "mappedGapMax": 7.788476,
+          "mappedGapMedian": 7.492747,
+          "mappedGapMin": 0.842619,
+          "mappedGapsOverBound": 21,
+          "mappedStamps": 30,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 3158
+        },
+        "scenario:context_75k": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 22163,
+          "machGapMax": 0.617862,
+          "machGapsOverBound": 2,
+          "machStamps": 22164,
+          "mappedGapCount": 165,
+          "mappedGapMax": 9.144845,
+          "mappedGapMedian": 7.835149,
+          "mappedGapMin": 5.227883,
+          "mappedGapsOverBound": 163,
+          "mappedStamps": 166,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 22164
+        },
+        "scenario:long_prompt_8k": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 2189,
+          "machGapMax": 0.062921,
+          "machGapsOverBound": 0,
+          "machStamps": 2190,
+          "mappedGapCount": 18,
+          "mappedGapMax": 7.618408,
+          "mappedGapMedian": 7.53321,
+          "mappedGapMin": 0.871112,
+          "mappedGapsOverBound": 16,
+          "mappedStamps": 19,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 2190
+        },
+        "scenario:multiturn_prefix_reuse": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 6098,
+          "machGapMax": 0.06881,
+          "machGapsOverBound": 0,
+          "machStamps": 6099,
+          "mappedGapCount": 47,
+          "mappedGapMax": 7.629139,
+          "mappedGapMedian": 7.537779,
+          "mappedGapMin": 5.191717,
+          "mappedGapsOverBound": 45,
+          "mappedStamps": 48,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 6099
+        },
+        "scenario:short_prompt": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 227,
+          "machGapMax": 0.061444,
+          "machGapsOverBound": 0,
+          "machStamps": 228,
+          "mappedGapCount": 3,
+          "mappedGapMax": 7.479461,
+          "mappedGapMedian": 4.168164,
+          "mappedGapMin": 1.225879,
+          "mappedGapsOverBound": 1,
+          "mappedStamps": 4,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 228
+        },
+        "scenario:stability_soak": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 5076,
+          "machGapMax": 0.114716,
+          "machGapsOverBound": 0,
+          "machStamps": 5077,
+          "mappedGapCount": 40,
+          "mappedGapMax": 7.569299,
+          "mappedGapMedian": 7.353677,
+          "mappedGapMin": 6.518094,
+          "mappedGapsOverBound": 39,
+          "mappedStamps": 41,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 5077
+        },
+        "scenario:tool_call": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 277,
+          "machGapMax": 0.060896,
+          "machGapsOverBound": 0,
+          "machStamps": 278,
+          "mappedGapCount": 3,
+          "mappedGapMax": 7.561615,
+          "mappedGapMedian": 7.414865,
+          "mappedGapMin": 0.842619,
+          "mappedGapsOverBound": 2,
+          "mappedStamps": 4,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 278
+        },
+        "wholePassProcessPeak": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 36739,
+          "machGapMax": 0.617862,
+          "machGapsOverBound": 3,
+          "machStamps": 36740,
+          "mappedGapCount": 288,
+          "mappedGapMax": 9.144845,
+          "mappedGapMedian": 7.568865,
+          "mappedGapMin": 0.101866,
+          "mappedGapsOverBound": 268,
+          "mappedStamps": 289,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 36740
+        }
+      },
+      "candidate": {
+        "processPeakSoFar:context_75k": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 23839,
+          "machGapMax": 0.291906,
+          "machGapsOverBound": 8,
+          "machStamps": 23840,
+          "mappedGapCount": 199,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.221519,
+          "mappedGapMin": 0.508173,
+          "mappedGapsOverBound": 179,
+          "mappedStamps": 200,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 23840
+        },
+        "processPeakSoFar:long_prompt_8k": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 1975,
+          "machGapMax": 0.267402,
+          "machGapsOverBound": 2,
+          "machStamps": 1976,
+          "mappedGapCount": 19,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.101963,
+          "mappedGapMin": 1.179308,
+          "mappedGapsOverBound": 12,
+          "mappedStamps": 20,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 1976
+        },
+        "processPeakSoFar:multiturn_prefix_reuse": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 3124,
+          "machGapMax": 0.274404,
+          "machGapsOverBound": 4,
+          "machStamps": 3125,
+          "mappedGapCount": 32,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.105376,
+          "mappedGapMin": 0.6417,
+          "mappedGapsOverBound": 19,
+          "mappedStamps": 33,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 3125
+        },
+        "processPeakSoFar:short_prompt": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 482,
+          "machGapMax": 0.138519,
+          "machGapsOverBound": 1,
+          "machStamps": 483,
+          "mappedGapCount": 5,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 5.784224,
+          "mappedGapMin": 1.179308,
+          "mappedGapsOverBound": 1,
+          "mappedStamps": 6,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 483
+        },
+        "processPeakSoFar:stability_soak": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 7085,
+          "machGapMax": 0.291906,
+          "machGapsOverBound": 7,
+          "machStamps": 7086,
+          "mappedGapCount": 65,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.208291,
+          "mappedGapMin": 0.542653,
+          "mappedGapsOverBound": 49,
+          "mappedStamps": 66,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 7086
+        },
+        "processPeakSoFar:tool_call": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 2241,
+          "machGapMax": 0.274404,
+          "machGapsOverBound": 3,
+          "machStamps": 2242,
+          "mappedGapCount": 23,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.092735,
+          "mappedGapMin": 1.179308,
+          "mappedGapsOverBound": 13,
+          "mappedStamps": 24,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 2242
+        },
+        "scenario:context_75k": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 16713,
+          "machGapMax": 0.136258,
+          "machGapsOverBound": 1,
+          "machStamps": 16714,
+          "mappedGapCount": 132,
+          "mappedGapMax": 7.562909,
+          "mappedGapMedian": 7.221817,
+          "mappedGapMin": 6.432931,
+          "mappedGapsOverBound": 130,
+          "mappedStamps": 133,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 16714
+        },
+        "scenario:long_prompt_8k": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 1458,
+          "machGapMax": 0.064065,
+          "machGapsOverBound": 0,
+          "machStamps": 1459,
+          "mappedGapCount": 13,
+          "mappedGapMax": 7.238345,
+          "mappedGapMedian": 7.109172,
+          "mappedGapMin": 1.878532,
+          "mappedGapsOverBound": 11,
+          "mappedStamps": 14,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 1459
+        },
+        "scenario:multiturn_prefix_reuse": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 845,
+          "machGapMax": 0.068175,
+          "machGapsOverBound": 0,
+          "machStamps": 846,
+          "mappedGapCount": 8,
+          "mappedGapMax": 7.275344,
+          "mappedGapMedian": 7.230742,
+          "mappedGapMin": 0.6417,
+          "mappedGapsOverBound": 6,
+          "mappedStamps": 9,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 846
+        },
+        "scenario:short_prompt": {
+          "issues": [],
+          "machGapCount": 194,
+          "machGapMax": 0.060065,
+          "machGapsOverBound": 0,
+          "machStamps": 195,
+          "mappedGapCount": 3,
+          "mappedGapMax": 6.989967,
+          "mappedGapMedian": 2.920006,
+          "mappedGapMin": 1.179308,
+          "mappedGapsOverBound": 0,
+          "mappedStamps": 4,
+          "readFailureCount": 0,
+          "scoredBytes": 34731153644,
+          "status": "measured",
+          "successfulSampleCount": 195
+        },
+        "scenario:stability_soak": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 3922,
+          "machGapMax": 0.291906,
+          "machGapsOverBound": 2,
+          "machStamps": 3923,
+          "mappedGapCount": 32,
+          "mappedGapMax": 7.677466,
+          "mappedGapMedian": 7.272322,
+          "mappedGapMin": 0.542653,
+          "mappedGapsOverBound": 30,
+          "mappedStamps": 33,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 3923
+        },
+        "scenario:tool_call": {
+          "issues": [
+            "resident-mapped-file-sampling-gap"
+          ],
+          "machGapCount": 230,
+          "machGapMax": 0.063124,
+          "machGapsOverBound": 0,
+          "machStamps": 231,
+          "mappedGapCount": 3,
+          "mappedGapMax": 7.120081,
+          "mappedGapMedian": 4.135941,
+          "mappedGapMin": 1.868294,
+          "mappedGapsOverBound": 1,
+          "mappedStamps": 4,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 231
+        },
+        "wholePassProcessPeak": {
+          "issues": [
+            "mach-physical-footprint-sampling-gap"
+          ],
+          "machGapCount": 23941,
+          "machGapMax": 0.291906,
+          "machGapsOverBound": 8,
+          "machStamps": 23942,
+          "mappedGapCount": 200,
+          "mappedGapMax": 10.823496,
+          "mappedGapMedian": 7.221496,
+          "mappedGapMin": 0.508173,
+          "mappedGapsOverBound": 179,
+          "mappedStamps": 201,
+          "readFailureCount": 1,
+          "scoredBytes": null,
+          "status": "partial",
+          "successfulSampleCount": 23942
+        }
+      }
+    },
+    "interval": {
+      "baselineDurationSeconds": 2125.073805,
+      "baselineFinish": 1788115795.126375,
+      "baselineStart": 1788113670.0525699,
+      "candidateDurationSeconds": 1370.179204,
+      "candidateFinish": 1788117186.393213,
+      "candidateStart": 1788115816.214009,
+      "overlapSeconds": -21.087634,
+      "separationSeconds": 21.087634
+    },
+    "memoryWindowsScoredOnBothSides": [],
+    "pins": {
+      "baseline": {
+        "contextPolicy": "kv=76800;prefill-step=2048;reasoning=medium",
+        "hostIdentity": "MacBookPro18,2/68719476736/25F80/arm64",
+        "maxOutputTokens": 256,
+        "modelDigest": "1b10f3fe1c1097c909fa35e112b943255c44be4a5f332f45e0af57a96188460b",
+        "modelOfRecord": "source:hf:orcarouter/Qwen3.8-27B-Uncensored-BF16",
+        "modelPath": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+        "promptSuiteDigest": "bba8867f4300f343b15960fb2cf8f821c653b96f538cf87287d0dacd36275d41",
+        "quantization": "8bit/group64/affine",
+        "seed": 1234,
+        "speculation": "off",
+        "temperature": 0,
+        "topP": 1
+      },
+      "candidate": {
+        "contextPolicy": "kv=76800;prefill-step=not-reported;reasoning=not-reported",
+        "hostIdentity": "MacBookPro18,2/68719476736/25F80/arm64",
+        "maxOutputTokens": 256,
+        "modelDigest": "31756fca94beca71ea4b8706d6fdc896dab2a3c6376ab0c1863b98512a24f8d6",
+        "modelOfRecord": "source:hf:orcarouter/Qwen3.8-27B-Uncensored-BF16",
+        "modelPath": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-GGUF-Q8_0/Qwen3.8-27B-Uncensored-OrcaRouter-Q8_0.gguf",
+        "promptSuiteDigest": "bba8867f4300f343b15960fb2cf8f821c653b96f538cf87287d0dacd36275d41",
+        "quantization": "Q8_0",
+        "seed": 1234,
+        "speculation": "off",
+        "temperature": 0,
+        "topP": 1
+      }
+    },
+    "revisions": {
+      "baseline": {
+        "mlx": "0.32.2",
+        "mlx_lm": "0.32.0",
+        "mlx_lm_commit": "45a472f2d0cda166b7ffe1a80fe50dd9621f4303",
+        "mlx_lm_direct_url": "{\"url\":\"https://github.com/relux-works/mlx-lm.git\",\"vcs_info\":{\"commit_id\":\"45a472f2d0cda166b7ffe1a80fe50dd9621f4303\",\"requested_revision\":\"45a472f2d0cda166b7ffe1a80fe50dd9621f4303\",\"vcs\":\"git\"}}",
+        "mlx_metal": "0.32.2",
+        "model_harness": "model-harness v1.6.1-103-g4270549 (4270549, 2026-08-30T10:01:14Z)",
+        "python": "3.14.7",
+        "transformers": "5.16.1"
+      },
+      "candidate": {
+        "model_harness": "model-harness v1.6.1-103-g4270549 (4270549, 2026-08-30T10:01:14Z)"
+      }
+    },
+    "sessionSummary": {
+      "baseline": {
+        "hostLoadAverageMax": 13.994629,
+        "lifecycle": {
+          "first_completion_seconds": 16.836392,
+          "models_listing_seconds": 0.812492
+        },
+        "memorySamplesMalformed": 0,
+        "memorySamplesReadFailed": 0,
+        "memorySamplesSuccessful": 36740,
+        "soak": {
+          "aggregate_output_tokens_per_second": 4.394028,
+          "first_latency_seconds": 10.313845,
+          "first_resident_memory_upper_bound_bytes": 29827094504,
+          "iterations": 20,
+          "last_latency_seconds": 12.377152,
+          "last_resident_memory_upper_bound_bytes": 29317158912,
+          "median_latency_seconds": 12.338475,
+          "resident_memory_upper_bound_drift_bytes": -509935592
+        }
+      },
+      "candidate": {
+        "hostLoadAverageMax": 8.881348,
+        "lifecycle": {
+          "first_completion_seconds": 12.568499,
+          "models_listing_seconds": 11.892707
+        },
+        "memorySamplesMalformed": 0,
+        "memorySamplesReadFailed": 0,
+        "memorySamplesSuccessful": 23942,
+        "soak": {
+          "aggregate_output_tokens_per_second": 5.623998,
+          "first_latency_seconds": 9.014724,
+          "first_resident_memory_upper_bound_bytes": 38145057404,
+          "iterations": 20,
+          "last_latency_seconds": 8.104323,
+          "last_resident_memory_upper_bound_bytes": 44346176540,
+          "median_latency_seconds": 8.624569,
+          "resident_memory_upper_bound_drift_bytes": 6201119136
+        }
+      }
+    },
+    "totalResponseSecondsByOutputTokens": {
+      "long_prompt_8k": {
+        "baseline": {
+          "1024": 260.728992,
+          "16": 109.614908,
+          "256": 145.594452,
+          "64": 116.810817
+        },
+        "candidate": {
+          "1024": 200.009496,
+          "16": 69.498937,
+          "256": 100.57288,
+          "64": 75.713726
+        }
+      },
+      "short_prompt": {
+        "baseline": {
+          "1024": 153.542932,
+          "16": 4.89091,
+          "256": 40.284249,
+          "64": 11.969578
+        },
+        "candidate": {
+          "1024": 127.864064,
+          "16": 4.10731,
+          "256": 33.573204,
+          "64": 10.000489
+        }
+      }
+    },
+    "ungatedMemoryWindows": {
+      "baseline:soakMemory": {
+        "issues": [],
+        "machGapCount": 19,
+        "machGapMax": 15.116633,
+        "machGapsOverBound": 19,
+        "machStamps": 20,
+        "mappedGapCount": 19,
+        "mappedGapMax": 15.116635,
+        "mappedGapMedian": 14.682109,
+        "mappedGapMin": 13.862468,
+        "mappedGapsOverBound": 19,
+        "mappedStamps": 20,
+        "readFailureCount": 0,
+        "scoredBytes": 29827094504,
+        "status": "measured",
+        "successfulSampleCount": 20
+      },
+      "baseline:warmupMemory": {
+        "issues": [],
+        "machGapCount": 0,
+        "machGapsOverBound": 0,
+        "machStamps": 1,
+        "mappedGapCount": 0,
+        "mappedGapsOverBound": 0,
+        "mappedStamps": 1,
+        "readFailureCount": 0,
+        "scoredBytes": 29120518072,
+        "status": "measured",
+        "successfulSampleCount": 1
+      },
+      "candidate:soakMemory": {
+        "issues": [],
+        "machGapCount": 19,
+        "machGapMax": 13.128794,
+        "machGapsOverBound": 19,
+        "machStamps": 20,
+        "mappedGapCount": 19,
+        "mappedGapMax": 13.128796,
+        "mappedGapMedian": 10.915913,
+        "mappedGapMin": 10.141473,
+        "mappedGapsOverBound": 19,
+        "mappedStamps": 20,
+        "readFailureCount": 0,
+        "scoredBytes": 44346176540,
+        "status": "measured",
+        "successfulSampleCount": 20
+      },
+      "candidate:warmupMemory": {
+        "issues": [],
+        "machGapCount": 0,
+        "machGapsOverBound": 0,
+        "machStamps": 1,
+        "mappedGapCount": 0,
+        "mappedGapsOverBound": 0,
+        "mappedStamps": 1,
+        "readFailureCount": 0,
+        "scoredBytes": 34248152988,
+        "status": "measured",
+        "successfulSampleCount": 1
+      }
+    }
+  },
+  "mlxSwiftPair": {
+    "accepted": false,
+    "baselineScenarios": {
+      "context_75k": {
+        "cacheReuse": null,
+        "completionTokens": 16,
+        "decodeTokensPerSecond": 7.932752,
+        "hostLoadAverageMax": 18.587402,
+        "peakPhysicalFootprintBytes": 48534787000,
+        "prefillTokensPerSecond": 75.164709,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 73016,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": 971.413331,
+        "wallClockSeconds": 973.304751
+      },
+      "long_prompt_8k": {
+        "cacheReuse": null,
+        "completionTokens": 106,
+        "decodeTokensPerSecond": 9.723227,
+        "hostLoadAverageMax": 10.184082,
+        "peakPhysicalFootprintBytes": 33705153440,
+        "prefillTokensPerSecond": 83.744055,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 7784,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": 92.949882,
+        "wallClockSeconds": 103.749389
+      },
+      "multiturn_prefix_reuse": {
+        "cacheReuse": null,
+        "completionTokens": 192,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 28.942383,
+        "peakPhysicalFootprintBytes": 35272446880,
+        "prefillTokensPerSecond": 74.76703,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 7784,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": 95.330975,
+        "wallClockSeconds": 317.145491
+      },
+      "short_prompt": {
+        "cacheReuse": null,
+        "completionTokens": 54,
+        "decodeTokensPerSecond": 10.271075,
+        "hostLoadAverageMax": 10.089844,
+        "peakPhysicalFootprintBytes": 29399274400,
+        "prefillTokensPerSecond": 41.630124,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 41,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": 0.984864,
+        "wallClockSeconds": 6.145161
+      },
+      "stability_soak": {
+        "cacheReuse": null,
+        "completionTokens": 1280,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 25.303223,
+        "peakPhysicalFootprintBytes": 30436316064,
+        "prefillTokensPerSecond": null,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 910,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": null,
+        "wallClockSeconds": 147.192309
+      },
+      "tool_call": {
+        "cacheReuse": null,
+        "completionTokens": 64,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 9.368652,
+        "peakPhysicalFootprintBytes": 30492005280,
+        "prefillTokensPerSecond": null,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 313,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": null,
+        "wallClockSeconds": 11.052548
+      }
+    },
+    "blockers": [
+      "long_prompt_8k/peak_physical_footprint_bytes ratio 1.1512007084931994 is outside the admissible band <= 1.1 (baseline 33705153440.0, candidate 38801396520.0)"
+    ],
+    "candidateOverBaselineRatios": {
+      "context_75k": {
+        "decodeTokensPerSecond": 0.14083,
+        "peakPhysicalFootprintBytes": 1.091907,
+        "prefillTokensPerSecond": 0.645692,
+        "ttftSeconds": 1.548726,
+        "wallClockSeconds": 1.559515
+      },
+      "long_prompt_8k": {
+        "decodeTokensPerSecond": 1.083324,
+        "peakPhysicalFootprintBytes": 1.151201,
+        "prefillTokensPerSecond": 0.999692,
+        "ttftSeconds": 1.000308,
+        "wallClockSeconds": 0.991351
+      },
+      "multiturn_prefix_reuse": {
+        "peakPhysicalFootprintBytes": 1.35295,
+        "prefillTokensPerSecond": 1.166712,
+        "ttftSeconds": 0.983922,
+        "wallClockSeconds": 0.920452
+      },
+      "short_prompt": {
+        "decodeTokensPerSecond": 1.06091,
+        "peakPhysicalFootprintBytes": 0.990391,
+        "prefillTokensPerSecond": 1.058215,
+        "ttftSeconds": 0.944987,
+        "wallClockSeconds": 0.92804
+      },
+      "stability_soak": {
+        "peakPhysicalFootprintBytes": 1.575201,
+        "wallClockSeconds": 0.891163
+      },
+      "tool_call": {
+        "peakPhysicalFootprintBytes": 1.300601,
+        "wallClockSeconds": 0.888708
+      }
+    },
+    "candidateScenarios": {
+      "context_75k": {
+        "cacheReuse": null,
+        "completionTokens": 16,
+        "decodeTokensPerSecond": 1.117169,
+        "hostLoadAverageMax": 35.211914,
+        "peakPhysicalFootprintBytes": 52995462000,
+        "prefillTokensPerSecond": 48.533267,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 73016,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": 1504.452612,
+        "wallClockSeconds": 1517.882921
+      },
+      "long_prompt_8k": {
+        "cacheReuse": null,
+        "completionTokens": 105,
+        "decodeTokensPerSecond": 10.533407,
+        "hostLoadAverageMax": 8.272949,
+        "peakPhysicalFootprintBytes": 38801396520,
+        "prefillTokensPerSecond": 83.718284,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 7784,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": 92.978494,
+        "wallClockSeconds": 102.852055
+      },
+      "multiturn_prefix_reuse": {
+        "cacheReuse": null,
+        "completionTokens": 192,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 5.72168,
+        "peakPhysicalFootprintBytes": 47721861928,
+        "prefillTokensPerSecond": 87.231608,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 7784,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": 93.798259,
+        "wallClockSeconds": 291.917125
+      },
+      "short_prompt": {
+        "cacheReuse": null,
+        "completionTokens": 53,
+        "decodeTokensPerSecond": 10.896686,
+        "hostLoadAverageMax": 8.471191,
+        "peakPhysicalFootprintBytes": 29116781352,
+        "prefillTokensPerSecond": 44.053628,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 41,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": 0.930684,
+        "wallClockSeconds": 5.702958
+      },
+      "stability_soak": {
+        "cacheReuse": null,
+        "completionTokens": 1256,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 13.131348,
+        "peakPhysicalFootprintBytes": 47943324456,
+        "prefillTokensPerSecond": null,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 910,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": null,
+        "wallClockSeconds": 131.172316
+      },
+      "tool_call": {
+        "cacheReuse": null,
+        "completionTokens": 63,
+        "decodeTokensPerSecond": null,
+        "hostLoadAverageMax": 6.224121,
+        "peakPhysicalFootprintBytes": 39657935656,
+        "prefillTokensPerSecond": null,
+        "processPeakSoFarMemory": null,
+        "promptTokens": 296,
+        "scenarioMemory": null,
+        "succeeded": true,
+        "ttftSeconds": null,
+        "wallClockSeconds": 9.822485
+      }
+    },
+    "declaredAsymmetries": [
+      "prompt cache enabled as deployed: --prompt-cache-size 1 --prompt-cache-bytes 8GB, the incumbent's installed configuration, kept rather than tuned away",
+      "/health is a static 200 in the deployed revision 9150698; the generation-thread liveness fix is in the fork checkout but not installed",
+      "/v1/models answers 200 about a second after launch with no weights resident; the model loads on first completion",
+      "no prompt cache across requests: every request builds a fresh KV cache, so a shared multi-turn prefix is re-prefilled every turn",
+      "one generation at a time: GenerationEngine is an actor, so requests serialize even though the profile allows concurrent leases",
+      "readiness is gated on a resident model: /v1/models answers 503 until the weights are loaded, and advertises only the configured model",
+      "served by MLXLLM.LLMModelFactory (text-only); the vision tower is not loaded and the HTTP contract refuses image and audio content"
+    ],
+    "interval": {
+      "baselineFinish": 1787933779.10256,
+      "baselineStart": 1787932209.0755548,
+      "candidateFinish": 1787935868.42378,
+      "candidateStart": 1787933801.567025,
+      "overlapSeconds": -22.464465
+    },
+    "pins": {
+      "baseline": {
+        "contextPolicy": "kv=unbounded;prefill-step=2048;reasoning=medium",
+        "hostIdentity": "MacBookPro18,2/68719476736/25F80/arm64",
+        "maxOutputTokens": 256,
+        "modelDigest": "1b10f3fe1c1097c909fa35e112b943255c44be4a5f332f45e0af57a96188460b",
+        "modelPath": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+        "promptSuiteDigest": "bba8867f4300f343b15960fb2cf8f821c653b96f538cf87287d0dacd36275d41",
+        "quantization": "8bit/group64/affine",
+        "seed": 1234,
+        "temperature": 0,
+        "topP": 1
+      },
+      "candidate": {
+        "contextPolicy": "kv=unbounded;prefill-step=2048;reasoning=medium",
+        "hostIdentity": "MacBookPro18,2/68719476736/25F80/arm64",
+        "maxOutputTokens": 256,
+        "modelDigest": "1b10f3fe1c1097c909fa35e112b943255c44be4a5f332f45e0af57a96188460b",
+        "modelPath": "/Users/alexis/src/local-models/Qwen3.8-27B-Uncensored-MLX-8bit",
+        "promptSuiteDigest": "bba8867f4300f343b15960fb2cf8f821c653b96f538cf87287d0dacd36275d41",
+        "quantization": "8bit/group64/affine",
+        "seed": 1234,
+        "temperature": 0,
+        "topP": 1
+      }
+    },
+    "revisions": {
+      "baseline": {
+        "mlx": "0.32.2",
+        "mlx_lm": "0.32.0",
+        "mlx_lm_direct_url": "{\"url\": \"file:///Users/alexis/src/relux-works/mlx-lm/.git\", \"vcs_info\": {\"commit_id\": \"91506981056172f937e7bdca4ab0d3b7459c7fab\", \"requested_revision\": \"91506981056172f937e7bdca4ab0d3b7459c7fab\", \"vcs\": \"git\"}}",
+        "mlx_metal": "0.32.2",
+        "model_harness": "model-harness v1.6.1-44-gd91d6fc (d91d6fc, 2026-08-27T06:58:43Z)",
+        "python": "3.14.7",
+        "transformers": "5.16.1"
+      },
+      "candidate": {
+        "mlx_swift": "0.31.6 (0bb916c67f4b9e5c682cbe02a42c701c93ab5021)",
+        "mlx_swift_lm": "3.31.4 (bd4b7434e6bdb588c7ef55706ff8904cb7fd4c57)",
+        "model_harness": "model-harness v1.6.1-44-gd91d6fc (d91d6fc, 2026-08-27T06:58:43Z)"
+      }
+    },
+    "scoredDeltas": [
+      {
+        "admissibleRatio": "<= 1.1",
+        "baseline": 41,
+        "candidate": 41,
+        "metric": "prompt_tokens",
+        "ratio": 1,
+        "scenario": "short_prompt",
+        "verdict": "within"
+      },
+      {
+        "admissibleRatio": "<= 1.1",
+        "baseline": 0.9848637580871582,
+        "candidate": 0.9306838512420654,
+        "metric": "time_to_first_token_seconds",
+        "ratio": 0.9449874092734175,
+        "scenario": "short_prompt",
+        "verdict": "within"
+      },
+      {
+        "admissibleRatio": ">= 0.9",
+        "baseline": 41.63012362200416,
+        "candidate": 44.053627819245506,
+        "metric": "prefill_tokens_per_second",
+        "ratio": 1.058215157352076,
+        "scenario": "short_prompt",
+        "verdict": "within"
+      },
+      {
+        "admissibleRatio": ">= 0.9",
+        "baseline": 10.271074675413033,
+        "candidate": 10.896686081347813,
+        "metric": "decode_tokens_per_second",
+        "ratio": 1.0609100240924518,
+        "scenario": "short_prompt",
+        "verdict": "within"
+      },
+      {
+        "admissibleRatio": "<= 1.1",
+        "baseline": 29399274400,
+        "candidate": 29116781352,
+        "metric": "peak_physical_footprint_bytes",
+        "ratio": 0.99039115577628,
+        "scenario": "short_prompt",
+        "verdict": "within"
+      },
+      {
+        "admissibleRatio": "<= 1.1",
+        "baseline": 7784,
+        "candidate": 7784,
+        "metric": "prompt_tokens",
+        "ratio": 1,
+        "scenario": "long_prompt_8k",
+        "verdict": "within"
+      },
+      {
+        "admissibleRatio": "<= 1.1",
+        "baseline": 92.94988203048706,
+        "candidate": 92.9784939289093,
+        "metric": "time_to_first_token_seconds",
+        "ratio": 1.0003078207072158,
+        "scenario": "long_prompt_8k",
+        "verdict": "within"
+      },
+      {
+        "admissibleRatio": ">= 0.9",
+        "baseline": 83.74405464492025,
+        "candidate": 83.71828442340217,
+        "metric": "prefill_tokens_per_second",
+        "ratio": 0.999692274017214,
+        "scenario": "long_prompt_8k",
+        "verdict": "within"
+      },
+      {
+        "admissibleRatio": ">= 0.9",
+        "baseline": 9.723226817584736,
+        "candidate": 10.533407463530223,
+        "metric": "decode_tokens_per_second",
+        "ratio": 1.0833242565606154,
+        "scenario": "long_prompt_8k",
+        "verdict": "within"
+      },
+      {
+        "admissibleRatio": "<= 1.1",
+        "baseline": 33705153440,
+        "candidate": 38801396520,
+        "metric": "peak_physical_footprint_bytes",
+        "ratio": 1.1512007084931994,
+        "scenario": "long_prompt_8k",
+        "verdict": "outside"
+      },
+      {
+        "admissibleRatio": "<= 1.1",
+        "baseline": 48534787000,
+        "candidate": 52995462000,
+        "metric": "peak_physical_footprint_bytes",
+        "ratio": 1.0919067595784442,
+        "scenario": "process",
+        "verdict": "within"
+      }
+    ],
+    "wholeProcessPeakPhysicalFootprintBytes": {
+      "baseline": 48534787000,
+      "candidate": 52995462000
+    }
+  }
+}
