@@ -199,9 +199,17 @@ while IFS= read -r board; do
   pid="$(python3  -c 'import json,sys;print(json.load(open(sys.argv[1]))["pid"])' "$st")"
   fp="$(python3   -c 'import json,sys;print(json.load(open(sys.argv[1]))["board_fingerprint"])' "$st")"
   sess="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["session_count"])' "$st")"
+  quar="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["quarantined_count"])' "$st")"
+  # Strict: `session list` is Count()+QuarantinedCount() rows (manager.go:959-981) and every row
+  # carries a plain non-omitempty `attached_clients` int (types.go:57). An absent key, a missing
+  # or non-list `sessions`, or a row count that disagrees with status is UNKNOWN -- never a
+  # measured zero, which would refuse nothing and then be recorded below as a fact nobody read.
   att="$(python3 -c 'import json,sys
-d=json.load(open(sys.argv[1])); rows=d if isinstance(d,list) else d.get("sessions") or []
-print(sum(int(r.get("attached_clients") or 0) for r in rows))' "$lst")"
+d=json.load(open(sys.argv[1])); rows=d["sessions"]
+if not isinstance(rows,list): raise SystemExit("sessions is not a list")
+if len(rows)!=int(sys.argv[2]): raise SystemExit("%d rows vs status %s"%(len(rows),sys.argv[2]))
+print(sum(int(r["attached_clients"]) for r in rows))' "$lst" "$((sess+quar))")" \
+    || { printf 'STOP attached_clients for %s is unknown, not zero\n' "$board" >&2; exit 1; }
   # An attached client is somebody`s running agent, and stopping the daemon closes the proxy
   # listener it talks through -- its owner`s decision, never a rollback side effect.
   [ "$att" = "0" ] || { printf 'STOP %s has %s attached client(s)\n' "$board" "$att" >&2; exit 1; }

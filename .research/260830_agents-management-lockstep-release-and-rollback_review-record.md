@@ -5,6 +5,82 @@ Companion to `260830_agents-management-lockstep-release-and-rollback.md`
 revision history, the finding that drove each revision, the evidence index, and the lessons.
 The operating plan does not depend on it.
 
+## Revision 12 — two fail-open reads the compression introduced
+
+The revision-11 review confirmed the compression lost **no** safety property and asked for two
+fixes, both in text revision 11 had rewritten. Both are closed here; nothing else changed, and
+the plan is still 800 lines.
+
+**F1 — P2 failed open under zsh (Steps 3 and 6).** Revision 11 merged revision 9's two
+per-installer P2 commands into one that globbed `"$…/scripts/lib/"`\*`.zsh` on both sides.
+`relux-agents-infra` has no `scripts/lib/` at all, and under zsh an unmatched glob aborts the
+whole command: `set_of` never ran, `diff` compared two empty streams, the probe `grep` never
+executed, and the result was byte-for-byte the empty output the plan documented as a pass.
+
+Reproduced against the real agents-infra installer with one injected undecided override
+`NEW_UNDECIDED_INPUT="${SOME_BRAND_NEW_OVERRIDE:-x}"`:
+
+| Shell | revision 11 | revision 12 |
+| --- | --- | --- |
+| bash | `SOME_BRAND_NEW_OVERRIDE` printed, `diff-exit=1` — stops | `SOME_BRAND_NEW_OVERRIDE` printed, no sigil — stops |
+| zsh | *no output*, `diff-exit=0` — **passes having read nothing** | `SOME_BRAND_NEW_OVERRIDE` printed, no sigil — stops |
+
+The fix is revision 9's shape, not a tolerance: each installer gets its own **named** operand
+list, `set_of` refuses an operand it cannot read, and P2 passes only on an explicit
+`P2-SET-OK` sigil, so an empty or unread set can no longer look like a clean one. Part II now
+also states the shell every precondition is run under — the root enabler, previously unstated.
+Both fences were extracted from the shipped plan and driven in **both** shells across five
+cases (identical trees, an override injected into task-board's *sourced* file, an override
+injected into agents-infra's `setup.sh`, and the F1 shape of a named operand that is missing):
+identical verdicts in bash and zsh, `P2-SET-OK 38`/`19` on the clean pairs.
+
+**F2 — R1 step 0d's attached-clients refusal admitted an absent field.** `att` was
+`sum(int(r.get("attached_clients") or 0) …)`, so an absent key, a missing `sessions` list or a
+`null` read as a measured zero: the daemon was stopped and `r1-daemons-stopped.txt` recorded
+`attached=0` as a fact nobody had read. It is now indexed strictly, `sessions` must be a list,
+and `len(rows)` is cross-checked against `session_count + quarantined_count` — `List()` returns
+`Count()` plus `QuarantinedCount()` rows (`manager.go:959-981`), so a disagreeing count is
+`unknown`, not zero.
+
+Driven against the 0d slice extracted verbatim from the shipped runbook, with a fake daemon the
+probe spawned itself and a stubbed `pgrep` so no real process could ever enter the census:
+
+| `session list` payload | revision 11 | revision 12 |
+| --- | --- | --- |
+| 4 rows, all `attached_clients:0` (control) | terminated | terminated, `attached=0` — a real read |
+| a row with `attached_clients:2` | `STOP … 2 attached client(s)` | unchanged |
+| rows with the key absent | **SIGTERM, recorded `attached=0`** | `KeyError` → STOP, never signalled |
+| `{"items":[…]}`, no `sessions` | **SIGTERM, recorded `attached=0`** | `KeyError` → STOP, never signalled |
+| `{"sessions":null}` | **SIGTERM, recorded `attached=0`** | STOP, never signalled |
+| 4 rows against `session_count:1` | SIGTERM, recorded `sessions=1 attached=0` | STOP, never signalled |
+| `quarantined_count` absent | n/a | `KeyError` → `set -e` stops R1 |
+| `attached_clients:"two"` | n/a | `ValueError` → STOP, never signalled |
+
+Two mutants bound it rather than only proving it exists. **Delete** — restoring revision 11's
+lenient `.get(…) or 0` — reproduces all three of the reviewer's shapes, terminating the daemon
+and recording a fabricated `attached=0`. **Narrow** — keeping strict indexing but removing only
+the row-count cross-check — still catches the absent key but lets the 4-rows-versus-1 case
+through, recording `sessions=1 attached=0`. So the two halves of the fix cover different
+classes and neither is redundant.
+
+The Go half is not fixable in shell and is not claimed to be: **Limit 7** now says plainly that
+against a protocol-mismatched daemon a lenient `json.Unmarshal` can zero a renamed or dropped
+field before the shell sees it, so a well-formed `attached_clients: 0` may be a decode artifact,
+PRE-1 is the structural fix, and until it ships such a zero is **unread** and that board is its
+owner's to disposition.
+
+**Minor, as asked.** Step 3's *Must remain working* cell regains the agents-infra
+tests/build/verify plus target/compose/Pi refusal gates that Step 6's cell kept; Step 5's
+rollback regains the `env -u AGENTS_INFRA_SOURCE_DIR` prefix RB-4 still carries; P5 no longer
+names `release-set.txt`, which nothing produced — it writes `p5-binaries.txt`/`p5-roles.txt`
+from both halves and diffs those against the manifest.
+
+**Still untested, unchanged.** R1 has never run against a real installed pair and R2 has no
+execution evidence of any kind. Every UNTESTED label in the plan and the runbook header stands.
+No migration step, release, install or tag was performed. No live daemon was signalled: every
+process stopped in these probes was a fake the probe spawned, and `pgrep` was stubbed so the
+real daemons on this host could not enter the census.
+
 ## Revision 11 — the size correction
 
 Revision 10 was correct and unusable. Nine review cycles of real findings produced a

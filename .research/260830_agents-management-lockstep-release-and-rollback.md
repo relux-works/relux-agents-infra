@@ -173,8 +173,11 @@ costs three things:
 - **Attached clients are disconnected.** `Manager.Close` closes the per-session proxy listener
   (`manager.go:596,1035-1058`) — concretely a managed `codex`/`claude` wrapper mid-run. The
   provider process survives and is reconciled, so the *session* is not lost, but the client
-  must re-attach. Step 0d therefore **refuses** a board reporting any `attached_clients`
-  rather than disconnecting somebody else's running agent to make a rollback tidy.
+  must re-attach. Step 0d therefore **refuses** a board reporting any `attached_clients` rather
+  than disconnecting somebody else's running agent to make a rollback tidy. That field is read
+  **strictly**: an absent key, a non-list, or a row count disagreeing with
+  `session_count + quarantined_count` is `unknown` and stops R1 — never a zero that stops
+  nothing and is then recorded as a fact nobody read (Limit 7).
 - **Durable-record skew is untouched.** `validateSessionRecord` (`record_store.go:315-321`)
   fails closed on an unknown record contract, so a `-v3` record is quarantined by name
   (`manager.go:205-221`) — loud, per-session, not resumable by the restored daemon. If
@@ -209,7 +212,9 @@ has no daemon — so an installed canary here observes nothing about the two boa
 
 Each is one command with a stated expected result. `$SAVED_SOURCE` is the recovery worktree
 the snapshot created at the commit the *installed* binary reports; `$RELEASE` is the release
-tree. Both operands are therefore live.
+tree. Both operands are therefore live. **Run every Part II command under `bash`**, never the
+operator's interactive `zsh`: the two disagree on unmatched globs and word splitting, and a
+precondition whose verdict depends on which shell typed it is not a precondition.
 
 ## P1 — installer text unchanged from the source this plan analysed
 
@@ -230,25 +235,44 @@ describes the new boundary.
 ## P2 — no environment variable this plan has not decided
 
 Match the `$` sigil, not an expansion operator, so `$X`, `${X}`, `${X:-}`, `${X-}`, `${X:=}`
-are all seen. task-board's surface is `setup.sh` plus the one file it sources (`:35`);
-agents-infra's is `setup.sh` alone.
+are all seen. Each installer gets its **own named operand list**: task-board is `setup.sh` plus
+the one file it sources (`scripts/lib/agents-infra-compose.zsh`, `:35`); agents-infra is
+`setup.sh` alone and has no `scripts/lib/` at all, so one shared `scripts/lib/`\*`.zsh` glob
+aborts the whole command under zsh — `set_of` never runs, `diff` compares two empty streams, the
+probe `grep` never executes, and the failure prints byte-for-byte what a pass prints. `set_of`
+therefore **refuses** an operand it cannot read, and P2 passes only on a `P2-SET-OK` sigil.
 
 ```bash
-set_of() { grep -ohE '\$\{?[A-Z][A-Z0-9_]*' "$@" | sed -E 's/^\$\{?//' | sort -u; }
-diff <(set_of "$SAVED_SOURCE/scripts/setup.sh" "$SAVED_SOURCE/scripts/lib/"*.zsh) \
-     <(set_of "$RELEASE/scripts/setup.sh"      "$RELEASE/scripts/lib/"*.zsh)
+set_of() {   # an unread set is not an empty set
+  for f in "$@"; do test -r "$f" || { echo "STOP P2 unreadable operand $f" >&2; return 2; }; done
+  grep -ohE '\$\{?[A-Z][A-Z0-9_]*' "$@" | sed -E 's/^\$\{?//' | sort -u
+}
+o="$RECOVERY_ROOT/p2-old.txt"; n="$RECOVERY_ROOT/p2-new.txt"
+L=scripts/lib/agents-infra-compose.zsh    # task-board only; agents-infra has no scripts/lib
+
+# Steps 2 and 5, task-board -- setup.sh plus the one file it sources, both named:
+set_of "$SAVED_SOURCE/scripts/setup.sh" "$SAVED_SOURCE/$L" > "$o" &&
+set_of "$RELEASE/scripts/setup.sh"      "$RELEASE/$L"      > "$n" &&
+diff "$o" "$n" && test -s "$n" && echo P2-SET-OK $(wc -l < "$n")
 grep -nE 'printenv|(^|[^_[:alnum:]])eval([^_[:alnum:]]|$)|\$\{\(P\)|\$\{!|\[\[ -v ' \
-  "$RELEASE/scripts/setup.sh" "$RELEASE/scripts/lib/"*.zsh
+  "$RELEASE/scripts/setup.sh" "$RELEASE/$L"
+
+# Steps 3 and 6, agents-infra -- setup.sh and nothing else:
+set_of "$SAVED_SOURCE/scripts/setup.sh" > "$o" && set_of "$RELEASE/scripts/setup.sh" > "$n" &&
+diff "$o" "$n" && test -s "$n" && echo P2-SET-OK $(wc -l < "$n")
+grep -nE 'printenv|(^|[^_[:alnum:]])eval([^_[:alnum:]]|$)|\$\{\(P\)|\$\{!|\[\[ -v ' \
+  "$RELEASE/scripts/setup.sh"
 ```
 
-**Expected: no output from either** (the second exits 1 from grep finding nothing; observed
-empty on both installers at planning time). A name only in the release is an input nobody
-decided about; a match on the second means the environment surface is no longer readable by
-inspection. Both stop the step. The set is deliberately unfiltered: `BIN_DIR` is *both*
-self-assigned and an external override, so any "names the script assigns itself" filter is
-wrong. Observed 38 names for task-board, 19 for agents-infra. Each external name's disposition
-is the install invocation itself (Part IV); `HOME`, `PATH`, `PWD`, `TMPDIR`, `XDG_CONFIG_HOME`
-stay real, and `SKILL_DIR`/`SOURCE_DIR` are computed from `$0`.
+**Expected: one `P2-SET-OK <n>` line and no output from the `grep`, which exits 1 finding
+nothing** (planning-time `n`: 38 task-board, 19 agents-infra; both `grep`s observed empty).
+**No sigil stops the step** — a differing set, an empty set, or an unreadable operand. A name
+only in the release is an input nobody decided about; a `grep` match means the environment
+surface is no longer readable by inspection. The set is deliberately unfiltered:
+`BIN_DIR` is *both* self-assigned and an external override, so any "names the script assigns
+itself" filter is wrong. Each external name's disposition is the install invocation itself
+(Part IV); `HOME`, `PATH`, `PWD`, `TMPDIR`, `XDG_CONFIG_HOME` stay real, and `SKILL_DIR`/
+`SOURCE_DIR` are computed from `$0`.
 
 ## P3 — `go` already resolves, so no installer can install it inside a window
 
@@ -292,14 +316,19 @@ it.**
 ## P5 — the release's artifact sets match the sets the snapshot holds
 
 ```bash
-sed -nE 's/^[[:space:]]*install_binary "([^"]+)".*/\1/p' "$PM_RELEASE/scripts/setup.sh"
-sed -nE 's/^(BINARY_NAME|MODEL_HARNESS_BINARY_NAME)="([^"]+)".*/\2/p' "$AI_RELEASE/scripts/setup.sh"
-ls -1A "$PM_RELEASE/.roles"
-diff <(sort "$RECOVERY_ROOT/manifest/binaries.txt") <(sort release-set.txt)     # per set
+# Both halves always: the released one from its release tree, the other from the snapshot source.
+PM_SRC="$RECOVERY_ROOT/sources/skill-project-management"   # Steps 2/5: PM_SRC="$PM_RELEASE"
+AI_SRC="$RECOVERY_ROOT/sources/relux-agents-infra"         # Steps 3/6: AI_SRC="$AI_RELEASE"
+{ sed -nE 's/^[[:space:]]*install_binary "([^"]+)".*/\1/p' "$PM_SRC/scripts/setup.sh"
+  sed -nE 's/^(BINARY_NAME|MODEL_HARNESS_BINARY_NAME)="([^"]+)".*/\2/p' "$AI_SRC/scripts/setup.sh"
+} | sort -u > "$RECOVERY_ROOT/p5-binaries.txt"; test -s "$RECOVERY_ROOT/p5-binaries.txt"
+ls -1A "$PM_SRC/.roles" | sort -u > "$RECOVERY_ROOT/p5-roles.txt"
+diff <(sort -u "$RECOVERY_ROOT/manifest/binaries.txt") "$RECOVERY_ROOT/p5-binaries.txt"
+diff <(sort -u "$RECOVERY_ROOT/manifest/roles.txt")    "$RECOVERY_ROOT/p5-roles.txt"
 ```
 
 Observed at planning time: 5 task-board executables, 2 agents-infra executables, 9 roles, 9
-skills. **Expected: no output from each `diff`.** A name only in the release is an artifact
+skills. **Expected: no output from either `diff`.** A name only in the release is an artifact
 R1/R2 must quarantine; a name only in the snapshot is one the release stopped installing. Both
 are permitted and handled in Part III — discovering the difference afterwards is not.
 
@@ -453,7 +482,8 @@ release tree that was installed.
   with `pgrep -fl tb-sessiond` (an exit other than 0 or 1 is a failed census, `unknown`);
   **stop** if a remote-board daemon is present. Per board: read `session status` and
   `session list` (both `Dial`-based, so they start and restart nothing); skip a board
-  reporting `running:false`; **refuse** a board with any `attached_clients`; re-identify the
+  reporting `running:false`; **refuse** a board with any `attached_clients`, indexed strictly and
+  cross-checked against `session_count + quarantined_count` (Limit 7); re-identify the
   PID against the live status and `ps` before signalling; `kill -TERM`; wait up to 30 s —
   **never SIGKILL**, a daemon that does not exit is a stop and an escalation to its owner;
   assert the board then reports `running:false`; record the board **only after** the stop is
@@ -534,9 +564,9 @@ re-mints both.
 | **0** freeze | whatever pair is installed; the operator reads no version from this document (planning-time observation: `0.24.3-172-g063197b1`/`v0.2.0` and `v1.6.1-103-g4270549`) | everything: read, preflight, one real spawn, outcome handoff, reviewer route on the installed pair | none | nothing installed changes; on snapshot failure stop and discard only the new snapshot after inspecting it | **UNTESTED** |
 | **1** hold `v0.5.0` | `skill-agents-management v0.5.0` at the reserved commit/checksum; publishes nothing | installed board keeps spawning and routing with embedded `v0.2.0` | none at runtime; the scratch repin is source-only | `go mod edit -require=…@v0.2.0`, `GOFLAGS=-mod=mod GOWORK=off go mod tidy`, re-run the candidate gate | **PARTIALLY TESTED** (source build/test only) |
 | **2** task-board `0.25.0` | `skill-project-management 0.25.0`, exact public `v0.5.0`; agents-infra unchanged | saved `current-pair` performs every spawn/route/resource/CR operation for the whole window | **`W2`** | **R1** with `RECOVERY_ROOT=…/current-pair`, `PM_RELEASE=…/skill-project-management-0.25.0`, then the R1 canary | **UNTESTED** |
-| **3** agents-infra `v1.7.0` | `relux-agents-infra v1.7.0`, exact public `v0.5.0`; task-board stays `0.25.0` | `0.25.0` preflights, spawns, composes through agents-infra, attaches an outcome and routes to a reviewer, before and after | **`W3`** | **R2** with `…/current-pair`, `AI_RELEASE=…/relux-agents-infra-v1.7.0`, then the recovery-prefixed canary; if task-board routing is red, also R1 | **UNTESTED** |
+| **3** agents-infra `v1.7.0` | `relux-agents-infra v1.7.0`, exact public `v0.5.0`; task-board stays `0.25.0` | `0.25.0` preflights, spawns, composes through agents-infra, attaches an outcome and routes to a reviewer, before and after; agents-infra full tests/build/verify plus the real target/compose/Pi refusal gates on the exact release head | **`W3`** | **R2** with `…/current-pair`, `AI_RELEASE=…/relux-agents-infra-v1.7.0`, then the recovery-prefixed canary; if task-board routing is red, also R1 | **UNTESTED** |
 | **4** allow `v0.6.0` | `skill-agents-management v0.6.0` candidate | installed `0.25.0`/`v1.7.0` continues all spawn and route with embedded `v0.5.0` | none at runtime; publishing repins nothing | before publication: repin the consumer candidate to `v0.5.0`, `go mod tidy`, `go test ./... -count=1`. After a bad tag is published **never delete or move it** — keep consumers on `v0.5.0` and publish a reviewed forward `v0.6.1` | **UNTESTED**; `v0.6.0` does not exist |
-| **5** task-board `0.25.1` | `skill-project-management 0.25.1`, exact released `v0.6.0`; agents-infra stays `v1.7.0`/`v0.5.0` | full candidate and installed spawn/route canaries **including the external agents-infra compose seam** | **`W5`** | **R1** with `…/bridge-pair`, then the R1 canary plus `agents-infra verify global` through the recovery PATH | **UNTESTED** |
+| **5** task-board `0.25.1` | `skill-project-management 0.25.1`, exact released `v0.6.0`; agents-infra stays `v1.7.0`/`v0.5.0` | full candidate and installed spawn/route canaries **including the external agents-infra compose seam** | **`W5`** | **R1** with `…/bridge-pair`, then the R1 canary plus `PATH="$RECOVERY_ROOT/bin:$PATH" env -u AGENTS_INFRA_SOURCE_DIR "$RECOVERY_ROOT/bin/agents-infra" verify global` | **UNTESTED** |
 | **6** agents-infra `v1.7.1` | `relux-agents-infra v1.7.1`, exact released `v0.6.0`; task-board stays `0.25.1` | agents-infra full gates and the installed spawn/compose/outcome/handoff/reviewer canary, reviewer route included | **`W6`** | **R2** against `…/bridge-pair`, then the canary; if the Step-5 seam canary fails, R1 against `bridge-pair` too | **UNTESTED** |
 
 Forward fixes always use new immutable patch releases (`0.25.2`, `v1.7.2`); never rewrite
@@ -729,6 +759,14 @@ first.** These are results, not gaps.
    name — loud, per-session, unrecoverable by the restored daemon. A kept `-v2` with added fields is
    dropped silently on the next save. The two shapes are opposite and neither can be chosen from
    `f1319eff`.
+
+7. **A cross-protocol `attached_clients` read cannot be trusted at all.** Step 0d's strict read
+   closes only the shell half. Against a **protocol-mismatched** daemon — the one situation 0d
+   exists for — the Go client's lenient `json.Unmarshal` can zero a renamed or dropped field
+   before the shell sees it, so a well-formed `attached_clients: 0` may be a decode artifact
+   rather than a measurement, and no shell-level check distinguishes them. PRE-1 is the
+   structural fix; until it ships, a zero from a daemon whose `protocol_version` differs from
+   the CLI's is **unread**, and that board is dispositioned by its owner, not stopped by R1.
 
 **Limits 1, 2, 3, 4 and 6 are one rehearsal, and it is P8:** build `0.25.0`, install it into a
 disposable `HOME`, start a daemon on a disposable board, downgrade with step 0d, and watch. If that
