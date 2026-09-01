@@ -152,10 +152,12 @@ func TestPiPluginGraphBuildLaunchMatchesAcceptedSurfaceAndIdentity(t *testing.T)
 func TestBuildPiPluginGraphRefusesResolvedProfileProviderCrossWires(t *testing.T) {
 	profileName := "profile"
 	provider := "local-qwen"
+	endpoint := "http://127.0.0.1:18011/v1"
 	base := ResolvedCanonicalTarget{
 		Target:            ProjectTarget{Name: "runtime", Vendor: "qwen", Environment: "pi", Model: "model", Profile: &profileName, ProfileProvider: &provider},
-		Profile:           &PiProfile{Provider: provider, Publisher: "alibaba", Family: "qwen", Model: "model", ContextWindow: 4096},
+		Profile:           &PiProfile{Provider: provider, Publisher: "alibaba", Family: "qwen", Model: "model", BaseURL: endpoint, ContextWindow: 4096},
 		EffectiveProvider: provider,
+		EffectiveEndpoint: endpoint,
 	}
 	tests := []struct {
 		name   string
@@ -164,6 +166,7 @@ func TestBuildPiPluginGraphRefusesResolvedProfileProviderCrossWires(t *testing.T
 		{"model cross-wire", func(r *ResolvedCanonicalTarget) { r.Target.Model = "other" }},
 		{"profile provider assertion cross-wire", func(r *ResolvedCanonicalTarget) { other := "other"; r.Target.ProfileProvider = &other }},
 		{"effective provider cross-wire", func(r *ResolvedCanonicalTarget) { r.EffectiveProvider = "other" }},
+		{"effective endpoint cross-wire", func(r *ResolvedCanonicalTarget) { r.EffectiveEndpoint = "http://127.0.0.1:18012/v1" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
