@@ -813,6 +813,12 @@ primary-session mode instead:
 agents-infra compose --mode primary-session --agent codex|claude --project /path/to/project --schema-version 1 --json [-- PROVIDER_ARGS...]
 ```
 
+Validation for these hosted primary sessions is provider-local: shared
+MCP/TOML structure and the selected Codex or Claude policy remain strict, while
+unselected provider-owned policy (including incomplete Pi profiles) is opaque.
+Direct Pi and canonical `qwen-infra` selection still validate the complete
+selected Pi profile and fail closed with exact field provenance.
+
 It emits one `agents-infra.primary-session-launch-plan` version-1 JSON
 document: the resolved provider executable, an `interactive` argv identical to
 what `agents-infra codex|claude` would launch, a `managed_host` argv

@@ -140,7 +140,7 @@ func BuildClaudeLaunchPlan(startDir, homeDir string, args []string) (ClaudeLaunc
 
 	ancestors := ancestorDirsRootFirst(startDir)
 	globalProjectConfigPath := filepath.Join(homeDir, ".agents", ".configs", projectConfigFileName)
-	projectConfig, err := loadCompositeProjectConfig(ancestors, globalProjectConfigPath)
+	projectConfig, err := loadPrimaryProviderProjectConfig(ancestors, globalProjectConfigPath, "claude")
 	if err != nil {
 		return ClaudeLaunchPlan{}, err
 	}

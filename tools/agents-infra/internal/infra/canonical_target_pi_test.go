@@ -93,6 +93,26 @@ func TestCanonicalQwenPlanProvesProfileDerivedIdentityAndEndpointInvariants(t *t
 	}
 }
 
+func TestCanonicalQwenSelectedProfileStillRequiresPublisher(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	writeProviderIsolationFixture(t, project, `
+[agents.targets.qwen]
+vendor = "qwen"
+environment = "pi"
+model = "Model"
+reasoning = "off"
+profile = "qwen-bsim"
+
+[agents.entrypoints]
+qwen-infra = "qwen"
+`)
+
+	_, err := BuildCanonicalTargetLaunchPlan("qwen-infra", project, home, nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
+	if err == nil || !strings.Contains(err.Error(), "agents.pi.profiles.qwen-bsim.publisher") {
+		t.Fatalf("error = %v, want canonical Qwen selected publisher field", err)
+	}
+}
+
 func TestCanonicalQwenAcceptsOperatorProviderWithoutLiteralLocalQwen(t *testing.T) {
 	project, home, _, _ := canonicalQwenProject(t, canonicalQwenTargetTOML(false, false))
 	resolved, err := ResolveCanonicalTarget("qwen-infra", project, home)

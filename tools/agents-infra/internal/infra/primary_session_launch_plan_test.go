@@ -53,6 +53,106 @@ func canonicalPrimarySessionFixturePaths(t *testing.T, plan PrimarySessionLaunch
 	return filepath.Join(configDir, projectConfigFileName), filepath.Join(configDir, "codex-mcp-servers.toml")
 }
 
+func writeProviderIsolationFixture(t *testing.T, project, extra string) string {
+	t.Helper()
+	configDir := filepath.Join(project, ".agents", ".configs")
+	mustMkdir(t, configDir)
+	path := filepath.Join(configDir, projectConfigFileName)
+	mustWrite(t, path, `
+[agents.codex.primary_session]
+model = "gpt-bsim"
+
+[agents.claude.primary_session]
+model = "claude-bsim"
+
+[agents.pi.primary_session]
+profile = "qwen-bsim"
+
+[agents.pi.profiles.qwen-bsim]
+provider = "local-qwen"
+`+extra)
+	return path
+}
+
+// Production call site: BuildPrimarySessionLaunchPlan ->
+// BuildCodexLaunchPlan/BuildClaudeLaunchPlan. The selected hosted provider must
+// not eagerly validate an unselected Pi profile owned by another runtime.
+func TestBuildPrimarySessionLaunchPlanProviderLocalIgnoresIncompletePiProfile(t *testing.T) {
+	for _, provider := range []string{"codex", "claude"} {
+		t.Run(provider, func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			writeProviderIsolationFixture(t, project, "")
+
+			plan, err := BuildPrimarySessionLaunchPlan(provider, project, home, nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
+			if err != nil {
+				t.Fatalf("BuildPrimarySessionLaunchPlan(%s): %v", provider, err)
+			}
+			if plan.Provider != provider || plan.Status != "ok" {
+				t.Fatalf("plan = %#v", plan)
+			}
+		})
+	}
+}
+
+// Production call site: BuildPrimarySessionLaunchPlan. These isolation cases
+// fail if validation widens back across hosted providers, while the selected
+// provider remains strict in the companion negative tests below.
+func TestBuildPrimarySessionLaunchPlanProviderLocalIgnoresUnselectedHostedPolicy(t *testing.T) {
+	tests := []struct {
+		provider string
+		body     string
+	}{
+		{provider: "codex", body: "[agents.codex.primary_session]\nmodel = \"gpt-bsim\"\n[agents.claude.primary_session]\nyolo_mode = \"not-a-boolean\"\n"},
+		{provider: "claude", body: "[agents.claude.primary_session]\nmodel = \"claude-bsim\"\n[agents.codex.primary_session]\nreasoning_effort = false\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.provider, func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			configDir := filepath.Join(project, ".agents", ".configs")
+			mustMkdir(t, configDir)
+			mustWrite(t, filepath.Join(configDir, projectConfigFileName), test.body)
+			if _, err := BuildPrimarySessionLaunchPlan(test.provider, project, home, nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t)); err != nil {
+				t.Fatalf("BuildPrimarySessionLaunchPlan(%s): %v", test.provider, err)
+			}
+		})
+	}
+}
+
+func TestBuildPrimarySessionLaunchPlanSelectedAndSharedPolicyRemainStrict(t *testing.T) {
+	tests := []struct {
+		name      string
+		provider  string
+		body      string
+		wantField string
+	}{
+		{name: "selected codex", provider: "codex", body: "[agents.codex.primary_session]\nmodel = false\n", wantField: codexPrimaryModelField},
+		{name: "selected claude", provider: "claude", body: "[agents.claude.primary_session]\nyolo_mode = \"true\"\n", wantField: claudePrimaryYoloModeField},
+		{name: "shared MCP", provider: "codex", body: "[mcp]\nenabled_servers = \"jira\"\n", wantField: "mcp.enabled_servers"},
+		{name: "shared agents root", provider: "claude", body: "agents = false\n", wantField: "agents"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			project, home := t.TempDir(), t.TempDir()
+			configDir := filepath.Join(project, ".agents", ".configs")
+			mustMkdir(t, configDir)
+			mustWrite(t, filepath.Join(configDir, projectConfigFileName), test.body)
+			_, err := BuildPrimarySessionLaunchPlan(test.provider, project, home, nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
+			if err == nil || !strings.Contains(err.Error(), test.wantField) {
+				t.Fatalf("error = %v, want selected/shared field %q", err, test.wantField)
+			}
+		})
+	}
+}
+
+func TestBuildPrimarySessionLaunchPlanSelectedPiProfileStillRequiresPublisher(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	writeProviderIsolationFixture(t, project, "")
+	_, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
+	if err == nil || !strings.Contains(err.Error(), "agents.pi.profiles.qwen-bsim.publisher") {
+		t.Fatalf("error = %v, want selected Pi publisher field", err)
+	}
+}
+
 func TestBuildPrimarySessionLaunchPlanCodexParityAndManagedHost(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()

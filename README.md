@@ -2175,6 +2175,16 @@ agents-infra compose --mode primary-session --agent claude --project "$PWD" --sc
 agents-infra compose --mode primary-session --agent pi --project "$PWD" --schema-version 1 --json -- --version
 ```
 
+Primary-session project validation is provider-local. Codex validates shared
+MCP/TOML structure and `agents.codex.primary_session`; Claude validates the
+same shared surface and `agents.claude.primary_session`. Either hosted provider
+leaves unselected provider-owned policy opaque, so an incomplete Pi profile or
+unavailable Pi-only detail cannot block its plan. Selecting Pi, including the
+canonical `qwen-infra` path, still parses and validates the complete selected Pi
+profile and fails closed with the exact `agents.pi.profiles.<name>.<field>`
+diagnostic. Malformed TOML, the shared `mcp` surface, the `agents` root, and the
+selected hosted provider's fields remain errors.
+
 The response contains:
 
 - `executable` — the resolved provider binary path (fails closed with error

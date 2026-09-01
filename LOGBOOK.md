@@ -5,6 +5,11 @@
 
 ## 2026-09-01
 
+### 1455 — Hosted Primary Sessions Validate Only Their Provider
+- ROOT CAUSE: `BuildCodexLaunchPlan` and `BuildClaudeLaunchPlan` both used the full project parser, so an unselected managed Pi profile could reject a hosted primary-session plan before provider selection; the bsim-shaped missing-`publisher` case reproduced against installed `agents-infra` with exit 1 and `invalid_project_configuration`.
+- FIX: Hosted launch planning now uses a provider-scoped parser that keeps TOML, shared MCP, the `agents` root, and the selected hosted provider strict while leaving other provider-owned tables opaque. Full parsing remains the default for Pi, setup/verify, and canonical targets.
+- GATE: Production-callsite tests cover Codex/Claude isolation, malformed selected/shared policy, and strict direct Pi/canonical Qwen publisher rejection. The bsim-shaped candidate composes Codex and Claude with exit 0; direct Pi and `qwen-infra` each exit 1 naming `agents.pi.profiles.qwen-3.8-27b-mlx-8bit.publisher`.
+
 ### 1330 — Dange Origin Moved Off Caller-Controlled Argv
 - CORRECTION: Revision 6 removes the public revision-5 call-site marker from production dispatch. `openai-dange` and `anthropic-dange` now call the sibling `agents-infra target-yolo <canonical-entrypoint>` route; `runTarget` retains its original strict `flag.FlagSet` path and never authenticates canonical-alias origin from provider argv.
 - NEGATIVE: Installed production tests invoke both canonical aliases with the exact retired marker and a marker-like assignment, require the real dispatcher to refuse before provider side effects, and retain the complete positive caller-flag matrix through both installed dange aliases.
