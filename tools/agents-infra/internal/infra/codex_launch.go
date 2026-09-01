@@ -149,7 +149,7 @@ func BuildCodexLaunchPlan(startDir, homeDir string, args []string) (CodexLaunchP
 
 	ancestors := ancestorDirsRootFirst(startDir)
 	globalProjectConfigPath := filepath.Join(homeDir, ".agents", ".configs", projectConfigFileName)
-	projectConfig, err := loadCompositeProjectConfig(ancestors, globalProjectConfigPath)
+	projectConfig, err := loadPrimaryProviderProjectConfig(ancestors, globalProjectConfigPath, "codex")
 	if err != nil {
 		return CodexLaunchPlan{}, err
 	}

@@ -207,6 +207,34 @@ func TestCanonicalHostedPlanLocksIdentityAndKeepsLegacyPolicyUnrelated(t *testin
 	}
 }
 
+func TestDirectProviderYoloDelegationResolvesExactlyOneNativeDangerFlag(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	writeCanonicalConfig(t, project, canonicalHostedTargetsTOML())
+	tests := []struct {
+		entrypoint string
+		callerArgs []string
+		nativeFlag string
+	}{
+		{entrypoint: "openai-infra", callerArgs: []string{"--danger", "exec", "inspect"}, nativeFlag: codexDangerouslyBypassApprovalsAndSandbox},
+		{entrypoint: "anthropic-infra", callerArgs: []string{"--yolo", "inspect"}, nativeFlag: claudeDangerouslySkipPermissions},
+	}
+	for _, test := range tests {
+		t.Run(test.entrypoint, func(t *testing.T) {
+			// The generated direct-provider alias owns the leading -d and forwards
+			// the caller suffix unchanged into the canonical production resolver.
+			args := append([]string{"-d"}, test.callerArgs...)
+			plan, err := BuildCanonicalTargetLaunchPlan(test.entrypoint, project, home, args, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
+			if err != nil {
+				t.Fatalf("BuildCanonicalTargetLaunchPlan: %v", err)
+			}
+			if got := countArg(plan.LaunchVariants.Interactive.Argv, test.nativeFlag); got != 1 {
+				t.Fatalf("native danger flag count = %d in %#v, want exactly one", got, plan.LaunchVariants.Interactive.Argv)
+			}
+		})
+	}
+}
+
 func TestCanonicalCodexSelectorsAcceptExactAndRefuseEveryDivergentForm(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()

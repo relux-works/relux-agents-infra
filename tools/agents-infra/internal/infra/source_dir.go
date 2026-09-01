@@ -365,7 +365,11 @@ func evaluateSourceDirCandidate(candidate SourceDirAttempt, req SourceDirRequest
 	if abs, err := filepath.Abs(candidate.Path); err == nil {
 		candidate.Path = abs
 	}
-	if req.TargetAgentsDir != "" && dirContains(candidate.Path, req.TargetAgentsDir) {
+	// Global setup can source from the installed runtime itself, so reject that
+	// cycle while selecting a candidate. Local setup performs the stronger
+	// source-versus-project canonical identity check at the start of Setup,
+	// where both fully resolved roots are available for the diagnostic.
+	if req.Mode != ModeLocal && req.TargetAgentsDir != "" && dirContains(candidate.Path, req.TargetAgentsDir) {
 		candidate.Reason = fmt.Sprintf("would sync into itself; it contains the destination %s", req.TargetAgentsDir)
 		return candidate
 	}

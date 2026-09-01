@@ -78,6 +78,8 @@ func run(args []string) error {
 		return runRuntime(args[1:])
 	case "target":
 		return runTarget(args[1:])
+	case "target-yolo":
+		return runDirectProviderYoloTarget(args[1:])
 	case "model-check":
 		return runModelCheck(args[1:])
 	case "version", "--version":
@@ -860,6 +862,22 @@ func runTarget(args []string) error {
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
+	return runCanonicalTarget(entrypoint, fs.Args(), *printConfig)
+}
+
+func runDirectProviderYoloTarget(args []string) error {
+	if len(args) == 0 {
+		return errors.New("target-yolo requires an entrypoint name")
+	}
+	entrypoint := args[0]
+	if entrypoint != "openai-infra" && entrypoint != "anthropic-infra" {
+		return fmt.Errorf("target-yolo does not support entrypoint %q", entrypoint)
+	}
+	printConfig, providerArgs := parseDirectProviderYoloTargetArgs(args[1:])
+	return runCanonicalTarget(entrypoint, providerArgs, printConfig)
+}
+
+func runCanonicalTarget(entrypoint string, providerArgs []string, printConfig bool) error {
 	startDir := os.Getenv(callerCWDEnv)
 	if startDir == "" {
 		var err error
@@ -869,11 +887,11 @@ func runTarget(args []string) error {
 		}
 	}
 	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
-	plan, err := infra.BuildCanonicalTargetLaunchPlan(entrypoint, startDir, "", fs.Args(), producer, nil)
+	plan, err := infra.BuildCanonicalTargetLaunchPlan(entrypoint, startDir, "", providerArgs, producer, nil)
 	if err != nil {
 		return err
 	}
-	if *printConfig {
+	if printConfig {
 		fmt.Fprint(os.Stdout, infra.RenderCanonicalTargetLaunchPlan(plan))
 		return nil
 	}
@@ -896,6 +914,33 @@ func runTarget(args []string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// parseDirectProviderYoloTargetArgs reserves only --print-config for the
+// distinct target-yolo dispatcher. Every other token before the first -- is
+// provider input, so the direct aliases accept native options without changing
+// the canonical target dispatcher's ordinary parsing contract.
+// The first -- remains the wrapper boundary and is consumed exactly as it was
+// by flag.FlagSet; later delimiters belong to the provider and are preserved.
+func parseDirectProviderYoloTargetArgs(args []string) (bool, []string) {
+	printConfig := false
+	providerArgs := make([]string, 1, len(args)+1)
+	providerArgs[0] = "-d"
+	wrapperBoundarySeen := false
+	for _, arg := range args {
+		if !wrapperBoundarySeen {
+			switch arg {
+			case "--print-config":
+				printConfig = true
+				continue
+			case "--":
+				wrapperBoundarySeen = true
+				continue
+			}
+		}
+		providerArgs = append(providerArgs, arg)
+	}
+	return printConfig, providerArgs
 }
 
 func runCompose(args []string) error {

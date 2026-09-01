@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -209,6 +210,89 @@ func TestRunTargetDispatchPreservesCallerCWDAndLocksBeforeProviderSideEffects(t 
 	legacyAfter, err := os.ReadFile(legacyConfig)
 	if err != nil || string(legacyAfter) != string(legacyBefore) {
 		t.Fatalf("unconfigured alias rewrote legacy config: err=%v before=%q after=%q", err, legacyBefore, legacyAfter)
+	}
+}
+
+const revision5DirectProviderYoloCallSiteMarker = "--agents-infra-direct-provider-yolo-call-site"
+
+// Production call site: target-yolo -> runDirectProviderYoloTarget ->
+// runCanonicalTarget -> BuildCanonicalTargetLaunchPlan. The distinct command
+// gates implicit provider-flag forwarding without trusting provider argv.
+func TestRunDirectProviderYoloTargetAcceptsLeadingProviderFlagsWithoutDelimiter(t *testing.T) {
+	home, project, binDir := t.TempDir(), t.TempDir(), t.TempDir()
+	writeMainCanonicalConfig(t, project, mainCanonicalHostedTOML())
+	for _, provider := range []string{"codex", "claude"} {
+		mustWrite(t, filepath.Join(binDir, provider), "#!/bin/sh\nexit 0\n")
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", binDir)
+	t.Setenv(callerCWDEnv, project)
+
+	tests := []struct {
+		entrypoint string
+		nativeFlag string
+	}{
+		{entrypoint: "openai-infra", nativeFlag: "--dangerously-bypass-approvals-and-sandbox"},
+		{entrypoint: "anthropic-infra", nativeFlag: "--dangerously-skip-permissions"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.entrypoint, func(t *testing.T) {
+			var runErr error
+			output := captureStdout(t, func() {
+				runErr = runDirectProviderYoloTarget([]string{testCase.entrypoint, "-d", "--danger", "--yolo", "--print-config", "inspect token"})
+			})
+			if runErr != nil {
+				t.Fatalf("runDirectProviderYoloTarget: %v", runErr)
+			}
+			if count := strings.Count(output, testCase.nativeFlag); count != 1 {
+				t.Fatalf("native danger flag count = %d, want 1\n%s", count, output)
+			}
+			if !strings.Contains(output, "inspect token") {
+				t.Fatalf("caller argument missing from launch plan:\n%s", output)
+			}
+		})
+	}
+}
+
+func TestRunDirectProviderYoloTargetRejectsMissingAndUnsupportedEntrypoints(t *testing.T) {
+	for _, args := range [][]string{nil, {"qwen-infra"}, {"forged-infra"}} {
+		if err := runDirectProviderYoloTarget(args); err == nil {
+			t.Fatalf("runDirectProviderYoloTarget(%q) unexpectedly succeeded", args)
+		}
+	}
+}
+
+func TestParseDirectProviderYoloTargetArgsPreservesProviderBytesAndConsumesOnlyWrapperSyntax(t *testing.T) {
+	input := []string{"-d", "--danger", "--model", "model value", "", "line 1\nline 2", "--print-config", "--", "--print-config", "--", "tail"}
+	printConfig, providerArgs := parseDirectProviderYoloTargetArgs(input)
+	want := []string{"-d", "-d", "--danger", "--model", "model value", "", "line 1\nline 2", "--print-config", "--", "tail"}
+	if !printConfig || !slices.Equal(providerArgs, want) {
+		t.Fatalf("parseDirectProviderYoloTargetArgs = (%t, %#v), want (true, %#v)", printConfig, providerArgs, want)
+	}
+}
+
+func TestRunTargetCanonicalAliasesStillRefuseLeadingDangerOutsideDangeRoute(t *testing.T) {
+	for _, entrypoint := range []string{"openai-infra", "anthropic-infra"} {
+		for _, flagArg := range []string{"-d", "--danger"} {
+			err := runTarget([]string{entrypoint, flagArg})
+			if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+				t.Fatalf("%s %s ordinary canonical alias parsing changed: %v", entrypoint, flagArg, err)
+			}
+		}
+	}
+}
+
+// Killing negative for CR revision 5. Production call site: runTarget's real
+// FlagSet parsing must reject the formerly privileged public marker before
+// canonical resolution or provider side effects can occur.
+func TestRunTargetCanonicalAliasesRefuseForgedRevision5Marker(t *testing.T) {
+	for _, entrypoint := range []string{"openai-infra", "anthropic-infra"} {
+		for _, forged := range []string{revision5DirectProviderYoloCallSiteMarker, revision5DirectProviderYoloCallSiteMarker + "=forged"} {
+			err := runTarget([]string{entrypoint, forged, "--model", "caller-model"})
+			if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+				t.Fatalf("%s accepted forged revision-5 marker %q: %v", entrypoint, forged, err)
+			}
+		}
 	}
 }
 

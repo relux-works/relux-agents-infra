@@ -45,6 +45,14 @@ the source tree from `--source-dir`, then `AGENTS_INFRA_SOURCE_DIR`, then the
 `~/.agents` runtime. An explicit source that is not an agents-infra tree fails
 and names what is missing instead of falling back.
 
+For `setup local`, the resolved source must be outside the resolved project.
+Setup refuses equality or a source ancestor before any project mutation and
+names both resolved paths; this closes recursive `PROJECT/.agents/.agents/...`
+installation through relative paths, trailing separators, symlinks, and
+case aliases. Choose an external source tree. For config-only changes, combine
+that external source with `--no-sync`; an explicit self/ancestor source remains
+invalid.
+
 A usable source carries the instruction entrypoints, `.configs`, `.rules`, the
 `tools/agents-infra` Go module the generated launcher builds, the exact
 217-record Pi tree manifest, and every instruction module its entrypoints
@@ -321,7 +329,21 @@ bytes or mode and a missing, wrong, or unusable sibling target. Both paths must
 themselves be regular files; a symlink is drift even when it resolves to
 byte-identical content. Setup also installs and repairs the exact sibling-only
 `openai-infra`, `anthropic-infra`, and `qwen-infra` aliases, each delegating as
-`agents-infra target <exact-entrypoint>` with no embedded target policy. They also
+`agents-infra target <exact-entrypoint>` with no embedded target policy. The
+source-managed `openai-dange` and `anthropic-dange` regular-file aliases sit
+beside them and invoke a distinct sibling-binary `target-yolo` dispatch route
+with the matching canonical entrypoint, preserving caller cwd and every
+non-danger argument byte/order. That route adds one YOLO selection and leaves danger
+de-duplication plus target identity to canonical launch resolution. It never
+authenticates wrapper origin from argv; a forged retired call-site marker on a
+canonical alias remains an unknown flag and fails before provider launch.
+Caller-leading danger shortcuts and ordinary provider flags such as `--model`
+need no explicit `--` only on this distinct dange route;
+direct `openai-infra` and `anthropic-infra` retain their wrapper delimiter and
+unknown-flag refusal behavior, including a caller-leading `-d`. Setup and
+`verify` repair or reject missing, drifted,
+symlinked, and non-executable direct YOLO aliases by the same exact-byte/mode
+contract. They also
 validate the authoritative source/installed manifest at
 `tools/agents-infra/internal/infra/pi-v0.84.2-darwin-arm64-tree-manifest.txt`
 with SHA-256
@@ -798,6 +820,12 @@ primary-session mode instead:
 ```bash
 agents-infra compose --mode primary-session --agent codex|claude --project /path/to/project --schema-version 1 --json [-- PROVIDER_ARGS...]
 ```
+
+Validation for these hosted primary sessions is provider-local: shared
+MCP/TOML structure and the selected Codex or Claude policy remain strict, while
+unselected provider-owned policy (including incomplete Pi profiles) is opaque.
+Direct Pi and canonical `qwen-infra` selection still validate the complete
+selected Pi profile and fail closed with exact field provenance.
 
 It emits one `agents-infra.primary-session-launch-plan` version-1 JSON
 document: the resolved provider executable, an `interactive` argv identical to

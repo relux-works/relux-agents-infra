@@ -151,6 +151,19 @@ type compositeProjectConfig struct {
 }
 
 func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath string) (compositeProjectConfig, error) {
+	return loadCompositeProjectConfigWithParser(ancestors, globalProjectConfigPath, parseProjectConfig)
+}
+
+func loadPrimaryProviderProjectConfig(ancestors []string, globalProjectConfigPath, provider string) (compositeProjectConfig, error) {
+	if provider != "codex" && provider != "claude" {
+		return compositeProjectConfig{}, fmt.Errorf("unsupported primary-session provider %q", provider)
+	}
+	return loadCompositeProjectConfigWithParser(ancestors, globalProjectConfigPath, func(data []byte, path string) (parsedProjectConfig, error) {
+		return parseProjectConfigForProvider(data, path, provider)
+	})
+}
+
+func loadCompositeProjectConfigWithParser(ancestors []string, globalProjectConfigPath string, parse func([]byte, string) (parsedProjectConfig, error)) (compositeProjectConfig, error) {
 	composite := compositeProjectConfig{
 		EnabledBy:   map[string][]string{},
 		PiProfiles:  map[string]PiProfile{},
@@ -171,7 +184,7 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
 		if err != nil {
 			return compositeProjectConfig{}, projectConfigFieldError(path, projectConfigParseField, fmt.Errorf("read project config: %w", err))
 		}
-		config, err := parseProjectConfig(data, path)
+		config, err := parse(data, path)
 		if err != nil {
 			return compositeProjectConfig{}, err
 		}
@@ -219,6 +232,14 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
 }
 
 func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
+	return parseProjectConfigForProvider(data, path, "")
+}
+
+// parseProjectConfigForProvider keeps shared configuration and the selected
+// hosted provider strict while leaving unselected provider-owned policy opaque.
+// An empty provider retains the full parser used by Pi, canonical targets,
+// setup, and verification.
+func parseProjectConfigForProvider(data []byte, path, provider string) (parsedProjectConfig, error) {
 	var document map[string]any
 	if err := toml.Unmarshal(data, &document); err != nil {
 		return parsedProjectConfig{}, projectConfigFieldError(path, projectConfigParseField, fmt.Errorf("parse TOML (including field %s and %s): %w", codexPrimarySessionField, claudePrimarySessionField, err))
@@ -243,25 +264,31 @@ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
 	if !present {
 		return config, nil
 	}
-	config.PrimarySession, err = parseCodexPrimarySession(agents, path)
-	if err != nil {
-		return parsedProjectConfig{}, err
+	if provider == "" || provider == "codex" {
+		config.PrimarySession, err = parseCodexPrimarySession(agents, path)
+		if err != nil {
+			return parsedProjectConfig{}, err
+		}
 	}
-	config.ClaudePrimarySession, err = parseClaudePrimarySession(agents, path)
-	if err != nil {
-		return parsedProjectConfig{}, err
+	if provider == "" || provider == "claude" {
+		config.ClaudePrimarySession, err = parseClaudePrimarySession(agents, path)
+		if err != nil {
+			return parsedProjectConfig{}, err
+		}
 	}
-	config.PiPrimarySession, config.PiStandaloneSession, config.PiProfiles, err = parsePiConfig(agents, path)
-	if err != nil {
-		return parsedProjectConfig{}, err
-	}
-	config.Targets, err = parseProjectTargets(agents, path)
-	if err != nil {
-		return parsedProjectConfig{}, err
-	}
-	config.Entrypoints, err = parseProjectEntrypoints(agents, path)
-	if err != nil {
-		return parsedProjectConfig{}, err
+	if provider == "" {
+		config.PiPrimarySession, config.PiStandaloneSession, config.PiProfiles, err = parsePiConfig(agents, path)
+		if err != nil {
+			return parsedProjectConfig{}, err
+		}
+		config.Targets, err = parseProjectTargets(agents, path)
+		if err != nil {
+			return parsedProjectConfig{}, err
+		}
+		config.Entrypoints, err = parseProjectEntrypoints(agents, path)
+		if err != nil {
+			return parsedProjectConfig{}, err
+		}
 	}
 	return config, nil
 }
