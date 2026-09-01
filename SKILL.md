@@ -321,7 +321,21 @@ bytes or mode and a missing, wrong, or unusable sibling target. Both paths must
 themselves be regular files; a symlink is drift even when it resolves to
 byte-identical content. Setup also installs and repairs the exact sibling-only
 `openai-infra`, `anthropic-infra`, and `qwen-infra` aliases, each delegating as
-`agents-infra target <exact-entrypoint>` with no embedded target policy. They also
+`agents-infra target <exact-entrypoint>` with no embedded target policy. The
+source-managed `openai-dange` and `anthropic-dange` regular-file aliases sit
+beside them and invoke a distinct sibling-binary `target-yolo` dispatch route
+with the matching canonical entrypoint, preserving caller cwd and every
+non-danger argument byte/order. That route adds one YOLO selection and leaves danger
+de-duplication plus target identity to canonical launch resolution. It never
+authenticates wrapper origin from argv; a forged retired call-site marker on a
+canonical alias remains an unknown flag and fails before provider launch.
+Caller-leading danger shortcuts and ordinary provider flags such as `--model`
+need no explicit `--` only on this distinct dange route;
+direct `openai-infra` and `anthropic-infra` retain their wrapper delimiter and
+unknown-flag refusal behavior, including a caller-leading `-d`. Setup and
+`verify` repair or reject missing, drifted,
+symlinked, and non-executable direct YOLO aliases by the same exact-byte/mode
+contract. They also
 validate the authoritative source/installed manifest at
 `tools/agents-infra/internal/infra/pi-v0.84.2-darwin-arm64-tree-manifest.txt`
 with SHA-256

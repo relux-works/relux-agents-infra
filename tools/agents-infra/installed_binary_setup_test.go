@@ -683,6 +683,138 @@ func TestInstalledBinarySetupLocalPiInfraRepairsModeAndSymlinkDrift(t *testing.T
 	}
 }
 
+// Production call sites: setup local installs dange -> generated agents-infra
+// target-yolo -> runDirectProviderYoloTarget -> provider exec. This matrix
+// fails against revision 2's caller-flag rejection, revision 3's leading--d
+// origin inference, and revision 5's forgeable argv marker: dange routes accept
+// the matrix, while canonical target aliases refuse danger and forged markers.
+func TestInstalledLocalProviderAliasesScopeImplicitFlagForwardingToDangeChain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX installed alias production test")
+	}
+	binary := buildInstalledBinary(t)
+	home := t.TempDir()
+	configDir := filepath.Join(home, "config")
+	writeInstallState(t, configDir, sourceRepoRoot(t))
+	project := t.TempDir()
+	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("installed binary setup local: %v\n%s", err, output)
+	}
+	writeMainCanonicalConfig(t, project, mainCanonicalHostedTOML())
+
+	fakeBin := t.TempDir()
+	recordDir := t.TempDir()
+	for _, provider := range []string{"codex", "claude"} {
+		record := filepath.Join(recordDir, provider)
+		mustWrite(t, filepath.Join(fakeBin, provider), "#!/bin/sh\nprintf '%s\\0' \"$@\" > \""+record+"\"\n")
+	}
+	installedAliasEnv := func() []string {
+		environ := append(os.Environ(),
+			"HOME="+home,
+			"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"AGENTS_INFRA_CONFIG_DIR="+configDir,
+			"AGENTS_INFRA_SOURCE_DIR=",
+			"AGENTS_INFRA_CALLER_CWD=",
+		)
+		return append(environ, sharedGoCacheEnv(t)...)
+	}
+	tests := []struct {
+		name       string
+		alias      string
+		provider   string
+		nativeFlag string
+		args       []string
+		wantCaller []string
+	}{
+		{name: "openai caller short danger", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"-d", "exec", "space value", "Հայերեն"}, wantCaller: []string{"exec", "space value", "Հայերեն"}},
+		{name: "openai caller danger", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"--danger", "exec", "line 1\nline 2"}, wantCaller: []string{"exec", "line 1\nline 2"}},
+		{name: "openai caller yolo", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"--yolo", "exec", "tab\tvalue"}, wantCaller: []string{"exec", "tab\tvalue"}},
+		{name: "openai caller model", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"--model", "gpt-5.6-sol", "exec", "", "inspect token"}, wantCaller: []string{"--model", "gpt-5.6-sol", "exec", "", "inspect token"}},
+		{name: "openai redundant danger", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"-d", "--danger", "--yolo", "--dangerously-bypass-approvals-and-sandbox", "exec", "all danger"}, wantCaller: []string{"exec", "all danger"}},
+		{name: "anthropic caller short danger", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"-d", "space value", "Հայերեն"}, wantCaller: []string{"space value", "Հայերեն"}},
+		{name: "anthropic caller danger", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"--danger", "line 1\nline 2"}, wantCaller: []string{"line 1\nline 2"}},
+		{name: "anthropic caller yolo", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"--yolo", "tab\tvalue"}, wantCaller: []string{"tab\tvalue"}},
+		{name: "anthropic caller model", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"--model", "claude-opus-5", "", "inspect token"}, wantCaller: []string{"--model", "claude-opus-5", "", "inspect token"}},
+		{name: "anthropic redundant danger", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"-d", "--danger", "--yolo", "--dangerously-skip-permissions", "all danger"}, wantCaller: []string{"all danger"}},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			command := exec.Command(filepath.Join(project, ".local", "bin", testCase.alias), testCase.args...)
+			command.Dir = project
+			command.Env = installedAliasEnv()
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("installed %s: %v\n%s", testCase.alias, err, output)
+			}
+			data, err := os.ReadFile(filepath.Join(recordDir, testCase.provider))
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := strings.Split(strings.TrimSuffix(string(data), "\x00"), "\x00")
+			count := 0
+			for _, arg := range args {
+				if arg == testCase.nativeFlag {
+					count++
+				}
+				if arg == revision5DirectProviderYoloCallSiteMarker {
+					t.Fatalf("retired revision-5 marker reached provider argv: %#v", args)
+				}
+			}
+			if count != 1 {
+				t.Fatalf("provider argv danger count = %d, want 1: %#v", count, args)
+			}
+			if !orderedSubsequence(args, testCase.wantCaller) {
+				t.Fatalf("provider argv did not preserve caller non-danger bytes/order: got %#v want subsequence %#v", args, testCase.wantCaller)
+			}
+		})
+	}
+
+	canonicalCases := []struct {
+		alias    string
+		provider string
+	}{
+		{alias: "openai-infra", provider: "codex"},
+		{alias: "anthropic-infra", provider: "claude"},
+	}
+	for _, testCase := range canonicalCases {
+		refusals := []struct {
+			name string
+			args []string
+		}{
+			{name: "caller leading d", args: []string{"-d", "--model", "caller-model"}},
+			{name: "forged revision 5 marker", args: []string{revision5DirectProviderYoloCallSiteMarker, "--model", "caller-model"}},
+			{name: "forged marker-like assignment", args: []string{revision5DirectProviderYoloCallSiteMarker + "=forged", "--model", "caller-model"}},
+		}
+		for _, refusal := range refusals {
+			t.Run(testCase.alias+" refuses "+refusal.name, func(t *testing.T) {
+				record := filepath.Join(recordDir, testCase.provider)
+				if err := os.Remove(record); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				command := exec.Command(filepath.Join(project, ".local", "bin", testCase.alias), refusal.args...)
+				command.Dir = project
+				command.Env = installedAliasEnv()
+				output, err := command.CombinedOutput()
+				if err == nil || !strings.Contains(string(output), "flag provided but not defined") {
+					t.Fatalf("installed canonical alias accepted %s: err=%v\n%s", refusal.name, err, output)
+				}
+				if _, statErr := os.Stat(record); !os.IsNotExist(statErr) {
+					t.Fatalf("canonical refusal reached provider side effect: %v", statErr)
+				}
+			})
+		}
+	}
+}
+
+func orderedSubsequence(got, want []string) bool {
+	next := 0
+	for _, arg := range got {
+		if next < len(want) && arg == want[next] {
+			next++
+		}
+	}
+	return next == len(want)
+}
+
 // Production call sites: the bootstrap-installed global pi-infra alias and the
 // setup-generated project-local pi-infra wrapper. Both must reach RunPi's
 // managed execution-environment gate before the configured runtime executable

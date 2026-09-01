@@ -193,6 +193,23 @@ func TestPiInfraWrapperBodyForWindowsUsesExactSiblingTarget(t *testing.T) {
 	}
 }
 
+func TestDirectProviderYoloWrapperBodyForWindowsUsesDistinctDispatcherOnce(t *testing.T) {
+	launcher := directProviderYoloLauncher{name: "openai-dange", canonicalTarget: "openai-infra"}
+	body := directProviderYoloWrapperBody(launcher, "windows", "agents-infra.cmd")
+	for _, want := range []string{
+		`if not exist "%DIR%agents-infra.cmd"`,
+		`"%DIR%agents-infra.cmd" target-yolo openai-infra %*`,
+		"exit /b %ERRORLEVEL%",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("windows direct provider YOLO wrapper missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Count(body, ` target-yolo openai-infra `) != 1 {
+		t.Fatalf("windows direct provider YOLO wrapper must select the distinct dispatcher exactly once:\n%s", body)
+	}
+}
+
 func TestPiInfraUnixWrapperPreservesCallerCWDAndEveryArgument(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell launcher test")
@@ -282,6 +299,8 @@ func TestSetupLocalCreatesInstalledRuntime(t *testing.T) {
 	assertFileContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), `"$TARGET" attachments "$@"`)
 	assertFileNotContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), "python")
 	assertRegularFile(t, filepath.Join(project, ".local", "bin", piInfraWrapperName(runtime.GOOS)))
+	assertRegularFile(t, filepath.Join(project, ".local", "bin", canonicalTargetWrapperName("openai-dange", runtime.GOOS)))
+	assertRegularFile(t, filepath.Join(project, ".local", "bin", canonicalTargetWrapperName("anthropic-dange", runtime.GOOS)))
 	assertFileContains(t, filepath.Join(project, ".local", "bin", piInfraWrapperName(runtime.GOOS)), "agents-infra")
 	assertFileContains(t, filepath.Join(project, ".local", "bin", piInfraWrapperName(runtime.GOOS)), " pi ")
 
@@ -686,6 +705,8 @@ func TestSetupGlobalDoesNotInstallCLIWrapper(t *testing.T) {
 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "openai-infra"))
 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "anthropic-infra"))
 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "qwen-infra"))
+	assertRegularFile(t, filepath.Join(home, ".local", "bin", "openai-dange"))
+	assertRegularFile(t, filepath.Join(home, ".local", "bin", "anthropic-dange"))
 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture)
 	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), modelAvailabilityPolicyFixture)
 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture)

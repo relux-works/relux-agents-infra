@@ -177,7 +177,43 @@ func runtimeArtifactFailures(layout Layout) []string {
 	failures = append(failures, managedSkillLinkFailures(layout)...)
 	failures = append(failures, piInfraLauncherFailures(layout)...)
 	failures = append(failures, canonicalTargetLauncherFailures(layout)...)
+	failures = append(failures, directProviderYoloLauncherFailures(layout)...)
 	return append(failures, launcherBackendFailures(layout)...)
+}
+
+func directProviderYoloLauncherFailures(layout Layout) []string {
+	goos := runtime.GOOS
+	targetName := piInfraTargetName(layout.Mode, goos)
+	var failures []string
+	for _, launcher := range directProviderYoloLaunchers {
+		aliasPath := filepath.Join(layout.BinDir, canonicalTargetWrapperName(launcher.name, goos))
+		wantBody := directProviderYoloWrapperBody(launcher, goos, targetName)
+		info, err := os.Lstat(aliasPath)
+		switch {
+		case os.IsNotExist(err):
+			failures = append(failures, fmt.Sprintf("no generated %s launcher at %s", launcher.name, aliasPath))
+			continue
+		case err != nil:
+			failures = append(failures, fmt.Sprintf("cannot inspect %s launcher %s: %v", launcher.name, aliasPath, err))
+			continue
+		case !info.Mode().IsRegular():
+			failures = append(failures, fmt.Sprintf("%s launcher %s is not a regular file", launcher.name, aliasPath))
+			continue
+		}
+		body, err := os.ReadFile(aliasPath)
+		switch {
+		case err != nil:
+			failures = append(failures, fmt.Sprintf("unreadable %s launcher %s: %v", launcher.name, aliasPath, err))
+			continue
+		case string(body) != wantBody:
+			failures = append(failures, fmt.Sprintf("%s launcher %s has drifted from direct provider YOLO dispatch", launcher.name, aliasPath))
+			continue
+		}
+		if goos != "windows" && info.Mode().Perm() != 0o755 {
+			failures = append(failures, fmt.Sprintf("%s launcher %s mode is %04o, want 0755", launcher.name, aliasPath, info.Mode().Perm()))
+		}
+	}
+	return failures
 }
 
 func canonicalTargetLauncherFailures(layout Layout) []string {

@@ -1069,6 +1069,9 @@ func setupHelpers(layout Layout, out io.Writer) error {
 	if err := installCanonicalTargetLaunchers(layout, out); err != nil {
 		return err
 	}
+	if err := installDirectProviderYoloLaunchers(layout, out); err != nil {
+		return err
+	}
 	if err := setupCodexLocalLauncher(layout, out); err != nil {
 		return err
 	}
@@ -1076,6 +1079,16 @@ func setupHelpers(layout Layout, out io.Writer) error {
 }
 
 var canonicalTargetLauncherNames = []string{"openai-infra", "anthropic-infra", "qwen-infra"}
+
+type directProviderYoloLauncher struct {
+	name            string
+	canonicalTarget string
+}
+
+var directProviderYoloLaunchers = []directProviderYoloLauncher{
+	{name: "openai-dange", canonicalTarget: "openai-infra"},
+	{name: "anthropic-dange", canonicalTarget: "anthropic-infra"},
+}
 
 func installCanonicalTargetLaunchers(layout Layout, out io.Writer) error {
 	for _, entrypoint := range canonicalTargetLauncherNames {
@@ -1120,6 +1133,44 @@ if [ ! -f "$TARGET" ] || [ -L "$TARGET" ] || [ ! -x "$TARGET" ]; then
 fi
 exec "$TARGET" target %s "$@"
 `, targetName, entrypoint, entrypoint)
+}
+
+func installDirectProviderYoloLaunchers(layout Layout, out io.Writer) error {
+	for _, launcher := range directProviderYoloLaunchers {
+		path := filepath.Join(layout.BinDir, canonicalTargetWrapperName(launcher.name, runtime.GOOS))
+		body := directProviderYoloWrapperBody(launcher, runtime.GOOS, piInfraTargetName(layout.Mode, runtime.GOOS))
+		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+			modeMatches := runtime.GOOS == "windows" || info.Mode().Perm() == 0o755
+			if existing, readErr := os.ReadFile(path); readErr == nil && string(existing) == body && modeMatches {
+				logf(out, "Direct provider YOLO launcher already up to date: %s", path)
+				continue
+			}
+		}
+		if err := removeManagedPath(path, out); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			return fmt.Errorf("write direct provider YOLO launcher %s: %w", launcher.name, err)
+		}
+		logf(out, "Installed direct provider YOLO launcher: %s", path)
+	}
+	return nil
+}
+
+func directProviderYoloWrapperBody(launcher directProviderYoloLauncher, goos, targetName string) string {
+	if strings.EqualFold(goos, "windows") {
+		return fmt.Sprintf("@echo off\r\nsetlocal\r\nset \"DIR=%%~dp0\"\r\nif not exist \"%%DIR%%%s\" (\r\n  echo %s: missing sibling target %%DIR%%%s 1^>^&2\r\n  exit /b 127\r\n)\r\n\"%%DIR%%%s\" target-yolo %s %%*\r\nexit /b %%ERRORLEVEL%%\r\n", targetName, launcher.name, targetName, targetName, launcher.canonicalTarget)
+	}
+	return fmt.Sprintf(`#!/usr/bin/env sh
+set -eu
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+TARGET="$DIR/%s"
+if [ ! -f "$TARGET" ] || [ -L "$TARGET" ] || [ ! -x "$TARGET" ]; then
+  echo "%s: missing or non-regular sibling $TARGET" >&2
+  exit 127
+fi
+exec "$TARGET" target-yolo %s "$@"
+`, targetName, launcher.name, launcher.canonicalTarget)
 }
 
 func installPiInfraLauncher(layout Layout, out io.Writer) error {

@@ -110,6 +110,66 @@ func TestSetupRepairsAndVerifyNarrowsEveryCanonicalTargetAlias(t *testing.T) {
 	}
 }
 
+func TestSetupRepairsAndVerifyRejectsDirectProviderYoloAliasDrift(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX alias file-kind and executable-mode contract")
+	}
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	mutations := []struct {
+		name   string
+		alias  string
+		mutate func(t *testing.T, path string)
+	}{
+		{name: "missing", alias: "openai-dange", mutate: func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "drifted", alias: "anthropic-dange", mutate: func(t *testing.T, path string) {
+			mustWrite(t, path, "#!/bin/sh\nexit 0\n")
+		}},
+		{name: "symlinked", alias: "openai-dange", mutate: func(t *testing.T, path string) {
+			external := filepath.Join(t.TempDir(), "alias")
+			mustWrite(t, external, string(mustReadRuntimeFile(t, path)))
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(external, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "non_executable", alias: "anthropic-dange", mutate: func(t *testing.T, path string) {
+			if err := os.Chmod(path, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			path := filepath.Join(layout.BinDir, canonicalTargetWrapperName(mutation.alias, runtime.GOOS))
+			mutation.mutate(t, path)
+			if err := VerifyInstalledRuntime(layout); err == nil || !strings.Contains(err.Error(), mutation.alias) {
+				t.Fatalf("VerifyInstalledRuntime error = %v, want %s-specific refusal", err, mutation.alias)
+			}
+			if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+				t.Fatalf("Setup repair: %v", err)
+			}
+			if err := VerifyInstalledRuntime(layout); err != nil {
+				t.Fatalf("VerifyInstalledRuntime after %s repair: %v", mutation.alias, err)
+			}
+		})
+	}
+}
+
 func TestCanonicalConfigurationFailurePreventsSetupAndVerifyMutation(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
