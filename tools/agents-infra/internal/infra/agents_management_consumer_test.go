@@ -223,7 +223,7 @@ func TestPlanIsMetamorphicUnderIdentityRenaming(t *testing.T) {
 		})
 		resolved := ResolvedCanonicalTarget{
 			Target:  ProjectTarget{Name: runtime, Vendor: "product-label", Environment: "pi", Model: model, Profile: &profileName},
-			Profile: &PiProfile{Provider: "local", Model: model, ContextWindow: 4096},
+			Profile: &PiProfile{Provider: "local", Publisher: "neutral-publisher", Family: "neutral-family", Model: model, ContextWindow: 4096},
 		}
 		graph, err := BuildPiPluginGraph("/repo", resolved, &fakeManagementStatusReader{}, reader)
 		if err != nil {

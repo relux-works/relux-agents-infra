@@ -337,6 +337,24 @@ anchored no-follow containment contract. Do not add raw profile-name path
 components, shared locks for byte-distinct names, a fallback for read/path
 failure, or project-controlled catalog evidence.
 
+Every managed profile declares separate `provider`, `publisher`, and `family`
+axes. `cache_budget_bytes` is optional, but a present value must be a positive
+integer, equal the single `--prompt-cache-bytes` constraint, and require
+exactly one `--prompt-cache-size 1` constraint in reviewed runtime argv (`6GB`
+for canonical `qwen-3.8-27b-mlx-8bit`, exactly
+`6442450944` bytes). Absence stays nil, not zero. Composition, primary and
+standalone launch plans, and shared-runtime profile/exec digests bind the typed
+value. `BuildPiPluginGraph` projects it plus the profile's accepted
+publisher/family directly into the released generic local-model fact; never
+infer any of these from argv, model/profile names, target vendor, context size,
+or live status.
+
+Use the installed, production-parsed canonical template at
+`.agents/.configs/templates/qwen-3.8-27b-mlx-8bit.project-config.toml`; merge it
+into the project's `project-config.toml` after replacing the reviewed runtime
+executable path. README examples are explanatory mirrors, not configuration
+authority.
+
 Long-lived local-model profiles may define a strict optional
 `[agents.pi.profiles.<name>.compaction]` table with required `enabled` and
 `keep_recent_tokens` fields plus exactly one threshold. Prefer explicit

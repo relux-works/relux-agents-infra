@@ -36,6 +36,20 @@ func BuildPiPluginGraph(project string, resolved ResolvedCanonicalTarget, status
 	if resolved.Target.Environment != "pi" || resolved.Target.Profile == nil || resolved.Profile == nil {
 		return PiPluginGraph{}, errors.New("agents-infra: canonical target is not a resolved Pi profile")
 	}
+	profileName := *resolved.Target.Profile
+	profile := *resolved.Profile
+	if resolved.Target.Model != profile.Model {
+		return PiPluginGraph{}, errors.New("agents-infra: resolved Pi target model contradicts the selected profile")
+	}
+	if resolved.Target.ProfileProvider != nil && *resolved.Target.ProfileProvider != profile.Provider {
+		return PiPluginGraph{}, errors.New("agents-infra: resolved Pi target provider assertion contradicts the selected profile")
+	}
+	if resolved.EffectiveProvider != "" && resolved.EffectiveProvider != profile.Provider {
+		return PiPluginGraph{}, errors.New("agents-infra: resolved Pi target effective provider contradicts the selected profile")
+	}
+	if resolved.EffectiveEndpoint != "" && resolved.EffectiveEndpoint != profile.BaseURL {
+		return PiPluginGraph{}, errors.New("agents-infra: resolved Pi target effective endpoint contradicts the selected profile")
+	}
 	runtimeID, err := vendorplugin.NormalizeRuntimeID(resolved.Target.Name)
 	if err != nil {
 		return PiPluginGraph{}, fmt.Errorf("agents-infra: canonical target cannot name a plugin runtime: %w", err)
@@ -44,7 +58,6 @@ func BuildPiPluginGraph(project string, resolved ResolvedCanonicalTarget, status
 	if err := vendorplugin.ValidateModelID(modelID); err != nil {
 		return PiPluginGraph{}, fmt.Errorf("agents-infra: canonical target cannot name a plugin model: %w", err)
 	}
-	profileName := *resolved.Target.Profile
 	engine := plugin.Ref{ID: defaultPiInferenceEngineID, Kind: inferenceengine.Kind}
 	adapter, err := NewSanitizedEngineObservationAdapter(engine, observations)
 	if err != nil {
@@ -63,7 +76,7 @@ func BuildPiPluginGraph(project string, resolved ResolvedCanonicalTarget, status
 		return PiPluginGraph{}, fmt.Errorf("agents-infra: register inference engine: %w", err)
 	}
 
-	profile := *resolved.Profile
+	cacheBudget := cloneInt64Pointer(profile.CacheBudgetBytes)
 	config := localmodels.Config{
 		InferenceEngines: []plugin.ID{engine.ID},
 		Runtimes: []localmodels.RuntimeEntry{{
@@ -73,10 +86,11 @@ func BuildPiPluginGraph(project string, resolved ResolvedCanonicalTarget, status
 			Models: map[vendorplugin.ModelID]localmodels.ModelEntry{
 				modelID: {
 					Description:         "Local model selected by the canonical agents-infra Pi target",
-					Publisher:           resolved.Target.Vendor,
-					Family:              resolved.Target.Vendor,
+					Publisher:           profile.Publisher,
+					Family:              profile.Family,
 					Lifecycle:           vendorplugin.LifecycleCurrent,
 					ContextWindowTokens: profile.ContextWindow,
+					CacheBudgetBytes:    cacheBudget,
 					EffortSupport:       agentic.EffortSupportNone,
 					Engine:              engine,
 					Pointer: localmodels.Pointer{

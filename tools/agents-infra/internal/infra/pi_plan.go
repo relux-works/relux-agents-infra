@@ -89,6 +89,7 @@ type PiRuntimePlan struct {
 	ReadinessURL           string   `json:"readiness_url"`
 	StartupTimeoutSeconds  int      `json:"startup_timeout_seconds"`
 	ShutdownTimeoutSeconds int      `json:"shutdown_timeout_seconds"`
+	CacheBudgetBytes       *int64   `json:"cache_budget_bytes,omitempty"`
 	ExecutableState        string   `json:"executable_state"`
 	Ownership              string   `json:"ownership"`
 }
@@ -245,7 +246,7 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
 	result.Resolved.Approval = PrimarySessionResolvedString{Source: "not_applicable"}
 	details := &PiLaunchPlanDetails{Managed: true, LogicalProfile: selected, ProfileSource: selectedSource, PiCompatibilitySource: composite.PiPrimarySession.PiCompatibility.Source, State: &state, ModelsJSON: PiGeneratedCatalog{Path: state.ModelsJSON, SHA256: hex.EncodeToString(modelsSum[:])}, PiIdentity: &identity,
 		LifecycleLogs: &PiLifecycleLogPlan{PolicySource: profile.Source, AggregateRoot: state.LifecycleLogsRoot, Policy: profile.LifecycleLogRetention, Status: "not-inspected"},
-		Runtime:       &PiRuntimePlan{Executable: profile.Runtime.Executable, Argv: append([]string(nil), profile.Runtime.Argv...), Source: profile.Source, Endpoint: profile.BaseURL, ReadinessURL: strings.TrimSuffix(profile.BaseURL, "/v1") + "/v1" + profile.Runtime.ReadinessPath, StartupTimeoutSeconds: profile.Runtime.StartupTimeoutSeconds, ShutdownTimeoutSeconds: profile.Runtime.ShutdownTimeoutSeconds, ExecutableState: execState, Ownership: "direct-child-process-group"},
+		Runtime:       &PiRuntimePlan{Executable: profile.Runtime.Executable, Argv: append([]string(nil), profile.Runtime.Argv...), Source: profile.Source, Endpoint: profile.BaseURL, ReadinessURL: strings.TrimSuffix(profile.BaseURL, "/v1") + "/v1" + profile.Runtime.ReadinessPath, StartupTimeoutSeconds: profile.Runtime.StartupTimeoutSeconds, ShutdownTimeoutSeconds: profile.Runtime.ShutdownTimeoutSeconds, CacheBudgetBytes: cloneInt64Pointer(profile.CacheBudgetBytes), ExecutableState: execState, Ownership: "direct-child-process-group"},
 		Capabilities:  &PiCapabilityPlan{Requested: append([]string(nil), profile.RequestedCapabilities...), Verified: []string{}, Verification: "not-claimed"}}
 	if profile.Compaction != nil {
 		compaction := *profile.Compaction

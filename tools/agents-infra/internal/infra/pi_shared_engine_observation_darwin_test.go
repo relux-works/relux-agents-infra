@@ -164,7 +164,7 @@ busy_action = "observe"
 	// never reach, signal, lease, or release the Process B (nor the
 	// independent Process-A-shaped lease) this test is holding.
 	resolvedTarget := ResolvedCanonicalTarget{
-		Target:  ProjectTarget{Name: "qwen-infra", Vendor: "qwen", Environment: "pi", Model: "local-test-model", Profile: &resolved.ProfileName},
+		Target:  ProjectTarget{Name: "qwen-infra", Vendor: "qwen", Environment: "pi", Model: resolved.Profile.Model, Profile: &resolved.ProfileName},
 		Profile: &resolved.Profile,
 	}
 	graph, err := BuildPiPluginGraph(project, resolvedTarget, &fakeManagementStatusReader{}, reader)

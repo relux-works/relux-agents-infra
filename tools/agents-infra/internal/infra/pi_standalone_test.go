@@ -255,7 +255,10 @@ func TestBuildPiStandaloneLaunchPlanSeparatesTrustAuthorizationAndRuntimeLease(t
 	project, home := t.TempDir(), t.TempDir()
 	piRoot := officialPiAsset(t)
 	configPath := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
-	writePiProjectConfig(t, project, validStandaloneQwenConfig("/bin/echo", 18011, true))
+	body := validStandaloneQwenConfig("/bin/echo", 18011, true)
+	body = strings.Replace(body, "max_tokens = 1024\n", "max_tokens = 1024\ncache_budget_bytes = 6442450944\n", 1)
+	body = strings.Replace(body, `"--port", "18011"`, `"--port", "18011", "--prompt-cache-size", "1", "--prompt-cache-bytes", "6GB"`, 1)
+	writePiProjectConfig(t, project, body)
 	plan, err := BuildPiStandaloneLaunchPlan(project, home, PiStandaloneRequest{Prompt: "safe prompt", Entrypoint: "qwen-infra"}, ChildLaunchCompositionProducer{Version: "test", Commit: "test"}, func(string) (string, error) {
 		return filepath.Join(piRoot, "pi"), nil
 	})
@@ -274,6 +277,9 @@ func TestBuildPiStandaloneLaunchPlanSeparatesTrustAuthorizationAndRuntimeLease(t
 	}
 	if plan.RuntimeMode != "shared" || plan.Runtime.Ownership != "shared-runtime-lease-broker" || plan.State.Isolation != "per-process-random-run-key" || plan.State.Persistence != "disabled" {
 		t.Fatalf("standalone runtime/state diagnostics = %#v / %#v / %#v", plan.RuntimeMode, plan.Runtime, plan.State)
+	}
+	if plan.Runtime.CacheBudgetBytes == nil || *plan.Runtime.CacheBudgetBytes != 6_442_450_944 {
+		t.Fatalf("standalone cache budget = %v, want 6442450944", plan.Runtime.CacheBudgetBytes)
 	}
 	joined := strings.Join(plan.Argv, "\x00")
 	if strings.Contains(joined, "safe prompt") || !strings.Contains(joined, "<prompt>") {

@@ -65,6 +65,8 @@ type PiPolicyStringListValue struct {
 
 type PiProfile struct {
 	Provider              string
+	Publisher             string
+	Family                string
 	Model                 string
 	BaseURL               string
 	API                   string
@@ -72,6 +74,7 @@ type PiProfile struct {
 	Input                 []string
 	ContextWindow         int
 	MaxTokens             int
+	CacheBudgetBytes      *int64
 	Thinking              string
 	RequestedCapabilities []string
 	Compaction            *PiCompaction
@@ -249,7 +252,7 @@ func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource, 
 func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) {
 	field := "agents.pi.profiles." + name
 	if err := rejectUnknownFields(table, field,
-		"provider", "model", "base_url", "api", "reasoning", "input", "context_window", "max_tokens", "thinking", "requested_capabilities", "compaction", "lifecycle_log_retention", "compat", "runtime"); err != nil {
+		"provider", "publisher", "family", "model", "base_url", "api", "reasoning", "input", "context_window", "max_tokens", "cache_budget_bytes", "thinking", "requested_capabilities", "compaction", "lifecycle_log_retention", "compat", "runtime"); err != nil {
 		return PiProfile{}, projectConfigFieldError(path, errField(err), err)
 	}
 	var p PiProfile
@@ -259,6 +262,12 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 	}
 	if err := validatePiProvider(p.Provider); err != nil {
 		return p, projectConfigFieldError(path, field+".provider", err)
+	}
+	if p.Publisher, err = requiredString(table, "publisher"); err != nil {
+		return p, projectConfigFieldError(path, field+".publisher", err)
+	}
+	if p.Family, err = requiredString(table, "family"); err != nil {
+		return p, projectConfigFieldError(path, field+".family", err)
 	}
 	if p.Model, err = requiredString(table, "model"); err != nil {
 		return p, projectConfigFieldError(path, field+".model", err)
@@ -292,6 +301,9 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 			err = errors.New("must not exceed context_window")
 		}
 		return p, projectConfigFieldError(path, field+".max_tokens", err)
+	}
+	if p.CacheBudgetBytes, err = optionalPositiveInt64(table, "cache_budget_bytes"); err != nil {
+		return p, projectConfigFieldError(path, field+".cache_budget_bytes", err)
 	}
 	if p.Thinking, err = requiredString(table, "thinking"); err != nil {
 		return p, projectConfigFieldError(path, field+".thinking", err)
@@ -347,6 +359,9 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 		return p, projectConfigFieldError(path, errField(err), err)
 	}
 	if err := validatePiRuntimeEndpointArgv(p.Runtime.Argv, p.BaseURL); err != nil {
+		return p, projectConfigFieldError(path, field+".runtime.argv", err)
+	}
+	if err := validatePiRuntimeCacheBudgetArgv(p.Runtime.Argv, p.CacheBudgetBytes); err != nil {
 		return p, projectConfigFieldError(path, field+".runtime.argv", err)
 	}
 	wantCaps := []string{"text", "tools"}
@@ -830,6 +845,89 @@ func validatePiRuntimeEndpointArgv(argv []string, baseURL string) error {
 	return nil
 }
 
+func validatePiRuntimeCacheBudgetArgv(argv []string, budget *int64) error {
+	if budget == nil {
+		return nil
+	}
+	const sizeFlag = "--prompt-cache-size"
+	var sizeRaw string
+	sizeCount := 0
+	for index := 0; index < len(argv); index++ {
+		switch {
+		case argv[index] == sizeFlag:
+			sizeCount++
+			if index+1 >= len(argv) {
+				return errors.New("cache_budget_bytes requires --prompt-cache-size 1 in runtime.argv")
+			}
+			sizeRaw = argv[index+1]
+			index++
+		case strings.HasPrefix(argv[index], sizeFlag+"="):
+			sizeCount++
+			sizeRaw = strings.TrimPrefix(argv[index], sizeFlag+"=")
+		}
+	}
+	if sizeCount != 1 || sizeRaw != "1" {
+		return fmt.Errorf("cache_budget_bytes requires exactly one %s 1 constraint in runtime.argv", sizeFlag)
+	}
+	const flag = "--prompt-cache-bytes"
+	var raw string
+	count := 0
+	for index := 0; index < len(argv); index++ {
+		switch {
+		case argv[index] == flag:
+			count++
+			if index+1 >= len(argv) {
+				return errors.New("cache_budget_bytes requires --prompt-cache-bytes with a value in runtime.argv")
+			}
+			raw = argv[index+1]
+			index++
+		case strings.HasPrefix(argv[index], flag+"="):
+			count++
+			raw = strings.TrimPrefix(argv[index], flag+"=")
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("cache_budget_bytes requires exactly one %s constraint in runtime.argv", flag)
+	}
+	actual, err := parsePiByteSize(raw)
+	if err != nil {
+		return fmt.Errorf("%s value %q is invalid: %w", flag, raw, err)
+	}
+	if actual != *budget {
+		return fmt.Errorf("%s constrains %d bytes, but cache_budget_bytes is %d", flag, actual, *budget)
+	}
+	return nil
+}
+
+func parsePiByteSize(raw string) (int64, error) {
+	units := []struct {
+		suffix     string
+		multiplier int64
+	}{
+		{"GiB", 1 << 30}, {"GB", 1 << 30},
+		{"MiB", 1 << 20}, {"MB", 1 << 20},
+		{"KiB", 1 << 10}, {"KB", 1 << 10},
+		{"B", 1},
+	}
+	multiplier := int64(1)
+	number := raw
+	for _, unit := range units {
+		if strings.HasSuffix(raw, unit.suffix) {
+			multiplier = unit.multiplier
+			number = strings.TrimSuffix(raw, unit.suffix)
+			break
+		}
+	}
+	value, err := strconv.ParseInt(number, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, errors.New("must be a positive integer byte size with optional B, KB, MB, GB, KiB, MiB, or GiB suffix")
+	}
+	if value > int64(^uint64(0)>>1)/multiplier {
+		return 0, errors.New("byte size overflows int64")
+	}
+	return value * multiplier, nil
+}
+
 func validatePiProvider(value string) error {
 	if value == "" {
 		return errors.New("must not be empty")
@@ -932,6 +1030,29 @@ func requiredPositiveInt(table map[string]any, key string) (int, error) {
 		return 0, errors.New("must be a positive platform integer")
 	}
 	return int(n), nil
+}
+
+func optionalPositiveInt64(table map[string]any, key string) (*int64, error) {
+	v, ok := table[key]
+	if !ok {
+		return nil, nil
+	}
+	n, ok := v.(int64)
+	if !ok {
+		return nil, fmt.Errorf("expected integer, got %T", v)
+	}
+	if n <= 0 {
+		return nil, errors.New("must be a positive integer")
+	}
+	return &n, nil
+}
+
+func cloneInt64Pointer(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func requiredPositiveDurationSeconds(table map[string]any, key string, maximum int64) (int, error) {
@@ -1062,6 +1183,10 @@ func clonePiStandaloneSessionSource(s PiStandaloneSessionSource) PiStandaloneSes
 func clonePiProfiles(in map[string]PiProfile) map[string]PiProfile {
 	out := map[string]PiProfile{}
 	for k, v := range in {
+		if v.CacheBudgetBytes != nil {
+			value := *v.CacheBudgetBytes
+			v.CacheBudgetBytes = &value
+		}
 		v.Input = append([]string(nil), v.Input...)
 		v.RequestedCapabilities = append([]string(nil), v.RequestedCapabilities...)
 		v.Runtime.Argv = append([]string(nil), v.Runtime.Argv...)

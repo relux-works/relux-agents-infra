@@ -83,10 +83,11 @@ func goodSanitizedEngineFacts() []SanitizedEngineFact {
 func managementGraphFixture(t *testing.T, observation *recordingSanitizedObservationReader, processA string) (PiPluginGraph, *fakeManagementStatusReader) {
 	t.Helper()
 	profile := "local-qwen"
+	cacheBudget := int64(6_442_450_944)
 	status := &fakeManagementStatusReader{}
 	resolved := ResolvedCanonicalTarget{
 		Target:  ProjectTarget{Name: "qwen-infra", Vendor: "qwen", Environment: "pi", Model: "qwen-3.8-27b-mlx-8bit", Profile: &profile},
-		Profile: &PiProfile{Provider: "local", Model: "qwen-3.8-27b-mlx-8bit", ContextWindow: 4096},
+		Profile: &PiProfile{Provider: "local-qwen", Publisher: "alibaba", Family: "qwen", Model: "qwen-3.8-27b-mlx-8bit", ContextWindow: 4096, CacheBudgetBytes: &cacheBudget},
 	}
 	graph, err := BuildPiPluginGraph("/repo", resolved, status, observation)
 	if err != nil {
@@ -127,6 +128,88 @@ func TestPiPluginGraphBuildLaunchMatchesAcceptedSurfaceAndIdentity(t *testing.T)
 	}
 	if caps := managementpi.New(status).Capabilities(); caps.EffortTransport != agentic.EffortTransportNone {
 		t.Fatalf("Pi thinking was equated with vendor effort: %q", caps.EffortTransport)
+	}
+	runtime, err := graph.Registry.ResolveRuntime(graph.Runtime)
+	if err != nil {
+		t.Fatalf("ResolveRuntime: %v", err)
+	}
+	models := runtime.Vendor.Models()
+	if len(models) != 1 {
+		t.Fatalf("generic models = %#v", models)
+	}
+	model := models[0]
+	if model.Publisher != "alibaba" || model.Family != "qwen" || model.CacheBudgetBytes == nil || *model.CacheBudgetBytes != 6_442_450_944 {
+		t.Fatalf("generic model facts = %#v", model)
+	}
+	provenance, err := plan.ConsumerProvenance()
+	if err != nil || provenance.Publisher != "alibaba" || provenance.Family != "qwen" {
+		t.Fatalf("consumer provenance = %#v, %v", provenance, err)
+	}
+}
+
+// Production call site: BuildPiPluginGraph. A caller cannot cross-wire a
+// target/model/provider coordinate around the already-resolved Pi profile.
+func TestBuildPiPluginGraphRefusesResolvedProfileProviderCrossWires(t *testing.T) {
+	profileName := "profile"
+	provider := "local-qwen"
+	base := ResolvedCanonicalTarget{
+		Target:            ProjectTarget{Name: "runtime", Vendor: "qwen", Environment: "pi", Model: "model", Profile: &profileName, ProfileProvider: &provider},
+		Profile:           &PiProfile{Provider: provider, Publisher: "alibaba", Family: "qwen", Model: "model", ContextWindow: 4096},
+		EffectiveProvider: provider,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ResolvedCanonicalTarget)
+	}{
+		{"model cross-wire", func(r *ResolvedCanonicalTarget) { r.Target.Model = "other" }},
+		{"profile provider assertion cross-wire", func(r *ResolvedCanonicalTarget) { other := "other"; r.Target.ProfileProvider = &other }},
+		{"effective provider cross-wire", func(r *ResolvedCanonicalTarget) { r.EffectiveProvider = "other" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolved := base
+			profile := *base.Profile
+			resolved.Profile = &profile
+			test.mutate(&resolved)
+			if _, err := BuildPiPluginGraph("/repo", resolved, &fakeManagementStatusReader{}, &recordingSanitizedObservationReader{}); err == nil {
+				t.Fatal("cross-wired resolved profile was admitted")
+			}
+		})
+	}
+}
+
+// Production call site: BuildPiPluginGraph. A Qwen-shaped model and context
+// are not cache-budget evidence; profile absence must remain nil in the
+// released generic local-model fact.
+func TestBuildPiPluginGraphPreservesMissingCacheBudgetWithoutInference(t *testing.T) {
+	profileName := "qwen-3.8-27b-mlx-8bit"
+	resolved := ResolvedCanonicalTarget{
+		Target: ProjectTarget{
+			Name:        "qwen-infra",
+			Vendor:      "qwen",
+			Environment: "pi",
+			Model:       "Qwen3.8-27B-MLX-8bit",
+			Profile:     &profileName,
+		},
+		Profile: &PiProfile{
+			Provider:      "local-qwen",
+			Publisher:     "alibaba",
+			Family:        "qwen",
+			Model:         "Qwen3.8-27B-MLX-8bit",
+			ContextWindow: 131072,
+		},
+	}
+	graph, err := BuildPiPluginGraph("/repo", resolved, &fakeManagementStatusReader{}, &recordingSanitizedObservationReader{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := graph.Registry.ResolveRuntime(graph.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := runtime.Vendor.Models()
+	if len(models) != 1 || models[0].CacheBudgetBytes != nil {
+		t.Fatalf("missing profile cache budget was inferred: %#v", models)
 	}
 }
 

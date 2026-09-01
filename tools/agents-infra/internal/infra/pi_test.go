@@ -48,6 +48,8 @@ pi_compatibility = %q
 
 [agents.pi.profiles.%q]
 provider = "local-provider"
+publisher = "fixture-publisher"
+family = "fixture-family"
 model = "Model"
 base_url = "http://127.0.0.1:%d/v1"
 api = "openai-completions"
@@ -103,6 +105,104 @@ func reasoningPiProfileTOML(name, runtime string, port int) string {
 	body = strings.Replace(body, `thinking = "off"`, `thinking = "medium"`, 1)
 	body = strings.Replace(body, `max_tokens_field = "max_tokens"`, "max_tokens_field = \"max_tokens\"\nthinking_format = \"qwen-chat-template\"", 1)
 	return body
+}
+
+func cacheBoundPiProfileTOML(name, runtime string, port int, budget, argvValue string) string {
+	body := validPiProfileTOML(name, runtime, port, false)
+	body = strings.Replace(body, "max_tokens = 1024\n", "max_tokens = 1024\ncache_budget_bytes = "+budget+"\n", 1)
+	body = strings.Replace(body, fmt.Sprintf(`"--port", "%d"`, port), fmt.Sprintf(`"--port", "%d", "--prompt-cache-size", "1", "--prompt-cache-bytes", %q`, port, argvValue), 1)
+	return body
+}
+
+// Production call site: parseProjectConfig -> parsePiProfile. Absence remains
+// nil; every present value is a positive int64 and is bound to the backend's
+// exact --prompt-cache-bytes constraint rather than becoming inert metadata.
+func TestParsePiProfilePreservesAndBindsOptionalCacheBudget(t *testing.T) {
+	absent, err := parseProjectConfig([]byte(validPiProfileTOML("profile", "/bin/echo", 18011, false)), "config")
+	if err != nil || absent.PiProfiles["profile"].CacheBudgetBytes != nil {
+		t.Fatalf("absent cache budget = %v, %v", absent.PiProfiles["profile"].CacheBudgetBytes, err)
+	}
+	for _, test := range []struct {
+		name, budget, argv string
+		want               int64
+	}{
+		{"lower positive", "1", "1", 1},
+		{"canonical six GiB", "6442450944", "6GB", 6_442_450_944},
+		{"higher positive", "12884901888", "12GiB", 12_884_901_888},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := parseProjectConfig([]byte(cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, test.budget, test.argv)), "config")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := cfg.PiProfiles["profile"].CacheBudgetBytes
+			if got == nil || *got != test.want {
+				t.Fatalf("cache budget = %v, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+// Production call site: parseProjectConfig -> parsePiProfile ->
+// validatePiRuntimeCacheBudgetArgv. These narrowed negatives fail when the
+// typed policy and executable backend constraint diverge in either direction.
+func TestParsePiProfileRefusesInvalidOrContradictoryCacheBudget(t *testing.T) {
+	tests := []struct{ name, body string }{
+		{"zero", cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, "0", "0")},
+		{"malformed", cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, `"six"`, "6GB")},
+		{"missing backend constraint", strings.Replace(cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, "6442450944", "6GB"), `, "--prompt-cache-bytes", "6GB"`, "", 1)},
+		{"missing cache size", strings.Replace(cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, "6442450944", "6GB"), `, "--prompt-cache-size", "1"`, "", 1)},
+		{"zero cache size", strings.Replace(cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, "6442450944", "6GB"), `"--prompt-cache-size", "1"`, `"--prompt-cache-size", "0"`, 1)},
+		{"duplicate cache size", strings.Replace(cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, "6442450944", "6GB"), `"--prompt-cache-size", "1"`, `"--prompt-cache-size", "1", "--prompt-cache-size", "1"`, 1)},
+		{"contradictory cache size", strings.Replace(cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, "6442450944", "6GB"), `"--prompt-cache-size", "1"`, `"--prompt-cache-size", "2"`, 1)},
+		{"declared lower than backend", cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, "1", "6GB")},
+		{"declared higher than backend", cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, "12884901888", "6GB")},
+		{"malformed backend constraint", cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, "6442450944", "six")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := parseProjectConfig([]byte(test.body), "config"); err == nil || (!strings.Contains(err.Error(), "cache_budget_bytes") && !strings.Contains(err.Error(), "--prompt-cache-bytes")) {
+				t.Fatalf("contradictory cache budget admitted: %v", err)
+			}
+		})
+	}
+}
+
+func TestCanonicalQwenTemplateIsProductionParsableAndCacheBound(t *testing.T) {
+	repoRoot, err := filepath.Abs("../../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(repoRoot, ".configs", "templates", "qwen-3.8-27b-mlx-8bit.project-config.toml")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseProjectConfig(body, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := cfg.PiProfiles["qwen-3.8-27b-mlx-8bit"]
+	if profile.CacheBudgetBytes == nil || *profile.CacheBudgetBytes != 6_442_450_944 || profile.Provider != "local-qwen" || profile.Publisher != "alibaba" || profile.Family != "qwen" {
+		t.Fatalf("canonical template profile = %#v", profile)
+	}
+}
+
+func TestCanonicalQwenCacheProfileOwnsExactIdentityAndBudget(t *testing.T) {
+	body := cacheBoundPiProfileTOML("qwen-3.8-27b-mlx-8bit", "/bin/echo", 18011, "6442450944", "6GB")
+	body = strings.Replace(body, `provider = "local-provider"`, `provider = "local-qwen"`, 1)
+	body = strings.Replace(body, `publisher = "fixture-publisher"`, `publisher = "alibaba"`, 1)
+	body = strings.Replace(body, `family = "fixture-family"`, `family = "qwen"`, 1)
+	body = strings.Replace(body, `model = "Model"`, `model = "Qwen3.8-27B-MLX-8bit"`, 1)
+	body = strings.Replace(body, `"--model", "Model"`, `"--model", "Qwen3.8-27B-MLX-8bit"`, 1)
+	cfg, err := parseProjectConfig([]byte(body), "config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := cfg.PiProfiles["qwen-3.8-27b-mlx-8bit"]
+	if profile.Provider != "local-qwen" || profile.Publisher != "alibaba" || profile.Family != "qwen" || profile.CacheBudgetBytes == nil || *profile.CacheBudgetBytes != 6_442_450_944 {
+		t.Fatalf("canonical Qwen profile = %#v", profile)
+	}
 }
 
 func compactionPiProfileTOML(name, runtime string, port int) string {
@@ -531,6 +631,26 @@ func TestPiPrintConfigReportsManagedCompactionWithoutCreatingState(t *testing.T)
 	}
 }
 
+// Production call site: BuildPrimarySessionLaunchPlan ->
+// buildPiPrimarySessionLaunchPlan. The typed plan binds the same cache budget
+// already enforced against backend argv, without starting a runtime.
+func TestPiPrimaryLaunchPlanCarriesBoundCacheBudgetWithoutRuntimeContact(t *testing.T) {
+	piRoot := officialPiAsset(t)
+	project, home := t.TempDir(), t.TempDir()
+	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
+	t.Setenv("HOME", home)
+	writePiProjectConfig(t, project, cacheBoundPiProfileTOML("profile", "/bin/echo", 18011, "6442450944", "6GB"))
+	plan, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, func(string) (string, error) {
+		return filepath.Join(piRoot, "pi"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Pi == nil || plan.Pi.Runtime == nil || plan.Pi.Runtime.CacheBudgetBytes == nil || *plan.Pi.Runtime.CacheBudgetBytes != 6_442_450_944 {
+		t.Fatalf("typed cache budget missing from launch plan: %#v", plan.Pi)
+	}
+}
+
 func TestParsePiPolicyRejectsMalformedUnsafeUnknownAndNarrowedInputs(t *testing.T) {
 	base := validPiProfileTOML("profile", "/bin/echo", 18011, false)
 	tests := map[string]string{
@@ -735,7 +855,7 @@ func TestPiComposeNearestSelectionCanUseOrReplaceAncestorProfile(t *testing.T) {
 	mustMkdir(t, filepath.Join(home, "Library", "Caches"))
 	t.Setenv("HOME", home)
 	parentBody := validPiProfileTOML("ancestor-a", "/bin/echo", 18027, false)
-	parentBody += "\n" + piProfileSection(t, validPiProfileTOML("ancestor-b", "/bin/echo", 18028, false))
+	parentBody += "\n" + piProfileSection(t, cacheBoundPiProfileTOML("ancestor-b", "/bin/echo", 18028, "6442450944", "6GB"))
 	writePiProjectConfig(t, parent, parentBody)
 	childConfig := filepath.Join(child, ".agents", ".configs", projectConfigFileName)
 	mustMkdir(t, filepath.Dir(childConfig))
@@ -754,6 +874,9 @@ profile = "ancestor-b"
 	if plan.Pi == nil || plan.Pi.LogicalProfile != "ancestor-b" || plan.Resolved.Profile.Source != canonicalChildConfig {
 		t.Fatalf("nearest selection did not select complete ancestor profile: %#v", plan)
 	}
+	if plan.Pi.Runtime.CacheBudgetBytes == nil || *plan.Pi.Runtime.CacheBudgetBytes != 6_442_450_944 {
+		t.Fatalf("composed ancestor cache budget = %v", plan.Pi.Runtime.CacheBudgetBytes)
+	}
 
 	replacement := validPiProfileTOML("ancestor-b", "/bin/echo", 18029, false)
 	replacement = strings.Replace(replacement, `provider = "local-provider"`, `provider = "child-provider"`, 1)
@@ -766,6 +889,9 @@ profile = "ancestor-b"
 	}
 	if plan.Resolved.Model.Value == nil || *plan.Resolved.Model.Value != "child-provider/ChildModel" {
 		t.Fatalf("child complete profile did not atomically replace ancestor: %#v", plan.Resolved.Model)
+	}
+	if plan.Pi.Runtime.CacheBudgetBytes != nil {
+		t.Fatalf("child replacement inherited ancestor cache budget: %v", *plan.Pi.Runtime.CacheBudgetBytes)
 	}
 }
 

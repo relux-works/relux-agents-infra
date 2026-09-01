@@ -1080,6 +1080,8 @@ profile = "profile"
 pi_compatibility = %q
 [agents.pi.profiles.profile]
 provider = "local-provider"
+publisher = "fixture-publisher"
+family = "fixture-family"
 model = "Model"
 base_url = "http://127.0.0.1:%d/v1"
 api = "openai-completions"

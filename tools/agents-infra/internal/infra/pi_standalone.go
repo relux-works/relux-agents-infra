@@ -326,6 +326,7 @@ func BuildPiStandaloneLaunchPlan(projectDir, homeDir string, request PiStandalon
 			ReadinessURL:           profile.BaseURL + profile.Runtime.ReadinessPath,
 			StartupTimeoutSeconds:  profile.Runtime.StartupTimeoutSeconds,
 			ShutdownTimeoutSeconds: profile.Runtime.ShutdownTimeoutSeconds,
+			CacheBudgetBytes:       cloneInt64Pointer(profile.CacheBudgetBytes),
 			ExecutableState:        staticExecutableState(profile.Runtime.Executable),
 			Ownership:              ownership,
 		},

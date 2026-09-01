@@ -131,6 +131,12 @@ func SharedRuntimeProfileDigest(profile PiProfile) string {
 	digest.addString("thinking", profile.Thinking)
 	digest.addString("context_window", strconv.Itoa(profile.ContextWindow))
 	digest.addString("max_tokens", strconv.Itoa(profile.MaxTokens))
+	if profile.CacheBudgetBytes == nil {
+		digest.addString("cache_budget_bytes.present", "false")
+	} else {
+		digest.addString("cache_budget_bytes.present", "true")
+		digest.addString("cache_budget_bytes", strconv.FormatInt(*profile.CacheBudgetBytes, 10))
+	}
 	for i, value := range profile.Input {
 		digest.addString(fmt.Sprintf("input[%d]", i), value)
 	}
@@ -189,6 +195,12 @@ func SharedRuntimeKey(profile PiProfile) (string, string) {
 
 func SharedRuntimeExecPlanDigest(profile PiProfile, cwd string) string {
 	var digest sharedDigestBuilder
+	if profile.CacheBudgetBytes == nil {
+		digest.addString("cache_budget_bytes.present", "false")
+	} else {
+		digest.addString("cache_budget_bytes.present", "true")
+		digest.addString("cache_budget_bytes", strconv.FormatInt(*profile.CacheBudgetBytes, 10))
+	}
 	digest.addString("runtime.executable", profile.Runtime.Executable)
 	digest.addString("runtime.argc", strconv.Itoa(len(profile.Runtime.Argv)))
 	for i, value := range profile.Runtime.Argv {

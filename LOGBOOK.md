@@ -3,6 +3,22 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-09-01
+
+### 0832 — Cache Budget Requires Explicit Single-Entry Enablement
+- CORRECTION: A byte budget alone is inert or ambiguous for the deployed MLX backend. Every cache-bound Pi profile now requires exactly one `--prompt-cache-size 1` plus one matching `--prompt-cache-bytes`; missing, zero, duplicate, and contradictory size constraints refuse in the production parser.
+- SCOPE: `.configs/templates/qwen-3.8-27b-mlx-8bit.project-config.toml` is the installed, production-consumable canonical source; README mirrors it but is not the authority.
+
+### 0824 — Cross-Repo Candidate Exposed A Board Validation Mismatch
+- ANOMALY: Task-board Change Request revision 1 recorded an empty repository delta and ran `skill-project-management` validation because the managed Story workspace is the control repo, while this task's explicit precondition owns the isolated `relux-agents-infra` worktree and forbids control-repo changes.
+- EVIDENCE: Control-repo validation command 3, `cd pkg/remoteconfig && env -u TASK_BOARD_DIR -u TASK_BOARD_CONFIG go test ./... -count=1`, reproducibly exits 1 before any `relux-agents-infra` candidate gate; exact-head infra focused/full tests, vet, build, formatting, module verification, Windows compile, and signature verification exit 0.
+- STATUS: Product candidate remains independently reviewable; board CR construction needs cross-repo routing or a control-repo gate repair outside this task's scope.
+
+### 0801 — Pi Profile Became The Sole Cache-Budget Producer
+- DECISION: `agents.pi.profiles.<name>` owns optional positive `cache_budget_bytes`, distinct `provider`/`publisher`/`family` axes, and the exact backend `--prompt-cache-bytes` constraint; machine-specific `.agents/.configs/project-config.toml` remains intentionally untracked.
+- FIX: `tools/agents-infra/internal/infra/pi_config.go`, `pi_plan.go`, `pi_shared_protocol.go`, and `agents_management_registry.go` bind the value through strict parse, non-launching plans, shared digests, and the released generic `local-models` fact without name/context/argv inference in the plugin graph.
+- MILESTONE: immutable `skill-agents-management v0.5.3` resolves to peeled commit `9da6283d7c1584138464ac3313765d80e90e71a7`; canonical Qwen policy records `local-qwen`, `alibaba/qwen`, and exactly `6442450944` bytes.
+
 ## 2026-08-31
 
 ### 1917 — Accepted Retention Replayed On Fresh Trunk, After The Adapter, With No Widened Overlap

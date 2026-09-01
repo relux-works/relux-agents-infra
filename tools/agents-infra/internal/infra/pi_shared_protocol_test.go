@@ -50,6 +50,20 @@ func TestSharedRuntimeDigestsExcludeSharingAndCoverTheExecutionPlan(t *testing.T
 	if SharedRuntimeExecPlanDigest(profile, "/runtime/cwd") == SharedRuntimeExecPlanDigest(profile, "/other/cwd") {
 		t.Fatal("runtime cwd is absent from exec plan digest")
 	}
+	absentProfileDigest := SharedRuntimeProfileDigest(profile)
+	absentExecDigest := SharedRuntimeExecPlanDigest(profile, "/runtime/cwd")
+	cacheBudget := int64(6_442_450_944)
+	profile.CacheBudgetBytes = &cacheBudget
+	lowerProfileDigest := SharedRuntimeProfileDigest(profile)
+	lowerExecDigest := SharedRuntimeExecPlanDigest(profile, "/runtime/cwd")
+	if lowerProfileDigest == absentProfileDigest || lowerExecDigest == absentExecDigest {
+		t.Fatal("cache budget presence is absent from a shared-runtime digest")
+	}
+	higher := int64(12_884_901_888)
+	profile.CacheBudgetBytes = &higher
+	if SharedRuntimeProfileDigest(profile) == lowerProfileDigest || SharedRuntimeExecPlanDigest(profile, "/runtime/cwd") == lowerExecDigest {
+		t.Fatal("cache budget value is absent from a shared-runtime digest")
+	}
 }
 
 func TestSharedRuntimePathsAreHashOnlyContainedAndBounded(t *testing.T) {

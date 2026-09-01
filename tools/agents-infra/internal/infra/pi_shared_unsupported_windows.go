@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -41,7 +42,20 @@ type SharedRuntimeRestartLedger struct {
 }
 
 func SharedRuntimeProfileDigest(profile PiProfile) string {
-	sum := sha256.Sum256([]byte(profile.Provider + "\x00" + profile.Model + "\x00" + profile.BaseURL))
+	budget := "absent"
+	if profile.CacheBudgetBytes != nil {
+		budget = strconv.FormatInt(*profile.CacheBudgetBytes, 10)
+	}
+	sum := sha256.Sum256([]byte(profile.Provider + "\x00" + profile.Model + "\x00" + profile.BaseURL + "\x00" + budget))
+	return hex.EncodeToString(sum[:])
+}
+
+func SharedRuntimeExecPlanDigest(profile PiProfile, cwd string) string {
+	budget := "absent"
+	if profile.CacheBudgetBytes != nil {
+		budget = strconv.FormatInt(*profile.CacheBudgetBytes, 10)
+	}
+	sum := sha256.Sum256([]byte(profile.Runtime.Executable + "\x00" + cwd + "\x00" + budget))
 	return hex.EncodeToString(sum[:])
 }
 

@@ -1,0 +1,65 @@
+[agents.pi.primary_session]
+profile = "qwen-3.8-27b-mlx-8bit"
+pi_compatibility = "github-release:earendil-works/pi@v0.84.2:darwin-arm64#sha256-c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65"
+yolo_mode = false
+
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit"]
+provider = "local-qwen"
+publisher = "alibaba"
+family = "qwen"
+model = "Qwen3.8-27B-MLX-8bit"
+base_url = "http://127.0.0.1:18011/v1"
+api = "openai-completions"
+reasoning = true
+input = ["text"]
+context_window = 131072
+max_tokens = 16384
+cache_budget_bytes = 6442450944
+thinking = "medium"
+requested_capabilities = ["text", "tools"]
+
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit".lifecycle_log_retention]
+max_count = 64
+max_bytes = 67108864
+max_envelope_bytes = 67371008
+max_age_seconds = 4838400
+create_timeout_seconds = 10
+append_timeout_seconds = 5
+close_timeout_seconds = 10
+status_timeout_seconds = 10
+maintenance_timeout_seconds = 30
+max_scan_entries = 325
+max_scan_control_bytes = 299008
+max_mutations_per_operation = 5
+
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit".compaction]
+enabled = true
+compact_at_tokens = 106496
+keep_recent_tokens = 8192
+
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit".compat]
+supports_developer_role = false
+supports_reasoning_effort = false
+supports_usage_in_streaming = true
+supports_finish_reason = true
+max_tokens_field = "max_tokens"
+thinking_format = "qwen-chat-template"
+
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit".runtime]
+executable = "/absolute/path/to/reviewed-runtime"
+argv = ["serve", "--model", "Qwen3.8-27B-MLX-8bit", "--host", "127.0.0.1", "--port", "18011", "--prompt-cache-size", "1", "--prompt-cache-bytes", "6GB"]
+readiness_path = "/models"
+startup_timeout_seconds = 120
+shutdown_timeout_seconds = 10
+
+[agents.targets."qwen-mlx-8bit"]
+vendor = "qwen"
+environment = "pi"
+model = "Qwen3.8-27B-MLX-8bit"
+reasoning = "medium"
+profile = "qwen-3.8-27b-mlx-8bit"
+profile_provider = "local-qwen"
+endpoint = "http://127.0.0.1:18011/v1"
+
+[agents.entrypoints]
+qwen-infra = "qwen-mlx-8bit"

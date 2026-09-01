@@ -427,29 +427,36 @@ Pi because pinned Pi has no end-of-options parser state, while safe suffix
 operands are appended byte-for-byte. A second delimiter or a suffix beginning
 with ASCII `-` or `@` is refused before the runtime starts.
 
-The cycle-10 reference policy is exactly:
+The canonical local-Qwen policy is installed at
+`.agents/.configs/templates/qwen-3.8-27b-mlx-8bit.project-config.toml`. Merge
+that strict, production-parsed template into the project's
+`.agents/.configs/project-config.toml`; do not treat this rendered excerpt as
+the configuration authority. The policy is exactly:
 
 ```toml
 [agents.pi.primary_session]
-profile = "qwen-3.8-27b"
+profile = "qwen-3.8-27b-mlx-8bit"
 pi_compatibility = "github-release:earendil-works/pi@v0.84.2:darwin-arm64#sha256-c996e888b7f7dce44bcf24f69176ac646c44139d3916bd49a6b28e5a8c5e3a65"
 yolo_mode = false
 
-[agents.pi.profiles."qwen-3.8-27b"]
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit"]
 provider = "local-qwen"
-model = "Qwen-3.8-27B"
+publisher = "alibaba"
+family = "qwen"
+model = "Qwen3.8-27B-MLX-8bit"
 base_url = "http://127.0.0.1:18011/v1"
 api = "openai-completions"
 reasoning = true
 input = ["text"]
 context_window = 131072
 max_tokens = 16384
+cache_budget_bytes = 6442450944
 thinking = "medium"
 requested_capabilities = ["text", "tools"]
 
 # Required. Every numeric authority and operation deadline is explicit; there
 # are no retention defaults.
-[agents.pi.profiles."qwen-3.8-27b".lifecycle_log_retention]
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit".lifecycle_log_retention]
 max_count = 64
 max_bytes = 67108864
 max_envelope_bytes = 67371008
@@ -465,12 +472,12 @@ max_mutations_per_operation = 5
 
 # Optional. If present, every field is required. This profile-managed policy
 # is merged into the isolated Pi settings before every launch.
-[agents.pi.profiles."qwen-3.8-27b".compaction]
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit".compaction]
 enabled = true
 compact_at_tokens = 106496
 keep_recent_tokens = 8192
 
-[agents.pi.profiles."qwen-3.8-27b".compat]
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit".compat]
 supports_developer_role = false
 supports_reasoning_effort = false
 supports_usage_in_streaming = true
@@ -478,16 +485,16 @@ supports_finish_reason = true
 max_tokens_field = "max_tokens"
 thinking_format = "qwen-chat-template"
 
-[agents.pi.profiles."qwen-3.8-27b".runtime]
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit".runtime]
 executable = "/absolute/path/to/reviewed-runtime"
-argv = ["serve", "--model", "Qwen-3.8-27B", "--host", "127.0.0.1", "--port", "18011"]
+argv = ["serve", "--model", "Qwen3.8-27B-MLX-8bit", "--host", "127.0.0.1", "--port", "18011", "--prompt-cache-size", "1", "--prompt-cache-bytes", "6GB"]
 readiness_path = "/models"
 startup_timeout_seconds = 120
 shutdown_timeout_seconds = 10
 
 # Optional. If this table is absent, the existing exclusive direct-child
 # runtime behavior is unchanged. If present, every field is required.
-[agents.pi.profiles."qwen-3.8-27b".runtime.sharing]
+[agents.pi.profiles."qwen-3.8-27b-mlx-8bit".runtime.sharing]
 mode = "shared"
 linger_seconds = 15
 max_leases = 8
@@ -503,8 +510,15 @@ quarantine_seconds = 30
 broker_start_timeout_seconds = 160
 resource_pressure_mode = "disabled"
 
+# `publisher` and `family` are provenance axes separate from `provider`.
+# `cache_budget_bytes` is optional for arbitrary profiles. When present it is
+# positive, exactly matches one runtime `--prompt-cache-bytes` constraint, and
+# requires exactly one `--prompt-cache-size 1` enablement constraint.
+
 [agents.pi.profiles."muse-glimmer-30b-dflash"]
 provider = "local-muse"
+publisher = "muse"
+family = "glimmer"
 model = "Muse-Glimmer-30B"
 base_url = "http://127.0.0.1:18012/v1"
 api = "openai-completions"
@@ -1035,17 +1049,22 @@ production consumer/parent entry point: it resolves the trusted Pi plugin
 graph — `localruntime.CLIStatusReader` for preflight and the concrete
 `SharedRuntimeSanitizedEngineObservationReader` for the sanitized engine
 observation, both reading agents-infra's own Process-B broker status and
-never becoming the broker — then drives `infra.BuildAndRunPiTurn`. Full
-end-to-end activation for the local Qwen path is still gated on the stable
-`skill-agents-management` release tag and its final pin, which a dedicated
-delivery task owns; this checkpoint pins the exact independently reviewed
-pseudo-version instead.
+never becoming the broker — then drives `infra.BuildAndRunPiTurn`. The consumer
+is pinned to immutable `skill-agents-management` release `v0.5.3`, whose
+generic local-model row carries the optional cache-budget fact.
 
 The plugin-plane vendor for this local path is `local-models`. The
 `qwen-infra` name and its configured `vendor = "qwen"` value are product/config
 labels only: they never select the shipped `qwen` system (`qwen-code` by
 Alibaba). Pi's configured `thinking` is likewise not vendor reasoning effort;
 the Pi system declares `EffortTransportNone`.
+
+Profile `cache_budget_bytes` absence stays absent, never zero. A present value
+is carried through composition, primary/standalone launch plans, and both
+shared-runtime digests. `BuildPiPluginGraph` copies the value and the profile's
+publisher/family directly into the generic `local-models` row without parsing
+argv or inferring from model/profile names, target vendor, context size, or
+live status.
 
 Profile-name identity is its exact post-TOML-decoding UTF-8 bytes. There is no
 normalization, case folding, trimming, path cleaning, or lossy sanitization.
