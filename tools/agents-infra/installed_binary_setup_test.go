@@ -97,6 +97,129 @@ func TestInstalledBinarySetupLocalResolvesSourceFromInstallState(t *testing.T) {
 	}
 }
 
+// Production call site: the installed binary dispatches setup local through
+// runSetup into infra.Setup. If resolveLocalSetupLayout is removed or narrowed
+// to lexical equality, these cases enter syncRepo and create project/.agents
+// (recursively for the equality cases), so the no-mutation assertions kill the
+// mutant rather than merely proving a helper exists.
+func TestInstalledBinarySetupLocalRefusesRecursiveSourceBeforeFilesystemMutation(t *testing.T) {
+	binary := buildInstalledBinary(t)
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		args func(t *testing.T, source, project string) (string, string)
+	}{
+		{
+			name: "equal",
+			args: func(_ *testing.T, source, _ string) (string, string) { return source, source },
+		},
+		{
+			name: "relative paths",
+			args: func(t *testing.T, source, _ string) (string, string) {
+				relative, relErr := filepath.Rel(workingDir, source)
+				if relErr != nil {
+					t.Fatalf("Rel(%s, %s): %v", workingDir, source, relErr)
+				}
+				return filepath.Join(relative, "."), relative
+			},
+		},
+		{
+			name: "trailing separators",
+			args: func(_ *testing.T, source, _ string) (string, string) {
+				return source + string(filepath.Separator), source + string(filepath.Separator) + "."
+			},
+		},
+		{
+			name: "symlink alias",
+			args: func(t *testing.T, source, _ string) (string, string) {
+				alias := filepath.Join(t.TempDir(), "source-alias")
+				if linkErr := os.Symlink(source, alias); linkErr != nil {
+					t.Skipf("cannot create source alias: %v", linkErr)
+				}
+				return alias, source
+			},
+		},
+		{
+			name: "source contains project",
+			args: func(_ *testing.T, source, project string) (string, string) { return source, project },
+		},
+	}
+	if runtime.GOOS == "darwin" {
+		tests = append(tests, struct {
+			name string
+			args func(t *testing.T, source, project string) (string, string)
+		}{
+			name: "case insensitive equality",
+			args: func(t *testing.T, source, _ string) (string, string) {
+				upper := strings.ToUpper(source)
+				if _, statErr := os.Stat(upper); statErr != nil {
+					t.Skip("test volume is case-sensitive")
+				}
+				return upper, source
+			},
+		})
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := seedRuntimeSource(t, t.TempDir())
+			project := source
+			if test.name == "source contains project" {
+				project = filepath.Join(source, "nested-project")
+				mustMkdir(t, project)
+			}
+			sourceArg, projectArg := test.args(t, source, project)
+			home := t.TempDir()
+			configDir := filepath.Join(home, "config")
+
+			output, runErr := runInstalledBinary(
+				t, binary, home, configDir,
+				"setup", "local", projectArg,
+				"--source-dir", sourceArg,
+				"--claude-yolo-mode=true",
+			)
+			if runErr == nil {
+				t.Fatalf("installed production setup local accepted recursive source:\n%s", output)
+			}
+			resolvedSource, resolveErr := filepath.EvalSymlinks(source)
+			if resolveErr != nil {
+				t.Fatalf("EvalSymlinks(source): %v", resolveErr)
+			}
+			resolvedProject, resolveErr := filepath.EvalSymlinks(project)
+			if resolveErr != nil {
+				t.Fatalf("EvalSymlinks(project): %v", resolveErr)
+			}
+			for _, want := range []string{
+				"refusing setup local",
+				"resolved source directory",
+				resolvedSource,
+				"resolved project directory",
+				resolvedProject,
+				"syncing would copy the source into its own project-local destination",
+			} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("setup local refusal %q missing %q", output, want)
+				}
+			}
+			for _, path := range []string{
+				filepath.Join(project, ".agents"),
+				filepath.Join(project, ".claude"),
+				filepath.Join(project, ".codex"),
+				filepath.Join(project, ".local"),
+				filepath.Join(project, "AGENTS.md"),
+			} {
+				if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+					t.Fatalf("refused setup mutated %s: %v", path, statErr)
+				}
+			}
+		})
+	}
+}
+
 func TestInstalledBinarySetupLocalScrubsLiteralSourceDirAndAvoidsRepoSkillCycle(t *testing.T) {
 	binary := buildInstalledBinary(t)
 	home := t.TempDir()

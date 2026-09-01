@@ -333,8 +333,10 @@ func TestSetupRefusesSourceDirContainingItsOwnDestination(t *testing.T) {
 	if err == nil {
 		t.Fatal("Setup accepted a source dir that contains its own destination")
 	}
-	if !strings.Contains(err.Error(), "would sync into itself") {
-		t.Fatalf("error %q does not name the self-sync rejection", err)
+	for _, want := range []string{"refusing setup local", project, "resolved source directory", "resolved project directory", "same directory", "--no-sync"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not name %q", err, want)
+		}
 	}
 	if _, statErr := os.Lstat(filepath.Join(project, ".agents")); !os.IsNotExist(statErr) {
 		t.Fatalf("Setup mutated the destination before rejecting the source: %v", statErr)

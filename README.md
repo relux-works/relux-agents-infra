@@ -101,6 +101,17 @@ Callers therefore do not need a host-specific checkout path:
 `agents-infra setup local /path/to/project` works from a globally installed
 binary.
 
+Before a local setup writes any project path, it resolves both the selected
+source directory and the project directory through filesystem symlinks. Setup
+refuses the operation when the resolved source is the project itself or an
+ancestor containing the project, because syncing that relationship would copy
+the source into `PROJECT/.agents` and recursively discover its own output. The
+error names both resolved paths. Choose an agents-infra source outside the
+project. For a config-only change, use `--no-sync` together with that external
+source; an explicit self/ancestor `--source-dir` is still refused so an
+apparently harmless invocation cannot later become a recursive sync when its
+flags change.
+
 #### What makes a tree usable
 
 The contract is derived from what setup installs, not from a set of

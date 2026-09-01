@@ -5,6 +5,12 @@
 
 ## 2026-09-01
 
+### 1522 — Setup Local Resolves Identity Without Rewriting Path Spelling
+- ROOT CAUSE: `setup local` compared lexical absolute source/destination paths, so symlink and macOS case aliases could evade the recursion check and copy a source checkout into its own `.agents` output until path length exhaustion.
+- FIX: The production `infra.Setup` entrypoint resolves source and project roots before destination validation or mutation, walks project ancestry by filesystem identity, and refuses equality or source containment with both resolved paths and external-source remediation.
+- COMPATIBILITY: Resolved paths are evidence for the safety decision only. Setup preserves the caller's cleaned absolute spelling for installed symlinks, receipts, and logs because macOS `/var` and `/private/var` can identify the same directory while remaining intentionally different output bytes.
+- GATE: The installed-binary negative covers exact, relative, trailing-separator, symlink, ancestor, and case-insensitive forms and asserts no `.agents`, `.claude`, `.codex`, `.local`, or root `AGENTS.md` mutation; the valid external-source setup path and full Go suite remain green.
+
 ### 1455 — Hosted Primary Sessions Validate Only Their Provider
 - ROOT CAUSE: `BuildCodexLaunchPlan` and `BuildClaudeLaunchPlan` both used the full project parser, so an unselected managed Pi profile could reject a hosted primary-session plan before provider selection; the bsim-shaped missing-`publisher` case reproduced against installed `agents-infra` with exit 1 and `invalid_project_configuration`.
 - FIX: Hosted launch planning now uses a provider-scoped parser that keeps TOML, shared MCP, the `agents` root, and the selected hosted provider strict while leaving other provider-owned tables opaque. Full parsing remains the default for Pi, setup/verify, and canonical targets.

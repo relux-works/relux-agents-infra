@@ -45,6 +45,14 @@ the source tree from `--source-dir`, then `AGENTS_INFRA_SOURCE_DIR`, then the
 `~/.agents` runtime. An explicit source that is not an agents-infra tree fails
 and names what is missing instead of falling back.
 
+For `setup local`, the resolved source must be outside the resolved project.
+Setup refuses equality or a source ancestor before any project mutation and
+names both resolved paths; this closes recursive `PROJECT/.agents/.agents/...`
+installation through relative paths, trailing separators, symlinks, and
+case aliases. Choose an external source tree. For config-only changes, combine
+that external source with `--no-sync`; an explicit self/ancestor source remains
+invalid.
+
 A usable source carries the instruction entrypoints, `.configs`, `.rules`, the
 `tools/agents-infra` Go module the generated launcher builds, the exact
 217-record Pi tree manifest, and every instruction module its entrypoints
