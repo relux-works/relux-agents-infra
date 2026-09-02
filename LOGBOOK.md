@@ -3,6 +3,15 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-09-02
+
+### 2101 — Pi Turn Parent Dropped The Canonical Entrypoint
+- ROOT CAUSE: `tools/agents-infra/main.go` `runPiTurnCLI` passed a literal empty entrypoint to `infra.ResolvePiPluginGraph`; `ResolveCanonicalTarget` has no fallback, so a canonical-only project with the only valid Qwen target mapped as `qwen-infra` refused `unknown_entrypoint` before `BuildLaunch` or Process A.
+- FIX: `pi turn --target ENTRYPOINT` is mandatory and provider-local (`main.go` `runPiTurn`); `infra.ValidateExplicitPiEntrypoint` gates the empty selection inside `ResolvePiPluginGraph` and a non-Pi target is refused as typed `invalid_target` with field/source (`internal/infra/agents_management_registry.go`). `PiPluginGraph.Provenance` carries entrypoint/target/profile/provider/model/endpoint with sources.
+- DECISION: No inference from a unique configured Pi target, model name, vendor label, argv, or legacy provider policy; the closed alias vocabulary means ambiguity lives in targets, and a repeated `--target` is a conflict, not last-wins.
+- GATE: `pi_turn_cli_test.go` drives `runPi -> runPiTurn -> ResolvePiPluginGraph -> BuildAndRunPiTurn -> vendorplugin.BuildLaunch` with a fake Process A only; five narrowed mutants (inferred target, dropped environment refusal, last-wins repeat, dropped provenance, hardcoded alias at the call site) each fail.
+- SCOPE: BUG-260902-p6b6h3; `skill-agents-management` pin v0.5.3 unchanged; `qwen-infra` standalone and schema-1 paths unchanged.
+
 ## 2026-09-01
 
 ### 1522 — Setup Local Resolves Identity Without Rewriting Path Spelling
