@@ -3,6 +3,7 @@ package infra
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/relux-works/skill-agents-management/pkg/agentic"
 	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
@@ -19,11 +20,52 @@ const defaultPiInferenceEngineID plugin.ID = "mlx"
 // registry owns the adapter; launch callers receive no observation setter or
 // per-request evidence field.
 type PiPluginGraph struct {
-	Registry *vendorplugin.Registry
-	Runtime  vendorplugin.RuntimeID
-	Model    vendorplugin.ModelID
-	Profile  string
-	Engine   plugin.Ref
+	Registry   *vendorplugin.Registry
+	Runtime    vendorplugin.RuntimeID
+	Model      vendorplugin.ModelID
+	Profile    string
+	Engine     plugin.Ref
+	Provenance PiPluginGraphProvenance
+}
+
+// PiPluginGraphProvenance is the exact canonical-target identity the graph was
+// assembled from: the explicit entrypoint, the target it maps to, the selected
+// profile, and the profile-derived effective provider and endpoint, each with
+// the configuration source that declared it. It is copied from the resolution
+// and never re-derived from model names, argv, or plugin rows.
+type PiPluginGraphProvenance struct {
+	Entrypoint       string
+	EntrypointSource string
+	Target           string
+	TargetSource     string
+	Vendor           string
+	Environment      string
+	Model            string
+	Profile          string
+	ProfileSource    string
+	Provider         string
+	Endpoint         string
+}
+
+func piPluginGraphProvenance(resolved ResolvedCanonicalTarget) PiPluginGraphProvenance {
+	provenance := PiPluginGraphProvenance{
+		Entrypoint:       resolved.Entrypoint.Name,
+		EntrypointSource: resolved.Entrypoint.Source,
+		Target:           resolved.Target.Name,
+		TargetSource:     resolved.Target.Source,
+		Vendor:           resolved.Target.Vendor,
+		Environment:      resolved.Target.Environment,
+		Model:            resolved.Target.Model,
+		Provider:         resolved.EffectiveProvider,
+		Endpoint:         resolved.EffectiveEndpoint,
+	}
+	if resolved.Target.Profile != nil {
+		provenance.Profile = *resolved.Target.Profile
+	}
+	if resolved.Profile != nil {
+		provenance.ProfileSource = resolved.Profile.Source
+	}
+	return provenance
 }
 
 // BuildPiPluginGraph consumes an already-resolved canonical Pi target. The
@@ -116,7 +158,25 @@ func BuildPiPluginGraph(project string, resolved ResolvedCanonicalTarget, status
 	}); err != nil {
 		return PiPluginGraph{}, fmt.Errorf("agents-infra: declare canonical Pi runtime: %w", err)
 	}
-	return PiPluginGraph{Registry: registry, Runtime: runtimeID, Model: modelID, Profile: profileName, Engine: engine}, nil
+	return PiPluginGraph{Registry: registry, Runtime: runtimeID, Model: modelID, Profile: profileName, Engine: engine, Provenance: piPluginGraphProvenance(resolved)}, nil
+}
+
+// ValidateExplicitPiEntrypoint is the provider-local gate every Pi consumer
+// passes before canonical resolution: the entrypoint must be selected
+// explicitly by the caller. An empty selection is refused as unknown_entrypoint
+// here, before any configuration is read, so that neither a unique configured
+// target, a model name, a vendor label, argv, nor the legacy provider policy
+// can stand in for the missing selection.
+func ValidateExplicitPiEntrypoint(entrypoint string) error {
+	if strings.TrimSpace(entrypoint) == "" || strings.TrimSpace(entrypoint) != entrypoint {
+		return &CanonicalTargetError{
+			Code:        PrimarySessionErrorUnknownEntrypoint,
+			Context:     TargetErrorContext{Field: entrypointsField},
+			Remediation: "select one configured [agents.entrypoints] alias explicitly, for example --target qwen-infra",
+			Err:         errors.New("canonical Pi entrypoint must be selected explicitly; a unique configured target, a model name, or legacy provider policy is not a fallback"),
+		}
+	}
+	return nil
 }
 
 // ResolvePiPluginGraph resolves the canonical Pi target and assembles the
@@ -126,6 +186,9 @@ func BuildPiPluginGraph(project string, resolved ResolvedCanonicalTarget, status
 // SharedRuntimeSanitizedEngineObservationReader for the sanitized engine
 // observation. Tests that need a fake reader still pass one explicitly.
 func ResolvePiPluginGraph(projectDir, homeDir, entrypoint string, status localruntime.StatusReader, observations SanitizedEngineObservationReader) (PiPluginGraph, error) {
+	if err := ValidateExplicitPiEntrypoint(entrypoint); err != nil {
+		return PiPluginGraph{}, err
+	}
 	project, err := CanonicalProjectDir(projectDir)
 	if err != nil {
 		return PiPluginGraph{}, err
@@ -133,6 +196,14 @@ func ResolvePiPluginGraph(projectDir, homeDir, entrypoint string, status localru
 	resolved, err := ResolveCanonicalTarget(entrypoint, project, homeDir)
 	if err != nil {
 		return PiPluginGraph{}, err
+	}
+	if resolved.Target.Environment != "pi" {
+		return PiPluginGraph{}, &CanonicalTargetError{
+			Code:        PrimarySessionErrorInvalidTarget,
+			Context:     TargetErrorContext{Entrypoint: resolved.Entrypoint.Name, Target: resolved.Target.Name, Field: targetsField + "." + resolved.Target.Name + ".environment", Source: resolved.Target.Source},
+			Remediation: "select an entrypoint whose target declares environment = \"pi\"",
+			Err:         fmt.Errorf("canonical entrypoint selects environment %q, not the managed Pi environment", resolved.Target.Environment),
+		}
 	}
 	if status == nil {
 		status = localruntime.NewCLIStatusReader()

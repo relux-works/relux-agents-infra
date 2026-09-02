@@ -16,6 +16,7 @@ import (
 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/attachments"
 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
 	managementpi "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
+	"github.com/relux-works/skill-agents-management/pkg/localruntime"
 )
 
 var (
@@ -690,15 +691,47 @@ func repeatedPiTurnFlags(args []string) bool {
 	return false
 }
 
+// piTurnDependencies are the process-level collaborators runPiTurn drives.
+// Production (runPiTurnCLI) fills them with the real caller directory, home,
+// environment, and OSProcessATurnRunner, and leaves the readers nil so
+// ResolvePiPluginGraph installs agents-infra's real status and sanitized
+// engine observation readers. Tests substitute a fake Process A only; target
+// selection and graph assembly always run the production path.
+type piTurnDependencies struct {
+	startDir     string
+	homeDir      string
+	environ      []string
+	status       localruntime.StatusReader
+	observations infra.SanitizedEngineObservationReader
+	runner       infra.ProcessATurnRunner
+	stdout       io.Writer
+}
+
 // runPiTurnCLI is the real production consumer/parent entry point: it
 // resolves the trusted Pi plugin graph (real preflight status reader, real
-// sanitized engine observation reader) and drives the exact Process-A plan
-// through vendorplugin.BuildLaunch and the sole pi.ValidateTurnResult
-// classifier. It never itself owns Process-B lifecycle; that stays with the
-// broker/runtime status surfaces the observation reader reads from.
+// sanitized engine observation reader) for the explicitly selected canonical
+// entrypoint and drives the exact Process-A plan through
+// vendorplugin.BuildLaunch and the sole pi.ValidateTurnResult classifier. It
+// never itself owns Process-B lifecycle; that stays with the broker/runtime
+// status surfaces the observation reader reads from.
 func runPiTurnCLI(args []string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+	return runPiTurn(args, piTurnDependencies{
+		startDir: callerProjectDir(),
+		homeDir:  homeDir,
+		environ:  os.Environ(),
+		runner:   infra.OSProcessATurnRunner{},
+		stdout:   os.Stdout,
+	})
+}
+
+func runPiTurn(args []string, deps piTurnDependencies) error {
 	fs := flag.NewFlagSet("pi turn", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	target := fs.String("target", "", "configured canonical entrypoint, for example qwen-infra")
 	prompt := fs.String("prompt", "", "single unattended worker prompt")
 	deadline := fs.Duration("deadline", 30*time.Minute, "total turn deadline (maximum 30m)")
 	if err := fs.Parse(args); err != nil {
@@ -710,26 +743,47 @@ func runPiTurnCLI(args []string) error {
 	if *deadline <= 0 || *deadline > 30*time.Minute {
 		return errors.New("pi turn deadline must be within (0, 30m]")
 	}
-	startDir := callerProjectDir()
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = ""
+	if repeatedPiTurnTargetFlag(args) {
+		return errors.New("pi turn --target must be selected exactly once; conflicting selections are refused")
 	}
-	graph, err := infra.ResolvePiPluginGraph(startDir, homeDir, "", nil, nil)
+	if *target == "" {
+		return errors.New("pi turn requires an explicit --target entrypoint, for example --target qwen-infra; a configured target is never inferred")
+	}
+	if err := infra.ValidateExplicitPiEntrypoint(*target); err != nil {
+		return err
+	}
+	graph, err := infra.ResolvePiPluginGraph(deps.startDir, deps.homeDir, *target, deps.status, deps.observations)
 	if err != nil {
 		return err
 	}
-	request := graph.SpawnRequest([]byte(*prompt), startDir, os.Environ())
+	request := graph.SpawnRequest([]byte(*prompt), deps.startDir, deps.environ)
 	ctx, cancel := context.WithTimeout(context.Background(), *deadline)
 	defer cancel()
-	result, runErr := infra.BuildAndRunPiTurn(ctx, graph.Registry, request, infra.OSProcessATurnRunner{})
+	result, runErr := infra.BuildAndRunPiTurn(ctx, graph.Registry, request, deps.runner)
 	if result.Class == "" {
 		return runErr
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+	if err := json.NewEncoder(deps.stdout).Encode(result); err != nil {
 		return err
 	}
 	return runErr
+}
+
+// repeatedPiTurnTargetFlag reports whether --target was supplied more than
+// once. The flag package would silently keep the last value; a repeated
+// selection is a conflict the parent must refuse rather than resolve.
+func repeatedPiTurnTargetFlag(args []string) bool {
+	count := 0
+	for _, arg := range args {
+		name := arg
+		if before, _, ok := strings.Cut(arg, "="); ok {
+			name = before
+		}
+		if name == "--target" || name == "-target" {
+			count++
+		}
+	}
+	return count > 1
 }
 
 func runRuntime(args []string) error {
@@ -1216,6 +1270,7 @@ func usageText() string {
   agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
   agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
   agents-infra pi spawn --prompt TEXT [--deadline DURATION] [--print-config]
+  agents-infra pi turn --target ENTRYPOINT --prompt TEXT [--deadline DURATION]
   agents-infra pi lifecycle status [--project DIR] [--profile NAME] [--continuation TOKEN] [--json]
   agents-infra pi lifecycle retire-legacy [--project DIR] [--profile NAME] (--dry-run | --confirm PLAN_HASH) [--json]
   agents-infra runtime status [--project DIR] [--profile NAME] [--json]
