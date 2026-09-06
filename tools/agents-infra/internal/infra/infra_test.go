@@ -1371,6 +1371,50 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
 	assertFileNotContains(t, filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.figma]")
 }
 
+// Production call site: Setup -> setupCodexWithConfig -> syncManagedCodexConfig.
+// This binds the repository-managed Codex config to the installed native config
+// that an openai-board parent session reads when no explicit project pin wins.
+func TestSetupGlobalInstallsRepositoryAstraPinWithReasoningEffort(t *testing.T) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	repositoryConfigPath := filepath.Join(workingDir, "..", "..", "..", "..", ".configs", "codex-config.toml")
+	repositoryConfig, err := os.ReadFile(repositoryConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", repositoryConfigPath, err)
+	}
+
+	source := seedSourceRepo(t)
+	mustWrite(t, filepath.Join(source, ".configs", "codex-config.toml"), string(repositoryConfig))
+	home := t.TempDir()
+	layout, err := GlobalLayout(source, home)
+	if err != nil {
+		t.Fatalf("GlobalLayout: %v", err)
+	}
+	seedGlobalAgentsInfraTarget(t, layout)
+
+	if err := Setup(Options{Layout: layout}); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	installedPath := filepath.Join(home, ".codex", "config.toml")
+	installedConfig, err := os.ReadFile(installedPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", installedPath, err)
+	}
+	var document struct {
+		Model           string `toml:"model"`
+		ReasoningEffort string `toml:"model_reasoning_effort"`
+	}
+	if err := toml.Unmarshal(installedConfig, &document); err != nil {
+		t.Fatalf("Unmarshal(%s): %v", installedPath, err)
+	}
+	if document.Model != "gpt-6-astra" || document.ReasoningEffort != "xhigh" {
+		t.Fatalf("installed Codex pin = %q/%q, want gpt-6-astra/xhigh", document.Model, document.ReasoningEffort)
+	}
+}
+
 func TestSetupGlobalMigratesManagedCodexConfigPreservingUserState(t *testing.T) {
 	source := seedSourceRepo(t)
 	home := t.TempDir()
@@ -1404,7 +1448,7 @@ hide_full_access_warning = true
 
 	configPath := filepath.Join(home, ".codex", "config.toml")
 	assertSymlink(t, configPath, existingConfigPath)
-	assertFileContains(t, configPath, "model = 'gpt-5.6-sol'")
+	assertFileContains(t, configPath, "model = 'gpt-6-astra'")
 	assertFileContains(t, configPath, "model_context_window = 272000")
 	assertFileContains(t, configPath, "model_auto_compact_token_limit = 245000")
 	assertFileContains(t, configPath, "service_tier = 'default'")
@@ -1549,7 +1593,7 @@ func seedSourceRepo(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n\n"+externalCILocalMirrorPolicySection+"\n")
 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
-	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.6-sol\"\nmodel_context_window = 272000\nmodel_auto_compact_token_limit = 245000\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
+	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-6-astra\"\nmodel_context_window = 272000\nmodel_auto_compact_token_limit = 245000\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
 url = "https://mcp.figma.com/mcp"
 

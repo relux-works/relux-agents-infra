@@ -1084,7 +1084,7 @@ Process A. Nothing infers the target from a unique configured Pi target, a
 model name, a vendor label, argv, or the legacy provider policy. The assembled
 graph carries the exact entrypoint/target/profile/provider/model/endpoint
 provenance with its configuration sources. The consumer
-is pinned to immutable `skill-agents-management` release `v0.5.3`, whose
+is pinned to immutable `skill-agents-management` release `v0.5.9`, whose
 generic local-model row carries the optional cache-budget fact.
 
 The plugin-plane vendor for this local path is `local-models`. The
@@ -2104,7 +2104,7 @@ Reference config with:
 
 ### Codex CLI (`codex-config.toml`)
 
-- Model: `gpt-5.6-sol`
+- Model: `gpt-6-astra`
 - Context window override: `272000`
 - Auto-compaction token limit: `245000` (about 90% of the configured window, leaving headroom below the long-context pricing threshold)
 - Reasoning effort: `xhigh`
@@ -2118,6 +2118,13 @@ Reference config with:
 - Local setup removes legacy managed project-local config symlinks but preserves custom `.codex/config.toml` files.
 - Explicit project-local config is available with `agents-infra setup local /path/to/project --codex-config=local`; it is rendered atomically from the installed config without the unsupported top-level `profiles` table.
 - Enforce global config with `agents-infra setup local /path/to/project --codex-config=global`.
+
+The repository-managed Codex parent-session pins are:
+
+| Model | Parent-session use | Reasoning effort | Spawn ceiling |
+| --- | --- | --- | --- |
+| `gpt-6-astra` | Shipped global default; may also be selected explicitly through `openai-board --model gpt-6-astra` or project `agents.codex.primary_session.model` | `xhigh` in the shipped global config; an explicit non-empty project or CLI value may override it | Admitted through `task-board.config.json` up to `medium` |
+| `gpt-5.6-sol` | Preserved explicit selection and workload-class row | Caller/project selection | Admitted through `task-board.config.json` up to `medium` |
 - `agents-infra doctor local` reports `codex_config_generated: true` for the managed rendered file and `codex_config_shadowing_global: true` whenever a project-local `.codex/config.toml` overrides the global config.
 
 ### Project-Local MCP Opt-In (Codex + Claude Code)

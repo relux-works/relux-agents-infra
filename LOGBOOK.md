@@ -3,6 +3,14 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-09-07
+
+### 1745 — Astra Parent Pin Has Three Independent Authorities
+- FINDING: `.configs/codex-config.toml` owns the installed native Codex fallback; project `.agents/.configs/project-config.toml` owns an explicit parent-session override composed by `BuildPrimarySessionLaunchPlan`; `task-board.config.json -> spawn.ceilings.codex` independently limits spawned Codex selections.
+- FIX: Native setup and explicit composition now test `gpt-6-astra` with `xhigh`; the task-board production preflight admits Astra only through the preserved explicit allow-set and caps it at `medium`.
+- GATE: The first Astra composition test used only a synthetic project fixture, so changing the repository native pin back to Sol survived. `TestSetupGlobalInstallsRepositoryAstraPinWithReasoningEffort` now binds the repository config to production `Setup` and kills that narrowing mutant.
+- SCOPE: `TASK-260905-ljuc4q`; Claude policy and every existing Codex row remain unchanged.
+
 ## 2026-09-02
 
 ### 2101 — Pi Turn Parent Dropped The Canonical Entrypoint

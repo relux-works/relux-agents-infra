@@ -259,6 +259,51 @@ func TestBuildPrimarySessionLaunchPlanCodexParityAndManagedHost(t *testing.T) {
 	}
 }
 
+// Production call site: openai-board asks task-board to compose a managed
+// Codex parent session through BuildPrimarySessionLaunchPlan. Keep the Astra
+// model and its configured effort in both the interactive and managed-host
+// launch variants so either delivery path starts the same pinned session.
+func TestBuildPrimarySessionLaunchPlanCodexPinsAstraWithReasoningEffort(t *testing.T) {
+	project := t.TempDir()
+	configPath := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
+	mustMkdir(t, filepath.Dir(configPath))
+	mustWrite(t, configPath, `[agents.codex.primary_session]
+model = "gpt-6-astra"
+reasoning_effort = "xhigh"
+`)
+
+	plan, err := BuildPrimarySessionLaunchPlan(
+		"codex",
+		project,
+		t.TempDir(),
+		nil,
+		ChildLaunchCompositionProducer{},
+		fakePrimarySessionLookPath(t),
+	)
+	if err != nil {
+		t.Fatalf("BuildPrimarySessionLaunchPlan: %v", err)
+	}
+
+	wantInteractive := []string{"--model", "gpt-6-astra", "-c", `model_reasoning_effort="xhigh"`}
+	if got := plan.LaunchVariants.Interactive.Argv; !reflect.DeepEqual(got, wantInteractive) {
+		t.Errorf("interactive argv = %#v, want %#v", got, wantInteractive)
+	}
+	wantManagedHost := []string{"-c", `model="gpt-6-astra"`, "-c", `model_reasoning_effort="xhigh"`, "app-server"}
+	if got := plan.LaunchVariants.ManagedHost.Argv; !reflect.DeepEqual(got, wantManagedHost) {
+		t.Errorf("managed-host argv = %#v, want %#v", got, wantManagedHost)
+	}
+	canonicalConfigPath, err := filepath.EvalSymlinks(configPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", configPath, err)
+	}
+	if got := plan.Resolved.Model; got.Value == nil || *got.Value != "gpt-6-astra" || got.Source != canonicalConfigPath {
+		t.Errorf("resolved model = %#v, want Astra from %s", got, canonicalConfigPath)
+	}
+	if got := plan.Resolved.Reasoning; got.Value == nil || *got.Value != "xhigh" || got.Source != canonicalConfigPath {
+		t.Errorf("resolved reasoning = %#v, want xhigh from %s", got, canonicalConfigPath)
+	}
+}
+
 func TestBuildPrimarySessionLaunchPlanCodexExplicitCLISuppressesProjectPolicy(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
