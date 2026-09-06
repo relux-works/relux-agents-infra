@@ -5,6 +5,13 @@
 
 ## 2026-09-07
 
+### 2200 — Shipped Codex Ceiling Now Has Behavioral Coverage
+- ROOT CAUSE: Fixture-only Astra tests could stay green after the shipped task-board ceiling changed.
+- FIX: `TestShippedCodexPolicyAdmitsAstraWithMediumCeilingAndSolFallback` runs the production task-board preflight against the repository JSON, asserts exact admitted pairs and medium ceiling, and drives Setup with the shipped TOML to retain Sol fallback.
+- GATE: Isolated-copy mutations lowering the ceiling, admitting high, removing the effort, or removing Astra all fail the named test with exit 1.
+- BOUND: Requires task-board on PATH; exercises production preflight and Setup, not a live provider session or a spawn execution.
+- SCOPE: TASK-260905-ljuc4q F2; no policy values or Claude rows changed.
+
 ### 1745 — Astra Parent Admission Has Three Independent Authorities
 - FINDING: `.configs/codex-config.toml` owns the installed native Codex fallback; project `.agents/.configs/project-config.toml` owns an explicit parent-session override composed by `BuildPrimarySessionLaunchPlan`; `task-board.config.json -> spawn.ceilings.codex` independently limits spawned Codex selections.
 - FIX: Native setup preserves the `gpt-5.6-sol`/`xhigh` fallback, explicit composition tests `gpt-6-astra`/`xhigh`, and the task-board production preflight admits Astra only through the explicit allow-set capped at `medium`.

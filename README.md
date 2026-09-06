@@ -1871,6 +1871,8 @@ established. The benchmark-only profiles pin both runtimes to a live-reported
 | `git` | Inspect repo state and validate diff hygiene | `git status --short`, `git diff --check` | No repo artifact; task-scoped command logs should be written under `.temp/` |
 | `ssh` / `scp` / `tar` | Validate and document host-agnostic remote agent worker handoff patterns | `ssh "$REMOTE_SSH" 'hostname'`, `scp prompt.md "$REMOTE_SSH:/tmp/run/prompt.md"`, `tar -czf source.tgz .` | Remote task copies and local scratch artifacts under `.temp/remote-agent/` |
 
+The Go suite requires `task-board` on `PATH` for `TestShippedCodexPolicyAdmitsAstraWithMediumCeilingAndSolFallback`. It runs `task-board q 'project_config(view=spawn-preflight, role=developer, agent=codex)'` against the shipped `task-board.config.json` with an isolated temporary board, checking Astra/Sol admission through medium and the shipped Sol native fallback through Setup. Missing tooling fails this contract test; no live session is launched.
+
 ## Research and Articles
 
 | Path | What it holds |
