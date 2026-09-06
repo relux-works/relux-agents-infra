@@ -2104,7 +2104,7 @@ Reference config with:
 
 ### Codex CLI (`codex-config.toml`)
 
-- Model: `gpt-6-astra`
+- Model: `gpt-5.6-sol`
 - Context window override: `272000`
 - Auto-compaction token limit: `245000` (about 90% of the configured window, leaving headroom below the long-context pricing threshold)
 - Reasoning effort: `xhigh`
@@ -2123,8 +2123,8 @@ The repository-managed Codex parent-session pins are:
 
 | Model | Parent-session use | Reasoning effort | Spawn ceiling |
 | --- | --- | --- | --- |
-| `gpt-6-astra` | Shipped global default; may also be selected explicitly through `openai-board --model gpt-6-astra` or project `agents.codex.primary_session.model` | `xhigh` in the shipped global config; an explicit non-empty project or CLI value may override it | Admitted through `task-board.config.json` up to `medium` |
-| `gpt-5.6-sol` | Preserved explicit selection and workload-class row | Caller/project selection | Admitted through `task-board.config.json` up to `medium` |
+| `gpt-5.6-sol` | Shipped global fallback; may also be selected explicitly through `openai-board --model gpt-5.6-sol` or project `agents.codex.primary_session.model` | `xhigh` in the shipped global config; an explicit non-empty project or CLI value may override it | Admitted through `task-board.config.json` up to `medium` |
+| `gpt-6-astra` | Explicit parent-session selection through `openai-board --model gpt-6-astra` or project `agents.codex.primary_session.model` | Caller/project selection | Admitted through `task-board.config.json` up to `medium` |
 - `agents-infra doctor local` reports `codex_config_generated: true` for the managed rendered file and `codex_config_shadowing_global: true` whenever a project-local `.codex/config.toml` overrides the global config.
 
 ### Project-Local MCP Opt-In (Codex + Claude Code)

@@ -1374,7 +1374,7 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
 // Production call site: Setup -> setupCodexWithConfig -> syncManagedCodexConfig.
 // This binds the repository-managed Codex config to the installed native config
 // that an openai-board parent session reads when no explicit project pin wins.
-func TestSetupGlobalInstallsRepositoryAstraPinWithReasoningEffort(t *testing.T) {
+func TestSetupGlobalPreservesRepositorySolFallbackWithReasoningEffort(t *testing.T) {
 	workingDir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
@@ -1410,8 +1410,8 @@ func TestSetupGlobalInstallsRepositoryAstraPinWithReasoningEffort(t *testing.T) 
 	if err := toml.Unmarshal(installedConfig, &document); err != nil {
 		t.Fatalf("Unmarshal(%s): %v", installedPath, err)
 	}
-	if document.Model != "gpt-6-astra" || document.ReasoningEffort != "xhigh" {
-		t.Fatalf("installed Codex pin = %q/%q, want gpt-6-astra/xhigh", document.Model, document.ReasoningEffort)
+	if document.Model != "gpt-5.6-sol" || document.ReasoningEffort != "xhigh" {
+		t.Fatalf("installed Codex pin = %q/%q, want gpt-5.6-sol/xhigh", document.Model, document.ReasoningEffort)
 	}
 }
 
@@ -1448,7 +1448,7 @@ hide_full_access_warning = true
 
 	configPath := filepath.Join(home, ".codex", "config.toml")
 	assertSymlink(t, configPath, existingConfigPath)
-	assertFileContains(t, configPath, "model = 'gpt-6-astra'")
+	assertFileContains(t, configPath, "model = 'gpt-5.6-sol'")
 	assertFileContains(t, configPath, "model_context_window = 272000")
 	assertFileContains(t, configPath, "model_auto_compact_token_limit = 245000")
 	assertFileContains(t, configPath, "service_tier = 'default'")
@@ -1593,7 +1593,7 @@ func seedSourceRepo(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n\n"+externalCILocalMirrorPolicySection+"\n")
 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
-	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-6-astra\"\nmodel_context_window = 272000\nmodel_auto_compact_token_limit = 245000\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
+	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.6-sol\"\nmodel_context_window = 272000\nmodel_auto_compact_token_limit = 245000\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
 url = "https://mcp.figma.com/mcp"
 

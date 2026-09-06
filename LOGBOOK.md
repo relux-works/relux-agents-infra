@@ -5,10 +5,10 @@
 
 ## 2026-09-07
 
-### 1745 — Astra Parent Pin Has Three Independent Authorities
+### 1745 — Astra Parent Admission Has Three Independent Authorities
 - FINDING: `.configs/codex-config.toml` owns the installed native Codex fallback; project `.agents/.configs/project-config.toml` owns an explicit parent-session override composed by `BuildPrimarySessionLaunchPlan`; `task-board.config.json -> spawn.ceilings.codex` independently limits spawned Codex selections.
-- FIX: Native setup and explicit composition now test `gpt-6-astra` with `xhigh`; the task-board production preflight admits Astra only through the preserved explicit allow-set and caps it at `medium`.
-- GATE: The first Astra composition test used only a synthetic project fixture, so changing the repository native pin back to Sol survived. `TestSetupGlobalInstallsRepositoryAstraPinWithReasoningEffort` now binds the repository config to production `Setup` and kills that narrowing mutant.
+- FIX: Native setup preserves the `gpt-5.6-sol`/`xhigh` fallback, explicit composition tests `gpt-6-astra`/`xhigh`, and the task-board production preflight admits Astra only through the explicit allow-set capped at `medium`.
+- GATE: `TestSetupGlobalPreservesRepositorySolFallbackWithReasoningEffort` binds the repository config to production `Setup`; `TestBuildPrimarySessionLaunchPlanCodexPinsAstraWithReasoningEffort` independently proves the explicit Astra selection.
 - SCOPE: `TASK-260905-ljuc4q`; Claude policy and every existing Codex row remain unchanged.
 
 ## 2026-09-02
