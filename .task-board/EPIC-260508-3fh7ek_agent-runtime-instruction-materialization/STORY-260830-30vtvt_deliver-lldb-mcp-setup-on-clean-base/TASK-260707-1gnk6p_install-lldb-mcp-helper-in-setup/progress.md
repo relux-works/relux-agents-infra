@@ -1,5 +1,5 @@
 ## Status
-to-dev
+closed
 
 ## Assigned To
 [reviewer] reviewer (codex)
@@ -8,7 +8,7 @@ to-dev
 2026-07-07T13:09:29Z
 
 ## Last Update
-2026-08-30T05:36:37Z
+2026-09-09T15:26:35Z
 
 ## Blocked By
 - (none)

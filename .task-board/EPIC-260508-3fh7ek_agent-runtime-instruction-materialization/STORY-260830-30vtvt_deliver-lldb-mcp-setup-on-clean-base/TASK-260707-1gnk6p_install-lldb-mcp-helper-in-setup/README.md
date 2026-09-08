@@ -1,7 +1,7 @@
 # TASK-260707-1gnk6p: install-lldb-mcp-helper-in-setup
 
 ## Description
-Install the LLDB MCP helper prerequisites from the agents-infra setup script on macOS so project-local lldb MCP opt-in works after render/restart without manual Homebrew or wrapper steps.
+Obsoleted on 2026-09-09 by BUG-260830-j1o8av, landed in #39. There is no supported source to install lldb-mcp from: Homebrew llvm 23 ships neither lldb nor lldb-mcp, and Apple Xcode LLDB has no MCP support. The bootstrap this task would have delivered was removed instead of completed. Closed rather than done: no helper was installed.
 
 ## Scope
 (define task scope)
