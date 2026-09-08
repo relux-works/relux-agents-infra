@@ -760,14 +760,11 @@ available when the user explicitly wants the unwrapped Codex CLI. Do not add MCP
 servers to global `~/.codex/config.toml` just to make plain `codex` work.
 
 Definitions may be streamable HTTP servers with `url` or stdio servers with
-`command` and optional `args`. `lldb` is available as an opt-in stdio definition
-using `command = "lldb-mcp"`. On macOS, `./setup.sh` installs Homebrew `llvm`
-when needed and writes an `lldb-mcp` wrapper into the Homebrew bin directory.
-The wrapper execs Homebrew's helper without overriding `LLDB_EXE_PATH`, so the
-helper uses the `lldb` binary next to itself by default, and it prunes dead-PID
-`~/.lldb/lldb-mcp-*.json` discovery files before launch. Set
-`AGENTS_INFRA_SKIP_LLDB_MCP=1` to skip that bootstrap. Projects may override the
-registry locally with an absolute helper path when needed.
+`command` and optional `args`. There is no shared `lldb` definition and no LLDB
+bootstrap: `lldb-mcp` is not distributed by any supported source, since Homebrew
+`llvm` 23 ships neither `lldb` nor `lldb-mcp` and Apple's Xcode LLDB has no MCP
+support. A project holding its own `lldb-mcp` binary can declare it locally with
+an absolute command path like any other stdio server.
 
 `safari` is available as an opt-in stdio definition using Safari Technology
 Preview's `safaridriver`:

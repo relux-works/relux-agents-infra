@@ -38,14 +38,13 @@ Supported shared MCP server definitions:
 | Server | Use | Enablement |
 |--------|-----|------------|
 | `figma` | Figma Dev Mode / design context | Add `figma` to `.agents/.configs/project-config.toml` |
-| `lldb` | LLDB debugging through `lldb-mcp` stdio bridge | Add `lldb` to `.agents/.configs/project-config.toml`; macOS `./setup.sh` installs Homebrew `llvm` and an `lldb-mcp` wrapper when needed |
 | `safari` | Safari Technology Preview web inspection through `safaridriver --mcp` | Add `safari` to `.agents/.configs/project-config.toml`; requires Safari Technology Preview with web developer features, remote automation, and external agents enabled |
 
 Project opt-in example:
 
 ```toml
 [mcp]
-enabled_servers = ["figma", "lldb", "safari"]
+enabled_servers = ["figma", "safari"]
 ```
 
 `enabled_servers` is one agent-agnostic list per project — there is a single

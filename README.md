@@ -2365,28 +2365,18 @@ policy. If no project opt-in is found while walking upward, neither launcher
 mounts anything — no `-c` overrides for Codex, no `--mcp-config` flag for
 Claude Code.
 
-LLDB MCP is available as an opt-in stdio server:
+There is no shared LLDB definition and no LLDB bootstrap. `lldb-mcp` is not
+distributed by any supported source: Homebrew `llvm` 23 ships neither `lldb`
+nor `lldb-mcp`, and Apple's LLDB from Xcode has no MCP support at all. Setup
+installs nothing for LLDB and never consults Homebrew for it.
 
-```toml
-[mcp]
-enabled_servers = ["lldb"]
-```
-
-LLDB's MCP integration uses `lldb-mcp`, which bridges stdio to the LLDB MCP
-server socket. On macOS, `./setup.sh` installs Homebrew `llvm` when `lldb-mcp`
-is missing and writes a narrow `$(brew --prefix)/bin/lldb-mcp` wrapper that
-execs Homebrew's helper without overriding `LLDB_EXE_PATH`. This lets
-`lldb-mcp` use the `lldb` binary next to itself by default, matching LLDB's
-documented behavior. The wrapper also prunes dead-PID
-`~/.lldb/lldb-mcp-*.json` discovery files before launch so stale sockets do not
-break the MCP initialize handshake. Set `AGENTS_INFRA_SKIP_LLDB_MCP=1` to skip
-that bootstrap. If a project uses an LLDB build with the helper elsewhere,
-override the definition in the project-local
+A project that obtains an `lldb-mcp` binary by other means can still declare it
+like any other stdio server in its own
 `.agents/.configs/codex-mcp-servers.toml`:
 
 ```toml
 [servers.lldb]
-command = "/path/to/lldb-mcp"
+command = "/absolute/path/to/lldb-mcp"
 ```
 
 Safari MCP is available as an opt-in stdio server backed by Safari Technology
