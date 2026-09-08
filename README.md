@@ -2013,7 +2013,7 @@ Modular instruction files in `.instructions/`:
 | `INSTRUCTIONS_TOOLS.md` | Allowed CLI tools |
 | `INSTRUCTIONS_SKILLS.md` | Skills system usage |
 | `INSTRUCTIONS_DIAGRAMS.md` | C4/PlantUML diagram rules |
-| `INSTRUCTIONS_TESTING.md` | Swift Testing, refactoring workflow |
+| `INSTRUCTIONS_TESTING.md` | Negative-testing baseline for all development, evidence controls, Swift Testing, Android state preservation, and refactoring workflow |
 | `INSTRUCTIONS_WORKFLOW.md` | Task tracking, parent primary-goal actualization, model fallback, autonomous completion, forced-fit escalation, Git, and logging |
 | `INSTRUCTIONS_DOCS.md` | Documentation requirements |
 | `INSTRUCTIONS_STYLE.md` | Communication style |

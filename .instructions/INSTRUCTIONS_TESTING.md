@@ -5,6 +5,48 @@
 * Use **Swift Testing** framework, not XCTest.
 * Tests must be in **Swift**, not ObjC.
 
+## Negative Tests Are A Development Baseline
+
+* Every development change must consider both required behavior and forbidden
+  outcomes. Add or preserve relevant executable negative tests for affected
+  contracts in features, bug fixes, refactoring, and integration. This is not
+  limited to security, validators, or explicit rejection gates.
+* Define negative expectations while specifying the change, before treating
+  happy-path success as completion. Derive cases from requirements and realistic
+  failure modes: invalid inputs, boundary values, forbidden transitions, missing
+  authority or dependencies, and interruption, retry, or concurrency where
+  relevant. Carry these expectations into implementation and review handoffs.
+* Assert the intended rejection or invariant, not merely any error, crash, or
+  timeout. Check post-failure state and observable effects against the contract:
+  no forbidden partial writes, leaked information, duplicate effects, or lost
+  recovery guarantees. Permitted rejection telemetry is not a forbidden effect.
+* Pair negative cases with nearby valid positive controls. An implementation
+  that rejects everything must not satisfy the tests. Two implementations
+  agreeing is not proof of correctness: ground expected verdicts in an
+  independent requirement and probe both disagreement directions when
+  equivalence is required. Document intentional asymmetry instead of demanding
+  identical behavior across different contracts.
+* For bug fixes, retain a regression witness and test relevant neighboring
+  variants so that the fix addresses the failure class, not just one input.
+  Preserve existing negative guarantees when refactoring.
+* Scale depth to risk and the changed contract, not a universal test quota.
+  Existing applicable coverage may be reused with evidence. For non-executable
+  changes, use meaningful contract fixtures or counterexamples where applicable.
+  Record a specific rationale for an inapplicable check and distinguish checks
+  that could not run from passing evidence. Silence or a small diff is not a
+  waiver; superficial tests written only to satisfy a checklist are not evidence.
+* When acceptance relies on a checker, scanner, gate, or test harness, establish
+  that it detects a known violation of the claimed property using a bounded
+  control plant where applicable. Require the intended failure: a skipped or
+  not-applied plant, unrelated setup failure, or crash is not a successful
+  control. Instrument controls supplement product negative tests; they do not
+  mandate exhaustive mutation testing for every edit. Reassess reused control
+  evidence when the relevant instrument, configuration, or contract changes.
+* Run fault injection and destructive negative cases in isolated fixtures or
+  explicitly authorized test environments. Negative-testing obligations never
+  authorize damaging user data, resetting live devices, weakening permissions,
+  or violating the state-preservation rules below.
+
 ## Android App State Preservation
 
 * Preserve the currently installed app, its data, granted permissions, active
