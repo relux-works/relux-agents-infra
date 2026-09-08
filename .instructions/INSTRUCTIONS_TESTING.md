@@ -5,6 +5,18 @@
 * Use **Swift Testing** framework, not XCTest.
 * Tests must be in **Swift**, not ObjC.
 
+## State What Each Test Proves
+
+* Add a brief comment beside each test stating the specific claim it proves.
+  One shared comment is sufficient for a cohesive group or table of tests that
+  checks the same claim; do not repeat it for every case.
+* State materially different per-case claims and important limits separately.
+  The claim must match the actual assertions, exercised path, inputs, and
+  environment; a passing example must not be described as a universal proof.
+* Keep this to a concise claim, plus a limitation when needed, not a mandatory
+  questionnaire or a narration of the test code. Update the comment when the
+  test changes. This applies to positive and negative tests alike.
+
 ## Negative Tests Are A Development Baseline
 
 * Every development change must consider both required behavior and forbidden
