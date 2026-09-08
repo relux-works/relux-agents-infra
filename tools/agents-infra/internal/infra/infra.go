@@ -819,6 +819,20 @@ func removeDanglingManagedSkillLinks(skillsDir, managedSkillsDir string, out io.
 	return nil
 }
 
+// managedSkillEntries lists the managed skill sources to fan out. A runtime
+// that carries no skills tree at all fans out nothing; that is an empty
+// surface, not a failure, so provider setup keeps rendering everything else.
+func managedSkillEntries(skillsDir string) ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(skillsDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
 func setupClaude(layout Layout, out io.Writer) error {
 	claudeSkillsDir := filepath.Join(layout.ClaudeDir, "skills")
 	if err := os.MkdirAll(claudeSkillsDir, 0o755); err != nil {
@@ -834,7 +848,7 @@ func setupClaude(layout Layout, out io.Writer) error {
 	if err := removeDanglingManagedSkillLinks(claudeSkillsDir, skillsDir, out); err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(skillsDir)
+	entries, err := managedSkillEntries(skillsDir)
 	if err != nil {
 		return err
 	}
@@ -875,7 +889,7 @@ func setupCodexWithConfig(layout Layout, codexConfigMode *CodexConfigMode, out i
 	if err := removeDanglingManagedSkillLinks(codexSkillsDir, skillsDir, out); err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(skillsDir)
+	entries, err := managedSkillEntries(skillsDir)
 	if err != nil {
 		return err
 	}

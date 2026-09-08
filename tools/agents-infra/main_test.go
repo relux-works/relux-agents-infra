@@ -1365,6 +1365,16 @@ model = "gpt-fast"
 	mustWrite(t, filepath.Join(project, ".agents", ".instructions", "AGENTS.md"), "# Managed instructions\n")
 	mustWrite(t, filepath.Join(project, ".agents", ".rules", "default.rules"), "allow\n")
 	mustWrite(t, filepath.Join(project, ".agents", "skills", "example", "SKILL.md"), "# Example\n")
+	receipt, err := json.Marshal(infra.RuntimeReceipt{
+		Schema:    1,
+		Mode:      infra.ModeLocal,
+		AgentsDir: filepath.Join(project, ".agents"),
+		BinDir:    filepath.Join(project, ".local", "bin"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(project, ".agents", ".agents-infra-install.json"), string(receipt)+"\n")
 	return project
 }
 
@@ -1664,4 +1674,59 @@ bearer_token_env_var = "JIRA_TOKEN"
 			t.Fatalf("required_env_names = %#v, want deduplicated [JIRA_TOKEN]", plan.RequiredEnvNames)
 		}
 	})
+}
+
+// Positive control for the config-only ancestor contract: a project that has no
+// .agents of its own still inherits primary-session policy from the nearest
+// ancestor .agents/.configs, and doctor names that ancestor file as the source.
+// Config inheritance and runtime-root selection are separate resolutions, so
+// the ancestor supplying configuration must not become the project's runtime.
+func TestRunDoctorLocalInheritsConfigFromConfigOnlyAncestor(t *testing.T) {
+	home := t.TempDir()
+	ancestor := t.TempDir()
+	mustMkdir(t, filepath.Join(ancestor, ".agents", ".configs"))
+	ancestorConfig := filepath.Join(ancestor, ".agents", ".configs", "project-config.toml")
+	mustWrite(t, ancestorConfig, `
+[agents.codex.primary_session]
+model = "codex-ancestor"
+reasoning_effort = "high"
+yolo_mode = true
+
+[agents.claude.primary_session]
+model = "claude-ancestor"
+yolo_mode = true
+`)
+	project := filepath.Join(ancestor, "nested", "project")
+	mustMkdir(t, project)
+	t.Setenv("HOME", home)
+
+	output := captureStdout(t, func() {
+		if err := runDoctor([]string{"local", project}); err != nil {
+			t.Fatalf("runDoctor: %v", err)
+		}
+	})
+	fields := parseKeyValueOutput(output)
+	want := map[string]string{
+		"codex_primary_model":             "codex-ancestor",
+		"codex_primary_model_source":      ancestorConfig,
+		"codex_primary_yolo_mode":         "true",
+		"codex_primary_yolo_mode_source":  ancestorConfig,
+		"claude_primary_model":            "claude-ancestor",
+		"claude_primary_model_source":     ancestorConfig,
+		"claude_primary_yolo_mode":        "true",
+		"claude_primary_yolo_mode_source": ancestorConfig,
+	}
+	for key, wantValue := range want {
+		if got := fields[key]; got != wantValue {
+			t.Fatalf("%s = %q, want %q:\n%s", key, got, wantValue, output)
+		}
+	}
+
+	// The ancestor supplied configuration only; preparation must not have
+	// adopted it as a runtime root and written a provider surface into it.
+	for _, dir := range []string{".claude", ".codex"} {
+		if _, err := os.Stat(filepath.Join(ancestor, dir)); !os.IsNotExist(err) {
+			t.Fatalf("doctor materialized %s in the config-only ancestor: %v", dir, err)
+		}
+	}
 }

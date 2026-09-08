@@ -181,6 +181,71 @@ func TestPreparePrimarySessionWithoutLocalRuntimeIsExplicitNoop(t *testing.T) {
 	}
 }
 
+func TestPreparePrimarySessionTreatsConfigOnlyAncestorAsNoop(t *testing.T) {
+	configRoot := t.TempDir()
+	configPath := filepath.Join(configRoot, ".agents", ".configs", "project-config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("[agents.codex.primary_session]\nmodel = \"gpt-test\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(configRoot, "nested", "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := PreparePrimarySession(
+		"codex",
+		project,
+		ChildLaunchCompositionProducer{Version: "test", Commit: "abc123"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.LocalRuntimePresent || report.RuntimeProjectDir != "" || len(report.Artifacts) != 0 {
+		t.Fatalf("config-only ancestor was treated as an installed runtime: %#v", report)
+	}
+	if _, err := os.Stat(filepath.Join(configRoot, ".codex")); !os.IsNotExist(err) {
+		t.Fatalf("prepare changed a config-only ancestor: %v", err)
+	}
+}
+
+func TestPreparePrimarySessionSkipsConfigOnlyAncestorForInstalledRuntime(t *testing.T) {
+	runtimeRoot := preparedRuntimeFixture(t)
+	configRoot := filepath.Join(runtimeRoot, "teams")
+	configPath := filepath.Join(configRoot, ".agents", ".configs", "project-config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("[agents.codex.primary_session]\nmodel = \"gpt-test\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(configRoot, "nested", "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := PreparePrimarySession(
+		"codex",
+		project,
+		ChildLaunchCompositionProducer{Version: "test", Commit: "abc123"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRuntimeRoot, err := filepath.EvalSymlinks(runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.LocalRuntimePresent || report.RuntimeProjectDir != canonicalRuntimeRoot {
+		t.Fatalf("report roots = %#v", report)
+	}
+	if _, err := os.Stat(filepath.Join(configRoot, ".codex")); !os.IsNotExist(err) {
+		t.Fatalf("prepare changed the nearer config-only ancestor: %v", err)
+	}
+}
+
 func TestPreparePrimarySessionUsesNearestInstalledAncestorRuntime(t *testing.T) {
 	project := preparedRuntimeFixture(t)
 	nested := filepath.Join(project, "tools", "feature")
@@ -266,5 +331,50 @@ model = "gpt-fast"
 			t.Fatal(err)
 		}
 	}
+	layout, err := LocalLayout("", project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRuntimeReceipt(layout); err != nil {
+		t.Fatal(err)
+	}
 	return project
+}
+
+// An installed runtime that carries no skills tree still renders its provider
+// surface. Proves the fan-out treats an absent source tree as an empty skill
+// set rather than a failure, and that it invents no links to fill the gap.
+func TestPreparePrimarySessionRendersSurfaceWithoutManagedSkillsTree(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run(provider, func(t *testing.T) {
+			project := preparedRuntimeFixture(t)
+			if err := os.RemoveAll(filepath.Join(project, ".agents", "skills")); err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := PreparePrimarySession(
+				provider,
+				project,
+				ChildLaunchCompositionProducer{Version: "test", Commit: "abc123"},
+			)
+			if err != nil {
+				t.Fatalf("prepare failed on a runtime with no skills tree: %v", err)
+			}
+			if !report.LocalRuntimePresent {
+				t.Fatalf("report = %#v", report)
+			}
+
+			providerDir := ".claude"
+			if provider == "codex" {
+				providerDir = ".codex"
+			}
+			skillLinks, err := os.ReadDir(filepath.Join(project, providerDir, "skills"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(skillLinks) != 0 {
+				t.Fatalf("prepare invented skill links with no source tree: %#v", skillLinks)
+			}
+		})
+	}
 }

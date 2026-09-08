@@ -203,12 +203,17 @@ func installedProjectRuntimeRoot(startDir string) (string, bool, error) {
 		agentsDir := filepath.Join(current, ".agents")
 		info, err := os.Stat(agentsDir)
 		if err == nil {
-			if !info.IsDir() {
-				return "", false, fmt.Errorf("installed project runtime is not a directory: %s", agentsDir)
+			if info.IsDir() {
+				layout, layoutErr := LocalLayout("", current)
+				if layoutErr != nil {
+					return "", false, layoutErr
+				}
+				if len(verifyRuntimeReceipt(layout, agentsDir)) == 0 {
+					return current, true, nil
+				}
 			}
-			return current, true, nil
 		}
-		if !os.IsNotExist(err) {
+		if err != nil && !os.IsNotExist(err) {
 			return "", false, fmt.Errorf("stat installed project runtime %s: %w", agentsDir, err)
 		}
 		parent := filepath.Dir(current)
