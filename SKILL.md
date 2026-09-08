@@ -870,10 +870,24 @@ instruction/settings links, and managed skills. Codex preparation preserves
 the exact pre-existing `.codex/config.toml` state, including absence; only
 explicit `setup local --codex-config=preserve|global|local` selects that mode.
 The report marks the config artifact `absent` or `preserved`. Without a local
-runtime it reports an explicit no-op. The nearest installed ancestor runtime
-is selected and the global `~/.agents` runtime is never treated as a project.
+runtime it reports an explicit no-op. The nearest ancestor carrying a valid
+completed-install receipt is selected; config-only `.agents/.configs` ancestors
+still contribute launch policy during composition but are skipped by
+preparation. The global `~/.agents` runtime is never treated as a project.
 Direct `agents-infra codex|claude` launches call the same preparation function
 immediately before provider exec; `--print-config` remains read-only.
+
+A directory whose `.agents/` holds only `.configs/` is a **meta-config**: a
+supported way to give one policy to every project beneath it. Configuration
+resolution and runtime materialization are separate walks — configuration reads
+every `.agents/.configs/project-config.toml` from the filesystem root down to
+the project, while materialization takes only the nearest ancestor with a valid
+completed-install receipt. A meta-config therefore supplies model, reasoning
+effort, `yolo_mode`, and MCP selection to the tree and never receives a provider
+surface of its own. It legitimately fails `verify local`, which is a runtime
+check and not a verdict on the config. `doctor local` `*_source` fields name the
+exact file behind each resolved value. See the README section
+"Meta-configs: one policy for a tree of projects".
 
 ## Attachments Contract
 

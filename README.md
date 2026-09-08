@@ -343,8 +343,11 @@ agents-infra prepare --agent claude --project /abs/path/to/project --schema-vers
 ```
 
 The command is non-launching and board-agnostic. It walks from `--project`
-toward the filesystem root, selects the nearest installed project `.agents/`
-runtime, and never treats the user's global `~/.agents` runtime as a project.
+toward the filesystem root and selects the nearest project `.agents/` runtime
+with a valid completed-install receipt. A config-only ancestor such as
+`.agents/.configs/project-config.toml` still contributes launch policy during
+composition, but preparation skips it instead of treating it as an installed
+runtime. The user's global `~/.agents` runtime is never treated as a project.
 Codex preparation refreshes the managed `.codex/AGENTS.md`, project-root
 `AGENTS.md`, and skills/rules links. It never chooses a Codex config mode:
 an absent `.codex/config.toml` stays absent, while an existing managed, custom,
@@ -1649,6 +1652,52 @@ Claude model and yolo provenance compose independently with the same
 root-to-leaf rule: the nearest explicitly configured field wins, and
 `yolo_mode = false` masks an inherited `true`. Claude never inherits Codex
 model, effort, or yolo values and does not affect Codex resolution.
+
+### Meta-configs: one policy for a tree of projects
+
+Configuration resolution and runtime materialization are two separate walks,
+and keeping them separate is what makes shared policy possible. A directory may
+carry a `.agents/` that holds **nothing but** `.configs/`, and every project
+beneath it then inherits that policy while keeping its own provider surface.
+This is a supported pattern, not a partial installation.
+
+```
+~/src/
+├── .agents/
+│   └── .configs/
+│       └── project-config.toml     # one primary-session policy for the tree
+├── service-a/                      # inherits it; surface lives here or global
+└── service-b/
+    ├── .agents/                    # a real installed runtime
+    └── .configs/project-config.toml  # overrides per field, root-to-leaf
+```
+
+The two walks differ in what they accept:
+
+| Walk | Looks for | A config-only `.agents` |
+| --- | --- | --- |
+| Configuration | every `.agents/.configs/project-config.toml` from the filesystem root down to the project | **is read** — it contributes policy |
+| Runtime materialization | the nearest ancestor `.agents/` carrying a valid completed-install receipt | **is skipped** — it never becomes the project's runtime root |
+
+So a meta-config directory supplies model, reasoning effort, `yolo_mode`, and
+MCP selection to everything under it, and never has `CLAUDE.md`, `settings.json`,
+skills, or `AGENTS.md` written into it. A project with no installed runtime of
+its own inherits the policy and reports an explicit preparation no-op rather
+than borrowing the ancestor's directory.
+
+A meta-config directory legitimately fails `agents-infra verify local` — it has
+no install receipt, no `.instructions`, no `.rules`, and no skills tree, because
+it was never meant to be a runtime. That report is a runtime check, not a
+verdict on the config.
+
+Confirm what a nested project actually resolved with `doctor local`, whose
+`*_source` fields name the exact file each value came from:
+
+```bash
+agents-infra doctor local /abs/path/to/project | grep _source
+```
+
+A value sourced from an ancestor path is inheritance working as intended.
 
 For model and reasoning effort, the per-field launch precedence is:
 
