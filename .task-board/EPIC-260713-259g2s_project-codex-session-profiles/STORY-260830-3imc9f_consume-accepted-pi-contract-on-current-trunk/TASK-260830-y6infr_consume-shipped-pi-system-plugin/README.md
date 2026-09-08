@@ -1,0 +1,10 @@
+# consume-accepted-pi-observer-and-turn-contract
+
+## Description
+Consume the exact independently accepted agents-management public observer and Pi Process-A turn contract (candidate tree 454e2aae, patch SHA-256 471ebb6c) through the existing generic Registry/BuildLaunch plugin graph. Implement the concrete agents-infra observation adapter and Process-A/Process-B bridge without moving broker ownership. Development may target the attached exact API artifact; final integration must pin the immutable upstream release that contains it.
+
+## Scope
+relux-agents-infra only: generic agents-management dependency wiring, sanitized MLX/Pi observation adapter, exact Pi Process-A child launch and sole ValidateTurnResult call, fake Process-B lifecycle composition, config/docs/tests. No Pi/Qwen/MLX/model-ID branch in generic dispatch; no live runtime, model, process, service, socket, endpoint, user config, or user HOME access.
+
+## Acceptance Criteria
+1. External-package compile tests consume the exact accepted observer and Pi turn types/functions. 2. agents-infra injects a versioned sanitized observation before BuildLaunch and refuses missing, malformed, stale, identity-drifted, wrong-engine and caller-conflict evidence before child effects. 3. The real production child-launch call site executes the exact Pi plan with fake Process A and fake Process B, passes bounded stdout/actual exit/intervention/cleanup to the sole pi.ValidateTurnResult classifier, and cannot parse around it. 4. Broker election, lease, restart, quarantine, rotation and Process-B ownership remain in agents-infra. 5. qwen-infra resolves to Pi plus local-models/MLX profile and never aliases shipped qwen-code x alibaba. 6. Generic core contains no Pi/Qwen/MLX/model-ID special case. 7. This checkpoint pins the exact independently accepted agents-management commit or its immutable pseudo-version; the dedicated final delivery task owns the stable release and final pin. 8. Static/fake full, race, vet, build, cross-platform, mutation, no-live-runtime, independent review, PR and merge gates pass.

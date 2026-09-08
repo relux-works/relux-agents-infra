@@ -1,0 +1,443 @@
+diff --git a/.research/260830_agents-management-lockstep-release-and-rollback.md b/.research/260830_agents-management-lockstep-release-and-rollback.md
+new file mode 100644
+index 0000000..fad4f7c
+--- /dev/null
++++ b/.research/260830_agents-management-lockstep-release-and-rollback.md
+@@ -0,0 +1,418 @@
++# Agents-management lockstep release and rollback plan
++
++Task: `TASK-260830-s5ro4e`
++
++Date: 2026-08-30
++
++## Decision
++
++Do not land a breaking agents-management contract before both consumers have
++shipped against the generalized graph. Use `skill-agents-management v0.5.0` as
++the compatibility bridge, migrate and release task-board first, then migrate
++and release agents-infra. Only then may a separately reviewed
++`skill-agents-management v0.6.0` remove the legacy compatibility adapters.
++
++This order creates no interval in which the running board dynamically loads an
++unsupported contract. Go resolves and compiles the pinned module into each
++binary. Publishing a newer module tag does not change a running or installed
++task-board binary.
++
++Reserved release versions for this sequence:
++
++- `skill-agents-management v0.5.0` at
++  `b74f758a90a422304d55460422831da80e3d6cc8` — already released; compatibility
++  bridge and inference-engine contract.
++- `skill-project-management 0.25.0` — first task-board release migrated to the
++  generalized graph, pinned to `skill-agents-management v0.5.0`.
++- `relux-agents-infra v1.7.0` — first agents-infra release consuming the same
++  graph, pinned to `skill-agents-management v0.5.0`.
++- `skill-agents-management v0.6.0` — first version allowed to remove legacy
++  compatibility adapters; conditional on the pre-release gates below.
++- `skill-project-management 0.25.1` and `relux-agents-infra v1.7.1` — patch
++  releases that repin the already-migrated consumers to `v0.6.0`.
++
++The reserved versions are part of this plan. If any is already occupied before
++execution, stop and revise this reviewed plan; do not silently substitute a
++different version.
++
++## Measured task-board consumption surface
++
++Baseline inspected:
++
++- task-board source: `skill-project-management` commit
++  `063197b1` (`0.24.3-172-g063197b1` when built with repository metadata).
++- installed task-board: `0.24.3-172-g063197b1`.
++- required module: `skill-agents-management v0.2.0` at
++  `tools/board-cli/go.mod:10`, with a vendored copy.
++
++The source census excludes `vendor/**`, generated module files, and tests unless
++the row says otherwise.
++
++| Measurement | Result |
++| --- | ---: |
++| Production Go files importing agents-management | 26 |
++| Test Go files importing agents-management | 38 |
++| Direct public package families | 13 |
++| Compiled agents-management packages, including transitive internals | 17 |
++| Production LOC in the 26 direct consumer files | 11,862 |
++| Direct raw `pkg/plugin` imports | 0 |
++| Direct `pkg/inferenceengine` imports | 0 |
++
++The 13 direct package families are `pkg/agentic`, six system plugins (`agy`,
++`claude`, `codex`, `gemini`, `muse`, `qwen`), `pkg/providerlimits`,
++`pkg/vendorplugin`, and four vendor registrations (`alibaba`, `anthropic`,
++`google`, `openai`).
++
++The coupling is dense but narrower than the task title suggests:
++
++1. Launch construction uses `agentic.Registry`, six system constructors,
++   `LaunchRequest`, `BuildPlan`, all three launch modes, capability/effort
++   declarations, composition, goals, budget, service tier, run context and the
++   resulting `Plan`. The production dispatch is
++   `internal/spawn/launch_plan.go:332-342`; process execution remains in
++   task-board.
++2. Model selection uses `vendorplugin.Default`, runtime declarations, vendor
++   and system IDs, lineup/lifecycle, model metadata, pricing and four init-time
++   vendor registrations. A custom `qwen-codex` runtime is declared through the
++   compatibility registry.
++3. The largest surface is `pkg/providerlimits`: provider classification,
++   identity resolution, state stores, leases, liveness, group tables, ladders,
++   spread cursors, observations, reports and reset hints. This is operationally
++   critical to spawn admission but is not the generalized plugin graph.
++4. task-board does not call the raw generalized registry or the inference-engine
++   contract today. `v0.5.0` publishes existing `agentic.Registry` and
++   `vendorplugin.Registry` as compatibility bridges backed by `pkg/plugin`.
++
++Therefore the immediate risk is compatibility-adapter regression across a
++large caller surface, not a direct dependency on every new graph type.
++
++## Compatibility matrix
++
++| task-board | agents-management compiled into it | agents-infra | Support status |
++| --- | --- | --- | --- |
++| `0.24.3-172-g063197b1` | `v0.2.0` | `v1.6.1-100-gd69a435` | Current known-working baseline. agents-infra does not import the module. |
++| Source `063197b1` scratch build | `v0.5.0` | unchanged | Source-compatible bridge proven by the bounded evidence below; not a shipped combination. |
++| `0.25.0` | `v0.5.0` | `v1.6.1-100-gd69a435` | Supported transition after task-board release. |
++| `0.25.0` | `v0.5.0` | `v1.7.0` | Target non-breaking migrated combination. |
++| Installed `0.25.0` | still embeds `v0.5.0` | installed `v1.7.0` | Remains supported while `v0.6.0` is merely published. No dynamic repin occurs. |
++| `0.25.1` | `v0.6.0` | `v1.7.1`, also pinned to `v0.6.0` | Target post-compatibility-cleanup combination. |
++
++No consumer may use an untagged agents-management commit, a `replace`, or a
++workspace override in a release build.
++
++## Required board capability gate
++
++At every step the currently installed board must retain all of these, not only
++parse a config:
++
++- `spawn`: task-specific preflight, run-record creation, provider launch,
++  status/observe/directives and terminal evidence;
++- route: producer `handoff`, reviewer launch, reviewer verdict and
++  `accept_cr`/rework routing;
++- resource add/update/get, because handoff requires outcome evidence;
++- Story workspace and Change Request reads needed to finish the migration.
++
++Static build/tests are necessary but insufficient. Each consumer release must
++run one real canary spawn and one real producer-to-reviewer route on the live
++board before it becomes the default binary. The canary must attach a
++task-scoped outcome, hand off, and receive an explicit reviewer verdict. A
++failed canary is routed with the saved old binary and triggers rollback; it is
++never relabelled green.
++
++## Release order and rollback
++
++### Step 0 — freeze the working recovery point
++
++Repositories and versions:
++
++- task-board: `skill-project-management` commit `063197b1`, installed version
++  `0.24.3-172-g063197b1`, compiled with agents-management `v0.2.0`;
++- agents-infra: installed `v1.6.1-100-gd69a435` at
++  `d69a435945758ea1cd5dfa62395ca32498e712c7`;
++- agents-management: `v0.5.0` at
++  `b74f758a90a422304d55460422831da80e3d6cc8`.
++
++Before any migration task starts, save executable copies and hashes under a
++task-scoped operator directory. Do not stop or restart any run:
++
++```bash
++TB_RECOVERY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/task-board-lockstep.XXXXXX")"
++mkdir -p "$TB_RECOVERY_ROOT/bin"
++cp "$(command -v task-board)" "$TB_RECOVERY_ROOT/bin/task-board"
++cp "$(command -v tb-sessiond)" "$TB_RECOVERY_ROOT/bin/tb-sessiond"
++cp "$(command -v agents-infra)" "$TB_RECOVERY_ROOT/bin/agents-infra"
++shasum -a 256 "$TB_RECOVERY_ROOT"/bin/*
++"$TB_RECOVERY_ROOT/bin/task-board" --version
++"$TB_RECOVERY_ROOT/bin/agents-infra" version
++```
++
++Required-working capabilities: run a read-only spawn preflight with the saved
++task-board, then use the installed board for one ordinary spawn/status/resource
++round trip. Existing in-flight runs continue on their already-exec'd process
++images.
++
++Rollback: this step changes no product state. Deleting the recovery directory
++is not a rollback and must wait until the whole sequence is accepted.
++
++Rollback status: **UNTESTED operationally**. This task inspected versions but
++did not copy or restore installed binaries.
++
++### Step 1 — hold agents-management at the compatibility bridge
++
++Repository/version: `skill-agents-management v0.5.0` at exact commit
++`b74f758a90a422304d55460422831da80e3d6cc8`. It is already published; this
++plan performs no tag or release action.
++
++Required-working capabilities: current task-board remains installed and still
++embeds `v0.2.0`; `spawn`, route and resource operations are unchanged. Before
++changing task-board source, a clean scratch copy of its exact candidate base
++must build and pass spawn tests against public `v0.5.0` with `GOWORK=off` and
++no module replace.
++
++In-flight runs: unaffected. Publishing a Go module tag does not replace code in
++an already-running task-board or child process.
++
++Source rollback command if the dependency-only candidate fails:
++
++```bash
++cd /path/to/skill-project-management/tools/board-cli
++GOWORK=off go mod edit \
++  -require=github.com/relux-works/skill-agents-management@v0.2.0
++GOWORK=off go mod tidy
++GOWORK=off go mod vendor
++GOWORK=off go test -mod=vendor ./internal/spawn -count=1
++GOWORK=off go build -mod=vendor ./...
++```
++
++Rollback status: **PARTIALLY TESTED**. In a scratch archive of `063197b1`,
++repinning `v0.5.0 -> v0.2.0`, building the CLI, reading the authoritative task
++and running spawn-preflight all exited 0. The full suite and workstation install
++restore were not exercised.
++
++### Step 2 — migrate and release task-board first
++
++Repository/version: `skill-project-management 0.25.0`, pinned exactly to
++`skill-agents-management v0.5.0` and migrated by `TASK-260830-mf1xwk`.
++
++Why first: task-board is the control plane that must remain capable of spawning
++and routing the agents-infra migration. agents-infra remains at
++`v1.6.1-100-gd69a435` during this step.
++
++Required-working capabilities and evidence, in order:
++
++1. Keep the saved `0.24.3-172-g063197b1` binary as the command used to route
++   the migration task until the candidate canary passes.
++2. On the exact reviewed `0.25.0` head, run the complete task-board suite,
++   build all binaries, and verify the module graph contains public `v0.5.0`
++   with no replace.
++3. Run the candidate CLI's read/query, `project_config(view=spawn-preflight)`,
++   one real canary spawn, resource handoff, reviewer spawn and reviewer verdict
++   on the live board.
++4. Only after that canary succeeds, install/tag/release `0.25.0` and make it the
++   default `task-board` binary. Re-run the same live spawn-and-route canary from
++   the installed binary.
++
++In-flight runs: do not cancel them. A running `task-board spawn` process keeps
++the old executable image after on-disk replacement, and its provider child is
++already launched. Its later board mutations remain valid because this step
++does not change board storage schemas. Existing `tb-sessiond` processes also
++keep their old image; do not restart them during active sessions. New commands
++use `0.25.0` only after the canary gate.
++
++Fast operational rollback, using the Step-0 saved binary:
++
++```bash
++install -m 0755 "$TB_RECOVERY_ROOT/bin/task-board" \
++  "$HOME/.local/bin/.task-board.rollback"
++mv -f "$HOME/.local/bin/.task-board.rollback" "$HOME/.local/bin/task-board"
++"$HOME/.local/bin/task-board" --version
++"$HOME/.local/bin/task-board" q --format compact \
++  'project_config(view=spawn-preflight, role=developer, agent=codex, task_class=code)'
++```
++
++Coherent binary/skill/role restore from the exact working source follows after
++the board is reachable:
++
++```bash
++TB_OLD_SOURCE="$TB_RECOVERY_ROOT/skill-project-management-063197b1"
++git -C /path/to/skill-project-management worktree add --detach \
++  "$TB_OLD_SOURCE" 063197b1
++"$TB_OLD_SOURCE/scripts/setup.sh" --install-only
++task-board --version
++```
++
++Rollback status: **UNTESTED operationally**. No installed binary, skill or role
++was replaced by this planning task. The source-level v0.2.0 rebuild/query
++rehearsal is not evidence that workstation restore works.
++
++### Step 3 — migrate and release agents-infra
++
++Repository/version: `relux-agents-infra v1.7.0`, pinned exactly to
++`skill-agents-management v0.5.0`, after `TASK-260830-y6infr` and
++`TASK-260830-11ajl2`. task-board stays at `0.25.0`.
++
++Required-working capabilities:
++
++- task-board `0.25.0` must still complete spawn-preflight and route while
++  agents-infra is built and tested;
++- agents-infra's existing compose, prepare, primary-session, target, Pi,
++  runtime and model-check gates must remain green;
++- a real task-board canary must exercise the production agents-infra compose
++  seam, launch a child, attach its outcome and route it through review;
++- Pi/runtime process ownership remains agents-infra; no broker or in-flight
++  local runtime is restarted merely to change the consumer library.
++
++In-flight runs: existing provider children and task-board monitors do not load
++the new agents-infra binary. Existing primary sessions and Pi runtimes continue
++under the old process image. Do not kill them. New compositions use `v1.7.0`
++only after its canary passes.
++
++Rollback to the saved installed binary:
++
++```bash
++install -m 0755 "$TB_RECOVERY_ROOT/bin/agents-infra" \
++  "$HOME/.local/bin/.agents-infra.rollback"
++mv -f "$HOME/.local/bin/.agents-infra.rollback" "$HOME/.local/bin/agents-infra"
++"$HOME/.local/bin/agents-infra" version
++"$HOME/.local/bin/agents-infra" verify global
++task-board q --format compact \
++  'project_config(view=spawn-preflight, role=developer, agent=codex, task_class=code)'
++```
++
++Coherent source restore, if the installed runtime surface also changed:
++
++```bash
++AI_OLD_SOURCE="$TB_RECOVERY_ROOT/relux-agents-infra-d69a435"
++git -C /path/to/relux-agents-infra worktree add --detach \
++  "$AI_OLD_SOURCE" d69a435945758ea1cd5dfa62395ca32498e712c7
++"$AI_OLD_SOURCE/setup.sh"
++agents-infra verify global
++```
++
++Rollback status: **UNTESTED**. This planning task did not replace the installed
++agents-infra executable or runtime surface.
++
++### Step 4 — only then allow the breaking contract release
++
++Repository/version: conditional `skill-agents-management v0.6.0`.
++
++Precondition: `0.25.0` and `v1.7.0` are both released, installed-canary green,
++and no production source imports the compatibility APIs proposed for removal.
++Create clean scratch copies of both exact release tags, repin them to the exact
++`v0.6.0` candidate commit, and run their full tests/builds plus the task-board
++live read/preflight canary before tagging agents-management.
++
++Required-working capabilities: the installed task-board remains `0.25.0` and
++continues embedding `v0.5.0`; its spawn and route behavior does not change when
++the `v0.6.0` tag is published.
++
++In-flight runs: unaffected. No installed process dynamically resolves the new
++module tag.
++
++Rollback if the candidate fails: do not publish `v0.6.0`; restore scratch
++consumer pins to `v0.5.0`. If a bad immutable tag has already been published,
++do not delete or move it. Keep all consumers pinned to `v0.5.0` and publish a
++new reviewed `v0.6.1` restoring the required surface before any consumer repin.
++
++```bash
++cd /path/to/consumer/tools/board-cli  # or the agents-infra Go module
++GOWORK=off go mod edit \
++  -require=github.com/relux-works/skill-agents-management@v0.5.0
++GOWORK=off go mod tidy
++```
++
++Rollback status: **UNTESTED**. `v0.6.0` does not exist and no adapter removal
++was performed.
++
++### Step 5 — repin migrated consumers to the breaking version
++
++Repositories/versions, in order:
++
++1. `skill-project-management 0.25.1`, pinned to released
++   `skill-agents-management v0.6.0`;
++2. `relux-agents-infra v1.7.1`, pinned to released
++   `skill-agents-management v0.6.0`.
++
++Required-working capabilities: repeat the full candidate and installed
++spawn-and-route canary for `0.25.1` before agents-infra moves; then repeat it
++after `v1.7.1`. The old `0.25.0` and `v1.7.0` binaries remain the recovery
++pair until both canaries and review accept the exact heads.
++
++In-flight runs: same as Steps 2 and 3. Old process images continue; no run is
++killed, restarted or reparented because of the repin.
++
++Rollback: atomically restore task-board `0.25.0` and agents-infra `v1.7.0`
++from the release-specific backups captured immediately before this step, then
++republish forward patch releases (`0.25.2` / `v1.7.2`) pinned to `v0.5.0` if a
++source fix is required. Never rewrite `0.25.1`, `v1.7.1` or `v0.6.0` tags.
++
++Rollback status: **UNTESTED**. None of these releases exists yet.
++
++## Unsupported-contract windows
++
++There are no planned runtime windows in which task-board runs against an
++unsupported agents-management version:
++
++| Potential window | Duration | Impact | Avoidance |
++| --- | ---: | --- | --- |
++| `v0.5.0` exists while current board pins `v0.2.0` | `0s` runtime mismatch | None; the board embeds `v0.2.0`. | Go module pinning; no dynamic loading. |
++| task-board source is being migrated | `0s` installed mismatch | None; saved/current board remains the routing authority. | Candidate is built and canaried out of place. |
++| `0.25.0` is installed while agents-infra remains old | `0s` contract mismatch | Spawn/route remain available; old agents-infra is an independent consumer. | task-board migrates first and the compose seam remains backward compatible. |
++| `v0.6.0` is published before consumer repin releases | `0s` runtime mismatch | None; installed consumers still embed `v0.5.0`. | Do not use `@latest`; exact pins only. |
++| binary replacement on disk | Expected sub-second file operation, but not a contract mismatch | Existing processes continue; a non-atomic installer could briefly make a new invocation fail. | Canary out of place, retain absolute old binary, and use same-filesystem temp-plus-`mv` for the critical CLI rollback/cutover. |
++
++The one prohibited window is editing the only runnable task-board source to a
++breaking dependency and invoking setup before candidate tests pass. Its
++duration would be from the failed install until source/binary restore, with new
++spawn and route commands potentially unavailable. The sequence above avoids
++that window entirely; it is not an accepted degraded mode.
++
++## Validation evidence gathered by this planning task
++
++No migration, release or tag was performed. All dependency changes were made
++only in `.temp/TASK-260830-s5ro4e/` against an archive of exact task-board
++commit `063197b1`.
++
++| Command / gate | Exit | Interpretation |
++| --- | ---: | --- |
++| `go list -mod=mod -m ...skill-agents-management` after scratch pin to `v0.5.0` | 0 | Public module resolved exactly as `v0.5.0`. |
++| `go test -mod=mod ./internal/spawn -count=1` | 1 | Honest red: only `TestCodexArgvGuardCatchesTheHistoricalThreeSites` failed because a `git archive` has no `.git` for its `git show HEAD:...` assertion. Not counted green. |
++| Same spawn package with only that archive-inapplicable guard skipped | 0 | All runnable spawn behavior tests passed against `v0.5.0`. |
++| `go build -mod=mod` candidate CLI against `v0.5.0` | 0 | Consumer compiles. |
++| First candidate CLI invocation | 127 | Operator path typo; no board mutation. Corrected path rerun below. |
++| Candidate CLI `get(...)` and real `project_config(view=spawn-preflight, ...)` | 0 | Authoritative board read and production preflight work against the `v0.5.0` build. |
++| Scratch repin to `v0.2.0` and rebuild | 0 | Source rollback builds. |
++| Rebuilt `v0.2.0` CLI read and spawn-preflight | 0 | Source rollback can read and preflight the authoritative board. |
++
++This evidence proves source compatibility and the bounded source-pin rollback.
++It does not claim a full-suite pass, a real child launch under the candidate,
++or an installed-binary rollback. Those remain mandatory gates for the
++execution tasks.
++
++## Release stop conditions
++
++Stop and roll back instead of forcing the migration if any of these occurs:
++
++- the candidate needs a `replace`, mutable tag, runtime lookup of `latest`, or
++  a second shadow graph to keep task-board working;
++- the old binary cannot route the candidate canary after a candidate failure;
++- a canary can spawn but cannot attach evidence and reach a real reviewer
++  verdict;
++- an in-flight run must be killed or have its record rewritten to survive a
++  step;
++- the proposed compatibility removal still has a production consumer import;
++- a rollback command has not been rehearsed for the environment where it will
++  be used. It remains explicitly **UNTESTED**, not assumed reversible.
++
++## References
++
++- `skill-project-management/tools/board-cli/go.mod:10`
++- `skill-project-management/tools/board-cli/internal/spawn/launch_plan.go:17-64,122-164,332-367`
++- `skill-project-management/tools/board-cli/internal/spawn/model_registry_build.go:9-20,209-340`
++- `skill-project-management/tools/board-cli/internal/spawn/provider_limits.go`
++- `skill-agents-management@v0.5.0/pkg/agentic/registry.go:124-223`
++- `skill-agents-management@v0.5.0/pkg/vendorplugin/registry.go:14-72`
++- `TASK-260830-1jpse1_v0.4.3-results.md`
++- `TASK-260830-ter72z_results-rev4.md`
++- `TASK-260830-ter72z_review-verdict-rev4.md`
++- `TASK-260830-12n20p_agents-infra-contract-audit.md`
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index fff878e..e9acebb 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,14 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-30
++
++### 1245 — Compatibility Bridge Removes The Lockstep Outage Window
++- FINDING: task-board commit `063197b1` directly imports agents-management from 26 production and 38 test Go files across 13 public package families, but imports neither raw `pkg/plugin` nor `pkg/inferenceengine`; the dense surface is compatibility `agentic`/`vendorplugin` plus `providerlimits`.
++- EVIDENCE: A clean scratch task-board build pinned to public `skill-agents-management v0.5.0` passed the runnable spawn package tests, CLI build, authoritative board read, and real spawn-preflight; the only unskipped package failure required Git history absent from `git archive`.
++- DECISION: Release task-board `0.25.0` on the `v0.5.0` bridge before agents-infra `v1.7.0`; permit breaking agents-management `v0.6.0` only after both consumers ship and pass live spawn-and-route canaries.
++- STATUS: Release/rollback plan recorded in `.research/260830_agents-management-lockstep-release-and-rollback.md`; operational install rollbacks remain explicitly untested.
++
+ ## 2026-08-29
+ 
+ ### 2318 — Status Publication Revalidates Its Resource Decision

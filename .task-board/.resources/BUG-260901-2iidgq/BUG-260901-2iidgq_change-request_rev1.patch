@@ -1,0 +1,319 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index b5cabcf..f0e7e8a 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,11 @@
+ 
+ ## 2026-09-01
+ 
++### 1455 — Hosted Primary Sessions Validate Only Their Provider
++- ROOT CAUSE: `BuildCodexLaunchPlan` and `BuildClaudeLaunchPlan` both used the full project parser, so an unselected managed Pi profile could reject a hosted primary-session plan before provider selection; the bsim-shaped missing-`publisher` case reproduced against installed `agents-infra` with exit 1 and `invalid_project_configuration`.
++- FIX: Hosted launch planning now uses a provider-scoped parser that keeps TOML, shared MCP, the `agents` root, and the selected hosted provider strict while leaving other provider-owned tables opaque. Full parsing remains the default for Pi, setup/verify, and canonical targets.
++- GATE: Production-callsite tests cover Codex/Claude isolation, malformed selected/shared policy, and strict direct Pi/canonical Qwen publisher rejection. The bsim-shaped candidate composes Codex and Claude with exit 0; direct Pi and `qwen-infra` each exit 1 naming `agents.pi.profiles.qwen-3.8-27b-mlx-8bit.publisher`.
++
+ ### 1330 — Dange Origin Moved Off Caller-Controlled Argv
+ - CORRECTION: Revision 6 removes the public revision-5 call-site marker from production dispatch. `openai-dange` and `anthropic-dange` now call the sibling `agents-infra target-yolo <canonical-entrypoint>` route; `runTarget` retains its original strict `flag.FlagSet` path and never authenticates canonical-alias origin from provider argv.
+ - NEGATIVE: Installed production tests invoke both canonical aliases with the exact retired marker and a marker-like assignment, require the real dispatcher to refuse before provider side effects, and retain the complete positive caller-flag matrix through both installed dange aliases.
+diff --git a/README.md b/README.md
+index 0ce3249..d76db11 100644
+--- a/README.md
++++ b/README.md
+@@ -2175,6 +2175,16 @@ agents-infra compose --mode primary-session --agent claude --project "$PWD" --sc
+ agents-infra compose --mode primary-session --agent pi --project "$PWD" --schema-version 1 --json -- --version
+ ```
+ 
++Primary-session project validation is provider-local. Codex validates shared
++MCP/TOML structure and `agents.codex.primary_session`; Claude validates the
++same shared surface and `agents.claude.primary_session`. Either hosted provider
++leaves unselected provider-owned policy opaque, so an incomplete Pi profile or
++unavailable Pi-only detail cannot block its plan. Selecting Pi, including the
++canonical `qwen-infra` path, still parses and validates the complete selected Pi
++profile and fails closed with the exact `agents.pi.profiles.<name>.<field>`
++diagnostic. Malformed TOML, the shared `mcp` surface, the `agents` root, and the
++selected hosted provider's fields remain errors.
++
+ The response contains:
+ 
+ - `executable` — the resolved provider binary path (fails closed with error
+diff --git a/SKILL.md b/SKILL.md
+index 534c7ff..862098a 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -813,6 +813,12 @@ primary-session mode instead:
+ agents-infra compose --mode primary-session --agent codex|claude --project /path/to/project --schema-version 1 --json [-- PROVIDER_ARGS...]
+ ```
+ 
++Validation for these hosted primary sessions is provider-local: shared
++MCP/TOML structure and the selected Codex or Claude policy remain strict, while
++unselected provider-owned policy (including incomplete Pi profiles) is opaque.
++Direct Pi and canonical `qwen-infra` selection still validate the complete
++selected Pi profile and fail closed with exact field provenance.
++
+ It emits one `agents-infra.primary-session-launch-plan` version-1 JSON
+ document: the resolved provider executable, an `interactive` argv identical to
+ what `agents-infra codex|claude` would launch, a `managed_host` argv
+diff --git a/tools/agents-infra/internal/infra/canonical_target_pi_test.go b/tools/agents-infra/internal/infra/canonical_target_pi_test.go
+index 26242cb..e131b2d 100644
+--- a/tools/agents-infra/internal/infra/canonical_target_pi_test.go
++++ b/tools/agents-infra/internal/infra/canonical_target_pi_test.go
+@@ -93,6 +93,26 @@ func TestCanonicalQwenPlanProvesProfileDerivedIdentityAndEndpointInvariants(t *t
+ 	}
+ }
+ 
++func TestCanonicalQwenSelectedProfileStillRequiresPublisher(t *testing.T) {
++	project, home := t.TempDir(), t.TempDir()
++	writeProviderIsolationFixture(t, project, `
++[agents.targets.qwen]
++vendor = "qwen"
++environment = "pi"
++model = "Model"
++reasoning = "off"
++profile = "qwen-bsim"
++
++[agents.entrypoints]
++qwen-infra = "qwen"
++`)
++
++	_, err := BuildCanonicalTargetLaunchPlan("qwen-infra", project, home, nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++	if err == nil || !strings.Contains(err.Error(), "agents.pi.profiles.qwen-bsim.publisher") {
++		t.Fatalf("error = %v, want canonical Qwen selected publisher field", err)
++	}
++}
++
+ func TestCanonicalQwenAcceptsOperatorProviderWithoutLiteralLocalQwen(t *testing.T) {
+ 	project, home, _, _ := canonicalQwenProject(t, canonicalQwenTargetTOML(false, false))
+ 	resolved, err := ResolveCanonicalTarget("qwen-infra", project, home)
+diff --git a/tools/agents-infra/internal/infra/claude_launch.go b/tools/agents-infra/internal/infra/claude_launch.go
+index aacf98f..ac52c7d 100644
+--- a/tools/agents-infra/internal/infra/claude_launch.go
++++ b/tools/agents-infra/internal/infra/claude_launch.go
+@@ -140,7 +140,7 @@ func BuildClaudeLaunchPlan(startDir, homeDir string, args []string) (ClaudeLaunc
+ 
+ 	ancestors := ancestorDirsRootFirst(startDir)
+ 	globalProjectConfigPath := filepath.Join(homeDir, ".agents", ".configs", projectConfigFileName)
+-	projectConfig, err := loadCompositeProjectConfig(ancestors, globalProjectConfigPath)
++	projectConfig, err := loadPrimaryProviderProjectConfig(ancestors, globalProjectConfigPath, "claude")
+ 	if err != nil {
+ 		return ClaudeLaunchPlan{}, err
+ 	}
+diff --git a/tools/agents-infra/internal/infra/codex_launch.go b/tools/agents-infra/internal/infra/codex_launch.go
+index 88b3972..3f533c5 100644
+--- a/tools/agents-infra/internal/infra/codex_launch.go
++++ b/tools/agents-infra/internal/infra/codex_launch.go
+@@ -149,7 +149,7 @@ func BuildCodexLaunchPlan(startDir, homeDir string, args []string) (CodexLaunchP
+ 
+ 	ancestors := ancestorDirsRootFirst(startDir)
+ 	globalProjectConfigPath := filepath.Join(homeDir, ".agents", ".configs", projectConfigFileName)
+-	projectConfig, err := loadCompositeProjectConfig(ancestors, globalProjectConfigPath)
++	projectConfig, err := loadPrimaryProviderProjectConfig(ancestors, globalProjectConfigPath, "codex")
+ 	if err != nil {
+ 		return CodexLaunchPlan{}, err
+ 	}
+diff --git a/tools/agents-infra/internal/infra/primary_session_launch_plan_test.go b/tools/agents-infra/internal/infra/primary_session_launch_plan_test.go
+index 236cba6..79b28c7 100644
+--- a/tools/agents-infra/internal/infra/primary_session_launch_plan_test.go
++++ b/tools/agents-infra/internal/infra/primary_session_launch_plan_test.go
+@@ -53,6 +53,106 @@ func canonicalPrimarySessionFixturePaths(t *testing.T, plan PrimarySessionLaunch
+ 	return filepath.Join(configDir, projectConfigFileName), filepath.Join(configDir, "codex-mcp-servers.toml")
+ }
+ 
++func writeProviderIsolationFixture(t *testing.T, project, extra string) string {
++	t.Helper()
++	configDir := filepath.Join(project, ".agents", ".configs")
++	mustMkdir(t, configDir)
++	path := filepath.Join(configDir, projectConfigFileName)
++	mustWrite(t, path, `
++[agents.codex.primary_session]
++model = "gpt-bsim"
++
++[agents.claude.primary_session]
++model = "claude-bsim"
++
++[agents.pi.primary_session]
++profile = "qwen-bsim"
++
++[agents.pi.profiles.qwen-bsim]
++provider = "local-qwen"
++`+extra)
++	return path
++}
++
++// Production call site: BuildPrimarySessionLaunchPlan ->
++// BuildCodexLaunchPlan/BuildClaudeLaunchPlan. The selected hosted provider must
++// not eagerly validate an unselected Pi profile owned by another runtime.
++func TestBuildPrimarySessionLaunchPlanProviderLocalIgnoresIncompletePiProfile(t *testing.T) {
++	for _, provider := range []string{"codex", "claude"} {
++		t.Run(provider, func(t *testing.T) {
++			project, home := t.TempDir(), t.TempDir()
++			writeProviderIsolationFixture(t, project, "")
++
++			plan, err := BuildPrimarySessionLaunchPlan(provider, project, home, nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++			if err != nil {
++				t.Fatalf("BuildPrimarySessionLaunchPlan(%s): %v", provider, err)
++			}
++			if plan.Provider != provider || plan.Status != "ok" {
++				t.Fatalf("plan = %#v", plan)
++			}
++		})
++	}
++}
++
++// Production call site: BuildPrimarySessionLaunchPlan. These isolation cases
++// fail if validation widens back across hosted providers, while the selected
++// provider remains strict in the companion negative tests below.
++func TestBuildPrimarySessionLaunchPlanProviderLocalIgnoresUnselectedHostedPolicy(t *testing.T) {
++	tests := []struct {
++		provider string
++		body     string
++	}{
++		{provider: "codex", body: "[agents.codex.primary_session]\nmodel = \"gpt-bsim\"\n[agents.claude.primary_session]\nyolo_mode = \"not-a-boolean\"\n"},
++		{provider: "claude", body: "[agents.claude.primary_session]\nmodel = \"claude-bsim\"\n[agents.codex.primary_session]\nreasoning_effort = false\n"},
++	}
++	for _, test := range tests {
++		t.Run(test.provider, func(t *testing.T) {
++			project, home := t.TempDir(), t.TempDir()
++			configDir := filepath.Join(project, ".agents", ".configs")
++			mustMkdir(t, configDir)
++			mustWrite(t, filepath.Join(configDir, projectConfigFileName), test.body)
++			if _, err := BuildPrimarySessionLaunchPlan(test.provider, project, home, nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t)); err != nil {
++				t.Fatalf("BuildPrimarySessionLaunchPlan(%s): %v", test.provider, err)
++			}
++		})
++	}
++}
++
++func TestBuildPrimarySessionLaunchPlanSelectedAndSharedPolicyRemainStrict(t *testing.T) {
++	tests := []struct {
++		name      string
++		provider  string
++		body      string
++		wantField string
++	}{
++		{name: "selected codex", provider: "codex", body: "[agents.codex.primary_session]\nmodel = false\n", wantField: codexPrimaryModelField},
++		{name: "selected claude", provider: "claude", body: "[agents.claude.primary_session]\nyolo_mode = \"true\"\n", wantField: claudePrimaryYoloModeField},
++		{name: "shared MCP", provider: "codex", body: "[mcp]\nenabled_servers = \"jira\"\n", wantField: "mcp.enabled_servers"},
++		{name: "shared agents root", provider: "claude", body: "agents = false\n", wantField: "agents"},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			project, home := t.TempDir(), t.TempDir()
++			configDir := filepath.Join(project, ".agents", ".configs")
++			mustMkdir(t, configDir)
++			mustWrite(t, filepath.Join(configDir, projectConfigFileName), test.body)
++			_, err := BuildPrimarySessionLaunchPlan(test.provider, project, home, nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++			if err == nil || !strings.Contains(err.Error(), test.wantField) {
++				t.Fatalf("error = %v, want selected/shared field %q", err, test.wantField)
++			}
++		})
++	}
++}
++
++func TestBuildPrimarySessionLaunchPlanSelectedPiProfileStillRequiresPublisher(t *testing.T) {
++	project, home := t.TempDir(), t.TempDir()
++	writeProviderIsolationFixture(t, project, "")
++	_, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++	if err == nil || !strings.Contains(err.Error(), "agents.pi.profiles.qwen-bsim.publisher") {
++		t.Fatalf("error = %v, want selected Pi publisher field", err)
++	}
++}
++
+ func TestBuildPrimarySessionLaunchPlanCodexParityAndManagedHost(t *testing.T) {
+ 	home := t.TempDir()
+ 	project := t.TempDir()
+diff --git a/tools/agents-infra/internal/infra/project_config.go b/tools/agents-infra/internal/infra/project_config.go
+index f2843cf..5057aaf 100644
+--- a/tools/agents-infra/internal/infra/project_config.go
++++ b/tools/agents-infra/internal/infra/project_config.go
+@@ -151,6 +151,19 @@ type compositeProjectConfig struct {
+ }
+ 
+ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath string) (compositeProjectConfig, error) {
++	return loadCompositeProjectConfigWithParser(ancestors, globalProjectConfigPath, parseProjectConfig)
++}
++
++func loadPrimaryProviderProjectConfig(ancestors []string, globalProjectConfigPath, provider string) (compositeProjectConfig, error) {
++	if provider != "codex" && provider != "claude" {
++		return compositeProjectConfig{}, fmt.Errorf("unsupported primary-session provider %q", provider)
++	}
++	return loadCompositeProjectConfigWithParser(ancestors, globalProjectConfigPath, func(data []byte, path string) (parsedProjectConfig, error) {
++		return parseProjectConfigForProvider(data, path, provider)
++	})
++}
++
++func loadCompositeProjectConfigWithParser(ancestors []string, globalProjectConfigPath string, parse func([]byte, string) (parsedProjectConfig, error)) (compositeProjectConfig, error) {
+ 	composite := compositeProjectConfig{
+ 		EnabledBy:   map[string][]string{},
+ 		PiProfiles:  map[string]PiProfile{},
+@@ -171,7 +184,7 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
+ 		if err != nil {
+ 			return compositeProjectConfig{}, projectConfigFieldError(path, projectConfigParseField, fmt.Errorf("read project config: %w", err))
+ 		}
+-		config, err := parseProjectConfig(data, path)
++		config, err := parse(data, path)
+ 		if err != nil {
+ 			return compositeProjectConfig{}, err
+ 		}
+@@ -219,6 +232,14 @@ func loadCompositeProjectConfig(ancestors []string, globalProjectConfigPath stri
+ }
+ 
+ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
++	return parseProjectConfigForProvider(data, path, "")
++}
++
++// parseProjectConfigForProvider keeps shared configuration and the selected
++// hosted provider strict while leaving unselected provider-owned policy opaque.
++// An empty provider retains the full parser used by Pi, canonical targets,
++// setup, and verification.
++func parseProjectConfigForProvider(data []byte, path, provider string) (parsedProjectConfig, error) {
+ 	var document map[string]any
+ 	if err := toml.Unmarshal(data, &document); err != nil {
+ 		return parsedProjectConfig{}, projectConfigFieldError(path, projectConfigParseField, fmt.Errorf("parse TOML (including field %s and %s): %w", codexPrimarySessionField, claudePrimarySessionField, err))
+@@ -243,25 +264,31 @@ func parseProjectConfig(data []byte, path string) (parsedProjectConfig, error) {
+ 	if !present {
+ 		return config, nil
+ 	}
+-	config.PrimarySession, err = parseCodexPrimarySession(agents, path)
+-	if err != nil {
+-		return parsedProjectConfig{}, err
+-	}
+-	config.ClaudePrimarySession, err = parseClaudePrimarySession(agents, path)
+-	if err != nil {
+-		return parsedProjectConfig{}, err
+-	}
+-	config.PiPrimarySession, config.PiStandaloneSession, config.PiProfiles, err = parsePiConfig(agents, path)
+-	if err != nil {
+-		return parsedProjectConfig{}, err
++	if provider == "" || provider == "codex" {
++		config.PrimarySession, err = parseCodexPrimarySession(agents, path)
++		if err != nil {
++			return parsedProjectConfig{}, err
++		}
+ 	}
+-	config.Targets, err = parseProjectTargets(agents, path)
+-	if err != nil {
+-		return parsedProjectConfig{}, err
++	if provider == "" || provider == "claude" {
++		config.ClaudePrimarySession, err = parseClaudePrimarySession(agents, path)
++		if err != nil {
++			return parsedProjectConfig{}, err
++		}
+ 	}
+-	config.Entrypoints, err = parseProjectEntrypoints(agents, path)
+-	if err != nil {
+-		return parsedProjectConfig{}, err
++	if provider == "" {
++		config.PiPrimarySession, config.PiStandaloneSession, config.PiProfiles, err = parsePiConfig(agents, path)
++		if err != nil {
++			return parsedProjectConfig{}, err
++		}
++		config.Targets, err = parseProjectTargets(agents, path)
++		if err != nil {
++			return parsedProjectConfig{}, err
++		}
++		config.Entrypoints, err = parseProjectEntrypoints(agents, path)
++		if err != nil {
++			return parsedProjectConfig{}, err
++		}
+ 	}
+ 	return config, nil
+ }

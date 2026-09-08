@@ -1,0 +1,21 @@
+{
+  "contract": "primary-goal-v1",
+  "id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 28,
+  "previous_revision": 27,
+  "state": "active",
+  "scope": {
+    "kind": "board"
+  },
+  "objective": "Complete all remaining active relux-agents-infra work through tracked implementation, independent review, green local or canonical checks, signed PR delivery, and merge. Keep the repository spawn policy mixed across Claude and Codex with gpt-5.6-sol up to medium and claude-sonnet-5 up to high, less_or_equal ceilings, class-aware recommendations where configured, and Codex fast_mode absent or false. Preserve the landed generic Pi adapter, restart and quarantine retention work, the clean signed skill-agents-management v0.5.3 dependency, fail-closed setup, canonical vendor targets, project-local instruction ownership, task-board version-control authority, external-CI local-mirror fallback, and Claude trust-warning diagnostics without mutating user trust configuration. Finish and independently accept parser-safe source-managed direct YOLO aliases openai-dange and anthropic-dange, including production-call regression coverage. Then make primary-session composition provider-local so Codex-only and Claude-only repositories do not fail because an unselected Pi or Qwen profile lacks publisher fields, while selected Pi or Qwen and malformed shared or selected-provider configuration remain strict. Continue the existing runtime backlog without model-specific control-plane special cases: stabilize Pi, Qwen, MLX and alternate engines for unattended multi-week use with bounded resources, leases, observability, pressure handling, restart and quarantine recovery, soak evidence, and one-writer serialization; complete the unbiased runtime comparison and migration decision; retain the pinned mlx-lm fork until an accepted replacement carries its fixes; resolve remaining review and authentication backlog; and continue adopting skill-agents-management as the single plugin graph with arbitrary plugin kinds, dependencies, three-axis model, agent and engine separation, adapter-owned engine behavior, local-model lifecycle sequencing, and written lockstep release and rollback.",
+  "mutation": {
+    "kind": "objective_realigned",
+    "reason": "Realign the infra primary goal with the accepted mixed spawn policy and the current alias and provider-local composition critical path",
+    "actor": {
+      "kind": "primary_parent",
+      "actor_id": "alexis"
+    }
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-09-01T10:01:57.930357Z"
+}

@@ -1,0 +1,21 @@
+{
+  "contract": "primary-goal-v1",
+  "id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 27,
+  "previous_revision": 26,
+  "state": "active",
+  "scope": {
+    "kind": "board"
+  },
+  "objective": "Complete all active agents-infra work through tracked implementation, independent review where required, green local checks, canonical PR delivery, and merge. Preserve fail-closed setup, canonical vendor targets, project-local instruction ownership, and task-board version-control authority. Stabilize Pi/Qwen/MLX for unattended multi-week use: compaction, bounded memory and logs, timeouts, restart and quarantine recovery, shared-runtime leases, observability, status export, retention, pressure handling, soak proof, and one-writer serialization for model-loading work. Finish the unbiased Python MLX versus MLX Swift versus llama.cpp comparison with corrected instrumentation, equal weighting of peak memory and decode speed plus TTFT, 75k context, tool parity, stability and migration risk; publish a dated classic-structure article with explicit GO/NO-GO, weighting and break-even output length; retain the pinned mlx-lm fork until an accepted replacement carries its fixes. Resolve every existing review backlog item through a verdict and decide multi-account authentication from the existing investigations. Stop extending a separate agents-infra agent plane: adopt skill-agents-management as the single plugin graph shared with task-board, migrate Pi from hardcoded logic, support arbitrary plugin kinds and dependencies, define local-model load/unload, inference-busy and pressure sequencing, fix and release contract gaps at source, and migrate task-board in lockstep with written release order and rollback. Make local models three-axis across model artifact, agent environment and inference engine; keep engine-specific argv, streams, health, weights, memory and speculative capabilities behind adapters; port Python mlx-lm, llama.cpp and MLX Swift; evaluate MTPLX; add OpenCode and Hermes. Add the external-CI local-mirror fallback to versioned global workflow instructions and verify setup/install: only verified external hosted-CI failures that the agent cannot repair permit exact clean-PR-head local reproduction with durable evidence; code/test failures remain blocking and review/protection is never bypassed. After task-board adds Codex fast_mode, set this repository versioned board config to exclusive Codex gpt-5.6-sol/high with fast_mode=true.",
+  "mutation": {
+    "kind": "objective_realigned",
+    "reason": "Add the global external-CI fallback policy and activate Codex fast mode in the agents-infra source config",
+    "actor": {
+      "kind": "primary_parent",
+      "actor_id": "alexis"
+    }
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-08-29T22:58:55.308717Z"
+}

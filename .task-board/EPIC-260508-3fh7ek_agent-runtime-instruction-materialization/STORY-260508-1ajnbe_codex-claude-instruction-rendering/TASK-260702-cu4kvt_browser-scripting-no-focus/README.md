@@ -7,4 +7,4 @@ Document that browser automation and scripting must avoid focusing or activating
 (define task scope)
 
 ## Acceptance Criteria
-(define acceptance criteria)
+Global instructions state that browser automation and page inspection are no-focus by default, name the background-capable tooling to use, forbid the AppleScript activate and frontmost-window patterns, and say when a human must take over instead — with the browser-secret handling rules preserved.

@@ -7,4 +7,4 @@
 (define epic scope)
 
 ## Acceptance Criteria
-(define acceptance criteria)
+Every supported agent runtime receives its instructions through one materialization path, verified on the installed artifact and not on source bytes, with the entrypoint and include chain intact for each runtime. Adding a runtime requires no runtime-specific branch in shared composition code. Global and project instruction layers compose in a defined precedence, and a missing or malformed layer fails closed with an error naming the layer.

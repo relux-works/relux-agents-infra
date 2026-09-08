@@ -1,0 +1,1123 @@
+diff --git a/.research/260830_agents-management-lockstep-release-and-rollback.md b/.research/260830_agents-management-lockstep-release-and-rollback.md
+new file mode 100644
+index 0000000..8c8fe17
+--- /dev/null
++++ b/.research/260830_agents-management-lockstep-release-and-rollback.md
+@@ -0,0 +1,1057 @@
++# Agents-management lockstep release and rollback plan
++
++Task: `TASK-260830-s5ro4e`
++
++Date: 2026-08-30
++
++Review state: revised after `CR-TASK-260830-s5ro4e-3` changes requested. This
++plan must receive a new independent acceptance before any breaking change,
++release, installation, or tag in this sequence.
++
++This revision answers verdict F1 and F2. Both were found to survive the prior
++rework attempt: the guard fix had been applied to the orchestration layer while
++the reader beneath it still returned zero on failed `brew` reads, and the
++recovery baseline had been rebound to a newer literal rather than derived. The
++guard now tests every read explicitly under both `bash` and `zsh`, and the
++recovery baseline is derived from the installed artifact. See "Validation
++evidence from this planning task" for the red/green matrix across both
++revisions.
++
++## Decision
++
++Use public `skill-agents-management v0.5.0` as the compatibility bridge. Release
++task-board first, then agents-infra, while both compile exact `v0.5.0`. Permit
++`v0.6.0` to remove a compatibility adapter only after exact released-source and
++linked-binary inventories prove that neither released consumer needs that
++adapter. Repin task-board first, then agents-infra, to the accepted immutable
++`v0.6.0` tag.
++
++The running programs do not dynamically load the Go module, but that fact alone
++does not remove migration risk. `v0.5.0` compatibility calls reach the general
++plugin graph and inference-engine code transitively. The safety argument is:
++
++1. immutable module versions and checksums in each released binary;
++2. unmodified compatibility/refusal tests against the exact public module;
++3. an exact removal manifest proved against both released consumers;
++4. out-of-place candidate canaries; and
++5. cutover isolation with the previous pair kept as an absolute-path routing
++   authority until the installed canary succeeds.
++
++There is no planned *dynamic module-version* mismatch. There are four real
++mixed-install windows, named below, during which the default installed surface
++may contain artifacts from two releases. Those windows are not called safe or
++zero-duration; new spawn/route work uses the saved old pair or waits for the
++installed canary.
++
++Reserved versions:
++
++- `skill-agents-management v0.5.0` at
++  `b74f758a90a422304d55460422831da80e3d6cc8`, checksum
++  `h1:yy/j8YgKrXLWcb6zzoAld79a7iamTvOI5eZd/9MaAIk=` — already released.
++- `skill-project-management 0.25.0` — first task-board release compiled with
++  exact `v0.5.0`.
++- `relux-agents-infra v1.7.0` — first agents-infra release compiled with exact
++  `v0.5.0`.
++- `skill-agents-management v0.6.0` — conditional breaking release.
++- `skill-project-management 0.25.1` — task-board repin to exact `v0.6.0`.
++- `relux-agents-infra v1.7.1` — agents-infra repin to exact `v0.6.0`.
++
++If any reserved version is occupied before execution, stop and revise this
++reviewed plan. Never move or replace a published tag.
++
++## Corrected task-board consumption measurement
++
++Measurement source:
++
++- clean detached Git worktree at exact task-board commit
++  `063197b10e02cbacabfba4c192d16fa310f70eb7`;
++- only `tools/board-cli/go.mod` and `go.sum` changed in scratch, pinning public
++  `skill-agents-management v0.5.0`;
++- `GOWORK=off`, `-mod=mod`, no agents-management `replace`, no workspace
++  override;
++- candidate binary built by Go 1.25.5 for Darwin arm64.
++
++The four instruments answer different questions:
++
++| Instrument | Exact result | What it establishes |
++| --- | ---: | --- |
++| Direct tracked-source import census | 25 production files, 36 test files, 13 package families | The written task-board source imports compatibility packages but directly imports neither `pkg/plugin` nor `pkg/inferenceengine`. The earlier 26/38 count did not reproduce and is not used as a gate. |
++| `GOWORK=off go list -mod=mod -deps ./...` | 20 compiled agents-management packages | The composed `v0.5.0` graph includes `pkg/plugin`, `pkg/inferenceengine`, and `pkg/inferenceengine/engines/mlx` despite zero direct imports. |
++| `go tool nm` on the candidate binary | 555 module symbols | 161 `pkg/agentic`, 32 `pkg/plugin`, 153 `pkg/vendorplugin`, 7 `pkg/inferenceengine`, 190 `pkg/providerlimits`; critical symbols include `plugin.(*Registry).RegisterAll`, `inferenceengine.init`, and `vendorplugin.productionEngineFactSource.ReadEngineFacts`. |
++| Production-path inspection plus candidate preflight | real init/registration/build path invoked; preflight exit 0 | The compile/link reach is operational, not test-only or dead-source evidence. |
++
++The 13 direct package families are `pkg/agentic`, six System packages (`agy`,
++`claude`, `codex`, `gemini`, `muse`, `qwen`), `pkg/providerlimits`,
++`pkg/vendorplugin`, and four vendor packages (`alibaba`, `anthropic`, `google`,
++`openai`). Direct raw graph imports remain zero. That is true but not evidence
++that the graph is unreachable.
++
++The production path is unguarded by build tags:
++
++1. `internal/spawn/launch_plan.go:157-164` calls `agentic.NewRegistry` and
++   `(*agentic.Registry).Register`; `:332-342` dispatches through
++   `agentic.BuildPlan`.
++2. `pkg/agentic/registry.go:120-128,170-183` maps that unchanged Register call
++   through `RegisterWithDependencies` into `plugin.Registry.Register`.
++3. task-board blank-imports four vendor packages. Their package `init`
++   functions call `vendorplugin.Register`; for example
++   `pkg/vendorplugin/vendors/openai/openai.go:59-65`.
++4. `pkg/vendorplugin/registry.go:252-337` validates models, syncs the agentic
++   graph and registers the vendor graph node; `:363-388` copies every visible
++   dependency-first graph node.
++5. `internal/spawn/models.go:307-332` reads `vendorplugin.Default` during
++   task-board package init. It declares the qwen-codex runtime and builds every
++   registered model before any CLI command runs.
++6. `pkg/vendorplugin/engine.go:9-11,31-54` imports and calls the concrete
++   inference-engine contract. The linked binary contains that implementation
++   and its refusal symbols.
++
++The reviewer-required unmodified gate now passes from the detached worktree:
++
++```text
++$ GOWORK=off go test -mod=mod ./internal/spawn -count=1
++ok  github.com/aagrigore/task-board/internal/spawn  10.341s
++exit 0
++```
++
++The earlier archive-only skip is withdrawn as gate evidence. The Git-history
++guard ran normally in this real worktree.
++
++## Exact compatibility-removal gate for `v0.6.0`
++
++Absence of direct imports is not an adapter-removal gate. `v0.5.0` explicitly
++labels these load-bearing bridges, all reached by the composed task-board:
++
++- `agentic.Registry`, `NewRegistry`, `Register`,
++  `RegisterWithDependencies`, `Lookup`, `Graph`, and `BuildPlan` plus the
++  `System`, `LaunchRequest`, `LaunchMode`, and `Plan` shapes;
++- `vendorplugin.Registry`, `Default`, `Register`, `DeclareRuntime`,
++  `RuntimeDeclarationOf`, `Lookup`, `Graph`, and the `Vendor`, `Model`,
++  `RuntimeDeclaration`, `BrokerProvenance`, pricing/lifecycle/effort shapes;
++- the internal adapter calls those surfaces currently trigger:
++  `plugin.Registry.Register`, graph topological sync, inference-engine init and
++  `productionEngineFactSource.ReadEngineFacts`.
++
++`0.25.0` and `v1.7.0` do not yet exist, so their exact final inventories cannot
++be guessed in this plan. Before a `v0.6.0` release candidate may be approved,
++the release owner must create a versioned removal manifest listing every
++method, exported type/field, init registration, linked symbol family and
++production call path proposed for removal. Then, for *both* exact released
++consumer tags:
++
++1. create clean detached worktrees of `0.25.0` and `v1.7.0`;
++2. prove their `go.mod`/`go.sum` use public exact `v0.5.0`, with no
++   agents-management replace or workspace override;
++3. record direct imports, transitive packages and `go tool nm` symbols;
++4. use Go type-check/build failures and production-entry tests to map every
++   manifest item to a consumer call site or prove it unused;
++5. repin scratch consumers to the exact `v0.6.0` candidate and run full tests,
++   builds and real launch/compose canaries;
++6. negatively narrow each removed adapter in a private candidate: both
++   released consumers must remain green because they no longer require it;
++   a delete-only result is insufficient;
++7. require the manifest result `required_by_0.25.0=false` and
++   `required_by_v1.7.0=false` for every item. `unknown`, failed read, partial
++   inventory, surviving symbol, init-only reach or production-path reach blocks
++   `v0.6.0`.
++
++This gate covers wrappers and init paths. A zero direct-import count cannot
++satisfy it.
++
++## Compatibility matrix
++
++| task-board | Embedded agents-management | agents-infra | Status |
++| --- | --- | --- | --- |
++| `0.24.3-172-g063197b1` | `v0.2.0` | `v1.6.1-103-g4270549` | Pair observed installed while planning; the recovery baseline is derived from the installed artifact at execution time, not from this row. |
++| scratch `063197b1` | `v0.5.0` | unchanged | Composed spawn tests/build/preflight green; not released. |
++| `0.25.0` | `v0.5.0` | old installed version | Required Step-2 transition; must pass installed canary. |
++| `0.25.0` | `v0.5.0` | `v1.7.0` / `v0.5.0` | Stable compatibility-bridge pair. |
++| `0.25.0` | `v0.5.0` | `v1.7.0` while `v0.6.0` exists | Still supported: immutable embedded pins. |
++| `0.25.1` | `v0.6.0` | `v1.7.0` / `v0.5.0` | Required Step-5 transition; external compose seam must be canaried before cutover. |
++| `0.25.1` | `v0.6.0` | `v1.7.1` / `v0.6.0` | Target pair after breaking cleanup. |
++
++No release build may use an untagged module commit, mutable tag, `@latest`, an
++agents-management `replace`, or a Go workspace override.
++
++## Capabilities that must remain working
++
++Every step requires an authoritative board path that can perform:
++
++- spawn preflight and model/provider selection;
++- run-record creation, child launch, observe/status/directives and terminal
++  outcome handling;
++- outcome resource add/update/read;
++- producer handoff, reviewer spawn, reviewer verdict, `accept_cr`, rework
++  routing and Story-workspace/Change-Request reads.
++
++During a mixed-install window, the default PATH surface is not authoritative.
++The absolute saved old pair, with the recovery bin prepended to PATH, is:
++
++```bash
++PATH="$RECOVERY_ROOT/bin:$PATH" \
++  "$RECOVERY_ROOT/bin/task-board" q --format compact \
++  'project_config(view=spawn-preflight, role=developer, agent=codex, task_class=research)'
++```
++
++That same prefix makes a saved task-board resolve saved `tb-sessiond` and
++saved `agents-infra`, not a partially installed sibling.
++
++## LLDB/Homebrew installer boundary
++
++The agents-infra bootstrap has one optional mutation before either managed
++binary is replaced: `scripts/setup.sh:93-170,258-263` normally runs
++`install_lldb_mcp`, which can run `brew install llvm` and rewrite
++`$(brew --prefix)/bin/lldb-mcp`. On the measured target, Homebrew and the
++wrapper are present at `/opt/homebrew/bin/lldb-mcp` (SHA-256
++`1ea8dd5ab2f944cca608d6facd14e590769879c821cfa9a4f85f7e89a9b86d2d`), so the
++mutating branch is reachable; absence is not assumed. Homebrew reports
++`llvm 23.1.0` installed with prefix `/opt/homebrew/opt/llvm`, and against that
++successfully read prefix the wrapper's configured
++`/opt/homebrew/opt/llvm/bin/lldb-mcp` target and adjacent `lldb` executable are
++measured absent; invoking the wrapper exited 1. The prefix read succeeding is
++what makes those two absences facts rather than artifacts. That is
++a pre-existing baseline anomaly, not a migration result; the lockstep steps
++must preserve the exact presence/absence shape and do not claim to repair LLDB.
++
++Steps 3 and 6 must therefore invoke the reviewed release bootstrap with
++`AGENTS_INFRA_SKIP_LLDB_MCP=1`. The production function returns at lines 94-96
++before `brew --prefix`, `brew install llvm`, wrapper backup/removal, or helper
++resolution. LLDB bootstrap is unrelated to this contract migration and is
++deferred to a separate reviewed maintenance operation.
++
++The following read-only identity guard runs immediately before and after each
++bootstrap. It covers the Homebrew llvm version, wrapper, helper, and adjacent
++LLDB executable; a missing read or byte/metadata difference fails the step.
++
++```bash
++snapshot_lldb_surface() (
++  # Subshell body plus an explicit status test on every read. Neither the
++  # caller's shell options nor an `if` context can turn a failed read into a
++  # zero status, and nothing here depends on `errexit` semantics that differ
++  # between bash and zsh.
++  set -euo pipefail
++
++  command -v brew >/dev/null || exit 70
++  command -v stat >/dev/null || exit 70
++  command -v shasum >/dev/null || exit 70
++  command -v grep >/dev/null || exit 70
++
++  brew_prefix=""
++  if ! brew_prefix="$(brew --prefix)"; then exit 70; fi
++  if test -z "$brew_prefix"; then exit 70; fi
++  printf 'BREW_PREFIX|%s\n' "$brew_prefix"
++
++  # `brew list --versions llvm` exits 1 both when llvm is genuinely absent and
++  # when the query itself fails, so it cannot distinguish a measured absence
++  # from a failed read. The full installed-formula list is unambiguous: exit 0
++  # makes the list authoritative, and any non-zero status refuses.
++  installed_formulae=""
++  if ! installed_formulae="$(brew list --formula)"; then exit 70; fi
++  if printf '%s\n' "$installed_formulae" | grep -qx llvm; then
++    llvm_installed=yes
++  else
++    llvm_installed=no
++  fi
++
++  set -- "$brew_prefix/bin/lldb-mcp"
++  if test "$llvm_installed" = yes; then
++    llvm_versions=""
++    if ! llvm_versions="$(brew list --versions llvm)"; then exit 70; fi
++    if test -z "$llvm_versions"; then exit 70; fi
++    printf 'LLVM_INSTALLED|%s\n' "$llvm_versions"
++
++    llvm_prefix=""
++    if ! llvm_prefix="$(brew --prefix llvm)"; then exit 70; fi
++    if test -z "$llvm_prefix"; then exit 70; fi
++    printf 'LLVM_PREFIX|%s\n' "$llvm_prefix"
++
++    # The llvm-prefixed targets are probed only when the prefix was actually
++    # read. Deriving them from an unset prefix collapses them to `/bin/...`
++    # and reports a failed read as `ABSENT`.
++    set -- "$@" "$llvm_prefix/bin/lldb-mcp" "$llvm_prefix/bin/lldb"
++  else
++    printf 'LLVM_NOT_INSTALLED|\n'
++  fi
++
++  for target in "$@"; do
++    if test -e "$target" || test -L "$target"; then
++      printf 'PRESENT|'
++      if ! stat -f '%N|%HT|%z|%m|%Sp' "$target"; then exit 70; fi
++      if ! shasum -a 256 "$target"; then exit 70; fi
++    else
++      printf 'ABSENT|%s\n' "$target"
++    fi
++  done
++)
++
++capture_lldb_surface() (
++  # Same construction: subshell body, explicit statuses. This function is
++  # invoked as an `if` condition, where a braced body would run with `errexit`
++  # suppressed and a failed `mv` would publish nothing while returning zero.
++  set -euo pipefail
++  destination="$1"
++  partial="${destination}.partial.$$"
++  rm -f "$destination" "$partial"
++
++  snapshot_exit=0
++  snapshot_lldb_surface > "$partial" || snapshot_exit=$?
++  if test "$snapshot_exit" -ne 0; then
++    rm -f "$partial"
++    exit "$snapshot_exit"
++  fi
++  if ! test -s "$partial"; then
++    rm -f "$partial"
++    exit 71
++  fi
++  # Publish only after the snapshot fully succeeded, so partial evidence can
++  # never be compared as if it were complete.
++  if ! mv -f "$partial" "$destination"; then
++    rm -f "$partial"
++    exit 72
++  fi
++  exit 0
++)
++
++guarded_agents_infra_install() (
++  set -euo pipefail
++  release_source="$1"
++  guard_dir="$2"
++  mkdir -p "$guard_dir"
++  rm -f "$guard_dir/passed"
++
++  before_exit=not-run
++  install_exit=not-run
++  after_exit=not-run
++  cmp_exit=not-run
++
++  if capture_lldb_surface "$guard_dir/before.txt"; then
++    before_exit=0
++    if AGENTS_INFRA_SKIP_LLDB_MCP=1 "$release_source/scripts/setup.sh"; then
++      install_exit=0
++    else
++      install_exit=$?
++    fi
++    if capture_lldb_surface "$guard_dir/after.txt"; then
++      after_exit=0
++      if cmp -s "$guard_dir/before.txt" "$guard_dir/after.txt"; then
++        cmp_exit=0
++      else
++        cmp_exit=$?
++      fi
++    else
++      after_exit=$?
++    fi
++  else
++    before_exit=$?
++  fi
++
++  printf 'before_exit=%s\ninstall_exit=%s\nafter_exit=%s\ncmp_exit=%s\n' \
++    "$before_exit" "$install_exit" "$after_exit" "$cmp_exit" \
++    > "$guard_dir/status.txt"
++
++  if test "$before_exit" = 0 && test "$install_exit" = 0 && \
++    test "$after_exit" = 0 && test "$cmp_exit" = 0; then
++    : > "$guard_dir/passed"
++    exit 0
++  fi
++  exit 1
++)
++```
++
++An explicit `ABSENT` line is a measured baseline fact; failure to execute a
++read is not absence and fails the guard. Three constructions enforce that, and
++each is covered by a negative probe that is red without it:
++
++1. **Every read has an explicit status test.** `snapshot_lldb_surface` and
++   `capture_lldb_surface` have subshell bodies that set their own
++   `set -euo pipefail` and additionally test each command with
++   `if ! var="$(...)"; then exit 70; fi`. A braced function body invoked as an
++   `if` condition runs with `errexit` suppressed, and `var=$(cmd)` does not
++   trip `errexit` in zsh at all — so neither the caller's `if` context nor its
++   shell dialect can turn a failed read into a zero status. The probes are
++   executed under both `bash` and `zsh` for exactly this reason.
++2. **The llvm state is read through an unambiguous query.**
++   `brew list --versions llvm` exits 1 both when llvm is genuinely absent and
++   when the query fails, so it cannot separate a measured absence from a failed
++   read. The guard instead requires `brew list --formula` to exit 0 and treats
++   that list as authoritative; any non-zero status refuses.
++3. **A path is never derived from an unread prefix.** The two llvm-prefixed
++   targets are probed only after `brew --prefix llvm` succeeded. Deriving them
++   from an unset prefix collapses them to `/bin/lldb-mcp` and `/bin/lldb` and
++   emits `ABSENT` lines for paths that were never the intended targets — a
++   failed read wearing the shape of a measured absence.
++
++`capture_lldb_surface` deletes partial
++and stale destination files unless the whole snapshot exits zero, and requires
++a non-empty published snapshot.
++`guarded_agents_infra_install` records the real status of all four operations;
++`not-run` is distinct from zero. It creates `passed` only after the before
++snapshot, installer, after snapshot and `cmp` each exited zero. Identical
++partial bytes therefore cannot authorize the installed surface. The interval
++from the before snapshot through the successful `cmp` is an LLDB bypass guard,
++not an accepted mixed-install window: the required outcome is zero
++LLDB/Homebrew delta. If the `passed` file is absent, report the result as
++`unknown/failed`, withhold all new default-PATH composition, and do not claim
++W3/W6 rollback success. The release operator must restore that separately owned
++Homebrew surface or obtain its owner before the migration resumes; this plan
++neither mutates nor claims to roll it back.
++
++## Recovery snapshot and restore primitives
++
++Run this before Step 2 and repeat into a new `bridge-pair` snapshot after both
++`0.25.0` and `v1.7.0` pass installed canaries. These commands copy no
++credential, cookie, token, keychain data or environment value.
++
++```bash
++set -euo pipefail
++
++extract_reported_commit() {
++  version_text="$1"
++  parsed="$(printf '%s\n' "$version_text" | sed -nE \
++    -e 's/.*\(commit ([0-9a-f]{7,40}),.*/\1/p' \
++    -e 's/.* commit=([0-9a-f]{7,40})( .*)?$/\1/p')"
++  if ! test -n "$parsed"; then
++    return 1
++  fi
++  if ! test "$(printf '%s\n' "$parsed" | awk \
++    'NF { count++ } END { print count + 0 }')" -eq 1; then
++    return 1
++  fi
++  printf '%s\n' "$parsed"
++}
++
++require_saved_binary_source_identity() {
++  binary_name="$1"
++  source_tree="$2"
++  version_text="$3"
++  if ! source_head="$(git -C "$source_tree" rev-parse HEAD)"; then
++    return 1
++  fi
++  if ! reported_commit="$(extract_reported_commit "$version_text")"; then
++    return 1
++  fi
++  if ! reported_head="$(git -C "$source_tree" \
++    rev-parse "$reported_commit^{commit}")"; then
++    return 1
++  fi
++  if ! test -z "$(git -C "$source_tree" status --porcelain)"; then
++    return 1
++  fi
++  if ! test "$reported_head" = "$source_head"; then
++    return 1
++  fi
++  printf '%s source_head=%s reported_commit=%s\n' \
++    "$binary_name" "$source_head" "$reported_commit"
++}
++
++PM_REPO=/Users/alexis/src/relux-works/skill-project-management
++AI_REPO=/Users/alexis/src/relux-works/relux-agents-infra
++AM_REPO=/Users/alexis/src/relux-works/skill-agents-management
++RECOVERY_ROOT="$HOME/.local/state/TASK-260830-s5ro4e/current-pair"
++RECOVERY_BIN="$RECOVERY_ROOT/bin"
++
++test ! -e "$RECOVERY_ROOT"
++mkdir -p "$RECOVERY_BIN" "$RECOVERY_ROOT/pm" "$RECOVERY_ROOT/ai" \
++  "$RECOVERY_ROOT/sources"
++
++for path in "$HOME/.local/bin" "$HOME/.agents/skills" "$HOME/.roles" \
++  "$RECOVERY_ROOT"; do
++  test -d "$path"
++done
++RECOVERY_DEVICE="$(stat -f %d "$RECOVERY_ROOT")"
++for path in "$HOME/.local/bin" "$HOME/.agents/skills" "$HOME/.roles"; do
++  test "$(stat -f %d "$path")" = "$RECOVERY_DEVICE"
++done
++
++for name in task-board tb-sessiond task-board-tui openai-board anthropic-board \
++  agents-infra model-harness; do
++  test -f "$HOME/.local/bin/$name"
++  test ! -L "$HOME/.local/bin/$name"
++  cp -p "$HOME/.local/bin/$name" "$RECOVERY_BIN/$name"
++  cmp -s "$HOME/.local/bin/$name" "$RECOVERY_BIN/$name"
++done
++
++rsync -a --delete "$HOME/.agents/skills/project-management/" \
++  "$RECOVERY_ROOT/pm/project-management-skill/"
++for role in context-builder coordinator developer doc-writer orchestrator \
++  researcher reviewer solution-architect tester; do
++  test -e "$HOME/.roles/$role"
++  rsync -a --delete "$HOME/.roles/$role/" "$RECOVERY_ROOT/pm/roles/$role/"
++done
++
++cp -p "$HOME/.config/task-board/install.json" \
++  "$RECOVERY_ROOT/pm/install.json"
++
++shasum -a 256 "$RECOVERY_BIN"/* > "$RECOVERY_ROOT/bin.sha256"
++TB_VERSION="$("$RECOVERY_BIN/task-board" --version)"
++SESSIOND_VERSION="$("$RECOVERY_BIN/tb-sessiond" --version)"
++AI_VERSION="$("$RECOVERY_BIN/agents-infra" version)"
++printf '%s\n%s\n%s\n' "$TB_VERSION" "$SESSIOND_VERSION" "$AI_VERSION" \
++  > "$RECOVERY_ROOT/versions.txt"
++
++# The recovery source is derived from the saved executable, never from a
++# literal revision written into this document. A pinned commit is stale the
++# moment either repository moves; this resolves the pair at execution time and
++# refuses when the installed artifact cannot be resolved to a commit.
++materialize_recovery_source() (
++  set -euo pipefail
++  repo="$1"
++  destination="$2"
++  version_text="$3"
++
++  reported_commit=""
++  if ! reported_commit="$(extract_reported_commit "$version_text")"; then
++    exit 1
++  fi
++  if test -z "$reported_commit"; then exit 1; fi
++
++  resolved=""
++  if ! resolved="$(git -C "$repo" rev-parse --verify --quiet \
++    "${reported_commit}^{commit}")"; then
++    exit 1
++  fi
++  if test -z "$resolved"; then exit 1; fi
++
++  if ! git -C "$repo" worktree add --detach "$destination" "$resolved" >&2; then
++    exit 1
++  fi
++  printf '%s\n' "$resolved"
++)
++
++TB_SOURCE="$RECOVERY_ROOT/sources/skill-project-management"
++AI_SOURCE="$RECOVERY_ROOT/sources/relux-agents-infra"
++
++TB_COMMIT="$(materialize_recovery_source "$PM_REPO" "$TB_SOURCE" "$TB_VERSION")"
++AI_COMMIT="$(materialize_recovery_source "$AI_REPO" "$AI_SOURCE" "$AI_VERSION")"
++
++# task-board and tb-sessiond ship from one repository and share one recovery
++# source worktree. A divergent reported commit means the installed pair is not
++# coherent, and it blocks Step 2 rather than picking one of the two.
++test "$(extract_reported_commit "$SESSIOND_VERSION")" \
++  = "$(extract_reported_commit "$TB_VERSION")"
++
++printf 'skill-project-management=%s\nrelux-agents-infra=%s\n' \
++  "$TB_COMMIT" "$AI_COMMIT" > "$RECOVERY_ROOT/recovery-source-commits.txt"
++{
++  require_saved_binary_source_identity task-board "$TB_SOURCE" "$TB_VERSION"
++  require_saved_binary_source_identity tb-sessiond "$TB_SOURCE" \
++    "$SESSIOND_VERSION"
++  require_saved_binary_source_identity agents-infra "$AI_SOURCE" "$AI_VERSION"
++} > "$RECOVERY_ROOT/binary-source-identities.txt"
++```
++
++Parse failure, an unknown commit, dirty detached source, a binary/source OID
++mismatch, a failed `cmp`, or any missing executable blocks Step 2. It is never
++treated as an absent identity or a usable rollback baseline.
++
++**Property of this plan: the recovery baseline and the recovery binary are the
++same pair by construction, not by a maintained literal.** Each source worktree
++is created at the commit its own saved executable reports, resolved in the
++owning repository at execution time. There is no revision written into this
++document that has to be refreshed when either repository moves, and no
++execution can silently pair a newer binary with an older source. If an
++executable's version output cannot be parsed to a commit, or that commit does
++not resolve in the repository, `materialize_recovery_source` refuses and no
++baseline is produced — the plan reports `unknown` and stops rather than
++guessing a nearby revision. `require_saved_binary_source_identity` therefore
++becomes a tautology guard that still catches a concurrent repository mutation
++or a tampered worktree between materialization and use.
++
++For the bridge snapshot, use a fresh
++`$HOME/.local/state/TASK-260830-s5ro4e/bridge-pair`. The same derivation
++applies unchanged: the saved `0.25.0` and `v1.7.0` executables name their own
++commits, and the exact tags are asserted against the resolved OIDs rather than
++substituted for them. Never overwrite a prior snapshot.
++
++Reusable same-filesystem binary restore:
++
++```bash
++restore_binary() {
++  name="$1"
++  source="$RECOVERY_ROOT/bin/$name"
++  destination="$HOME/.local/bin/$name"
++  temporary="$HOME/.local/bin/.$name.rollback.$$"
++  test -f "$source"
++  test ! -L "$source"
++  install -m 0755 "$source" "$temporary"
++  mv -f "$temporary" "$destination"
++}
++```
++
++Coherent task-board skill/role restore, executed only for the release-owned
++paths listed above:
++
++```bash
++restore_project_management_surface() {
++  PM_SKILLS="$HOME/.agents/skills"
++  PM_STAGE="$PM_SKILLS/.project-management.rollback.$$"
++  rsync -a --delete "$RECOVERY_ROOT/pm/project-management-skill/" "$PM_STAGE/"
++  mv "$PM_SKILLS/project-management" "$PM_SKILLS/.project-management.failed.$$"
++  mv "$PM_STAGE" "$PM_SKILLS/project-management"
++  test -L "$HOME/.claude/skills/project-management"
++  test -L "$HOME/.codex/skills/project-management"
++  ln -sfn "$PM_SKILLS/project-management" "$HOME/.claude/skills/project-management"
++  ln -sfn "$PM_SKILLS/project-management" "$HOME/.codex/skills/project-management"
++
++  for role in context-builder coordinator developer doc-writer orchestrator \
++    researcher reviewer solution-architect tester; do
++    stage="$HOME/.roles/.$role.rollback.$$"
++    rsync -a --delete "$RECOVERY_ROOT/pm/roles/$role/" "$stage/"
++    mv "$HOME/.roles/$role" "$HOME/.roles/.$role.failed.$$"
++    mv "$stage" "$HOME/.roles/$role"
++  done
++
++  install -m 0644 "$RECOVERY_ROOT/pm/install.json" \
++    "$HOME/.config/task-board/.install.json.rollback.$$"
++  mv -f "$HOME/.config/task-board/.install.json.rollback.$$" \
++    "$HOME/.config/task-board/install.json"
++}
++```
++
++Coherent agents-infra managed-runtime restore uses the saved old executable and
++exact old source. It deliberately does not copy `~/.agents` wholesale and does
++not print config contents:
++
++```bash
++restore_agents_infra_surface() {
++  restore_binary agents-infra
++  restore_binary model-harness
++  "$RECOVERY_ROOT/bin/agents-infra" setup global \
++    --source-dir "$RECOVERY_ROOT/sources/relux-agents-infra"
++  "$RECOVERY_ROOT/bin/agents-infra" verify global
++}
++```
++
++Each rollback block below runs in one `set -euo pipefail` shell after defining
++the three primitives exactly as written above. A partial primitive invocation
++is a rollback failure, not a successful half-restore.
++
++All restore procedures in this plan are **UNTESTED operationally** until a
++release operator rehearses them on a disposable home/runtime and records the
++real exits. They are not assumed reversible.
++
++## Release order
++
++### Step 0 — freeze the current working pair
++
++Repository/version: whatever pair is actually installed when this step runs.
++The operator does not read a version out of this document. The snapshot block
++above reads `task-board --version`, `tb-sessiond --version` and
++`agents-infra version` from the *saved* executables and materializes each
++recovery source at the commit those executables report.
++
++At the time this plan was written the installed pair measured
++`0.24.3-172-g063197b1` embedding `v0.2.0` and `v1.6.1-103-g4270549`. That is
++recorded as an observation, not as a pin: both repositories moved during this
++planning task alone, so any literal here is expected to be stale by the time
++the migration runs, and nothing in the procedure depends on these values.
++
++Required board capability: run read, preflight, one real spawn, outcome
++resource handoff and reviewer route using the installed pair, then capture the
++`current-pair` recovery snapshot above. The snapshot is admissible only when
++its task-board, tb-sessiond and agents-infra version outputs each resolve to the
++HEAD of their saved clean detached source tree. In a disposable HOME, the saved
++agents-infra binary must run `setup global --source-dir` against the source
++worktree derived from that same binary and then `verify global`, both with exit
++zero. An installed executable whose reported commit does not resolve in its
++repository blocks Step 0; the operator repairs or reinstalls a resolvable pair
++rather than substituting a nearby revision.
++
++In-flight runs: remain on their existing process images. Do not restart or
++kill them. Do not begin Step 2 while a run is at a handoff/acceptance mutation
++boundary.
++
++Mismatch window: none; this step only copies explicitly named non-secret
++artifacts and creates detached source worktrees.
++
++Rollback command: no installed artifact changes. On snapshot failure, stop and
++discard only the newly created task-scoped snapshot after inspecting it; no
++release step may start.
++
++Rollback status: **UNTESTED**.
++
++### Step 1 — hold agents-management at `v0.5.0`
++
++Repository/version: `skill-agents-management v0.5.0` at exact commit/checksum
++named above. This tag already exists; this task publishes nothing.
++
++Required board capability: the current installed board continues to spawn and
++route with embedded `v0.2.0`. The exact detached consumer candidate must pass:
++
++```bash
++cd "$PM_CANDIDATE/tools/board-cli"
++GOWORK=off go test -mod=mod ./internal/spawn -count=1
++GOWORK=off go build -mod=mod ./...
++```
++
++In-flight runs: unaffected; no executable changes.
++
++Mismatch window: none at runtime. A source-only scratch repin exists until its
++worktree is removed, but the installed board does not read it.
++
++Rollback commands for a failed scratch candidate:
++
++```bash
++cd "$PM_CANDIDATE/tools/board-cli"
++GOWORK=off go mod edit \
++  -require=github.com/relux-works/skill-agents-management@v0.2.0
++GOFLAGS=-mod=mod GOWORK=off go mod tidy
++GOWORK=off go test -mod=mod ./internal/spawn -count=1
++GOWORK=off go build -mod=mod ./...
++```
++
++Rollback status: **PARTIALLY TESTED** for source build/read/preflight only;
++installed restoration remains untested.
++
++### Step 2 — release and install task-board `0.25.0`
++
++Repository/version: `skill-project-management 0.25.0`, exact public
++agents-management `v0.5.0`. agents-infra remains the old installed release.
++
++Required board capability: the saved current-pair remains able to perform all
++spawn/route/resource/CR operations. Before install, the reviewed candidate runs
++the full suite/build, graph inventory, binary symbol inventory and an
++out-of-place real spawn-and-review canary. After install, repeat the same live
++canary through installed `task-board`.
++
++In-flight runs: provider children and already-exec'd CLI/sessiond processes
++continue. A run that reaches a new CLI mutation during the mixed window may see
++a partial default install; retry its mutation through the recovery-prefixed old
++pair. Do not reparent, rewrite or kill the run.
++
++Mixed-install window `W2`: starts at the first atomic replacement of
++`task-board`; then `tb-sessiond`, TUI, both board launchers, installed skill,
++roles and install state change sequentially; it ends only when installed
++verification plus the live canary succeeds, or when rollback plus the recovery
++canary succeeds. Duration is measured as `W2_end - W2_start`, not assumed
++sub-second. Default-PATH new spawn/route is withheld during `W2`; the absolute
++saved old pair remains the routing authority.
++
++Rollback commands:
++
++```bash
++RECOVERY_ROOT="$HOME/.local/state/TASK-260830-s5ro4e/current-pair"
++restore_binary task-board
++restore_binary tb-sessiond
++restore_binary task-board-tui
++restore_binary openai-board
++restore_binary anthropic-board
++restore_project_management_surface
++
++PATH="$RECOVERY_ROOT/bin:$PATH" "$RECOVERY_ROOT/bin/task-board" --version
++PATH="$RECOVERY_ROOT/bin:$PATH" "$RECOVERY_ROOT/bin/tb-sessiond" --version
++PATH="$RECOVERY_ROOT/bin:$PATH" \
++  "$RECOVERY_ROOT/bin/task-board" q --format compact \
++  'project_config(view=spawn-preflight, role=developer, agent=codex, task_class=research)'
++# Run the recovery-prefixed live spawn -> outcome -> handoff -> reviewer route canary.
++```
++
++Rollback status: **UNTESTED**.
++
++### Step 3 — release and install agents-infra `v1.7.0`
++
++Repository/version: `relux-agents-infra v1.7.0`, exact public
++agents-management `v0.5.0`. task-board remains installed `0.25.0`.
++
++Required board capability: `0.25.0` must preflight, spawn, compose through
++agents-infra, attach outcome and route to a reviewer before and after install.
++agents-infra full tests/build/verify plus real target/compose/Pi refusal gates
++must pass on the exact release head.
++
++Required install command and LLDB bypass proof:
++
++```bash
++set -euo pipefail
++AI_RELEASE="$HOME/.local/state/TASK-260830-s5ro4e/release-candidates/relux-agents-infra-v1.7.0"
++test "$(git -C "$AI_RELEASE" describe --tags --exact-match)" = "v1.7.0"
++LLDB_GUARD_DIR="$RECOVERY_ROOT/lldb-guard-step-3"
++guarded_agents_infra_install "$AI_RELEASE" "$LLDB_GUARD_DIR"
++test -f "$LLDB_GUARD_DIR/passed"
++```
++
++The two complete identity files, four real statuses and measured command
++duration are retained with the release evidence. `AGENTS_INFRA_SKIP_LLDB_MCP=1`
++is mandatory, not an operator option. Missing `passed` withholds every new
++default-PATH composition even when both partial outputs happened to be equal.
++
++In-flight runs: provider children, primary sessions, Pi runtimes and existing
++LLDB MCP processes retain old process images and leases. Do not restart them.
++New compositions, including LLDB-enabled compositions, use the saved old
++agents-infra until the LLDB identity comparison, installed verification and the
++canary all pass.
++
++Mixed-install window `W3`: starts when `agents-infra` is replaced; includes
++`model-harness`, install state, receipt invalidation, `.agents` source sync,
++Claude/Codex links, helper/target launchers, runtime verification and receipt
++write; ends at installed canary success or rollback canary success. Record the
++actual duration. New default-PATH spawn/route is withheld; recovery-prefixed
++`0.24.3`/old-agents-infra remains available even if the new `0.25.0` half must
++also be abandoned. The earlier `install_lldb_mcp` call is a verified no-op under
++the mandatory environment flag; the first possible installed mutation is
++therefore the first managed binary replacement. A failed LLDB identity `cmp`
++is not folded into W3 or treated as a successful agents-infra rollback.
++
++Rollback commands:
++
++```bash
++RECOVERY_ROOT="$HOME/.local/state/TASK-260830-s5ro4e/current-pair"
++restore_agents_infra_surface
++
++PATH="$RECOVERY_ROOT/bin:$PATH" \
++  "$RECOVERY_ROOT/bin/task-board" q --format compact \
++  'project_config(view=spawn-preflight, role=developer, agent=codex, task_class=research)'
++# Run the recovery-prefixed live spawn -> outcome -> handoff -> reviewer route canary.
++```
++
++If agents-infra restores but task-board routing is not green, also execute the
++Step-2 task-board restore. If task-board restores first but agents-infra does
++not, keep `PATH="$RECOVERY_ROOT/bin:$PATH"` and do not admit new default-PATH
++spawns until the agents-infra restore succeeds. A half-restored pair is a
++recovery state, never a release success.
++
++Rollback status: **UNTESTED**.
++
++After Step 3 is green, capture the fresh immutable `bridge-pair` snapshot of
++installed `0.25.0` and `v1.7.0` before any Step-5 mutation.
++
++### Step 4 — allow conditional agents-management `v0.6.0`
++
++Repository/version: `skill-agents-management v0.6.0` candidate.
++
++Required board capability: installed `0.25.0`/`v1.7.0` continues all spawn and
++route operations with embedded `v0.5.0`. The exact compatibility-removal gate
++above must be green for both release tags and every removed item.
++
++In-flight runs: unaffected; no installed binary resolves the new tag.
++
++Mismatch window: none at runtime. Publishing `v0.6.0` does not repin either
++consumer. The candidate is prohibited if any manifest item remains required or
++unknown.
++
++Rollback commands before publication:
++
++```bash
++cd "$CONSUMER_CANDIDATE"
++GOWORK=off go mod edit \
++  -require=github.com/relux-works/skill-agents-management@v0.5.0
++GOFLAGS=-mod=mod GOWORK=off go mod tidy
++GOWORK=off go test -mod=mod ./... -count=1
++```
++
++After a bad immutable tag is published, do not delete/move it. Keep consumers
++on `v0.5.0` and publish only a separately reviewed forward `v0.6.1` that
++restores the required contract; no consumer repin begins first.
++
++Rollback status: **UNTESTED**; `v0.6.0` does not yet exist.
++
++### Step 5 — release and install task-board `0.25.1`
++
++Repository/version: `skill-project-management 0.25.1`, exact released
++agents-management `v0.6.0`. agents-infra remains `v1.7.0` embedding `v0.5.0`.
++
++Required board capability: full candidate and installed spawn/route canaries,
++including the external agents-infra compose seam. The Step-5 intermediate pair
++must be explicitly accepted; independent embedded module versions do not prove
++the external seam by themselves.
++
++In-flight runs: same process-image behavior as Step 2. Their next CLI mutation
++may require replay through `bridge-pair`; no run is killed or rewritten.
++
++Mixed-install window `W5`: same artifact sequence as `W2`, from first
++task-board replacement through installed canary or rollback canary. Duration is
++recorded. Default-PATH new spawn/route is withheld; `bridge-pair` is authority.
++
++Rollback commands (fixing the former missing Step-5 sequence):
++
++```bash
++RECOVERY_ROOT="$HOME/.local/state/TASK-260830-s5ro4e/bridge-pair"
++restore_binary task-board
++restore_binary tb-sessiond
++restore_binary task-board-tui
++restore_binary openai-board
++restore_binary anthropic-board
++restore_project_management_surface
++
++PATH="$RECOVERY_ROOT/bin:$PATH" "$RECOVERY_ROOT/bin/task-board" --version
++PATH="$RECOVERY_ROOT/bin:$PATH" "$RECOVERY_ROOT/bin/tb-sessiond" --version
++PATH="$RECOVERY_ROOT/bin:$PATH" \
++  "$RECOVERY_ROOT/bin/agents-infra" verify global
++PATH="$RECOVERY_ROOT/bin:$PATH" \
++  "$RECOVERY_ROOT/bin/task-board" q --format compact \
++  'project_config(view=spawn-preflight, role=developer, agent=codex, task_class=research)'
++# Run the bridge-pair live spawn -> outcome -> handoff -> reviewer route canary.
++```
++
++If only task-board restores, force the recovery PATH so it also resolves saved
++`v1.7.0` agents-infra. If agents-infra verification is red, execute the
++agents-infra managed-runtime restore block before admitting new work. Do not
++claim rollback success from only one green half.
++
++Rollback status: **UNTESTED**.
++
++### Step 6 — release and install agents-infra `v1.7.1`
++
++Repository/version: `relux-agents-infra v1.7.1`, exact released
++agents-management `v0.6.0`. task-board remains `0.25.1`.
++
++Required board capability: agents-infra full gates and exact installed
++spawn/compose/outcome/handoff/reviewer canary, including successful reviewer
++route. The accepted Step-5 pair remains available until the new pair passes.
++
++Required install command and LLDB bypass proof:
++
++```bash
++set -euo pipefail
++AI_RELEASE="$HOME/.local/state/TASK-260830-s5ro4e/release-candidates/relux-agents-infra-v1.7.1"
++test "$(git -C "$AI_RELEASE" describe --tags --exact-match)" = "v1.7.1"
++LLDB_GUARD_DIR="$RECOVERY_ROOT/lldb-guard-step-6"
++guarded_agents_infra_install "$AI_RELEASE" "$LLDB_GUARD_DIR"
++test -f "$LLDB_GUARD_DIR/passed"
++```
++
++Retain both complete identity files, the four statuses and measured duration.
++Any failed read, not-run status or difference is a failed step and preserves
++the bridge-pair as routing authority.
++
++In-flight runs: same as Step 3. Existing sessions, runtimes and LLDB MCP
++processes are not restarted; new composition is withheld from the partial
++installed surface until the identity comparison and full canary pass.
++
++Mixed-install window `W6`: same artifact sequence as `W3`, from first
++agents-infra mutation through installed canary or rollback canary. Record
++actual duration. `bridge-pair` remains the fail-closed authority. Mandatory
++LLDB skipping and the before/after identity comparison exclude the earlier
++Homebrew/helper branch from this migration; a non-zero comparison is not an
++accepted W6 state.
++
++Rollback commands:
++
++```bash
++RECOVERY_ROOT="$HOME/.local/state/TASK-260830-s5ro4e/bridge-pair"
++restore_agents_infra_surface
++
++PATH="$RECOVERY_ROOT/bin:$PATH" \
++  "$RECOVERY_ROOT/bin/task-board" q --format compact \
++  'project_config(view=spawn-preflight, role=developer, agent=codex, task_class=research)'
++# Run the bridge-pair live spawn -> outcome -> handoff -> reviewer route canary.
++```
++
++If `0.25.1` plus restored `v1.7.0` fails the Step-5 seam canary, restore the
++five task-board executables, skill, roles and install state from `bridge-pair`
++too. If task-board restores first while agents-infra restore is red, use only
++the full recovery-prefixed pair. Forward fixes use new immutable patch releases
++(`0.25.2`, `v1.7.2` or later); never rewrite `0.25.1`, `v1.7.1` or `v0.6.0`.
++
++Rollback status: **UNTESTED**.
++
++## Named unsupported and mixed windows
++
++| Window | Duration | Impact | Survival/avoidance |
++| --- | --- | --- | --- |
++| Public `v0.5.0` while installed board embeds `v0.2.0` | `0s` dynamic mismatch | None from publication alone. | Exact immutable embedded pin. |
++| `W2`: task-board `0.25.0` install | First installed mutation to installed canary or rollback canary; measured, unbounded in advance | Default surface may mix five binaries, skill, roles and install state; new default spawn/route may fail. | Withhold default surface; saved current-pair with recovery PATH remains authority. |
++| Step-3 LLDB bypass guard | Before-snapshot through successful after-snapshot `cmp`; measured | No accepted mutation. A failed read/difference makes LLDB state unknown and may affect LLDB-enabled composition. | Mandatory `AGENTS_INFRA_SKIP_LLDB_MCP=1`; withhold new composition and stop on any non-identical result. |
++| `W3`: agents-infra `v1.7.0` install | First managed binary replacement to installed canary or rollback canary; measured | Binary, model-harness, install state, `.agents`, links/helpers and receipt may mix; new composition may fail. | Saved current-pair; existing children/sessions keep process images; retry later mutations through saved pair. |
++| `0.25.0` installed while `v1.7.0` is not yet installed | Until Step 3 canary | Supported only if Step-2 live external-seam canary passed. | This is an explicit tested pair, not inferred independence. |
++| Public `v0.6.0` while both installed consumers embed `v0.5.0` | `0s` dynamic mismatch | None from publication alone. | Exact pins; no `@latest`. |
++| `W5`: task-board `0.25.1` install | First task-board mutation to installed/rollback canary; measured | Same mixed task-board surface as `W2`; new default spawn/route withheld. | Saved bridge-pair authority and full Step-5 rollback. |
++| `0.25.1/v0.6.0` with agents-infra `v1.7.0/v0.5.0` | Until Step 6 canary | Cross-version embedded libraries behind one external seam. | Allowed only after the Step-5 real spawn/compose/route canary. |
++| Step-6 LLDB bypass guard | Before-snapshot through successful after-snapshot `cmp`; measured | No accepted mutation. A failed read/difference makes LLDB state unknown and may affect LLDB-enabled composition. | Mandatory `AGENTS_INFRA_SKIP_LLDB_MCP=1`; withhold new composition and stop on any non-identical result. |
++| `W6`: agents-infra `v1.7.1` install | First managed binary replacement to installed/rollback canary; measured | Same mixed runtime surface as `W3`; new default composition withheld. | Saved bridge-pair; restore one half, canary, then restore both if the intermediate pair is red. |
++
++The forbidden window is running an installer from a breaking consumer candidate
++before its exact tests, removal manifest, out-of-place canary and recovery
++snapshot are green. Its impact would be loss of new spawn/route authority for
++an unbounded time. This plan never accepts that mode.
++
++## Validation evidence from this planning task
++
++No migration, install, release or tag was performed.
++
++| Command/gate | Exit | Result |
++| --- | ---: | --- |
++| Tool readiness (`task-board`, Git, Go, `rg`, `nm`) | 0 | Required tools executable; log in task scratch. |
++| `go mod download -json ...@v0.5.0` | 0 | Exact origin commit and checksum reproduced. |
++| Initial `go mod tidy` with stale vendor auto-selection | 1 | Preparation refusal; not a gate pass. |
++| `go mod tidy -mod=mod` | 2 | Invalid Go 1.25.5 flag placement; not a gate pass. |
++| `GOFLAGS=-mod=mod GOWORK=off go mod tidy` | 0 | Correct scratch pin completed. |
++| `GOWORK=off go list -mod=mod -deps ... ./...` | 0 | 20 compiled module packages recorded. |
++| `GOWORK=off go build -mod=mod -o ... .` | 0 | Candidate binary built. |
++| `go version -m` / `go tool nm` | 0 / 0 | Exact `v0.5.0` checksum and linked surface recorded. |
++| `GOWORK=off go test -mod=mod ./internal/spawn -count=1` | 0 | Unmodified reviewer-required gate green in a real detached Git worktree. |
++| Candidate production `project_config(view=spawn-preflight, ...)` | 0 | Real candidate init/model/preflight path reached authoritative board. |
++| Installer/host LLDB boundary inspection | 0 | Skip returns before Homebrew/helper mutation; measured host resolves the mutating default branch, so Steps 3/6 mandate the skip plus identity guard. |
++| First sandbox setup probe (HOME nested in source) | 1 | Expected refusal: source would sync into itself; not a gate pass. |
++| Second sandbox setup probe (noncanonical global bin) | 1 | Expected refusal: `pi-infra` sibling target missing; not a gate pass. |
++| Canonical sandbox setup with `AGENTS_INFRA_SKIP_LLDB_MCP=1` plus exact before/after guard | 0 | Production setup/verify green and LLDB/Homebrew snapshot byte-identical. |
++| Initial zsh guard draft | 0 false green, discarded | Special loop variable `path` broke command lookup; output contained command failures. Corrected helper uses `target` and readiness checks. |
++| Production setup without skip against fake Homebrew | 0 | Negative probe changed fake wrapper SHA-256 `0a5fb2d3…` to `1de8aa42…`, proving the pre-binary mutation path is reachable. |
++| Targeted child/Codex/Claude stdio-MCP composition and invalid-config refusal tests | 0 | Five production-surface tests green with `-count=1`; exact package output recorded in revision-3 validation evidence. |
++| Installed current-pair version and SHA-256 measurement | 0 | Observed at planning time: task-board/tb-sessiond report `063197b1`; agents-infra reports `v1.6.1-103-g4270549`. Recorded as an observation only — the procedure derives the baseline from the installed artifact and does not consume these values. |
++| First exact-`4270549` sandbox `setup global` without sibling binary | 1 | Expected refusal: disposable global runtime lacked its required sibling `~/.local/bin/agents-infra`; not a gate pass. |
++| Byte-identical `4270549` binary + exact-source sandbox `setup global` / `verify global` | 0 / 0 | Coherent recovery pair installs and verifies in disposable HOME; real installed runtime untouched. |
++| Initial revision-4 extracted guard validator | 1 | Correctly retained red: failed after-snapshot status was recorded as `not-run`; plan fixed to preserve exit 7. |
++| Second revision-4 extracted guard validator | 1 | Correctly retained red: conditional caller context exposed fail-open identity helper; parser and matcher changed to explicit returns. |
++| Revision-4 extracted guard/identity validator | 0 | **Superseded — this green was not load-bearing.** All five of its guard probes replaced `snapshot_lldb_surface` with a stub, so they exercised the orchestration logic and never the reader. The reader's own fail-open survived it. |
++| Revision-5 probe: real reader, `brew --prefix llvm` fails | rev4 `0` / rev5 `70` | Red before the fix. Two failed reads produced a fabricated snapshot containing `ABSENT|/bin/lldb-mcp` and `ABSENT|/bin/lldb` from a collapsed empty prefix. |
++| Revision-5 probe: same failure via an `if` condition | rev4 `0` / rev5 `70` | Red before the fix. A braced function body invoked as an `if` condition runs with `errexit` suppressed, so the caller context erased the failure. |
++| Revision-5 probe: `brew` entirely absent | rev4 `0` / rev5 `70` | Red before the fix. A completely missing Homebrew was accepted as a clean surface. |
++| Revision-5 probe: `brew list --versions llvm` / `brew --prefix llvm` fail | rev4 `0` / rev5 `70` | Red before the fix. Each llvm detail read now refuses instead of degrading the snapshot. |
++| Revision-5 probe: llvm genuinely not installed | 0 | Measured absence still passes and records `LLVM_NOT_INSTALLED`; it does not probe collapsed `/bin/...` paths. Proves the fix narrows the gate rather than deleting it. |
++| Revision-5 probe: end-to-end production guard on an unreadable surface | rev4 `0` / rev5 `1` | Red before the fix: rev4 created `passed`, reported all four statuses as `0`, and ran the installer. rev5 refuses and the installer is never invoked. |
++| Revision-5 probe: end-to-end production guard on the real host | 0 | Positive path reachable; `passed` created. Real host reads `llvm 23.1.0`, prefix `/opt/homebrew/opt/llvm`, both llvm targets measured absent. |
++| Revision-5 probe: baseline derived from the installed artifact | 0 | `materialize_recovery_source` resolves the saved binary's reported commit and creates the worktree at exactly that OID; the derived pair passes its own identity gate. |
++| Revision-5 probe: unparseable / unresolvable reported commit | rev4 n/a / rev5 `1` / `1` | Refuses and creates no worktree. Under zsh, rev5's earlier `var=$(cmd)` form returned 0 for both; explicit `if !` tests fixed it. |
++| Revision-5 probe: no maintained baseline literal in executable blocks | rev4 `2` / rev5 `0` | Rev4 pinned both recovery revisions as literals; rev5 has none. |
++| Full revision-5 validator under `zsh` | rev4 `1` / rev5 `0` | Every negative probe red on rev4, green on rev5. |
++| Full revision-5 validator under `bash` | rev4 `1` / rev5 `0` | Same verdict in the shell the code fences declare, so the fail-open was not a zsh artifact. |
++| `go test ./internal/infra -run 'TestSetupGlobal|TestVerifyInstalledRuntimeRefusesIncorrectGlobalPiInfraTarget' -count=1` | 0 | Exact setup/verify and negative runtime-target package tests green. |
++| `go build ./...` in `tools/agents-infra` | 0 | Go CLI still compiles on the repository's supported host platform. |
++
++The spawn package gate attacks production launch/model registry paths and their
++refusals; the separate direct/transitive/link/runtime instruments expose the
++direct-import bypass that the first plan missed.
++
++Two findings from this revision are worth carrying forward as review lessons.
++First, a guard suite that stubs the component under attack proves only that the
++orchestration around it works: revision 4's five green probes all replaced the
++reader, which is why a reader that returned zero on three failed `brew` calls
++survived them. Second, a negative probe must be executed against the *previous*
++revision to show it is red; every row above marked `rev4 … / rev5 …` was run
++against both documents, in both shells, from the same validator.
++
++Validators: `.temp/TASK-260830-s5ro4e/validate-revision5.zsh` and
++`.temp/TASK-260830-s5ro4e/validate-revision5.bash`. Both extract the guard and
++identity functions verbatim from this document rather than testing a retyped
++copy, and both accept the plan path as an argument so either revision can be
++attacked with the identical suite.
++
++## Stop conditions
++
++Stop and restore the last accepted pair if:
++
++- any manifest item proposed for `v0.6.0` is still required or unknown for
++  either exact released consumer;
++- any read/inventory is failed, partial or malformed;
++- a candidate requires `replace`, workspace override, mutable lookup or shadow
++  graph;
++- a real spawn succeeds but resource/handoff/reviewer routing fails;
++- the saved absolute pair cannot route during a cutover failure;
++- an in-flight run would need to be killed, reparented or rewritten;
++- one restored half is green but the pair canary is red;
++- a rollback remains unrehearsed in the target environment. It stays labelled
++  **UNTESTED** and cannot be assumed to work.
++
++## References
++
++- task-board `internal/spawn/launch_plan.go:157-164,332-342`
++- task-board `internal/spawn/models.go:307-332`
++- task-board `internal/spawn/model_registry_build.go:9-20,209-306`
++- agents-management `pkg/agentic/registry.go:120-128,170-183`
++- agents-management `pkg/vendorplugin/registry.go:252-337,363-388`
++- agents-management `pkg/vendorplugin/engine.go:9-11,31-54`
++- project-management installer `scripts/setup.sh:194-209,330-400,904-924`
++- agents-infra installer `scripts/setup.sh:93-170,181-205,243-269`
++- agents-infra global setup `tools/agents-infra/internal/infra/infra.go:134-215`
++- `TASK-260830-s5ro4e_review-verdict.md`
++- `TASK-260830-s5ro4e_review-verdict-rev3.md`
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index fff878e..64a5a12 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,55 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-30
++
++### 1731 — A Guard Suite That Stubs Its Reader Proves Nothing
++- ROOT CAUSE: Entry 1529 below claimed the migration guard was fixed. It was not. All five of that revision's probes replaced `snapshot_lldb_surface` with a stub, so they attacked the orchestration around the reader and never the reader itself. The reader returned 0 after three failed `brew` calls and the suite stayed green.
++- FINDING: Two distinct fail-open mechanisms hid under that stub. `errexit` is suppressed inside a *braced* function body invoked as an `if` condition — which is exactly how `capture_lldb_surface` calls the reader — and `var=$(cmd)` never trips `errexit` in zsh at all. A completely absent `brew` was also accepted as a clean surface.
++- FINDING: `brew list --versions llvm` exits 1 both when llvm is absent and when the query fails, so it cannot separate a measured absence from a failed read. Worse, deriving target paths from an unread prefix collapsed them to `/bin/lldb-mcp` and `/bin/lldb` and emitted `ABSENT` lines for paths that were never the intended targets — a failed read wearing the shape of a measured absence.
++- FIX: Reader and capture functions now have subshell bodies with an explicit status test on every read (`if ! var="$(...)"; then exit 70; fi`), so neither caller context nor shell dialect can launder a failure. llvm state is read via `brew list --formula`, which is authoritative on exit 0 and refuses otherwise; llvm-prefixed targets are probed only after the prefix was actually read.
++- EVIDENCE: The validator extracts the functions verbatim from the plan and takes the plan path as an argument, so both revisions are attacked by the identical suite. Every negative probe is red against revision 4 and green against revision 5, **under both `bash` and `zsh`** — confirming the fail-open was real in the shell the code fences declare, not a zsh artifact.
++- LESSON: A positive probe on a readable host cannot kill a negative shape, and a green suite whose stub replaces the component under attack is not evidence about that component. Run every negative probe against the previous revision to show it is red.
++
++### 1730 — Rollback Baselines Must Be Derived, Never Pinned
++- ROOT CAUSE: Entry 1528 below "fixed" a stale recovery baseline by rewriting one literal commit into another. Both repositories moved several times during this single planning task, so the replacement literal was stale on arrival — the same defect, one commit later.
++- FIX: The recovery source is now derived from the installed artifact at execution time. `materialize_recovery_source` parses the commit the *saved* executable reports, resolves it in the owning repository, and creates the detached worktree at exactly that OID. Baseline and binary are the same pair by construction, with no revision in the document to maintain.
++- FIX: Unparseable version output or a commit that does not resolve refuses and produces no baseline; the plan reports `unknown` and stops rather than guessing a nearby revision.
++- EVIDENCE: Derivation resolves the installed binary's commit and the resulting worktree passes its own identity gate; unparseable and unresolvable inputs both refuse and create no worktree. Zero baseline literals remain in the plan's executable blocks, down from 2.
++- LESSON: A rollback plan that pins a literal commit is a maintenance liability that fails silently. Derive the pair from the artifact you are actually rolling back to.
++
++### 1529 — Caller Context Cannot Authorize Migration Guards
++- SUPERSEDED by 1731: the fix described here was real but incomplete, and the evidence below was not load-bearing because every probe stubbed the reader.
++- ROOT CAUSE: Shell `errexit` is not an authority when a function is invoked from `if`/`||`; failed status tests could be followed by a successful command and return a false green.
++- FIX: `.research/260830_agents-management-lockstep-release-and-rollback.md` records every LLDB operation, publishes only complete snapshots, creates `passed` only in an explicit all-zero branch, and makes identity parsing/matching return explicitly on every failure.
++- EVIDENCE: Extracted production-plan functions reject identical partial output, absent before evidence, changed snapshots, failed installer, stale source identity, and unparseable identity; coherent paths pass.
++
++### 1528 — Recovery Baseline Rebound To Exact Installed Producer
++- SUPERSEDED by 1730: rebinding to a newer literal did not fix the defect class. The versions below remain accurate as planning-time observations only.
++- FINDING: Installed task-board/tb-sessiond report `063197b1`; installed agents-infra reports `v1.6.1-103-g4270549`, full source OID `4270549dd17c010599e2083bf3ec7672af60ea29`.
++- FIX: Recovery plan replaces stale `d69a435` source/version claims and requires saved executable commit reports to resolve to clean detached source HEADs before Step 2.
++- EVIDENCE: Byte-identical saved `4270549` executable ran sandboxed `setup global --source-dir` and `verify global` against exact `4270549` source with exit 0; real home/runtime unchanged.
++
++### 1458 — LLDB Wrapper Is A Reachable Pre-Binary Installer Mutation
++- FINDING: `scripts/setup.sh:93-170,258-263` normally reaches Homebrew and wrapper replacement before managed binaries; `AGENTS_INFRA_SKIP_LLDB_MCP=1` returns before that branch.
++- ANOMALY: Measured `/opt/homebrew/bin/lldb-mcp` is a regular managed wrapper (SHA-256 `1ea8dd5a…`), while its `/opt/homebrew/opt/llvm/bin/lldb-mcp` and adjacent `lldb` targets are explicitly absent; invoking the wrapper exits 1.
++- ANOMALY: The first guard draft used zsh special variable `path`, erased command lookup inside the loop, and returned 0 after two `ABSENT` lines despite failed `stat`/`shasum`; production probing exposed the false green.
++- DECISION: Steps 3 and 6 mandate the skip flag and compare explicit before/after presence, metadata, and hashes with non-special `target` plus command-readiness checks; recorded absence is a baseline fact, while read failure or any delta blocks cutover.
++- EVIDENCE: Real sandboxed setup with skip plus exact before/after `cmp` exited 0; the same production setup without skip against fake Homebrew rewrote the fake wrapper from SHA-256 `0a5fb2d3…` to `1de8aa42…`, retained the original backup, and exited 0.
++- STATUS: LLDB maintenance remains separate from the agents-management migration; no Homebrew or installed-runtime mutation performed by this task.
++
++### 1428 — Composed V0.5 Graph Corrects The No-Reach Claim
++- ROOT CAUSE: The initial 1245 measurement treated a direct-import census and a 17-package `v0.2.0` scratch graph as the `v0.5.0` production reach; wrapper and init registration paths bypassed that check.
++- FINDING: Exact public `v0.5.0` compiles 20 module packages into task-board, including `pkg/plugin`, `pkg/inferenceengine`, and MLX; the candidate binary links 555 module symbols and production preflight reaches vendor init/model/launch registry paths.
++- DECISION: The 1245 entry now carries the corrected measurement. Dynamic module mismatch is avoided by immutable pins, tested adapters and cutover isolation, while Steps 2, 3, 5 and 6 retain explicitly measured mixed-install windows with a saved old routing pair.
++- STATUS: Revised plan at `.research/260830_agents-management-lockstep-release-and-rollback.md`; all operational rollbacks remain `UNTESTED` until rehearsed.
++
++### 1245 — Compatibility Bridge Requires Measured Cutover Isolation
++- FINDING: task-board commit `063197b1` directly imports agents-management from 25 production and 36 test Go files across 13 package families; its exact public `v0.5.0` composed graph compiles 20 module packages, including `pkg/plugin`, `pkg/inferenceengine`, and MLX.
++- EVIDENCE: The Darwin/arm64 candidate links 555 module symbols and production preflight reaches vendor init/model/launch registration; the unmodified real-worktree spawn gate passes with exit 0.
++- DECISION: Release task-board `0.25.0` on the `v0.5.0` bridge before agents-infra `v1.7.0`; isolate and time the mixed-install windows in Steps 2, 3, 5, and 6 with a saved old routing pair, then permit `v0.6.0` only after the per-removal gate proves neither released consumer needs each removed surface.
++- STATUS: Release/rollback plan recorded in `.research/260830_agents-management-lockstep-release-and-rollback.md`; all operational rollbacks remain explicitly `UNTESTED` until rehearsed.
++
+ ## 2026-08-29
+ 
+ ### 2318 — Status Publication Revalidates Its Resource Decision

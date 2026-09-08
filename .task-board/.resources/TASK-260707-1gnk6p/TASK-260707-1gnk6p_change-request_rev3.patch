@@ -1,0 +1,514 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index d3dfd0b..24ce8e5 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,21 @@
+ 
+ ## 2026-08-30
+ 
++### 0809 — Managed LLDB Wrapper Health Uses Canonical Bytes And Delegation
++- ROOT CAUSE: `scripts/setup.sh` rewrote its wrapper every run and a line-presence check could accept unreachable delegation after an early `exit 0`.
++- FIX: One renderer owns the wrapper bytes; setup preserves a byte-identical executable and atomically repairs every divergent managed wrapper.
++- EVIDENCE: `TestBootstrapSetupRepairsManagedLLDBMCPWrapperWithUnreachableExpectedTarget` drives root `setup.sh`, then executes the repaired wrapper and observes helper argument delegation.
++
++### 0808 — LLDB Setup Installs LLVM Only When Required
++- ROOT CAUSE: `install_lldb_mcp` invoked `brew install llvm` unconditionally before validating the already-installed helper and adjacent `lldb`.
++- FIX: `scripts/setup.sh` probes `brew --prefix llvm` and both executables first; a second production setup neither invokes Homebrew install nor changes wrapper inode.
++- EVIDENCE: `TestBootstrapSetupInstallsLLDBMCPOnceAndWrapperDelegates` runs root `setup.sh` twice and records one install plus stable inode.
++
++### 0807 — LLDB MCP Bootstrap Now Fails Closed
++- REGRESSION: macOS setup without Homebrew or external `lldb-mcp` returned success and printed `=== Done ===`, leaving project opt-in unavailable.
++- FIX: `scripts/setup.sh` now returns non-zero with actionable remediation when Homebrew/prefix/install/helper/lldb prerequisites cannot be established.
++- EVIDENCE: `TestBootstrapSetupRefusesMissingLLDBMCPPrerequisites` and `TestBootstrapSetupRefusesLLVMInstallWithoutExpectedHelper` drive root `setup.sh` and require refusal before success output.
++
+ ### 0646 — Correction: Readiness Test Predates Later Main State
+ - CORRECTION: `TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry` was introduced in `97ebda4`, not after `TASK-260817-3a0zr3`; it passes in the exact `0413aee` task-head suite and fails only in the current-main runs observed here.
+ - FINDING: `TestModelCheckProductionEntrypoint/deadline_override_terminates_both_owned_process_groups` was introduced after the task head.
+diff --git a/README.md b/README.md
+index 1bcc496..012bd0c 100644
+--- a/README.md
++++ b/README.md
+@@ -1938,14 +1938,40 @@ enabled_servers = ["lldb"]
+ ```
+ 
+ LLDB's MCP integration uses `lldb-mcp`, which bridges stdio to the LLDB MCP
+-server socket. On macOS, `./setup.sh` installs Homebrew `llvm` when `lldb-mcp`
+-is missing and writes a narrow `$(brew --prefix)/bin/lldb-mcp` wrapper that
++server socket. On macOS, run the source bootstrap to install and verify its
++prerequisites:
++
++```bash
++./setup.sh
++```
++
++The bootstrap runs `brew install llvm` only when Homebrew's LLVM helper or its
++adjacent `lldb` is missing, then writes a narrow
++`$(brew --prefix)/bin/lldb-mcp` wrapper that
+ execs Homebrew's helper without overriding `LLDB_EXE_PATH`. This lets
+ `lldb-mcp` use the `lldb` binary next to itself by default, matching LLDB's
+ documented behavior. The wrapper also prunes dead-PID
+ `~/.lldb/lldb-mcp-*.json` discovery files before launch so stale sockets do not
+-break the MCP initialize handshake. Set `AGENTS_INFRA_SKIP_LLDB_MCP=1` to skip
+-that bootstrap. If a project uses an LLDB build with the helper elsewhere,
++break the MCP initialize handshake. Re-running `./setup.sh` leaves an already
++healthy LLVM installation and byte-identical managed wrapper unchanged. Setup
++fails if neither an external `lldb-mcp` nor usable Homebrew prerequisites are
++available; install Homebrew and rerun, provide `lldb-mcp` on `PATH`, or make an
++intentional opt-out with the exact command:
++
++```bash
++AGENTS_INFRA_SKIP_LLDB_MCP=1 ./setup.sh
++```
++
++After setup, render the project's local runtime, confirm the opt-in, and restart
++Codex through the managed launcher:
++
++```bash
++agents-infra setup local "$PWD"
++agents-infra codex --print-config
++agents-infra codex
++```
++
++If a project uses an LLDB build with the helper elsewhere,
+ override the definition in the project-local
+ `.agents/.configs/codex-mcp-servers.toml`:
+ 
+diff --git a/SKILL.md b/SKILL.md
+index 5bcd1a8..0f304c1 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -674,7 +674,11 @@ servers to global `~/.codex/config.toml` just to make plain `codex` work.
+ Definitions may be streamable HTTP servers with `url` or stdio servers with
+ `command` and optional `args`. `lldb` is available as an opt-in stdio definition
+ using `command = "lldb-mcp"`. On macOS, `./setup.sh` installs Homebrew `llvm`
+-when needed and writes an `lldb-mcp` wrapper into the Homebrew bin directory.
++only when its helper or adjacent `lldb` is missing and writes an `lldb-mcp`
++wrapper into the Homebrew bin directory. A second setup run leaves both the
++formula and a byte-identical managed wrapper unchanged. Missing Homebrew and
++missing or invalid LLVM outputs fail setup clearly instead of leaving the
++opt-in unavailable behind a successful bootstrap.
+ The wrapper execs Homebrew's helper without overriding `LLDB_EXE_PATH`, so the
+ helper uses the `lldb` binary next to itself by default, and it prunes dead-PID
+ `~/.lldb/lldb-mcp-*.json` discovery files before launch. Set
+diff --git a/scripts/setup.sh b/scripts/setup.sh
+index dcae871..5f86335 100755
+--- a/scripts/setup.sh
++++ b/scripts/setup.sh
+@@ -90,6 +90,34 @@ install_go() {
+   exit 1
+ }
+ 
++render_lldb_mcp_wrapper() {
++  local destination="$1"
++  local helper="$2"
++  cat > "$destination" <<EOF
++#!/bin/sh
++# $LLDB_MCP_WRAPPER_MARKER.
++set -eu
++
++state_dir="\${HOME:-}/.lldb"
++if [ -n "\${HOME:-}" ] && [ -d "\$state_dir" ]; then
++  for state_file in "\$state_dir"/lldb-mcp-*.json; do
++    [ -e "\$state_file" ] || continue
++    state_name=\${state_file##*/}
++    state_pid=\${state_name#lldb-mcp-}
++    state_pid=\${state_pid%.json}
++    case "\$state_pid" in
++      ''|*[!0-9]*) continue ;;
++    esac
++    if ! kill -0 "\$state_pid" 2>/dev/null; then
++      rm -f "\$state_file"
++    fi
++  done
++fi
++
++exec "$helper" "\$@"
++EOF
++}
++
+ install_lldb_mcp() {
+   if [[ "${AGENTS_INFRA_SKIP_LLDB_MCP:-0}" == "1" ]]; then
+     yellow "Skipping lldb-mcp setup because AGENTS_INFRA_SKIP_LLDB_MCP=1"
+@@ -100,39 +128,80 @@ install_lldb_mcp() {
+     return
+   fi
+ 
++  local existing
++  existing="$(command -v lldb-mcp 2>/dev/null || true)"
++
+   if ! command -v brew >/dev/null 2>&1; then
+-    yellow "Homebrew not found; skipping lldb-mcp setup."
+-    yellow "Install Homebrew or provide lldb-mcp on PATH for LLDB MCP support."
+-    return
++    if [[ -n "$existing" ]] && ! grep -Fq "$LLDB_MCP_WRAPPER_MARKER" "$existing" 2>/dev/null; then
++      green "lldb-mcp already installed: $existing"
++      return
++    fi
++    red "Homebrew not found and no usable external lldb-mcp is available; cannot install lldb-mcp."
++    red "Install Homebrew so setup can install llvm, provide lldb-mcp on PATH, or explicitly set AGENTS_INFRA_SKIP_LLDB_MCP=1."
++    return 1
+   fi
+ 
+-  local brew_prefix wrapper existing
+-  brew_prefix="$(brew --prefix)"
++  local brew_prefix wrapper
++  if ! brew_prefix="$(brew --prefix)" || [[ -z "$brew_prefix" ]]; then
++    red "Homebrew could not report its installation prefix; cannot install lldb-mcp."
++    return 1
++  fi
+   wrapper="$brew_prefix/bin/lldb-mcp"
+-  existing="$(command -v lldb-mcp 2>/dev/null || true)"
+ 
+   if [[ -n "$existing" && "$existing" != "$wrapper" ]]; then
+     green "lldb-mcp already installed: $existing"
+     return
+   fi
+ 
+-  yellow "Ensuring Homebrew llvm and lldb-mcp wrapper for LLDB MCP support..."
+-  brew install llvm
+-
+   local llvm_prefix helper
+-  llvm_prefix="$(brew --prefix llvm)"
++  llvm_prefix="$(brew --prefix llvm 2>/dev/null || true)"
++  helper="${llvm_prefix:+$llvm_prefix/bin/lldb-mcp}"
++  if [[ -z "$llvm_prefix" || ! -x "$helper" || ! -x "$llvm_prefix/bin/lldb" ]]; then
++    yellow "Installing Homebrew llvm for LLDB MCP support..."
++    if ! brew install llvm; then
++      red "Homebrew failed to install llvm; cannot install lldb-mcp."
++      return 1
++    fi
++    llvm_prefix="$(brew --prefix llvm 2>/dev/null || true)"
++  fi
++
++  if [[ -z "$llvm_prefix" ]]; then
++    red "Homebrew llvm was installed but its prefix is unavailable; cannot install lldb-mcp."
++    return 1
++  fi
+   helper="$llvm_prefix/bin/lldb-mcp"
+   if [[ ! -x "$helper" ]]; then
+     red "Homebrew llvm did not provide expected helper: $helper"
+-    exit 1
++    return 1
+   fi
+ 
+   if [[ ! -x "$llvm_prefix/bin/lldb" ]]; then
+     red "Homebrew llvm did not provide expected lldb: $llvm_prefix/bin/lldb"
+-    exit 1
++    return 1
+   fi
+ 
+   mkdir -p "$(dirname "$wrapper")"
++  local rendered_wrapper
++  if ! rendered_wrapper="$(mktemp "$brew_prefix/bin/.lldb-mcp.agents-infra.XXXXXX")"; then
++    red "Could not create a temporary lldb-mcp wrapper in $brew_prefix/bin."
++    return 1
++  fi
++  if ! render_lldb_mcp_wrapper "$rendered_wrapper" "$helper"; then
++    rm -f "$rendered_wrapper"
++    red "Could not render the managed lldb-mcp wrapper."
++    return 1
++  fi
++  chmod +x "$rendered_wrapper"
++
++  if [[ -f "$wrapper" ]] && cmp -s "$rendered_wrapper" "$wrapper"; then
++    rm -f "$rendered_wrapper"
++    if [[ ! -x "$wrapper" ]]; then
++      chmod +x "$wrapper"
++    fi
++    green "lldb-mcp wrapper already installed: $wrapper"
++    return
++  fi
++
+   if [[ -e "$wrapper" && ! -L "$wrapper" ]]; then
+     local backup="$wrapper.agents-infra.bak"
+     if [[ ! -e "$backup" ]]; then
+@@ -142,31 +211,7 @@ install_lldb_mcp() {
+       yellow "Existing lldb-mcp backup already present: $backup"
+     fi
+   fi
+-  rm -f "$wrapper"
+-cat > "$wrapper" <<EOF
+-#!/bin/sh
+-# $LLDB_MCP_WRAPPER_MARKER.
+-set -eu
+-
+-state_dir="\${HOME:-}/.lldb"
+-if [ -n "\${HOME:-}" ] && [ -d "\$state_dir" ]; then
+-  for state_file in "\$state_dir"/lldb-mcp-*.json; do
+-    [ -e "\$state_file" ] || continue
+-    state_name=\${state_file##*/}
+-    state_pid=\${state_name#lldb-mcp-}
+-    state_pid=\${state_pid%.json}
+-    case "\$state_pid" in
+-      ''|*[!0-9]*) continue ;;
+-    esac
+-    if ! kill -0 "\$state_pid" 2>/dev/null; then
+-      rm -f "\$state_file"
+-    fi
+-  done
+-fi
+-
+-exec "$helper" "\$@"
+-EOF
+-  chmod +x "$wrapper"
++  mv -f "$rendered_wrapper" "$wrapper"
+   green "Installed lldb-mcp wrapper: $wrapper"
+ }
+ 
+diff --git a/tools/agents-infra/setup_lldb_mcp_test.go b/tools/agents-infra/setup_lldb_mcp_test.go
+new file mode 100644
+index 0000000..78cfe47
+--- /dev/null
++++ b/tools/agents-infra/setup_lldb_mcp_test.go
+@@ -0,0 +1,251 @@
++package main
++
++import (
++	"os"
++	"os/exec"
++	"path/filepath"
++	"runtime"
++	"strings"
++	"syscall"
++	"testing"
++)
++
++const managedLLDBMCPMarker = "agents-infra managed lldb-mcp wrapper"
++
++type lldbMCPSetupHarness struct {
++	home       string
++	binDir     string
++	configDir  string
++	fakeBin    string
++	brewPrefix string
++	llvmPrefix string
++	brewLog    string
++}
++
++func newLLDBMCPSetupHarness(t *testing.T, withBrew bool) lldbMCPSetupHarness {
++	t.Helper()
++	root := t.TempDir()
++	harness := lldbMCPSetupHarness{
++		home:       filepath.Join(root, "home"),
++		binDir:     filepath.Join(root, "installed-bin"),
++		configDir:  filepath.Join(root, "config"),
++		fakeBin:    filepath.Join(root, "fake-bin"),
++		brewPrefix: filepath.Join(root, "homebrew"),
++		llvmPrefix: filepath.Join(root, "homebrew", "opt", "llvm"),
++		brewLog:    filepath.Join(root, "brew-install.log"),
++	}
++	for _, path := range []string{harness.home, harness.binDir, harness.configDir, harness.fakeBin} {
++		if err := os.MkdirAll(path, 0o755); err != nil {
++			t.Fatalf("MkdirAll(%s): %v", path, err)
++		}
++	}
++	writeExecutable(t, filepath.Join(harness.fakeBin, "go"), `#!/bin/sh
++set -eu
++if [ "${1:-}" = "version" ]; then
++  echo 'go version go-test darwin/arm64'
++  exit 0
++fi
++output=''
++while [ "$#" -gt 0 ]; do
++  if [ "$1" = '-o' ]; then
++    output="$2"
++    shift 2
++    continue
++  fi
++  shift
++done
++[ -n "$output" ]
++mkdir -p "$(dirname "$output")"
++printf '%s\n' '#!/bin/sh' 'exit 0' > "$output"
++chmod +x "$output"
++`)
++	if withBrew {
++		if err := os.MkdirAll(filepath.Join(harness.brewPrefix, "bin"), 0o755); err != nil {
++			t.Fatalf("MkdirAll(Homebrew bin): %v", err)
++		}
++		writeExecutable(t, filepath.Join(harness.fakeBin, "brew"), `#!/bin/sh
++set -eu
++case "${1:-}:${2:-}" in
++  --prefix:)
++    printf '%s\n' "$FAKE_BREW_PREFIX"
++    ;;
++  --prefix:llvm)
++    [ -e "$FAKE_LLVM_PREFIX/.installed" ] || exit 1
++    printf '%s\n' "$FAKE_LLVM_PREFIX"
++    ;;
++  install:llvm)
++    printf '%s\n' llvm >> "$FAKE_BREW_LOG"
++    mkdir -p "$FAKE_LLVM_PREFIX"
++    : > "$FAKE_LLVM_PREFIX/.installed"
++    if [ "${FAKE_BREW_CREATE_LLVM:-1}" = 1 ]; then
++      mkdir -p "$FAKE_LLVM_PREFIX/bin"
++      printf '%s\n' '#!/bin/sh' 'printf "delegated"' 'for arg in "$@"; do printf "|%s" "$arg"; done' 'printf "\\n"' > "$FAKE_LLVM_PREFIX/bin/lldb-mcp"
++      printf '%s\n' '#!/bin/sh' 'exit 0' > "$FAKE_LLVM_PREFIX/bin/lldb"
++      chmod +x "$FAKE_LLVM_PREFIX/bin/lldb-mcp" "$FAKE_LLVM_PREFIX/bin/lldb"
++    fi
++    ;;
++  *)
++    echo "unexpected brew invocation: $*" >&2
++    exit 64
++    ;;
++esac
++`)
++	}
++	return harness
++}
++
++func (h lldbMCPSetupHarness) run(t *testing.T, extraEnv ...string) (string, error) {
++	t.Helper()
++	setup := filepath.Join(sourceRepoRoot(t), "setup.sh")
++	command := exec.Command("/bin/zsh", setup, "--bin-dir", h.binDir)
++	command.Env = append(os.Environ(),
++		"HOME="+h.home,
++		"AGENTS_INFRA_CONFIG_DIR="+h.configDir,
++		"AGENTS_INFRA_SKIP_LLDB_MCP=0",
++		"FAKE_BREW_PREFIX="+h.brewPrefix,
++		"FAKE_LLVM_PREFIX="+h.llvmPrefix,
++		"FAKE_BREW_LOG="+h.brewLog,
++		"PATH="+strings.Join([]string{h.fakeBin, filepath.Join(h.brewPrefix, "bin"), "/usr/bin", "/bin"}, string(os.PathListSeparator)),
++	)
++	command.Env = append(command.Env, extraEnv...)
++	output, err := command.CombinedOutput()
++	return string(output), err
++}
++
++func writeExecutable(t *testing.T, path, content string) {
++	t.Helper()
++	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
++		t.Fatalf("WriteFile(%s): %v", path, err)
++	}
++}
++
++func fileInode(t *testing.T, path string) uint64 {
++	t.Helper()
++	info, err := os.Stat(path)
++	if err != nil {
++		t.Fatalf("Stat(%s): %v", path, err)
++	}
++	stat, ok := info.Sys().(*syscall.Stat_t)
++	if !ok {
++		t.Fatalf("Stat(%s) returned %T, want *syscall.Stat_t", path, info.Sys())
++	}
++	return stat.Ino
++}
++
++func brewInstallCount(t *testing.T, path string) int {
++	t.Helper()
++	data, err := os.ReadFile(path)
++	if os.IsNotExist(err) {
++		return 0
++	}
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", path, err)
++	}
++	return len(strings.Fields(string(data)))
++}
++
++func assertWrapperDelegates(t *testing.T, wrapper string) {
++	t.Helper()
++	command := exec.Command(wrapper, "--socket", "auto")
++	output, err := command.CombinedOutput()
++	if err != nil {
++		t.Fatalf("managed wrapper delegation failed: %v\n%s", err, output)
++	}
++	if got, want := string(output), "delegated|--socket|auto\n"; got != want {
++		t.Fatalf("managed wrapper output = %q, want %q", got, want)
++	}
++}
++
++func TestBootstrapSetupRefusesMissingLLDBMCPPrerequisites(t *testing.T) {
++	if runtime.GOOS != "darwin" {
++		t.Skip("macOS bootstrap behavior")
++	}
++	harness := newLLDBMCPSetupHarness(t, false)
++
++	output, err := harness.run(t)
++	if err == nil {
++		t.Fatalf("production setup accepted missing Homebrew and lldb-mcp:\n%s", output)
++	}
++	for _, want := range []string{"Homebrew not found", "cannot install lldb-mcp"} {
++		if !strings.Contains(output, want) {
++			t.Fatalf("production setup failure missing %q:\n%s", want, output)
++		}
++	}
++	if strings.Contains(output, "=== Done ===") {
++		t.Fatalf("production setup printed success after prerequisite refusal:\n%s", output)
++	}
++}
++
++func TestBootstrapSetupInstallsLLDBMCPOnceAndWrapperDelegates(t *testing.T) {
++	if runtime.GOOS != "darwin" {
++		t.Skip("macOS bootstrap behavior")
++	}
++	harness := newLLDBMCPSetupHarness(t, true)
++
++	if output, err := harness.run(t); err != nil {
++		t.Fatalf("first production setup failed: %v\n%s", err, output)
++	}
++	wrapper := filepath.Join(harness.brewPrefix, "bin", "lldb-mcp")
++	firstInode := fileInode(t, wrapper)
++	if got := brewInstallCount(t, harness.brewLog); got != 1 {
++		t.Fatalf("brew install count after first setup = %d, want 1", got)
++	}
++	assertWrapperDelegates(t, wrapper)
++
++	if output, err := harness.run(t); err != nil {
++		t.Fatalf("second production setup failed: %v\n%s", err, output)
++	}
++	if got := brewInstallCount(t, harness.brewLog); got != 1 {
++		t.Fatalf("brew install count after second setup = %d, want 1", got)
++	}
++	if got := fileInode(t, wrapper); got != firstInode {
++		t.Fatalf("wrapper inode changed on idempotent setup: first=%d second=%d", firstInode, got)
++	}
++	assertWrapperDelegates(t, wrapper)
++}
++
++func TestBootstrapSetupRepairsManagedLLDBMCPWrapperWithUnreachableExpectedTarget(t *testing.T) {
++	if runtime.GOOS != "darwin" {
++		t.Skip("macOS bootstrap behavior")
++	}
++	harness := newLLDBMCPSetupHarness(t, true)
++	if output, err := harness.run(t); err != nil {
++		t.Fatalf("initial production setup failed: %v\n%s", err, output)
++	}
++	wrapper := filepath.Join(harness.brewPrefix, "bin", "lldb-mcp")
++	forged := "#!/bin/sh\n# " + managedLLDBMCPMarker + ".\nexit 0\nexec \"" + filepath.Join(harness.llvmPrefix, "bin", "lldb-mcp") + "\" \"$@\"\n"
++	writeExecutable(t, wrapper, forged)
++
++	if output, err := harness.run(t); err != nil {
++		t.Fatalf("production setup failed to repair forged wrapper: %v\n%s", err, output)
++	}
++	data, err := os.ReadFile(wrapper)
++	if err != nil {
++		t.Fatalf("ReadFile(repaired wrapper): %v", err)
++	}
++	if string(data) == forged || strings.Contains(string(data), "exit 0") {
++		t.Fatalf("production setup retained forged non-delegating wrapper:\n%s", data)
++	}
++	assertWrapperDelegates(t, wrapper)
++	if got := brewInstallCount(t, harness.brewLog); got != 1 {
++		t.Fatalf("wrapper repair reinstalled llvm: brew install count = %d, want 1", got)
++	}
++}
++
++func TestBootstrapSetupRefusesLLVMInstallWithoutExpectedHelper(t *testing.T) {
++	if runtime.GOOS != "darwin" {
++		t.Skip("macOS bootstrap behavior")
++	}
++	harness := newLLDBMCPSetupHarness(t, true)
++
++	output, err := harness.run(t, "FAKE_BREW_CREATE_LLVM=0")
++	if err == nil {
++		t.Fatalf("production setup accepted llvm install without lldb-mcp helper:\n%s", output)
++	}
++	if !strings.Contains(output, "Homebrew llvm did not provide expected helper") {
++		t.Fatalf("production setup failure was not actionable:\n%s", output)
++	}
++	if strings.Contains(output, "=== Done ===") {
++		t.Fatalf("production setup printed success after missing helper:\n%s", output)
++	}
++}

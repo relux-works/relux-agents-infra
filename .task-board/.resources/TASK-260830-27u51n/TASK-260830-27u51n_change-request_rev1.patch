@@ -1,0 +1,147 @@
+diff --git a/.instructions/INSTRUCTIONS_WORKFLOW.md b/.instructions/INSTRUCTIONS_WORKFLOW.md
+index 65d71ab..9bc1c06 100644
+--- a/.instructions/INSTRUCTIONS_WORKFLOW.md
++++ b/.instructions/INSTRUCTIONS_WORKFLOW.md
+@@ -52,6 +52,14 @@ attribution policy. Repository-specific contribution rules still apply.
+ * A direct default-branch push is an exception only when the user or repository workflow explicitly requires it, or when the remote has no review workflow. A stricter repository-local PR/MR-only rule always wins. If the canonical flow is required but authentication, policy, or hosting constraints prevent it, report the exact blocker instead of silently falling back to a direct push.
+ * This section governs the shape of remote publication. It does not grant commit, push, review, or merge authority, and it does not replace task-board commit confirmation or repository-specific acceptance gates.
+ 
++### External-CI local mirror fallback
++
++* Use a local mirror only when hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair. Establish the cause from hosted provider evidence; an absent, failed, partial, malformed, or inconclusive status read is not proof of an external failure and does not authorize the fallback.
++* Reproduce every affected hosted job from an exact, clean checkout of the PR-head commit. Run the matching commands with the same toolchain versions, environment variables and non-secret configuration, dependent services, and target platform, architecture, device, or runtime. When an exact match is objectively unavailable, document the difference and why the chosen substitute is equivalent for the behavior under test; otherwise report the job as unverified.
++* Preserve auditable evidence for each mirrored job: PR-head SHA, hosted job name, external failure cause, local platform and target, tool versions, environment assumptions, services, exact commands, and every exit code. Redact secrets without omitting the fact that the corresponding configuration was present.
++* Repository-caused code, test, build, configuration, or integration failures remain blocking whether they appear in hosted CI or the local mirror. A passing mirror never overrides a repository failure and never converts an unknown hosted result into success.
++* Never forge, synthesize, edit, or otherwise misrepresent a hosted check or commit status. Local evidence supplements the unavailable hosted execution; it does not satisfy a required hosted status, authorize self-review, or bypass remote review, merge queues, or branch protection. The hosting platform's real review record and protection rules remain authoritative, and a required hosted check keeps the merge blocked until it reports legitimately or an authorized repository owner changes the rule.
++
+ ## Worktrees
+ 
+ * When you need to work on multiple revisions, parallel fixes, or isolated experiments in the same repo, prefer **`git worktree`** over juggling branches in one checkout.
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index fff878e..9367046 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,13 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-30
++
++### 0201 — External-CI Mirror Is Evidence, Not Status
++- DECISION: `.instructions/INSTRUCTIONS_WORKFLOW.md` permits local mirroring only for a verified external hosted-CI execution failure the agent cannot repair; unknown or malformed status evidence does not qualify.
++- SCOPE: Every affected job runs from the exact clean PR head with matching commands, toolchain, environment variables, services, and target or a documented equivalent; evidence records SHA, job, platform, tools, commands, and exits.
++- STATUS: Repository-caused failures, legitimate hosted status, remote review, merge queues, and branch protection remain authoritative and blocking.
++
+ ## 2026-08-29
+ 
+ ### 2318 — Status Publication Revalidates Its Resource Decision
+diff --git a/README.md b/README.md
+index 1524252..61b71dc 100644
+--- a/README.md
++++ b/README.md
+@@ -1516,6 +1516,20 @@ Task-board child spawn ceilings belong to the separate
+ Agents-infra neither reads nor validates that `task-board.config.json` policy;
+ it owns only this primary-session TOML.
+ 
++### External-CI local mirror fallback
++
++The installed workflow permits a local CI mirror only after hosted CI is proven
++unable to execute repository steps for an external cause the agent cannot
++repair. Every affected job must run from an exact, clean PR-head checkout with
++matching commands, toolchain, environment variables, services, and target, or a documented
++equivalent. Evidence names the SHA, hosted job, platform, tools, commands, and
++exit codes.
++
++The mirror is evidence, not a replacement hosted status. Repository-caused
++failures remain blocking; agents must not forge checks or bypass remote review,
++merge queues, or branch protection. The hosting platform's review record and
++protection rules remain authoritative.
++
+ ### Parent primary-goal alignment
+ 
+ The installed workflow instructions also tell an eligible primary parent to
+diff --git a/tools/agents-infra/internal/infra/infra_test.go b/tools/agents-infra/internal/infra/infra_test.go
+index cf6c898..c3b61b5 100644
+--- a/tools/agents-infra/internal/infra/infra_test.go
++++ b/tools/agents-infra/internal/infra/infra_test.go
+@@ -20,6 +20,17 @@ const (
+ 	dirtyCheckoutPolicyFixture     = "validate in a task-scoped worktree before integrating a reviewed patch"
+ )
+ 
++var externalCILocalMirrorPolicyClauses = []string{
++	"hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair",
++	"exact, clean checkout of the PR-head commit",
++	"same toolchain versions, environment variables and non-secret configuration, dependent services, and target platform",
++	"PR-head SHA, hosted job name, external failure cause, local platform and target, tool versions",
++	"Repository-caused code, test, build, configuration, or integration failures remain blocking",
++	"Never forge, synthesize, edit, or otherwise misrepresent a hosted check or commit status",
++	"remote review, merge queues, or branch protection",
++	"hosting platform's real review record and protection rules remain authoritative",
++}
++
+ func TestLocalLayout(t *testing.T) {
+ 	layout, err := LocalLayout("/src/repo", "/tmp/project")
+ 	if err != nil {
+@@ -681,6 +692,62 @@ func TestSetupGlobalDoesNotInstallCLIWrapper(t *testing.T) {
+ 	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), dirtyCheckoutPolicyFixture)
+ }
+ 
++func TestSetupGlobalPublishesExternalCILocalMirrorPolicyToClaudeAndCodex(t *testing.T) {
++	_, testFile, _, ok := runtime.Caller(0)
++	if !ok {
++		t.Fatal("resolve infra test source path")
++	}
++	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", "..", "..", ".."))
++	home := t.TempDir()
++	layout, err := GlobalLayout(repoRoot, home)
++	if err != nil {
++		t.Fatalf("GlobalLayout: %v", err)
++	}
++	seedGlobalAgentsInfraTarget(t, layout)
++
++	sourcePath := filepath.Join(repoRoot, ".instructions", "INSTRUCTIONS_WORKFLOW.md")
++	sourceBody, err := os.ReadFile(sourcePath)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", sourcePath, err)
++	}
++	for _, clause := range externalCILocalMirrorPolicyClauses {
++		if !bytes.Contains(sourceBody, []byte(clause)) {
++			t.Fatalf("versioned workflow source missing external-CI clause %q", clause)
++		}
++	}
++
++	if err := Setup(Options{Layout: layout}); err != nil {
++		t.Fatalf("Setup: %v", err)
++	}
++
++	for _, installedPath := range []string{
++		filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"),
++		filepath.Join(home, ".claude", "instructions", "INSTRUCTIONS_WORKFLOW.md"),
++	} {
++		installedBody, err := os.ReadFile(installedPath)
++		if err != nil {
++			t.Fatalf("ReadFile(%s): %v", installedPath, err)
++		}
++		if !bytes.Equal(installedBody, sourceBody) {
++			t.Fatalf("installed Claude workflow %s does not match versioned source", installedPath)
++		}
++	}
++
++	codexPath := filepath.Join(home, ".codex", "AGENTS.md")
++	codexBody, err := os.ReadFile(codexPath)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", codexPath, err)
++	}
++	if !bytes.Contains(codexBody, sourceBody) {
++		t.Fatalf("rendered Codex instructions %s do not contain the versioned workflow source", codexPath)
++	}
++	for _, clause := range externalCILocalMirrorPolicyClauses {
++		if !bytes.Contains(codexBody, []byte(clause)) {
++			t.Fatalf("rendered Codex instructions missing external-CI clause %q", clause)
++		}
++	}
++}
++
+ func TestSetupGlobalRemovesStaleProjectConfig(t *testing.T) {
+ 	source := seedSourceRepo(t)
+ 	home := t.TempDir()

@@ -1,0 +1,392 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 3c1295d..f86f761 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,12 @@
+ 
+ ## 2026-08-29
+ 
++### 1756 — Backoff Status Publishes Only Persisted Facts
++- DECISION: `SharedRuntimeStatus` publishes ledger-derived `restart_not_before` and `half_open`; `restart_count` never implies active backoff, and `half_open` never gates a runtime that may already be serving.
++- DECISION: `last_failure` and `last_failure_at` remain absent until a reviewed ledger event persists reason/time; placeholders or counter-derived provenance are refused by contract.
++- EVIDENCE: `SharedRuntimeStatusReport` pre/post fixtures copy the exact deadline, malformed lifecycle timestamps refuse, and a narrowed production mapping that drops the persisted deadline makes `TestSharedRuntimeStatusReportPublishesPersistedDeadlineWithoutInference` exit 1.
++- SCOPE: `tools/agents-infra/internal/infra/pi_shared_operator_darwin.go`, platform stubs, CLI output, `README.md`, and `SKILL.md`.
++
+ ### 1646 — Supervision Seconds Duration Overflow Refused
+ - REGRESSION: `tools/agents-infra/internal/infra/pi_config.go:424` admitted seconds above 9223372036; later `time.Duration(seconds) * time.Second` overflowed and could make backoff, stable-run, and quarantine timing negative or immediate.
+ - FIX: Runtime and shared-supervision seconds now have explicit overflow-safe bounds; doubled lease-stale and handoff sums have effective-duration bounds, broker ordering uses `int64`, and exponential backoff clamps before doubling.
+diff --git a/README.md b/README.md
+index dfb47a1..08d1144 100644
+--- a/README.md
++++ b/README.md
+@@ -667,7 +667,46 @@ runtime for `quarantine_seconds`; the next broker attempt after that deadline
+ is the automatic half-open probe. `runtime quarantine` and
+ `runtime unquarantine` mutate the same ledger only while no broker owns it, so
+ stop an active broker before changing manual quarantine. Status JSON always
+-includes `restart_count`, `quarantined_until`, and `last_readiness_match`.
++includes `restart_count`, `restart_not_before`, `quarantined_until`,
++`last_readiness_match`, `manual_quarantine`, and `half_open`.
++`restart_not_before` is the ledger's exact RFC3339 deadline or JSON `null`; it
++is never synthesized from `restart_count`, readiness history, or broker state.
++A non-zero restart count is historical and may coexist with a serving runtime.
++`half_open` is also copied directly from the ledger. It is lifecycle evidence,
++not an availability gate: it can remain true after readiness while the stable
++run timer is still pending.
++
++The consumer handoff is exact and presence-aware. A post-extension parser must
++require the `restart_not_before` key, accept only JSON `null` or a valid RFC3339
++timestamp, and refuse malformed timestamps as a failed status read. A
++pre-extension fixture with the key absent is compatibility input with no
++backoff-deadline evidence; it must not fall back to `restart_count`. Given a
++successful read observed at `checked_at`, only a non-null deadline strictly
++after `checked_at` maps to:
++
++```go
++vendorplugin.LimitedUntil(
++    restartNotBefore,
++    vendorplugin.Observation{
++        Source: "agents-infra runtime status --json.restart_not_before",
++        Detail: "shared runtime restart backoff deadline",
++        At: checkedAt,
++    },
++)
++```
++
++That shape is validator-safe: `Until` is evidence-derived and non-zero, while
++`Checked` and `Observed` are populated by `LimitedUntil`. A missing legacy key
++maps to `vendorplugin.UnknownAfterCheck` for that source. A `null` or elapsed
++deadline contributes no backoff verdict; consumers continue with attested
++broker/runtime facts, so a serving runtime is never relabeled from a historical
++restart count. `half_open` alone likewise contributes no availability verdict.
++
++`last_failure` and `last_failure_at` are explicitly deferred and absent from
++this status schema. Restart-ledger v1 persists neither a failure reason nor a
++failure timestamp, so publishing placeholders or deriving them from another
++field would fabricate provenance. Adding them requires a separately reviewed
++ledger/event write contract and new pre/post fixtures.
+ Every configured seconds field is bounded before conversion to `time.Duration`;
+ coupled handoff and doubled lease-stale windows are bounded as effective
+ durations too, so overflow is refused during config resolution before launch.
+diff --git a/SKILL.md b/SKILL.md
+index 2d1e89d..926eaf4 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -386,6 +386,18 @@ standalone Pi tree check both initially and immediately before Pi spawn. It
+ never attaches or silently falls back to another runtime, port, profile, model,
+ listener, or Muse target-only decoding.
+ 
++Shared-runtime status publishes persisted restart facts without inference.
++`restart_not_before` is always present as the ledger's RFC3339 deadline or JSON
++`null`; `half_open` is the ledger Boolean. Never infer active backoff from a
++non-zero `restart_count`, and never treat `half_open` as an availability gate —
++a ready runtime may retain both historical facts until its stable-run reset.
++Consumers must distinguish a pre-extension missing key from post-extension
++`null`, refuse malformed timestamps, and create
++`vendorplugin.LimitedUntil` only for a non-null future deadline observed at
++`agents-infra runtime status --json.restart_not_before`. `last_failure` and
++`last_failure_at` remain explicitly absent until a separately reviewed ledger
++event persists their reason and time; do not synthesize them from counters.
++
+ Before raising a local profile's context window, configure every member of its
+ `[profiles.<name>.stress]` table in the separate model-harness config and run:
+ 
+diff --git a/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go b/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go
+index ac4c503..d73f38a 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go
+@@ -72,9 +72,11 @@ type SharedRuntimeStatus struct {
+ 	ProfileDigest      string                      `json:"profile_digest"`
+ 	Endpoint           string                      `json:"endpoint"`
+ 	RestartCount       int                         `json:"restart_count"`
++	RestartNotBefore   *time.Time                  `json:"restart_not_before"`
+ 	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
+ 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
+ 	ManualQuarantine   bool                        `json:"manual_quarantine"`
++	HalfOpen           bool                        `json:"half_open"`
+ 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
+ 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
+ 	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+@@ -137,9 +139,11 @@ func SharedRuntimeStatusReport(options SharedRuntimeOperatorOptions) (SharedRunt
+ 
+ func applySharedRuntimeLedgerStatus(report *SharedRuntimeStatus, ledger SharedRuntimeRestartLedger) {
+ 	report.RestartCount = ledger.RestartCount
++	report.RestartNotBefore = ledger.RestartNotBefore
+ 	report.QuarantinedUntil = ledger.QuarantinedUntil
+ 	report.LastReadinessMatch = ledger.LastReadinessMatch
+ 	report.ManualQuarantine = ledger.ManualQuarantine
++	report.HalfOpen = ledger.HalfOpen
+ }
+ 
+ func SetSharedRuntimeManualQuarantine(options SharedRuntimeOperatorOptions, enabled bool) (SharedRuntimeRestartLedger, error) {
+diff --git a/tools/agents-infra/internal/infra/pi_shared_supervision_test.go b/tools/agents-infra/internal/infra/pi_shared_supervision_test.go
+index 5bd3a9b..25e779d 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_supervision_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_supervision_test.go
+@@ -138,30 +138,168 @@ func sharedRuntimeErrorCode(err error) string {
+ 
+ func TestSharedRuntimeStatusJSONCarriesLifecycleFacts(t *testing.T) {
+ 	now := time.Unix(2000, 0).UTC()
+-	report := SharedRuntimeStatus{RestartCount: 2, QuarantinedUntil: &now, LastReadinessMatch: &now}
++	report := SharedRuntimeStatus{
++		RestartCount: 2, RestartNotBefore: &now, QuarantinedUntil: &now,
++		LastReadinessMatch: &now, HalfOpen: true,
++	}
+ 	data, err := json.Marshal(report)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	for _, field := range []string{`"restart_count":2`, `"quarantined_until":`, `"last_readiness_match":`} {
++	for _, field := range []string{
++		`"restart_count":2`, `"restart_not_before":`, `"quarantined_until":`,
++		`"last_readiness_match":`, `"half_open":true`,
++	} {
+ 		if !bytes.Contains(data, []byte(field)) {
+ 			t.Fatalf("status JSON %s lacks %s", data, field)
+ 		}
+ 	}
++	if bytes.Contains(data, []byte(`"last_failure`)) {
++		t.Fatalf("status JSON invented deferred last-failure evidence: %s", data)
++	}
+ }
+ 
+-// Production call site: SharedRuntimeStatusReport. A malformed ledger is a
+-// failed read, not an absent ledger with zero-valued lifecycle facts.
+-func TestSharedRuntimeStatusRefusesMalformedRestartLedger(t *testing.T) {
++func TestSharedRuntimeStatusServingAfterRestartHasNoInferredBackoff(t *testing.T) {
++	readyAt := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
++	report := SharedRuntimeStatus{
++		RestartCount: 2, LastReadinessMatch: &readyAt, HalfOpen: true,
++		Broker:  SharedRuntimeBrokerStatus{State: "ready", Source: "attested"},
++		Runtime: &SharedRuntimeProcessStatus{Source: "attested", Endpoint: "http://127.0.0.1:18011/v1"},
++	}
++	data, err := json.Marshal(report)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !bytes.Contains(data, []byte(`"restart_not_before":null`)) {
++		t.Fatalf("serving status inferred backoff from restart_count: %s", data)
++	}
++}
++
++func TestSharedRuntimeStatusWireFixturesAreAdditiveAndTimestampStrict(t *testing.T) {
++	const preExtension = `{"restart_count":2,"quarantined_until":null,"last_readiness_match":"2026-08-29T12:00:00Z","manual_quarantine":false}`
++	var legacy SharedRuntimeStatus
++	if err := json.Unmarshal([]byte(preExtension), &legacy); err != nil {
++		t.Fatalf("decode pre-extension fixture: %v", err)
++	}
++	if legacy.RestartNotBefore != nil || legacy.HalfOpen {
++		t.Fatalf("pre-extension fixture fabricated new facts: %#v", legacy)
++	}
++	var legacyFields map[string]json.RawMessage
++	if err := json.Unmarshal([]byte(preExtension), &legacyFields); err != nil {
++		t.Fatal(err)
++	}
++	if _, present := legacyFields["restart_not_before"]; present {
++		t.Fatalf("pre-extension fixture unexpectedly contains restart_not_before: %s", preExtension)
++	}
++
++	const postExtension = `{"restart_count":2,"restart_not_before":"2026-08-29T12:00:04Z","quarantined_until":null,"last_readiness_match":"2026-08-29T12:00:00Z","manual_quarantine":false,"half_open":true}`
++	var widened SharedRuntimeStatus
++	if err := json.Unmarshal([]byte(postExtension), &widened); err != nil {
++		t.Fatalf("decode post-extension fixture: %v", err)
++	}
++	wantDeadline := time.Date(2026, 8, 29, 12, 0, 4, 0, time.UTC)
++	if widened.RestartNotBefore == nil || !widened.RestartNotBefore.Equal(wantDeadline) || !widened.HalfOpen {
++		t.Fatalf("post-extension facts=%#v want deadline=%s half_open=true", widened, wantDeadline)
++	}
++	var widenedFields map[string]json.RawMessage
++	if err := json.Unmarshal([]byte(postExtension), &widenedFields); err != nil {
++		t.Fatal(err)
++	}
++	if _, present := widenedFields["restart_not_before"]; !present {
++		t.Fatalf("post-extension fixture omitted restart_not_before: %s", postExtension)
++	}
++
++	for _, fixture := range []string{
++		`{"restart_not_before":"not-a-timestamp"}`,
++		`{"quarantined_until":"not-a-timestamp"}`,
++		`{"last_readiness_match":"not-a-timestamp"}`,
++	} {
++		var status SharedRuntimeStatus
++		if err := json.Unmarshal([]byte(fixture), &status); err == nil {
++			t.Fatalf("malformed timestamp fixture decoded: %s", fixture)
++		}
++	}
++}
++
++// Production call site: SharedRuntimeStatusReport. It copies the persisted
++// deadline and half-open fact; a historical restart count never mints backoff.
++func TestSharedRuntimeStatusReportPublishesPersistedDeadlineWithoutInference(t *testing.T) {
+ 	project, home, cache, resolved := newSharedIntegrationProfile(t)
+-	if err := os.WriteFile(resolved.Paths.RestartLedger, []byte(`{"schema":`), 0o600); err != nil {
++	readyAt := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
++	ledger := newSharedRuntimeRestartLedger(resolved.RuntimeKey, resolved.ProfileDigest)
++	ledger.RestartCount = 2
++	ledger.LastReadinessMatch = &readyAt
++	ledger.HalfOpen = true
++	if err := writeSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, ledger); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	_, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{
++	options := SharedRuntimeOperatorOptions{
+ 		ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile",
+-	})
+-	if sharedRuntimeErrorCode(err) != "shared_runtime_state_unreadable" {
+-		t.Fatalf("malformed ledger was treated as absence: %v", err)
++	}
++	report, err := SharedRuntimeStatusReport(options)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if report.RestartCount != 2 || report.RestartNotBefore != nil || !report.HalfOpen {
++		t.Fatalf("historical restart count was inferred as backoff: %#v", report)
++	}
++
++	deadline := time.Date(2026, 8, 29, 12, 0, 4, 0, time.UTC)
++	ledger.RestartNotBefore = &deadline
++	ledger.HalfOpen = false
++	if err := writeSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, ledger); err != nil {
++		t.Fatal(err)
++	}
++	report, err = SharedRuntimeStatusReport(options)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if report.RestartNotBefore == nil || !report.RestartNotBefore.Equal(deadline) || report.HalfOpen {
++		t.Fatalf("persisted restart facts changed in status: %#v", report)
++	}
++}
++
++// Production call site: SharedRuntimeStatusReport. A malformed ledger is a
++// failed read, not an absent ledger with zero-valued lifecycle facts.
++func TestSharedRuntimeStatusRefusesMalformedRestartLedgerTimestamps(t *testing.T) {
++	project, home, cache, resolved := newSharedIntegrationProfile(t)
++	valid := map[string]any{
++		"schema": sharedRuntimeRestartLedgerSchema, "runtime_key": resolved.RuntimeKey,
++		"profile_digest": resolved.ProfileDigest, "restart_count": 2,
++		"restart_not_before": nil, "quarantined_until": nil,
++		"last_readiness_match": nil, "manual_quarantine": false, "half_open": false,
++	}
++	fixtures := []struct {
++		name string
++		data []byte
++	}{{name: "truncated", data: []byte(`{"schema":`)}}
++	for _, field := range []string{"restart_not_before", "quarantined_until", "last_readiness_match"} {
++		record := make(map[string]any, len(valid))
++		for key, value := range valid {
++			record[key] = value
++		}
++		record[field] = "not-a-timestamp"
++		data, err := json.Marshal(record)
++		if err != nil {
++			t.Fatal(err)
++		}
++		fixtures = append(fixtures, struct {
++			name string
++			data []byte
++		}{name: field, data: data})
++	}
++	for _, fixture := range fixtures {
++		t.Run(fixture.name, func(t *testing.T) {
++			if err := os.WriteFile(resolved.Paths.RestartLedger, fixture.data, 0o600); err != nil {
++				t.Fatal(err)
++			}
++			_, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{
++				ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile",
++			})
++			if sharedRuntimeErrorCode(err) != "shared_runtime_state_unreadable" {
++				t.Fatalf("malformed ledger was treated as absence: %v", err)
++			}
++		})
+ 	}
+ }
+ 
+diff --git a/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go b/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go
+index ce5b0d2..515b32d 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go
++++ b/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go
+@@ -46,9 +46,11 @@ type SharedRuntimeStatus struct {
+ 	RuntimeKey         string                      `json:"runtime_key"`
+ 	ProfileDigest      string                      `json:"profile_digest"`
+ 	RestartCount       int                         `json:"restart_count"`
++	RestartNotBefore   *time.Time                  `json:"restart_not_before"`
+ 	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
+ 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
+ 	ManualQuarantine   bool                        `json:"manual_quarantine"`
++	HalfOpen           bool                        `json:"half_open"`
+ 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
+ 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
+ 	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+diff --git a/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go b/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go
+index b41bd9e..33e3c7c 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go
++++ b/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go
+@@ -93,9 +93,11 @@ type SharedRuntimeStatus struct {
+ 	RuntimeKey         string                      `json:"runtime_key"`
+ 	ProfileDigest      string                      `json:"profile_digest"`
+ 	RestartCount       int                         `json:"restart_count"`
++	RestartNotBefore   *time.Time                  `json:"restart_not_before"`
+ 	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
+ 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
+ 	ManualQuarantine   bool                        `json:"manual_quarantine"`
++	HalfOpen           bool                        `json:"half_open"`
+ 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
+ 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
+ 	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+diff --git a/tools/agents-infra/main.go b/tools/agents-infra/main.go
+index 7f7507c..9122df4 100644
+--- a/tools/agents-infra/main.go
++++ b/tools/agents-infra/main.go
+@@ -646,9 +646,11 @@ func printSharedRuntimeStatus(report infra.SharedRuntimeStatus) {
+ 	fmt.Fprintf(os.Stdout, "runtime_key: %s\n", report.RuntimeKey)
+ 	fmt.Fprintf(os.Stdout, "profile_digest: %s\n", report.ProfileDigest)
+ 	fmt.Fprintf(os.Stdout, "restart_count: %d\n", report.RestartCount)
++	fmt.Fprintf(os.Stdout, "restart_not_before: %v\n", report.RestartNotBefore)
+ 	fmt.Fprintf(os.Stdout, "quarantined_until: %v\n", report.QuarantinedUntil)
+ 	fmt.Fprintf(os.Stdout, "last_readiness_match: %v\n", report.LastReadinessMatch)
+ 	fmt.Fprintf(os.Stdout, "manual_quarantine: %t\n", report.ManualQuarantine)
++	fmt.Fprintf(os.Stdout, "half_open: %t\n", report.HalfOpen)
+ 	fmt.Fprintf(os.Stdout, "broker.state: %s\n", report.Broker.State)
+ 	if report.Broker.PID != 0 {
+ 		fmt.Fprintf(os.Stdout, "broker.pid: %d\n", report.Broker.PID)
+diff --git a/tools/agents-infra/pi_operator_docs_test.go b/tools/agents-infra/pi_operator_docs_test.go
+index 87649a1..683d52a 100644
+--- a/tools/agents-infra/pi_operator_docs_test.go
++++ b/tools/agents-infra/pi_operator_docs_test.go
+@@ -43,6 +43,10 @@ func TestPiOperatorContractDocumentsCycle10Boundary(t *testing.T) {
+ 		"Explicit `--no-approve`/`-na` conflicts with effective yolo",
+ 		"logs/<UTC-start>-<random>.jsonl",
+ 		"foreground-terminal ownership",
++		"`restart_not_before` is the ledger's exact RFC3339 deadline or JSON `null`",
++		"agents-infra runtime status --json.restart_not_before",
++		"vendorplugin.LimitedUntil",
++		"`last_failure` and `last_failure_at` are explicitly deferred",
+ 	} {
+ 		if !strings.Contains(readme, want) {
+ 			t.Fatalf("README.md missing Pi operator contract fragment %q", want)
+@@ -70,6 +74,9 @@ func TestReluxAgentsInfraSkillRoutesSafePiWorkflowToSource(t *testing.T) {
+ 		"`--approve`/`-a` controls one-run trust for project-local files",
+ 		"mode-`0600` lifecycle JSONL",
+ 		"foreground-terminal ownership",
++		"`restart_not_before` is always present as the ledger's RFC3339 deadline or JSON `null`",
++		"vendorplugin.LimitedUntil",
++		"`last_failure` and `last_failure_at` remain explicitly absent",
+ 	} {
+ 		if !strings.Contains(skill, want) {
+ 			t.Fatalf("SKILL.md missing managed Pi guidance %q", want)
+diff --git a/tools/agents-infra/runtime_main_darwin_test.go b/tools/agents-infra/runtime_main_darwin_test.go
+index 3eb24e1..10371d5 100644
+--- a/tools/agents-infra/runtime_main_darwin_test.go
++++ b/tools/agents-infra/runtime_main_darwin_test.go
+@@ -54,7 +54,10 @@ broker_start_timeout_seconds = 40
+ 	if err := json.Unmarshal([]byte(output), &fields); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	for _, name := range []string{"restart_count", "quarantined_until", "last_readiness_match"} {
++	for _, name := range []string{
++		"restart_count", "restart_not_before", "quarantined_until",
++		"last_readiness_match", "half_open",
++	} {
+ 		if _, present := fields[name]; !present {
+ 			t.Fatalf("runtime status JSON omitted %q: %s", name, output)
+ 		}

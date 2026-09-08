@@ -1,5 +1,5 @@
 ## Status
-backlog
+done
 
 ## Review
 light
@@ -28,4 +28,4 @@ research
 2026-07-20T15:59:12Z
 
 ## Last Update
-2026-07-20T15:59:12Z
+2026-08-31T03:37:06Z

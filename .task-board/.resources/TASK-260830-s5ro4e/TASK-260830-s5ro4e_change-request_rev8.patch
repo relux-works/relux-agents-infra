@@ -1,0 +1,7 @@
+diff --git a/val-zsh.log b/val-zsh.log
+new file mode 100644
+index 0000000..a254987
+--- /dev/null
++++ b/val-zsh.log
+@@ -0,0 +1 @@
++zsh: can't open input file: ./validate-revision9.sh

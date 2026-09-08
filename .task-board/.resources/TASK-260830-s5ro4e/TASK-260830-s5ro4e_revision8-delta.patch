@@ -1,0 +1,1156 @@
+diff --git a/.research/260830_agents-management-lockstep-release-and-rollback.md b/.research/260830_agents-management-lockstep-release-and-rollback.md
+index 9ca9fe4..05a0488 100644
+--- a/.research/260830_agents-management-lockstep-release-and-rollback.md
++++ b/.research/260830_agents-management-lockstep-release-and-rollback.md
+@@ -6,12 +6,12 @@ Date: 2026-08-30
+ 
+ Numbering: this document keeps its own revision counter, which runs one ahead
+ of the board's Change Request counter because the first document revision
+-predates the first CR. **Document revision 7 is `CR-TASK-260830-s5ro4e-6`**, and
+-the attached patch is named `..._change-request_rev6.patch` to match the board.
++predates the first CR. **Document revision 8 is `CR-TASK-260830-s5ro4e-7`**, and
++the attached patch is named `..._change-request_rev7.patch` to match the board.
+ The `rev4 … / rev5 …` rows retained in the validation table keep the document
+ numbering they were run and reviewed under.
+ 
+-Review state: revised after `CR-TASK-260830-s5ro4e-5` changes requested. This
++Review state: revised after `CR-TASK-260830-s5ro4e-6` changes requested. This
+ plan must receive a new independent acceptance before any breaking change,
+ release, installation, or tag in this sequence.
+ 
+@@ -71,6 +71,37 @@ Three of the replacements are strictly stronger than the code they replace:
+   is replaced by a snapshot of the **entire** Homebrew formula list, which is
+   what makes a `brew install go` visible (revision-6 F1).
+ 
++## Revision 8 — what the revision-7 review found, and what changed
++
++Revision 7's form held. The harness is gone, the preconditions are commands an
++operator can read, and the review reproduced every derivation rather than
++accepting it. The three findings were about the **migration domain** rather than
++about this document's own machinery, and severity fell again — High, Medium,
++Low.
++
++| Finding | What changed |
++| --- | --- |
++| F1 — `tb-sessiond` is a long-lived daemon carrying its own CLI-to-daemon protocol version; the plan modelled neither the daemon's lifecycle nor the skew a staged release creates, and R1 could not recover the downgrade direction | Part I gains a section that models the daemon and its control protocol from production text. **P7** enumerates the live daemons and derives `controlProtocolVersion` on both sides *before* the window. Part V names `W2d`, `W5d` and `Wimg`. R1 gains a daemon census and a canary that reaches the session manager instead of only a config reader. The downgrade direction is stated as **unrecoverable by any command this plan or the product provides**, with the exact point of irreversibility named. |
++| F2 — the snapshot records a `directory` kind for the `~/.claude` and `~/.codex` link trees, stages no tree for it, and R1 then aborts mid-rollback | The snapshot stages link-tree directories symmetrically with `~/.agents`, and **R1 gains a pre-mutation admissibility pass** over the whole snapshot — kinds, link targets, staged trees, saved executables, saved roles and the saved install state. A snapshot R1 cannot restore is refused before the first `mv`, not discovered halfway through. |
++| F3 — two of six evidence sections described running the document's own commands when they ran a reimplementation | Section D is retitled as what it is, a fixture-level illustration, with the real P6 run pointed at section H. Section E now drives **the document's own P4 fence, verbatim**, including the manual append the document requires of the operator. Section G's prose matches how the suite actually locates the block. |
++
++Working F1 produced a fact the finding did not have. **The control protocol has
++been bumped four times in five days**: `df4201dc` (2026-07-24) introduced the v1
++identifier, `445b391e` (2026-07-26) made it the integer 2, `f8ba3268`
++(2026-07-28) 3, and `d66bfea8` (2026-07-28) 4. A bump between the installed pair
++and `0.25.0` is the historical norm for this surface, not a hypothesis, which is
++why P7 derives it rather than assuming either answer.
++
++It also produced a second skew the finding did not name, and the host is already
++in it. Even when the protocol does **not** change, a live daemon keeps executing
++the task-board image it was started from — with that image's embedded
++agents-management — for an unbounded time after the file on disk is replaced.
++The two daemons live on this host right now report `0.24.3-112-ged48781` and
++`0.24.3-124-g2a527a8` while the installed file is `0.24.3-172-g063197b1`: sixty
++and forty-eight commits of drift, eight and five days old, holding 31 and 2
++sessions. That window is `Wimg` in Part V, and it exists today, before this
++migration starts.
++
+ ## Decision
+ 
+ Use public `skill-agents-management v0.5.0` as the compatibility bridge. Release
+@@ -241,6 +272,12 @@ Every step requires an authoritative board path that can perform:
+ - producer handoff, reviewer spawn, reviewer verdict, `accept_cr`, rework
+   routing and Story-workspace/Change-Request reads.
+ 
++Goal-bound and writable-context spawn additionally requires a **usable session
++plane**: `launchTrackedSpawnRun` routes those runs through the board's
++`tb-sessiond`, so a board whose daemon speaks a protocol the CLI does not accept
++has lost `spawn` even though every file on disk is correct. P7 and the R1 canary
++cover that surface; a `project_config` read does not reach it.
++
+ During a mixed-install window, the default PATH surface is not authoritative.
+ The absolute saved old pair, with the recovery bin prepended to PATH, is:
+ 
+@@ -443,6 +480,143 @@ Two of the eight (`core-data`, `swiftui`) additionally get a root `SKILL.md`
+ symlink into their nested directory via the `SKILL_NESTED` map when the root
+ file is absent.
+ 
++## `tb-sessiond` is a daemon, and its control protocol is part of this migration
++
++`install_binary "tb-sessiond"` replaces a **file**. What that file becomes when
++it runs is a long-lived, per-board daemon whose lifetime is independent of the
++file's, which owns that board's provider hosts and session records, and which
++speaks a **versioned control protocol** to the CLI. Revisions 1-7 of this plan
++modelled the file and not the daemon. Everything below is read from production
++text at `skill-project-management` `f1319eff`.
++
++### The contract surface
++
++- `tools/board-cli/internal/sessionmanager/types.go:11-13` defines
++  `controlProtocolName = "task-board-session-manager"` and
++  `controlProtocolVersion = 4`. It is a compile-time constant, so a CLI's
++  supported version is a property of the **build**, not of anything the binary
++  prints: `--version` does not report it, and it can only be derived from the
++  source tree that build came from. That is why P7 reads it out of
++  `$SAVED_SOURCE` and `$PM_RELEASE` rather than out of an installed artifact.
++- The daemon reports its own version over its status endpoint, as
++  `protocol` (`task-board-session-manager-v4`) and `protocol_version` (`4`),
++  alongside `daemon_version`, `pid`, `board_fingerprint` and `session_count`
++  (`types.go:114-128`).
++- The daemon executable is resolved **through `PATH`**, not from a path beside
++  the CLI: `cmd/session.go:26,480-484` looks up the bare name `tb-sessiond`
++  with `exec.LookPath`. This is what makes the recovery-PATH prefix used
++  throughout this plan work — a saved CLI launched with
++  `PATH="$RECOVERY_ROOT/bin:$PATH"` starts the **saved** daemon. It is also why
++  a saved CLI run *without* that prefix would start the **release's** daemon.
++
++### Two ways the CLI reaches a live daemon, and only one of them restarts it
++
++| Entry point | Production call sites | Compatibility check | May restart the daemon |
++| --- | --- | --- | --- |
++| `sessionmanager.Dial` (`client.go:70`) | `cmd/session.go:42,75,100` (`session status`, `list`, `stop`), `cmd/spawn_goal.go:283`, `cmd/primary_goal.go:356`, `cmd/goal_reflect.go:26` | **none** | no — it never launches one |
++| `sessionmanager.ConnectOrStart` (`client.go:128`) and `ConnectOrStartAndAttach` (`client.go:228`), both through `connectOrStartSessionManager` (`cmd/session.go:360-372`) | `cmd/session.go:151,199,245` (`logs`, `doctor`, `reclaim-contexts`), `cmd/session_context_economics.go:58`, `cmd/session_context_retention.go:50`, `cmd/spawn_context_lifecycle.go:292`, `cmd/codex_goal_spawn.go:43`, `cmd/codex_manager.go:92`, `cmd/claude_manager.go:115` | **yes** | **yes** |
++
++**Spawn is in the second row.** `launchTrackedSpawnRun`
++(`cmd/codex_goal_spawn.go:50-56`) sends every goal-bound or writable-context
++Codex/Claude run through `launchManagedGoalBoundRun` (`:81`), which reaches the
++daemon through `connectManagedSpawnSession` (`:35-44`) and therefore through
++`ConnectOrStart`. The capability this plan says must keep working is the
++capability that triggers the restart.
++
++### What happens in each direction
++
++**CLI newer than daemon** — `actual < controlProtocolVersion`
++(`client.go:719-724`) returns `ManagerProtocolUpgradeError`. `ConnectOrStart`
++does not surface it to the operator: at `client.go:149-163` it calls
++`takeOverOutdatedManager` (`stale_takeover.go:71-79`), which fences the running
++daemon and replaces it. The takeover first asks the old daemon to `Drain`
++(`stale_takeover.go:139`, `client.go:340-346`), which releases only the manager
++transport and **deliberately leaves durable provider hosts running**; if the
++daemon predates that endpoint or does not release its instance lock within the
++grace period, it falls through to a fenced `terminateStaleInstance`
++(`stale_takeover.go:162`), i.e. SIGTERM then SIGKILL. Both live daemons on this
++host are v4 and can drain, so on this host the automatic path is the gentler
++one — but that is a measurement of two processes today, not a property of the
++step.
++
++**Daemon newer than CLI** — `actual > controlProtocolVersion`
++(`client.go:725-731`) is a hard refusal: *"Session Manager protocol v%d is newer
++than this wrapper supports (v%d); update task-board before retrying"*. There is
++no recovery path in that direction. `takeOverOutdatedManager` refuses it
++explicitly at `stale_takeover.go:76-78` — *"refusing protocol takeover without
++an older daemon version"* — and no CLI subcommand exposes `Drain`; it is reached
++only from inside the takeover that just refused. `session status` still answers,
++because `Dial` performs no compatibility check and the response decoder is
++lenient (`client.go:677`, a plain `json.Decoder.Decode` with no
++`DisallowUnknownFields`), but that is a **read**, not a repair.
++
++### Why a bump is likely rather than hypothetical
++
++The constant's whole history, from `git log -L` on its own line:
++
++| Commit | Date | Value |
++| --- | --- | --- |
++| `df4201dc` | 2026-07-24 | `"task-board-session-manager-v1"` |
++| `445b391e` | 2026-07-26 | `2` |
++| `f8ba3268` | 2026-07-28 | `3` |
++| `d66bfea8` | 2026-07-28 | `4` |
++
++Four values in five days. This plan therefore treats "does `0.25.0` change
++`controlProtocolVersion`?" as a question P7 must answer from the release tree,
++and a change as a condition that stops the step for a decision — not as
++something to discover when a daemon is fenced mid-window.
++
++### The point of irreversibility
++
++If `0.25.0` bumps the constant, the harm is not done by the install. It is done
++by **the first `ConnectOrStart`-class command the newly installed CLI runs
++against a board whose daemon is older** — a `task-board spawn` with a goal, a
++`session doctor`, a managed `codex`/`claude` wrapper. At that moment that board
++gets a daemon speaking the new protocol. From then on:
++
++- R1 restores every file, and the restored CLI still cannot use that board's
++  session plane, because the daemon is newer than it supports.
++- Nothing in the older build can drain, replace or stop that daemon.
++- The only remaining moves are to leave it running until it exits on its own, or
++  to terminate it out of band. A termination is **not** a drain, and this plan
++  makes no claim about what its provider children do — that is stated as
++  unknown, not guessed.
++
++So the downgrade direction is not recoverable by R1, and saying so is more
++useful than writing a rollback step that would not work. The response is
++prevention, in P7: either the release does not change the constant, or every
++live daemon is quiesced and stopped by its owner **before** Step 2 opens.
++
++### Image skew, which exists even when the protocol does not change
++
++An unchanged `controlProtocolVersion` makes the step *protocol*-transparent. It
++does not make it *image*-transparent. A daemon started before the install keeps
++running its own task-board image, with that image's embedded
++agents-management, and there is no mechanism that replaces it until it is
++restarted. Measured on this host on 2026-08-30, read-only, through
++`task-board --board-dir <board> --json session status`:
++
++| Board | PID | `daemon_version` | `protocol_version` | Sessions | Started |
++| --- | ---: | --- | ---: | ---: | --- |
++| `~/src/mac-infra/.task-board` | 42553 | `0.24.3-112-ged48781` | 4 | 31 | 2026-08-22 |
++| `~/src/casual-talks/.task-board` | 61270 | `0.24.3-124-g2a527a8` | 4 | 2 | 2026-08-25 |
++| `~/src/relux-works/relux-agents-infra/.task-board` (this migration's board) | — | not running | — | 0 | — |
++
++The installed file is `0.24.3-172-g063197b1`. Two daemons are therefore already
++sixty and forty-eight commits behind the binary that would be replaced, and have
++been for eight and five days. That is the honest shape of the surface this plan
++sequences, and it has two consequences the earlier revisions got wrong:
++
++1. **The instruction "do not restart or kill them" is not the operator's to
++   give for `tb-sessiond`.** For provider children and already-exec'd CLI
++   processes it is correct. For a daemon whose protocol is older than the
++   installed CLI's, the CLI restarts it automatically on the next
++   `ConnectOrStart`, whatever this document says.
++2. **The migration's own board has no daemon.** An installed canary run here
++   meets no session manager at all, so it says nothing about the two boards that
++   do have one. That is why P7 is a census of the host, not a check on one
++   board.
++
+ ## Measured host state of the surfaces the installers touch
+ 
+ Read-only, taken 2026-08-30 on the target host. Every row is a completed read;
+@@ -465,6 +639,11 @@ time.
+ | `/opt/homebrew/opt/llvm/bin/lldb` | **absent** | Same |
+ | Installed `task-board` / `tb-sessiond` | `0.24.3-172-g063197b1 (commit 063197b1)` | Observation only; Step 0 derives the baseline from the artifact |
+ | Installed `agents-infra` | `v1.6.1-103-g4270549 commit=4270549` | Same |
++| `pgrep -fl tb-sessiond` | 2 live daemons, pids 42553 and 61270, both launched from `~/.local/bin/tb-sessiond` | The file Step 2 replaces is the file both running daemons came from |
++| Their `protocol_version` | 4 and 4 | Equal to the installed build's `controlProtocolVersion`, so no skew today |
++| Their `daemon_version` | `0.24.3-112-ged48781`, `0.24.3-124-g2a527a8` | **Both differ from the installed file's `0.24.3-172-g063197b1`**: image skew already exists |
++| Their `session_count` | 31 and 2 | What an automatic protocol takeover would drain or fence |
++| This migration's board | `running:false`, exit 0 | A legitimate absence, not a failed read — and the reason an installed canary here cannot observe the other two |
+ | `~/.roles` | 9 entries | |
+ | The eight `SKILL_REPOS` trees | all real directories, no git metadata, both link trees symlinks to the agents copy | The destructive clone branch is not selected today |
+ 
+@@ -509,6 +688,13 @@ Revision 7 adds a fifteenth site the census did not have: the `W3`/`W6` stage
+ sequence, which revision 6 described in prose. It is now `sed -n '/^install_go$/,$p'`
+ on the release, saved to `w3-call-sequence.txt`.
+ 
++Revision 8 adds two more, both from the revision-7 review:
++
++| # | Place | Was stated as | Derived in revision 8 by |
++| ---: | --- | --- | --- |
++| 16 | The link trees' restorable content | A recorded kind with nothing staged for it | the snapshot stages `~/.claude`/`~/.codex` directory entries into `pm/claude-skills` and `pm/codex-skills`, and both the snapshot and R1 assert that every recorded kind has what its restore needs |
++| 17 | The CLI-to-daemon control protocol | Absent — the daemon was modelled as a file | `grep -n 'controlProtocolVersion *=' …/sessionmanager/types.go` against `$SAVED_SOURCE` and the release, plus `pgrep -fl tb-sessiond` and a per-board `session status --json` read (P7) |
++
+ ### What is still a literal, and why that is safe
+ 
+ Four kinds of value remain written here. None can drift silently.
+@@ -865,6 +1051,128 @@ only after they have repaired it or accepted the change.
+ The before-snapshot-to-after-comparison interval is a bypass guard, not an
+ accepted window: its required outcome is zero Homebrew delta.
+ 
++## P7 — the live session-manager daemons, and the protocol both sides speak
++
++Applies to **Steps 2 and 5**, the two that replace `tb-sessiond`. Part I
++establishes why: `install_binary` replaces a file, the daemon is a process, and
++the CLI decides on its own schedule what to do about a process whose protocol
++differs from its own. This precondition makes that decision visible before the
++window rather than during it.
++
++### P7a — enumerate the live daemons and the boards they hold
++
++```bash
++rc=0
++pgrep -fl tb-sessiond > "$RECOVERY_ROOT/daemons-before.txt" || rc=$?
++case "$rc" in
++  0) : ;;                                     # one line per live daemon
++  1) printf 'NO-LIVE-DAEMON\n' > "$RECOVERY_ROOT/daemons-before.txt" ;;
++  *) printf 'DAEMON-CENSUS-FAILED rc=%s\n' "$rc" >&2; exit 1 ;;
++esac
++cat "$RECOVERY_ROOT/daemons-before.txt"
++```
++
++**Expected: exit 0 and one line per daemon, or exit 1 and `NO-LIVE-DAEMON`.**
++`pgrep` returns 1 for "no match" and 2 or 3 for a usage or fatal error; the
++`case` keeps those apart, because a failed process census is `unknown` and must
++stop the step, never be read as "no daemons are running".
++
++Each line carries the daemon's own arguments, which is where the board comes
++from — `--board-dir <path>` for a local board and
++`--remote-origin`/`--remote-board-id` for a remote one, per
++`cmd/session.go:486-498`. Extract the local boards:
++
++```bash
++sed -nE 's/.*--board-dir[ =]([^ ]+).*/\1/p' "$RECOVERY_ROOT/daemons-before.txt" \
++  | sort -u > "$RECOVERY_ROOT/daemon-boards.txt"
++grep -c -- '--remote-origin' "$RECOVERY_ROOT/daemons-before.txt" || true
++```
++
++A non-zero count of remote-origin daemons is not covered by the per-board read
++below and must be dispositioned by hand; this plan does not model a remote
++board's session plane.
++
++### P7b — read each live daemon's protocol, without starting or restarting one
++
++```bash
++: > "$RECOVERY_ROOT/daemon-status-before.jsonl"
++while IFS= read -r board; do
++  test -n "$board" || continue
++  task-board --board-dir "$board" --json session status \
++    >> "$RECOVERY_ROOT/daemon-status-before.jsonl"
++done < "$RECOVERY_ROOT/daemon-boards.txt"
++cat "$RECOVERY_ROOT/daemon-status-before.jsonl"
++```
++
++**Expected: one JSON object per board, exit 0.** `session status` uses
++`sessionmanager.Dial` (`cmd/session.go:42`), which never launches a daemon and
++performs no compatibility check, so this is a read that reports skew instead of
++repairing it. A `"running":false` object with exit 0 is a **legitimate absence**;
++a non-zero exit, an empty line or unparseable output is `unknown` and stops the
++step. Record `protocol_version`, `daemon_version`, `pid` and `session_count` per
++board — `session_count` is what an automatic takeover would drain or fence.
++
++Observed on the target host at planning time: two live daemons, both
++`protocol_version` 4, `daemon_version` `0.24.3-112-ged48781` and
++`0.24.3-124-g2a527a8`, holding 31 and 2 sessions. That is an observation, not a
++comparison operand; P7c below compares two live values.
++
++### P7c — derive `controlProtocolVersion` on both sides
++
++```bash
++grep -n 'controlProtocolVersion *=' \
++  "$SAVED_SOURCE/tools/board-cli/internal/sessionmanager/types.go"
++grep -n 'controlProtocolVersion *=' \
++  "$PM_RELEASE/tools/board-cli/internal/sessionmanager/types.go"
++```
++
++**Expected: exactly one line from each, and the two values equal.** An empty
++result from either side is a failed read — the constant may have been renamed or
++moved — and is `unknown`, not "no protocol". Neither operand is written in this
++document: one comes from the saved installed pair's own source worktree, the
++other from the release tree.
++
++### The two dispositions
++
++**Equal — the step is protocol-transparent.** No takeover fires in either
++direction, and R1 stays recoverable. It is **not** image-transparent: every live
++daemon keeps running its old task-board image, and its old embedded
++agents-management, until it is restarted. Protocol equality proves the transport
++is compatible; it proves nothing about how two different embedded
++agents-management versions compose across it, and this plan makes no such claim.
++Required disposition, recorded per board before the window:
++
++- either the board is **quiesced** — `session_count` 0, and the daemon stopped
++  by its owner, outside every window, so the next command starts a daemon from
++  the new image;
++- or it is **explicitly excluded** from goal-bound and writable-context spawn
++  until its daemon next exits on its own.
++
++Neither disposition may be "we will see". A board with a live daemon and no
++recorded disposition stops the step.
++
++**Different — stop, before the window, for a decision.** The consequences are
++laid out in Part I and are not survivable by R1:
++
++1. The first `ConnectOrStart`-class command from the new CLI against each board
++   with an older daemon restarts that daemon automatically, draining or fencing
++   the sessions it holds. The operator does not choose when: any goal-bound
++   `spawn`, `session doctor`, `session logs`, or managed `codex`/`claude`
++   wrapper does it.
++2. From that moment the rollback is one-way. A restored older CLI cannot use
++   that board's session plane, cannot drain the newer daemon and cannot replace
++   it.
++3. The migration board itself has no daemon, so its installed canary cannot
++   observe either failure.
++
++The only forms of this step that are safe are: **(a)** the release does not
++change the constant, or **(b)** every live daemon is quiesced and stopped by its
++owner before Step 2 opens, so that no board carries an older daemon into the
++window and there is nothing for the new CLI to take over. Option (b) is a
++cross-board operation this plan does not have authority to perform; it is a
++decision for the owners of `mac-infra` and `casual-talks`, obtained in writing
++before the step, and recorded with the step evidence.
++
+ ## Preconditions that are NOT IMPLEMENTED
+ 
+ Stated so that the gap is visible rather than papered over by an untested guard.
+@@ -875,6 +1183,8 @@ Stated so that the gap is visible rather than papered over by an untested guard.
+ | Mechanically classify a diff produced by P1 into "touches a modelled boundary" versus "does not" | The judgement is currently the operator's, and a large refactor diff is tiring to read | **NOT IMPLEMENTED.** Mitigation: P1's four questions are answered in writing and attached to the step evidence, so the judgement is reviewable after the fact. |
+ | Verify that the `env -u` list in Steps 2/5 still covers every `TASK_BOARD_*` name P2 reports | Two lists that must agree; today the operator compares them by eye | **NOT IMPLEMENTED.** Mitigation: both lists appear in this document adjacent to each other, and P2's diff catches an added name even though it does not catch a forgotten `-u`. |
+ | Rehearse any rollback procedure against a real installed pair | See "UNTESTED" throughout Part III | **NOT IMPLEMENTED / UNTESTED.** |
++| Prevent a `ConnectOrStart`-class command from reaching a board with an older daemon during `W2`/`W5` | The restart is automatic and any wrapper, agent or human on the host can trigger it; only quiescing the daemons beforehand removes it | **NOT IMPLEMENTED.** Mitigation: P7's per-board disposition, and a release that does not change `controlProtocolVersion`. There is no host-wide interlock, and this plan does not pretend to one. |
++| Establish what a live daemon's provider children do when the daemon is terminated out of band rather than drained | It is the only remaining move after a protocol downgrade, and its blast radius decides whether that state is recoverable at all | **NOT IMPLEMENTED / UNKNOWN.** Not measured here, and not guessed. |
+ 
+ None of these is a substitute for a guard that was removed: P1, P2, P3, P4, P5
+ and P6 each cover strictly more than the code they replace. These four are
+@@ -915,7 +1225,8 @@ RECOVERY_ROOT="$HOME/.local/state/TASK-260830-s5ro4e/current-pair"
+ MANIFEST="$RECOVERY_ROOT/manifest"
+ test ! -e "$RECOVERY_ROOT"
+ mkdir -p "$RECOVERY_ROOT/bin" "$MANIFEST" "$RECOVERY_ROOT/pm/roles" \
+-         "$RECOVERY_ROOT/pm/skills" "$RECOVERY_ROOT/ai" "$RECOVERY_ROOT/sources"
++         "$RECOVERY_ROOT/pm/skills" "$RECOVERY_ROOT/pm/claude-skills" \
++         "$RECOVERY_ROOT/pm/codex-skills" "$RECOVERY_ROOT/ai" "$RECOVERY_ROOT/sources"
+ 
+ printf '%s\n' "$BIN_DIR"  > "$MANIFEST/bin-dir.txt"
+ printf '%s\n' "$PM_STATE" > "$MANIFEST/pm-state-path.txt"
+@@ -1020,9 +1331,15 @@ while IFS= read -r skill; do
+   else                               kind=absent;    link=""
+   fi
+   line="$skill|$kind|$link"
+-  for root in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
++  # Each link tree gets its own staging area. Revision 7 recorded a `directory`
++  # kind here and staged nothing for it, so R1 met an empty tree and aborted
++  # halfway through. A kind is only worth recording if its restore has an
++  # operand.
++  for spec in "$HOME/.claude/skills|claude-skills" "$HOME/.codex/skills|codex-skills"; do
++    root="${spec%%|*}"; stage="${spec##*|}"
+     if   [ -L "$root/$skill" ]; then line="$line|symlink|$(readlink "$root/$skill")"
+     elif [ -d "$root/$skill" ]; then line="$line|directory|"
++         rsync -a --delete "$root/$skill/" "$RECOVERY_ROOT/pm/$stage/$skill/"
+     elif [ -e "$root/$skill" ]; then exit 77
+     else                             line="$line|absent|"
+     fi
+@@ -1030,6 +1347,24 @@ while IFS= read -r skill; do
+   printf '%s\n' "$line" >> "$MANIFEST/skill-state.txt"
+ done < "$MANIFEST/skills.txt"
+ 
++# --- the snapshot must be restorable, asserted here rather than during R1 ---
++# Refusing at the door costs nothing. Aborting mid-rollback leaves the host in a
++# state neither the release nor the rollback planned for.
++snapshot_restorable() {   # $1 label  $2 kind  $3 recorded link  $4 staged tree
++  case "$2" in
++    symlink)   test -n "$3" || { printf 'UNRESTORABLE %s symlink with no recorded target\n' "$1" >&2; return 1; } ;;
++    directory) test -d "$4" || { printf 'UNRESTORABLE %s directory with no staged tree\n'   "$1" >&2; return 1; } ;;
++    absent)    : ;;
++    *)         printf 'UNRESTORABLE %s unrecognised kind %s\n' "$1" "$2" >&2; return 1 ;;
++  esac
++}
++while IFS='|' read -r skill a_kind a_link c_kind c_link x_kind x_link; do
++  test -n "$skill" || continue
++  snapshot_restorable "$skill:.agents" "$a_kind" "$a_link" "$RECOVERY_ROOT/pm/skills/$skill"
++  snapshot_restorable "$skill:.claude" "$c_kind" "$c_link" "$RECOVERY_ROOT/pm/claude-skills/$skill"
++  snapshot_restorable "$skill:.codex"  "$x_kind" "$x_link" "$RECOVERY_ROOT/pm/codex-skills/$skill"
++done < "$MANIFEST/skill-state.txt"
++
+ # --- both machine-scoped install states ---
+ # The agents-infra one records repoPath, which the installed binary uses to
+ # resolve its own source tree, so a rollback that leaves it naming an abandoned
+@@ -1042,6 +1377,11 @@ Expected at planning time: `binaries.txt` 7 lines, `roles.txt` 9,
+ `skills.txt` 9, `skill-state.txt` 9. Those counts are observations; the
+ `diff` above, not a count written here, is the check.
+ 
++The `snapshot_restorable` pass is deliberately duplicated as R1's step 0. The
++snapshot proves the artifact it just wrote is restorable; R1 proves the artifact
++it is about to consume is restorable, whoever wrote it and however long ago.
++Neither may rely on the other having run.
++
+ A parse failure, an unresolvable commit, a dirty source worktree, a divergent
+ task-board/tb-sessiond commit, a failed `cmp`, a changed derived set or any
+ missing executable blocks Step 2. None of them is treated as an absent identity
+@@ -1067,6 +1407,38 @@ set -euo pipefail
+ MANIFEST="$RECOVERY_ROOT/manifest"
+ BIN_DIR="$(cat "$MANIFEST/bin-dir.txt")"
+ 
++# 0. Admissibility. R1 refuses a snapshot it cannot restore BEFORE it mutates
++#    anything: every recorded kind must be one it can restore, every symlink
++#    must have a target, every directory must have a staged tree, and every
++#    saved executable, role and install state must be present. Revision 7
++#    discovered these one at a time, mid-rollback, after executables had already
++#    been replaced — a half-restore is a state neither side planned for.
++snapshot_restorable() {   # $1 label  $2 kind  $3 recorded link  $4 staged tree
++  case "$2" in
++    symlink)   test -n "$3" || { printf 'UNRESTORABLE %s symlink with no recorded target\n' "$1" >&2; return 1; } ;;
++    directory) test -d "$4" || { printf 'UNRESTORABLE %s directory with no staged tree\n'   "$1" >&2; return 1; } ;;
++    absent)    : ;;
++    *)         printf 'UNRESTORABLE %s unrecognised kind %s\n' "$1" "$2" >&2; return 1 ;;
++  esac
++}
++while IFS='|' read -r skill a_kind a_link c_kind c_link x_kind x_link; do
++  test -n "$skill" || continue
++  snapshot_restorable "$skill:.agents" "$a_kind" "$a_link" "$RECOVERY_ROOT/pm/skills/$skill"
++  snapshot_restorable "$skill:.claude" "$c_kind" "$c_link" "$RECOVERY_ROOT/pm/claude-skills/$skill"
++  snapshot_restorable "$skill:.codex"  "$x_kind" "$x_link" "$RECOVERY_ROOT/pm/codex-skills/$skill"
++done < "$MANIFEST/skill-state.txt"
++while IFS= read -r name; do
++  test -n "$name" || continue
++  test -f "$RECOVERY_ROOT/bin/$name" || \
++    { printf 'UNRESTORABLE bin/%s missing from the snapshot\n' "$name" >&2; exit 1; }
++done < "$MANIFEST/binaries.txt"
++while IFS= read -r role; do
++  test -n "$role" || continue
++  test -d "$RECOVERY_ROOT/pm/roles/$role" || \
++    { printf 'UNRESTORABLE roles/%s missing from the snapshot\n' "$role" >&2; exit 1; }
++done < "$MANIFEST/roles.txt"
++test -f "$RECOVERY_ROOT/pm/install.json"
++
+ # 1. Executables the snapshot holds -> restored.
+ sed -nE 's/^[[:space:]]*install_binary "([^"]+)".*/\1/p' \
+   "$PM_RELEASE/scripts/setup.sh" | sort -u > /tmp/r1-release-bins.$$
+@@ -1088,12 +1460,16 @@ done < /tmp/r1-release-bins.$$
+ ls -1A "$BIN_DIR" | grep -vxF -f "$MANIFEST/bin-inventory.txt" \
+   > "$RECOVERY_ROOT/unexpected-bin-entries.txt" || true
+ 
+-# 4. Skills: restore each snapshot entry to its exact recorded kind.
+-#    An unrecognised kind returns 1, which aborts the block under errexit.
++# 4. Skills: restore each snapshot entry to its exact recorded kind. Step 0
++#    has already proved every kind restorable, so the arms below cannot meet a
++#    missing operand. The `*)` arm and the symlink arm's `test -n` stay as a
++#    second line of defence; step 0 makes both unreachable, so neither is
++#    exercised by any probe, and Part VI says so.
+ restore_entry() {   # $1 path  $2 kind  $3 link-target  $4 staged tree
+   d="$(dirname "$1")"; b="$(basename "$1")"
+   case "$2" in
+     symlink)
++      test -n "$3"
+       rm -rf "$1"
+       ln -sfn "$3" "$1"
+       ;;
+@@ -1117,8 +1493,10 @@ while IFS='|' read -r skill a_kind a_link c_kind c_link x_kind x_link; do
+   test -n "$skill" || continue
+   restore_entry "$HOME/.agents/skills/$skill" "$a_kind" "$a_link" \
+                 "$RECOVERY_ROOT/pm/skills/$skill"
+-  restore_entry "$HOME/.claude/skills/$skill" "$c_kind" "$c_link" ""
+-  restore_entry "$HOME/.codex/skills/$skill"  "$x_kind" "$x_link" ""
++  restore_entry "$HOME/.claude/skills/$skill" "$c_kind" "$c_link" \
++                "$RECOVERY_ROOT/pm/claude-skills/$skill"
++  restore_entry "$HOME/.codex/skills/$skill"  "$x_kind" "$x_link" \
++                "$RECOVERY_ROOT/pm/codex-skills/$skill"
+ done < "$MANIFEST/skill-state.txt"
+ 
+ # 5. A skill this release's SKILL_REPOS added is removed from all three trees.
+@@ -1161,6 +1539,20 @@ install -m 0644 "$RECOVERY_ROOT/pm/install.json" \
+ mv -f "$(dirname "$(cat "$MANIFEST/pm-state-path.txt")")/.install.json.rollback.$$" \
+   "$(cat "$MANIFEST/pm-state-path.txt")"
+ 
++# 8. Session-manager daemons. R1 restores files. It does not restore a running
++#    daemon and it cannot downgrade one, so this step REPORTS rather than
++#    repairs. A board whose daemon is newer than the restored CLI supports has
++#    not been rolled back, whatever the file system says.
++rc=0
++pgrep -fl tb-sessiond > "$RECOVERY_ROOT/daemons-after-r1.txt" || rc=$?
++case "$rc" in
++  0) : ;;
++  1) printf 'NO-LIVE-DAEMON\n' > "$RECOVERY_ROOT/daemons-after-r1.txt" ;;
++  *) printf 'DAEMON-CENSUS-FAILED rc=%s\n' "$rc" >&2; exit 1 ;;
++esac
++sed -nE 's/.*--board-dir[ =]([^ ]+).*/\1/p' "$RECOVERY_ROOT/daemons-after-r1.txt" \
++  | sort -u > "$RECOVERY_ROOT/daemon-boards-after-r1.txt"
++
+ rm -f /tmp/r1-release-bins.$$ /tmp/r1-snapshot-bins.$$ /tmp/r1-release-skills.$$ \
+       /tmp/r1-added-skills.$$ /tmp/r1-added-roles.$$
+ ```
+@@ -1173,16 +1565,55 @@ PATH="$RECOVERY_ROOT/bin:$PATH" "$RECOVERY_ROOT/bin/tb-sessiond" --version
+ PATH="$RECOVERY_ROOT/bin:$PATH" \
+   "$RECOVERY_ROOT/bin/task-board" q --format compact \
+   'project_config(view=spawn-preflight, role=developer, agent=codex, task_class=research)'
+-# then a live spawn -> outcome -> handoff -> reviewer route canary, recovery-prefixed
++
++# Reach the session manager, not only the config reader. `project_config` need
++# never touch a daemon, so it can go green over exactly the failure this step
++# has to detect. `session status` uses Dial: it starts nothing, restarts
++# nothing, and reports the protocol the daemon is actually speaking.
++while IFS= read -r board; do
++  test -n "$board" || continue
++  PATH="$RECOVERY_ROOT/bin:$PATH" \
++    "$RECOVERY_ROOT/bin/task-board" --board-dir "$board" --json session status
++done < "$RECOVERY_ROOT/daemon-boards-after-r1.txt"
++
++# then a live spawn -> outcome -> handoff -> reviewer route canary, recovery-prefixed,
++# on a board whose reported protocol_version the restored CLI supports
+ ```
+ 
++Reading the canary:
++
++- `"running":false` with exit 0 is a **legitimate absence**: no daemon holds
++  that board, and the next command will start one from the restored image. A
++  non-zero exit or unparseable output is `unknown`, and R1 is not green.
++- `protocol_version` **equal** to the restored build's `controlProtocolVersion`
++  (P7c, read from `$RECOVERY_ROOT/sources/skill-project-management`) is the
++  rolled-back state.
++- `protocol_version` **greater** is the one state R1 cannot fix. That board's
++  session plane is lost to the restored CLI: `spawn` with a goal, `session
++  doctor`, and the managed wrappers all refuse, and nothing in the restored
++  build can drain or replace the daemon. Report the step `unknown/failed`, name
++  the board, and escalate to that board's owner. **Do not** run the live spawn
++  canary against it and call the absence of a result a pass.
++
++The last bullet is why P7 exists. R1 can detect this state; it was never able to
++recover it, and revision 7 was wrong to imply otherwise by pairing R1 with a
++canary that could not see it.
++
+ Rollback status: **UNTESTED operationally.** R1's logic was exercised against a
+ disposable `HOME` with fake artifacts (Part VI section G: restore, quarantine of
+ release-added artifacts, preservation of unrelated ones, and refusal on a
+ malformed snapshot or a missing saved executable). That is not a rehearsal
+ against a real installed pair and does not make R1 assumed-reversible.
+ 
+-A partial run of R1 is a rollback failure, not a successful half-restore.
++A partial run of R1 is a rollback failure, not a successful half-restore — and
++after step 0, a snapshot R1 cannot fully consume produces no partial run at all.
++
++**R1's scope, stated plainly.** R1 restores files: executables, skills, roles and
++the machine-scoped install state. It does not restore processes. For provider
++children and already-exec'd CLI processes that is correct and intended. For
++`tb-sessiond` it is a limit: a daemon started from the release during the window
++survives R1, and if the release changed `controlProtocolVersion`, R1 cannot make
++that board usable again. Step 8 detects it; nothing in this plan repairs it.
+ 
+ ## Rollback R2 — agents-infra managed runtime (Steps 3 and 6)
+ 
+@@ -1250,9 +1681,11 @@ sequencing the rehearsal:
+ 
+ | Procedure | Logic exercised? | Run against a real pair? | Status |
+ | --- | --- | --- | --- |
+-| R1 (task-board surface) | yes — Part VI section G, disposable `HOME`, fake artifacts, including four refusal probes with narrowing controls | no | **UNTESTED operationally** |
++| R1 (task-board surface) | yes — Part VI sections G and J, disposable `HOME`, fake artifacts, six refusal probes with narrowing controls | no | **UNTESTED operationally** |
++| R1 step 8, daemon census | yes — the `pgrep` status discrimination, section J | no | **UNTESTED operationally** |
+ | R2 (agents-infra runtime) | **no** | no | **UNTESTED** |
+-| Snapshot block | derivations and version parsing only | no | **UNTESTED** |
++| Snapshot block | derivations, version parsing and the restorability pass only | no | **UNTESTED** |
++| Recovery from a newer-protocol daemon | **there is no procedure** | n/a | **NOT RECOVERABLE.** Prevented by P7 or not prevented at all. |
+ 
+ # Part IV — Release order
+ 
+@@ -1281,6 +1714,15 @@ In-flight runs: remain on their existing process images. Do not restart or kill
+ them. Do not begin Step 2 while a run is at a handoff/acceptance mutation
+ boundary.
+ 
++`tb-sessiond` is the exception to "existing process images", and Step 0 is where
++it is written down rather than assumed. Run **P7a and P7b here**, before the
++snapshot, and record the census with it: which boards hold a live daemon, each
++daemon's `protocol_version`, `daemon_version`, `pid` and `session_count`. Two
++daemons on this host already run images older than the installed file, so the
++census is a real measurement and not a formality. Step 0 mutates nothing and the
++census is a read; its purpose is that Step 2's disposition has a baseline to be
++a disposition *about*.
++
+ Mismatch window: none; this step only copies explicitly named non-secret
+ artifacts and creates detached source worktrees.
+ 
+@@ -1354,6 +1796,7 @@ Then, in order, each with the expected result stated in Part II:
+ | P3 | `go` already resolves | `command -v go && go version && brew list --formula \| grep -qx go` | path, version, exit 0 |
+ | P4 | every managed skill is a real directory | the `SKILL_REPOS` loop | nine `OK`, no `REFUSE` |
+ | P5 | artifact sets match the snapshot | three `diff`s (executables, roles, skills) | no output, or a difference the operator has recorded and R1 handles |
++| P7 | live daemons censused, control protocol unchanged | `pgrep -fl tb-sessiond`, per-board `session status --json`, and `grep -n 'controlProtocolVersion *='` on both source trees | a census with a recorded disposition per board, and **two equal protocol values**; a difference stops the step for a decision, and a failed census is `unknown` |
+ 
+ Record the `setup_main` stage list the release will actually run:
+ 
+@@ -1387,10 +1830,33 @@ external input for this installer.
+ 
+ ### In-flight runs
+ 
+-Provider children and already-exec'd CLI/sessiond processes continue. A run that
+-reaches a new CLI mutation during the mixed window may see a partial default
+-install; retry its mutation through the recovery-prefixed old pair. Do not
+-reparent, rewrite or kill the run.
++Provider children and already-exec'd CLI processes continue on their existing
++images. A run that reaches a new CLI mutation during the mixed window may see a
++partial default install; retry its mutation through the recovery-prefixed old
++pair. Do not reparent, rewrite or kill the run.
++
++**`tb-sessiond` does not follow that rule, and the operator does not decide it.**
++Replacing the file leaves every running daemon alive, on its old image, holding
++its own sessions. What happens next depends on P7c:
++
++- **Protocol unchanged** — no daemon is restarted by anything. Each live daemon
++  keeps serving its board from the *old* task-board image with the old embedded
++  agents-management until it exits, which may be never within this migration.
++  That is window `Wimg`, and P7's per-board disposition is what bounds it.
++- **Protocol changed** — the first `ConnectOrStart`-class command the installed
++  `0.25.0` runs against a board with an older daemon **restarts that daemon
++  automatically**: `Drain` first, so a v2+ daemon's provider hosts survive, and a
++  fenced SIGTERM/SIGKILL if it does not release its lock. Any goal-bound
++  `task-board spawn`, `session doctor`, `session logs` or managed
++  `codex`/`claude` wrapper is such a command, from any process on the host. P7
++  refuses to open the window in this state, because from the first such command
++  the rollback is one-way.
++
++Note the asymmetry with the rest of this step: withholding the *default PATH*
++protects new work this operator starts. It does not protect against another
++agent, wrapper or human on the same host invoking the installed `task-board` by
++its plain name. There is no interlock for that, and it is listed under
++"Preconditions that are NOT IMPLEMENTED".
+ 
+ An interruption inside `install_go` changes nothing when P3 holds (see P3 for
+ the case where it does not). An interruption inside `install_skills` leaves a
+@@ -1499,6 +1965,14 @@ retain old process images and leases. Do not restart them. New compositions,
+ including LLDB-enabled compositions, use the saved old agents-infra until the P6
+ comparison, installed verification and the canary all pass.
+ 
++`tb-sessiond` is not in this release's artifact set, so Steps 3 and 6 neither
++replace it nor trigger a protocol takeover, and P7 does not apply to them. What
++does carry across: a live daemon resolves the programs it launches at exec time
++through the `PATH` it inherited, so a child launched by an old daemon *after*
++this step can pick up the new `agents-infra`. That combination is not proved by
++anything in this step, which is why new composition is withheld until the canary
++passes rather than only until the installer exits.
++
+ An interruption inside `install_go` changes nothing when P3 holds. An
+ interruption inside `install_binary` leaves either `agents-infra` or
+ `model-harness` replaced and the other not; `install_binary` uses a new-inode
+@@ -1591,8 +2065,8 @@ SAVED_SOURCE="$RECOVERY_ROOT/sources/skill-project-management"
+ test "$(git -C "$PM_RELEASE" describe --tags --exact-match)" = "0.25.1"
+ ```
+ 
+-P1 through P5 run exactly as in Step 2, and the install command is byte-for-byte
+-the Step-2 one with `$PM_RELEASE` repointed. The stage list goes to
++P1 through P5 and **P7** run exactly as in Step 2, and the install command is
++byte-for-byte the Step-2 one with `$PM_RELEASE` repointed. The stage list goes to
+ `"$RECOVERY_ROOT/w5-setup-main.txt"`.
+ 
+ Because `$SAVED_SOURCE` here is the `bridge-pair` source — that is, `0.25.0` —
+@@ -1600,10 +2074,14 @@ P1 compares `0.25.1`'s installer against `0.25.0`'s. A boundary change
+ introduced by `0.25.1` stops Step 5 the same way `0.25.0`'s would have stopped
+ Step 2.
+ 
+-In-flight runs: same process-image behaviour as Step 2. Their next CLI mutation
+-may require replay through `bridge-pair`; no run is killed or rewritten. An
+-interruption inside `install_skills` has the same recovery authority as in
+-Step 2, against the `bridge-pair` snapshot.
++In-flight runs: same process-image behaviour as Step 2, **including P7 and the
++`tb-sessiond` exception in full**. Step 5 replaces `tb-sessiond` again, so the
++census, the protocol derivation (this time `bridge-pair`'s saved `0.25.0` source
++against the `0.25.1` release tree) and the per-board disposition are repeated,
++not inherited from Step 2. A protocol that was unchanged at Step 2 says nothing
++about Step 5. Their next CLI mutation may require replay through `bridge-pair`;
++no run is killed or rewritten. An interruption inside `install_skills` has the
++same recovery authority as in Step 2, against the `bridge-pair` snapshot.
+ 
+ Mixed-install window `W5`: same construction as `W2`, from the first
+ `install_binary` call through installed canary or R1 canary, including the
+@@ -1681,6 +2159,8 @@ Rollback status: **UNTESTED**.
+ | `W3`: agents-infra `v1.7.0` install | First managed binary replacement to installed canary or R2 canary; measured | Every executable the release's `BINARY_NAME`/`MODEL_HARNESS_BINARY_NAME` name, the machine-scoped install state in the resolved config dir, `.agents`, links/helpers and receipt may mix; new composition may fail. | Saved current-pair; existing children/sessions keep process images; retry later mutations through the saved pair. |
+ | `0.25.0` installed while `v1.7.0` is not yet installed | Until Step 3 canary | Supported only if the Step-2 live external-seam canary passed. | An explicit tested pair, not inferred independence. |
+ | Public `v0.6.0` while both installed consumers embed `v0.5.0` | `0s` dynamic mismatch | None from publication alone. | Exact pins; no `@latest`. |
++| `W2d`: daemon protocol skew after `0.25.0` is installed, **only if `0.25.0` changes `controlProtocolVersion`** | Opens when the new `tb-sessiond`/`task-board` pair is on disk. Closes **per board**, when that board's daemon is next reached by a `ConnectOrStart`-class command — an interval with no upper bound, since a board nobody touches keeps its old daemon indefinitely | Each such board's daemon is restarted without operator action: drained if it is v2+, fenced with SIGTERM/SIGKILL otherwise. Until then the board runs a daemon whose protocol the installed CLI refuses, so goal-bound `spawn`, `session doctor`, `logs`, `reclaim-contexts` and the managed wrappers fail on it. **After the takeover, R1 cannot restore that board**: the newer daemon outlives the rollback and the restored CLI refuses it. | **Not survived — avoided.** P7c derives the constant on both sides before the window and stops the step if it changed. If it must change, every live daemon is quiesced and stopped by its owner before the window opens, so no board carries an older daemon into it. There is no third option, and there is no rollback. |
++| `Wimg`: daemon image skew, **whether or not the protocol changes** | Opens when `tb-sessiond` is replaced. Closes per board when that board's daemon next exits. Unbounded; on this host it is already open, with daemons 60 and 48 commits behind the installed file, 8 and 5 days old | Each live daemon keeps executing the old task-board image and its old embedded agents-management while the CLI on disk executes the new one. Protocol equality proves the transport is compatible and proves nothing about how the two embedded contract versions compose across it. Sessions held: 31 and 2 at planning time. | P7's recorded per-board disposition: the board is quiesced and its daemon stopped by its owner outside the window, or it is explicitly excluded from goal-bound and writable-context spawn until its daemon exits. A board with a live daemon and no recorded disposition stops the step. |
+ | `W5`: task-board `0.25.1` install | First `install_binary` call to installed or R1 canary; measured | Same task-board surface as `W2`, including the unconditional `install_skills` stage; new default spawn/route withheld. | Saved bridge-pair authority, the same P3/P4 preconditions, and the full R1 rollback. |
+ | `0.25.1/v0.6.0` with agents-infra `v1.7.0/v0.5.0` | Until Step 6 canary | Cross-version embedded libraries behind one external seam. | Allowed only after the Step-5 real spawn/compose/route canary. |
+ | Step-6 Homebrew/LLDB bypass guard | P6 before-snapshot through a successful after-comparison; measured | As Step 3. | As Step 3. |
+@@ -1691,7 +2171,11 @@ before its exact tests, removal manifest, out-of-place canary and recovery
+ snapshot are green. Its impact would be loss of new spawn/route authority for an
+ unbounded time. This plan never accepts that mode.
+ 
+-Two windows that earlier revisions did not name, and where they are now:
++`W2d` and `Wimg` repeat identically for Step 5, against the `bridge-pair`
++snapshot and the `0.25.0`-to-`0.25.1` protocol comparison. They are not listed
++twice; the Step-5 section says P7 is re-run rather than inherited.
++
++Three windows that earlier revisions did not name, and where they are now:
+ 
+ - **`install_go`, both installers, before every managed binary.** Not a window
+   under P3, because its only reachable branch is a read. Without P3 it is an
+@@ -1701,6 +2185,12 @@ Two windows that earlier revisions did not name, and where they are now:
+   because every managed skill is already a real directory. Without P4 it is a
+   network fetch of an unrelated skill at an arbitrary remote HEAD, whose failure
+   mode deletes the skill.
++- **`tb-sessiond`'s lifetime, both task-board steps.** Named above as `W2d` and
++  `Wimg`. Revisions 1-7 mentioned `tb-sessiond` only as a name in a derived
++  executable list and a `--version` line, and asserted that its processes
++  "continue" — which production overrides. It is the one surface in this plan
++  where a window is opened by a *process*, not by a file, and where one of the
++  two directions has no rollback at all.
+ 
+ # Part VI — Validation evidence from this planning task
+ 
+@@ -1736,18 +2226,21 @@ Every command below was run read-only against the real production installers at
+ against the real host. Each row is the exact command this plan tells the
+ operator to run.
+ 
+-Validator: `.temp/TASK-260830-s5ro4e/validate-revision7.sh`, run under both
+-`bash` and `zsh`. **74 probes, 0 failures, exit 0 in both shells.** Logs:
+-`.temp/TASK-260830-s5ro4e/val-bash.log`, `val-zsh.log`.
+-
+-The suite locates the R1 and P6 blocks inside this document **by content**, not
+-by line number, so a shifted offset cannot silently point it at the wrong block
+-or at nothing.
+-
+-Every one of the 39 shell fences in this document was extracted mechanically
+-(`.temp/TASK-260830-s5ro4e/extract-fences.py`) and syntax-checked: `bash -n` and
+-`zsh -n` on every `bash` fence, `zsh -n` on every verbatim-production `zsh`
+-fence. All 39 parse in every applicable shell. The `zsh` fences parsing is what
++Validator: `.temp/TASK-260830-s5ro4e-rev8/validate-revision8.sh`, run under both
++`bash` and `zsh`. **151 probes, 0 failures, exit 0 in both shells.** Logs:
++`.temp/TASK-260830-s5ro4e-rev8/val-bash.log`, `val-zsh.log`.
++
++The suite locates every block it drives — R1, P4a, P4b, P6, P7a and the snapshot
++— inside this document **by content**, not by line number, so a shifted offset
++cannot silently point it at the wrong block or at nothing. Where a section
++compares against the *previous* revision's text, that text is recovered from the
++committed document at `HEAD` and extracted the same way, so "red on the shipped
++text" is measured rather than asserted.
++
++Every one of the 43 shell fences in this document was extracted mechanically
++(`.temp/TASK-260830-s5ro4e-rev8/extract-fences.py`) and syntax-checked: `bash -n`
++and `zsh -n` on every `bash` fence, `zsh -n` on every verbatim-production `zsh`
++fence. All 43 parse in every applicable shell. The `zsh` fences parsing is what
+ confirms the production excerpts in Part I are quoted faithfully rather than
+ paraphrased.
+ 
+@@ -1776,11 +2269,20 @@ A14 and A15 are the measurements revision 6 did not take, and they are why `W2`,
+ `W3`, `W5` and `W6` can honestly open at the first managed-binary replacement:
+ the stage that precedes it mutates nothing once P3 holds.
+ 
+-### B, C, D — each replacement attacked against the guard it replaced
++### B, C — each replacement attacked against the guard it replaced
+ 
+-Every row runs the **revision-6 guard verbatim** and the **revision-7
+-precondition** against the same mutant. A row is only meaningful because the
+-revision-6 column is a fail-open on production text.
++Every row in B and C runs the **revision-6 guard verbatim** and the
++**revision-7 precondition** against the same mutant, on real production text. A
++row is only meaningful because the revision-6 column is a fail-open there.
++
++**D is different, and revision 7 described it wrongly.** Its three rows compare
++`printf`-written fixtures, not the document's P6 script: they show what the two
++*shapes* of snapshot can and cannot see, which is an illustration rather than a
++measurement of anything that ships. The substantive property — that the block in
++this document sees a formula-set change on the real host — is established in
++section H, where the P6 fence is extracted from this markdown and executed
++against the real Homebrew installation, and H9 is the row that measures it. The
++rows below are relabelled accordingly.
+ 
+ | # | Mutant applied to real production text | rev-6 guard | P-check |
+ | --- | --- | --- | --- |
+@@ -1793,22 +2295,33 @@ revision-6 column is a fail-open on production text.
+ | C4 | `FOURTH=${FOURTH_FLAG:-x}` — `${X:-}` (the one shape rev 6 saw) | **refused** | **refused** |
+ | C5 | *no mutation* (narrowing control) | — | **admitted** |
+ | C6 | injected `eval "$SOMETHING"` | n/a | indirect probe **fires** |
+-| D1/D2 | a formula appears in `brew list --formula` — what `install_go`'s `brew install go` does | five-value LLDB target set **compares identical, blind** | whole formula list **differs, refused** |
++| D1/D2 | **fixture**: a formula appears in a `printf`-written formula list | a rev-6-*shaped* five-value record **compares identical** | a formula-list-*shaped* record **differs** |
+ | D3 | *no mutation* (narrowing control) | — | **identical** |
+ 
+-B5, C5 and D3 are the narrowing controls. Without them B/C/D would prove only
+-that the new checks can fail, not that they discriminate.
++B5, C5 and D3 are the narrowing controls. Without them B and C would prove only
++that the new checks can fail, not that they discriminate. D's control makes the
++same point about the two shapes, and nothing more.
++
++### E — P3, and P4 driven as this document's own fences
+ 
+-### E — P3 and P4 driven against a disposable HOME
++Revision 7 titled this "P3 and P4 driven" while P4 was a `p4_check` function the
++validator defined itself — a mirror of the classification, not the print loop
++this document actually gives the operator, and the manual step the document
++requires was never exercised. Revision 8 locates **both** P4 fences by content
++in the extracted fences and runs them verbatim.
+ 
+ | # | Condition | Result |
+ | --- | --- | --- |
+ | E1 | `go` absent from `PATH` | P3 **refuses** (exit 1) |
+ | E2 | the real target host | P3 **satisfied** (exit 0) |
+-| E3 | all nine managed skills are real directories | P4 **OK** |
+-| E4 | one skill is a symlink — the installer would `rm` it and clone | P4 **REFUSE** |
+-| E5 | one skill is absent — the installer would clone from the network | P4 **REFUSE** |
+-| E6 | the same skill re-materialised as a directory | P4 **OK** — narrowing control: P4 refuses the clone branch without refusing a legitimate installed skill |
++| E0a/E0b | both P4 fences located by content | located |
++| E3a-E3b | the **P4a fence**, run verbatim against the real release tree | exit 0, 8 `SKILL_REPOS` keys derived |
++| E3c | **the operator's manual append** of `project-management`, which revision 7 never exercised | 9 names |
++| E4-E5 | the **P4b fence**, run verbatim, all nine skills real directories | 9 `OK`, **0** `REFUSE` |
++| E6-E7 | one skill is a symlink — the installer would `rm` it and clone | 1 `REFUSE`, and it names the shape it saw (`symlink`) |
++| E8-E9 | one skill is absent — the installer would clone from the network | 1 `REFUSE`, named `absent` |
++| E10 | one skill is a plain file | 1 `REFUSE` |
++| E11-E12 | the same skill re-materialised as a directory | 0 `REFUSE`, 9 `OK` — narrowing control: P4 refuses the clone branch without refusing a legitimate installed skill |
+ 
+ ### F — recovery-baseline identity
+ 
+@@ -1847,10 +2360,14 @@ drifted during the planning task.
+ 
+ ### G — R1 executed verbatim from this document
+ 
+-The R1 block was extracted from this markdown file by line offset and run with
+-`bash`, not retyped, against a disposable `HOME` holding fake artifacts. **No
+-installer was executed.** The simulated release adds an executable, a role and a
+-skill, and rewrites an existing dependency skill and an existing role.
++The R1 block is located in the extracted fences **by content** — `grep -l
++'r1-release-bins'` — and run with `bash`, not retyped, against a disposable
++`HOME` holding fake artifacts. Locating by content is what stops a line-number
++shift in this document from pointing the suite at the wrong block or at nothing;
++revision 7's prose said "by line offset", which was not what its own validator
++did. **No installer was executed.** The simulated release adds an executable, a
++role and a skill, and rewrites an existing dependency skill and an existing
++role.
+ 
+ | # | Assertion | Result |
+ | --- | --- | --- |
+@@ -1867,12 +2384,85 @@ skill, and rewrites an existing dependency skill and an existing role.
+ | G15 | a snapshot skill recorded as `symlink` is restored as a symlink, not a copy | pass |
+ | G16 | an unrecognised kind in `skill-state.txt` **aborts R1 non-zero** | refused |
+ | G17 | R1 re-run on an already-restored state exits 0 — so G16's non-zero is attributable to the bad kind, not to non-idempotence | pass |
+-| G18-G19 | a **missing snapshot executable** aborts R1 non-zero, and R1 does not report success while leaving the release binary in place | refused; `BIN_DIR` still holds the release binary, correctly, because R1 stopped |
++| G18-G19 | a **missing snapshot executable** stops R1 non-zero, and R1 does not report success while leaving the release binary in place | refused; `BIN_DIR` still holds the release binary, correctly, because R1 stopped. In revision 8 it stops in step 0, before any mutation — section J measures that difference directly |
+ | G20-G21 | R1 green again once the snapshot is complete, and the executable is restored — narrowing control | pass |
+ 
+ G17 and G20 are what make G16 and G18 evidence rather than noise: without them a
+ non-zero exit could be R1 being generally broken.
+ 
++### I — the `tb-sessiond` contract, derived from production text and the live host
++
++Every row is a read. No process was signalled, started or stopped; the two live
++daemons were observed and left alone.
++
++| # | Check | Result |
++| --- | --- | --- |
++| I1-I2 | `controlProtocolVersion` is a compile-time constant, and its value | one match, `4` |
++| I3 | `task-board --version` does not report it — so it can only come from source | 0 mentions |
++| I4 | the daemon publishes it as `protocol_version` on its status endpoint | present in `ManagerStatus` |
++| I5-I7 | `managerProtocolCompatibility` has an older-daemon branch, a newer-daemon branch, and the newer branch is a bare refusal | all three present |
++| I8 | `takeOverOutdatedManager` refuses the downgrade direction in words | *"refusing protocol takeover without an older daemon version"* |
++| I9 | the takeover is reached from `ConnectOrStart` itself, not from a helper | present in `ConnectOrStart`'s body |
++| I10-I11 | the takeover drains first and falls through to a fenced terminate | both present |
++| I12 | **no cobra command reaches `Drain`** — so no operator can drain a daemon by hand | 0 files under `cmd/` |
++| I13-I14 | `Dial` performs no compatibility check, and `session status` uses it | 0 / 1 |
++| I15 | the response decoder is lenient — no `DisallowUnknownFields` | 0 |
++| I16-I18 | the daemon is resolved through `PATH` by the bare name `tb-sessiond`, and its board comes from its own argv | all three |
++| I19-I20 | goal-bound spawn reaches the daemon through `ConnectOrStart` | both present |
++| I21 | the constant's four historical values, from `git show` at each touching commit | `4 3 2 "task-board-session-manager-v1"` |
++| I22 | every live daemon answered `session status` | 2 of 2 |
++| I23 | both report `protocol_version` 4 | 2 |
++| I24 | **neither daemon's image equals the installed file's version** | 0 matches |
++| I25 | both run some older `0.24.3-1…` image | 2 |
++| I26 | and they hold sessions a takeover would drain or fence | 33 total |
++| I27-I29 | this migration's own board: exit 0, `running:false`, no `protocol_version` | a **legitimate absence**, distinguishable from a failed read — and the reason an installed canary here observes neither live daemon |
++
++I24 and I27-I29 are the two rows that make this section evidence rather than
++description. The first says the skew is not hypothetical on this host; the
++second says the canary the plan already had could not have seen it.
++
++### J — the recorded-but-unrestorable kind, attacked against the shipped text
++
++The control is **revision 7's own R1**, recovered from the committed document at
++`HEAD` and extracted the same way as revision 8's, so "red on the text that
++shipped" is measured. Every fixture differs from its control in exactly one
++recorded field.
++
++| # | Input | Revision-7 R1 | Revision-8 R1 |
++| --- | --- | --- | --- |
++| J1-J4 | `~/.claude` kind recorded `directory`, nothing staged | **aborts non-zero — after mutating.** Executables already restored; steps 6 and 7 never ran, so the role and the install state are still the abandoned release's | — |
++| J5-J8 | the same snapshot | — | **refused in step 0**, executables and role untouched, and it names the entry: `UNRESTORABLE swiftui:.claude directory with no staged tree` |
++| J9-J12 | the same kind, with the tree staged by the revision-8 snapshot | — | **exit 0**; the link-tree entry is a directory again, not a symlink, with the snapshot's content, and the rest of the rollback completed — narrowing control |
++| J13-J17 | `symlink` kind with an **empty** recorded target | **exit 0 — reports success.** `ln -sfn ""` succeeds, so R1 `rm -rf`s the real tree and leaves a dangling symlink to nowhere | **refused in step 0**, nothing mutated |
++| J18-J20 | a **saved role missing** from the snapshot | aborts non-zero after restoring the executables | **refused in step 0**, executables untouched |
++| J21-J22 | a well-formed snapshot | — | **exit 0** and restored — narrowing control, so the four refusals are attributable to the input |
++| J23-J24 | the snapshot block and R1 both define `snapshot_restorable` and both handle the two link trees | text check, not an execution | both |
++
++**J13-J17 is a finding revision 8 made, not one the review reported.** The
++review found that a recorded `directory` kind *aborts* R1. A recorded `symlink`
++kind with no target does something worse: it **fails open**. `ln -sfn "" path`
++exits 0, so revision 7's R1 destroys the tree it was restoring, creates a
++dangling link, and reports a successful rollback. The same defect class, one
++arm over, and the reason the fix is an admissibility pass over every kind rather
++than a staged tree for one of them.
++
++### K — the daemon census, driven as this document's own P7a fence
++
++P7a's whole point is that a failed process census must not be read as "no
++daemons". The fence is located by content and driven with a stub `pgrep` whose
++exit code is the only variable.
++
++| # | `pgrep` exit | Result |
++| --- | ---: | --- |
++| K1-K2 | 0, two daemons | admitted, both lines recorded |
++| K3-K4 | 1, no match | **admitted as a legitimate absence**, recorded `NO-LIVE-DAEMON` |
++| K5-K7 | 2, usage error | **refused**, no `NO-LIVE-DAEMON` published over the failure, and it names `DAEMON-CENSUS-FAILED rc=2` |
++| K8 | 3, fatal | **refused** — the class, not one code |
++| K9-K11 | the real `pgrep` on the target host | admitted, 2 live daemons seen, 2 board paths extracted from their own argv — narrowing control |
++
++K3 and K5 are the pair that matters: the same command, one exit code apart, and
++the plan treats them as opposite facts.
++
+ ### The three revision-6 findings, and why the replacements cover them
+ 
+ **F1 — `install_go` unmodelled.** Confirmed against production: defined at
+@@ -1908,6 +2498,34 @@ saved source, so no such judgement is needed. Its residual blind spots
+ (`printenv`, `eval`, indirect expansion) are named in P2 and probed by a second
+ command that returns empty on both installers today.
+ 
++### The three revision-7 findings, and where each is closed
++
++**F1 — `tb-sessiond` modelled as a binary, not a daemon.** Part I now models it:
++the constant, both compatibility branches, the automatic takeover reached from
++`ConnectOrStart`, the drain-then-fence sequence, the `PATH` resolution, the
++protocol's four-value history, and the measured live census. **P7** enumerates
++the daemons and derives the constant on both sides before the window, with a
++`pgrep` status discrimination proved in section K. **Part V** names `W2d` and
++`Wimg` with their real duration semantics — per board, unbounded, closing when
++that board's daemon is next reached or next exits. **R1** gains a daemon census
++and a canary that reaches the session manager instead of a config reader that
++could go green over the failure. And the downgrade direction is stated as what
++production says it is: refused by `managerProtocolCompatibility`, refused again
++by `takeOverOutdatedManager`, with no cobra command anywhere near `Drain` (I12).
++It is not recoverable, the point of irreversibility is named, and the answer is
++prevention rather than a rollback step that would not work.
++
++**F2 — a recorded kind with nothing to restore it from.** The snapshot stages
++both link trees; R1 refuses before it mutates; section J drives the shipped
++revision-7 text and the revision-8 text against the same fixtures and measures
++the difference. Working the finding also found the fail-open one arm over
++(J13-J17), which is why the fix covers the class.
++
++**F3 — evidence describing a reimplementation as a run.** Section D says what it
++is; section E drives the document's own P4 fences including the manual append;
++section G's prose matches its validator. Where revision 8 still checks text
++rather than execution — J23-J24 — the row says "text check, not an execution".
++
+ ### What this revision did not do, stated as unknown
+ 
+ - **R1 was exercised, not rehearsed.** Section G ran the R1 block against a
+@@ -1937,6 +2555,31 @@ command that returns empty on both installers today.
+   graph and the `./internal/spawn` gate are unchanged since document revision 3
+   and were reproduced by the revision-2 review; this revision makes no
+   independent claim about them.
++- **No CLI/daemon protocol mismatch was staged end to end.** Section I rests on
++  production source, its production call sites, the constant's history, and the
++  measured live census. It does **not** rest on a daemon actually refusing a
++  CLI, and this revision did not build two task-board images with different
++  constants to watch the takeover fire. What a takeover does to a real
++  daemon's 31 sessions is therefore **unknown**, not estimated.
++- **What a live daemon's provider children do when it is terminated out of band**
++  — the only remaining move after a protocol downgrade — was not measured. The
++  code says `Drain` deliberately leaves them running; it says nothing about
++  SIGTERM. Stated as unknown rather than inferred from the drain comment.
++- **Whether `0.25.0` or `0.25.1` will change `controlProtocolVersion` is not
++  established.** Those tags do not exist. That is exactly why P7c derives it at
++  execution time instead of this document guessing in either direction.
++- **P7 itself was not run as a whole.** P7a was driven verbatim (section K).
++  P7b was driven against the real host as three individual commands (I22-I29),
++  not as the document's loop. P7c is a two-line `grep` whose operands are two
++  source trees, one of which does not exist yet; it was not run.
++- **`restore_entry`'s own defences are unreachable and therefore unprobed.**
++  R1 step 0 refuses an unrecognised kind and an empty symlink target before the
++  restore loop runs, so the `*)` arm and the symlink arm's `test -n "$3"` cannot
++  fire. They are kept as a second line of defence, not as tested behaviour. The
++  behaviour that *is* tested is step 0's, in section J.
++- **The revision-8 snapshot block was still not executed** against the real
++  installed pair. Its new restorability pass is proved only by R1's identical
++  copy (section J) and by a text check (J23-J24).
+ 
+ ### Review lessons carried forward
+ 
+@@ -1947,12 +2590,24 @@ command that returns empty on both installers today.
+ 2. A fix applied to a finding is not a fix applied to a class. Revision 4
+    removed one maintained literal; revision 5 reintroduced the same defect one
+    line away.
+-3. **New, and the reason for this revision's form:** a fix that adds machinery
+-   moves the defect into the machinery. Revisions 3-6 each closed a finding and
+-   each introduced a new fail-open in the code that closed it. Severity did not
+-   fall. When the mechanism protecting a plan needs its own adversarial review
+-   every cycle, the mechanism is the risk, and the correct move is to replace it
+-   with something an operator can audit in one reading.
++3. A fix that adds machinery moves the defect into the machinery. Revisions 3-6
++   each closed a finding and each introduced a new fail-open in the code that
++   closed it. Severity did not fall. When the mechanism protecting a plan needs
++   its own adversarial review every cycle, the mechanism is the risk, and the
++   correct move is to replace it with something an operator can audit in one
++   reading.
++4. **New in revision 8:** a plan that models artifacts will miss every risk that
++   lives in a process. Seven revisions treated `tb-sessiond` as a name in an
++   executable list, and the surface it actually is — a daemon with its own
++   versioned protocol, older than the file it came from, holding 33 sessions
++   across two boards this migration does not touch — was invisible the whole
++   time. The general form: **enumerate what is running, not only what is
++   installed.** A rollback restores files; it does not restore processes, and a
++   plan that does not say so is claiming a reversibility it does not have.
++5. **Also new:** when a review finds a defect in one arm of a `case`, read the
++   other arms. F2 reported an abort in the `directory` arm; the `symlink` arm on
++   the same input fails *open* (J13-J17), which is worse and was not reported.
++   Fixing the reported instance would have left that one shipping.
+ 
+ # Stop conditions
+ 
+@@ -1972,7 +2627,53 @@ Stop and restore the last accepted pair if:
+ - a P1 diff touches a modelled boundary — the plan is re-derived and re-reviewed
+   rather than patched at the console;
+ - a rollback remains unrehearsed in the target environment. It stays labelled
+-  **UNTESTED** and cannot be assumed to work.
++  **UNTESTED** and cannot be assumed to work;
++- `controlProtocolVersion` differs between the saved installed source and the
++  release, at Step 2 or Step 5. This is not a stop that P7 can clear by being
++  re-run: it needs either a release that does not change the constant, or a
++  written per-board decision from the owners of every board holding a live
++  daemon, obtained before the window;
++- a live daemon exists on any board with no recorded P7 disposition;
++- the daemon census fails to read — a `pgrep` exit other than 0 or 1, a
++  `session status` that exits non-zero or returns unparseable output. A failed
++  census is `unknown` and is never "no daemons";
++- after a rollback, any board reports a `protocol_version` greater than the
++  restored build's `controlProtocolVersion`. That board is not rolled back, and
++  no procedure in this plan makes it so.
++
++# The limit of what more writing can fix
++
++The revision-7 review asked for this to be said if it were true, and it is.
++
++Three risks in this plan are now bounded as tightly as a document can bound
++them, and the remaining reduction is not another paragraph:
++
++1. **R1 and R2 have never been run against a real installed pair.** R1's logic
++   has been driven hard — forty-nine probes across sections G and J, five of
++   them revision-8 refusals with narrowing controls — but every artifact it
++   moved was a
++   text file standing in for a binary, a skill tree or a role. No multi-megabyte
++   `rsync`, no real permission edge, no real filesystem. R2 has no execution
++   evidence at all. The next useful thing is a rehearsal on a disposable
++   home and runtime, recording real exits. Writing more about R1 will not
++   produce it.
++2. **The protocol takeover has never been observed.** Section I establishes what
++   the code does from the code. Nobody in this task has watched a `0.25.0`-class
++   CLI fence a v4 daemon holding real sessions, and the honest answer about what
++   that does to those 31 sessions is unknown. The next useful thing is two
++   throwaway builds with different constants on a disposable board — not a
++   sharper description of `takeOverManagerForProtocolUpgrade`.
++3. **The installers have never been run under exactly the `env -u` invocations
++   this plan specifies.** They are quoted, derived and reviewed; they are not
++   executed.
++
++Everything else in this plan is either derived at execution time or labelled
++`UNTESTED`/`unknown`. These three are the cases where the honest answer is
++**"this step cannot be made safe without trying it on a disposable copy first"**,
++and a reviewer should treat further prose about them as noise. The plan's own
++acceptance criterion — reviewed and accepted before the first breaking change —
++is met by review; its *operational* readiness is not, and no revision of this
++document can supply it.
+ 
+ # References
+ 
+@@ -1995,6 +2696,22 @@ Production sources read at `skill-project-management` `f1319eff` and
+   (`install_lldb_mcp`), `:255-271` (call sequence)
+ - agents-infra global setup `tools/agents-infra/internal/infra/infra.go:134-215`
+ - agents-infra source resolution `tools/agents-infra/internal/infra/source_dir.go:12-19`
++- task-board session manager `internal/sessionmanager/types.go:11-13` (protocol
++  name and version), `:114-128` (`ManagerStatus`)
++- task-board session manager `internal/sessionmanager/client.go:70-96` (`Dial`),
++  `:112-126` (`Connect`), `:128-165` (`ConnectOrStart` and the upgrade branch),
++  `:228-253` (`ConnectOrStartAndAttach`), `:340-346` (`Drain`), `:677`
++  (lenient response decoding), `:714-735` (`managerProtocolCompatibility`)
++- task-board session manager `internal/sessionmanager/stale_takeover.go:71-79`
++  (`takeOverOutdatedManager` and its downgrade refusal), `:86-163`
++  (`takeOverManagerForProtocolUpgrade`, drain then fence)
++- task-board `cmd/session.go:26` (`tb-sessiond`), `:34-110` (`Dial`-based
++  reads), `:151,199,245` (`ConnectOrStart`-based commands), `:360-372`
++  (`connectOrStartSessionManager`), `:480-506` (`launchSessionManagerDaemon`,
++  `exec.LookPath`, `--board-dir`/`--remote-origin` argv)
++- task-board `cmd/codex_goal_spawn.go:35-44` (`connectManagedSpawnSession`),
++  `:50-56` (`launchTrackedSpawnRun`), `:74-79` (`requiresManagedSpawnSession`)
++- `TASK-260830-s5ro4e_review-verdict-rev6.md`
+ - `TASK-260830-s5ro4e_review-verdict.md`
+ - `TASK-260830-s5ro4e_review-verdict-rev3.md`
+ - `TASK-260830-s5ro4e_review-verdict-rev4.md`
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index b7a302d..2b6b3cc 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,19 @@
+ 
+ ## 2026-08-30
+ 
++### 2350 — A Plan That Models Artifacts Misses Every Risk That Lives In A Process
++
++- ROOT CAUSE: Seven revisions of the lockstep release plan treated `tb-sessiond` as a name in a derived executable list and asserted that its processes "continue" across an install. It is a long-lived per-board daemon with its own CLI-to-daemon control protocol, and production overrides that assertion: `internal/sessionmanager/client.go:719-724` returns `ManagerProtocolUpgradeError` when the daemon is older, and `ConnectOrStart` (`:149-163`) responds by *automatically* fencing and replacing it. `install_binary` replaces a file; the CLI decides on its own schedule what to do about the process.
++- FINDING: `controlProtocolVersion` (`internal/sessionmanager/types.go:13`) is at 4 and has been bumped four times in five days — `df4201dc` v1, `445b391e` 2, `f8ba3268` 3, `d66bfea8` 4. A bump between an installed pair and the next release is the historical norm for this surface, not a hypothetical.
++- FINDING: The downgrade direction has no recovery. `managerProtocolCompatibility` refuses a newer daemon outright, `takeOverOutdatedManager` refuses to replace one (`stale_takeover.go:76-78`), and **no cobra command anywhere under `cmd/` reaches `Drain`** — verified, 0 files. So a rollback restores every file and still cannot use that board's session plane. The irreversibility begins not at the install but at the first `ConnectOrStart`-class command the new CLI runs against a board holding an older daemon; goal-bound `task-board spawn` is such a command.
++- FINDING (measured, not modelled): two daemons live on this host run `0.24.3-112-ged48781` and `0.24.3-124-g2a527a8` while the installed file is `0.24.3-172-g063197b1` — 60 and 48 commits of drift, 8 and 5 days old, holding 31 and 2 sessions. Image skew between a running daemon and the binary on disk is not a migration risk this plan creates; it is the state of the machine before the plan starts. The migration's own board has no daemon at all, so its installed canary could never have observed either.
++- FINDING: `task-board --board-dir B --json session status` is the right probe: it uses `sessionmanager.Dial`, which never launches a daemon and performs no compatibility check, so it reports skew rather than repairing it. `running:false` with exit 0 is a legitimate absence and is distinguishable from a failed read.
++- FINDING (new, found while fixing a reported one): the rollback recorded a `directory` kind for the `~/.claude`/`~/.codex` link trees and staged no tree, so it aborted mid-rollback — that was the review's finding. One `case` arm over, a `symlink` kind with an empty recorded target **fails open**: `ln -sfn "" path` exits 0, so the rollback `rm -rf`s the tree it was restoring, leaves a dangling link, and reports success. Worse than the reported defect, same class.
++- DECISION: The fix is an admissibility pass over the whole snapshot before the first mutation — kinds, link targets, staged trees, saved executables, saved roles, saved install state — not a staged tree for the one arm that was reported. A rollback that aborts halfway leaves a state neither side planned for; refusing at the door costs nothing.
++- DECISION: Prevention over rollback for the protocol. A new precondition enumerates live daemons (`pgrep`, with exit 2/3 treated as a failed read and exit 1 as a legitimate absence), reads each one's protocol, and derives the constant from both source trees. A change stops the step for a decision by the owners of the boards holding live daemons. There is no third option and no rollback.
++- EVIDENCE: 151 probes green under both `bash` and `zsh`, exit 0. Section J drives **revision 7's own rollback text, recovered from the committed document at HEAD**, against revision 8's on identical fixtures: rev 7 aborts after restoring executables (role and install state left as the abandoned release's), or exits 0 while destroying a tree; rev 8 refuses before touching anything and names the entry. Five refusals with narrowing controls. Section K drives the census fence with a stub `pgrep` and shows exit 1 and exit 2 treated as opposite facts. All 43 shell fences extracted mechanically and parsed under both shells.
++- LESSON: Enumerate what is *running*, not only what is installed. A rollback restores files; it does not restore processes, and a plan that does not say so is claiming a reversibility it does not have. Corollary: when a review finds a defect in one arm of a `case`, read the other arms — fixing the reported instance would have shipped the fail-open next to it.
++
+ ### 1920 — When Every Fix Adds Machinery, The Machinery Is The Risk
+ 
+ - ROOT CAUSE: Four consecutive reviews of the same planning document each found a new fail-open in the code the *previous* revision added to close the previous finding. Entry 1529's guard was broken (1731). Entry 1731's fix left a truncating function extractor and a one-shape environment classifier. Entry 1815's mirror claimed a byte-identical comparison but `extract_function_body` stops at the first column-0 `}`, so it compared a truncated prefix and admitted a changed `write_install_state` on production text. Severity never fell.

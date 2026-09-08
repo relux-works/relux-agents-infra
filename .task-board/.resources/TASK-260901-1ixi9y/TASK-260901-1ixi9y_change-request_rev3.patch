@@ -1,0 +1,669 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 96f4e84..d248abc 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,13 @@
+ 
+ ## 2026-09-01
+ 
++### 1246 — Direct Provider YOLO Aliases Preserve Canonical Resolution
++- FIX: Global and local setup now install and repair regular executable `openai-dange` and `anthropic-dange` launchers; each delegates to its sibling canonical provider alias with one added `-d` and byte-preserved caller argv.
++- GATE: `VerifyInstalledRuntime -> runtimeArtifactFailures -> directProviderYoloLauncherFailures` rejects missing, drifted, symlinked, or non-executable aliases; production canonical resolution tests require exactly one provider-native danger flag even with duplicate caller shortcuts.
++- CORRECTION: Initial review found the installed chain failed before resolution because `runTarget` rejected the alias-prefixed `-d` as an unknown wrapper flag. Revision 2 admitted that leading alias prefix, restored it to provider argv, and added an installed local setup test that drove both aliases through the generated target command to provider exec stubs.
++- CORRECTION: Revision 2 still let `runTarget` parse only the injected first `-d`; caller-leading `-d`, `--danger`, `--yolo`, or ordinary provider flags failed before canonical resolution. The target dispatcher now consumes only its reserved `--print-config` and first wrapper delimiter, forwarding all other bytes in order; the installed-alias regression matrix attacks every leading form for both providers and redundant danger selections.
++- ANOMALY: First full Go run hit unrelated transient Pi direct-RPC/readiness failures; isolated `-count=1` reruns and two subsequent full suites passed. Evidence: board resource `TASK-260901-1ixi9y_implementation-validation.md`.
++
+ ### 0832 — Cache Budget Requires Explicit Single-Entry Enablement
+ - CORRECTION: A byte budget alone is inert or ambiguous for the deployed MLX backend. Every cache-bound Pi profile now requires exactly one `--prompt-cache-size 1` plus one matching `--prompt-cache-bytes`; missing, zero, duplicate, and contradictory size constraints refuse in the production parser.
+ - SCOPE: `.configs/templates/qwen-3.8-27b-mlx-8bit.project-config.toml` is the installed, production-consumable canonical source; README mirrors it but is not the authority.
+diff --git a/README.md b/README.md
+index 2a7bb8b..cc17f04 100644
+--- a/README.md
++++ b/README.md
+@@ -160,13 +160,20 @@ Two consequences worth knowing:
+ run one.
+ 
+ Both setup modes install sibling-only `pi-infra`, `openai-infra`,
+-`anthropic-infra`, and `qwen-infra` launchers: global setup writes
+-it beside the bootstrap-owned `agents-infra`, and local setup writes it beside
++`anthropic-infra`, `qwen-infra`, `openai-dange`, and `anthropic-dange`
++launchers: global setup writes them beside the bootstrap-owned `agents-infra`,
++and local setup writes them beside
+ the generated project launcher. `pi-infra` delegates as `agents-infra pi`; the
+ three vendor aliases delegate as `agents-infra target <exact-alias>` without
+ changing the caller's working directory or argument bytes/order, including a
+ literal wrapper delimiter and its following operands. It never searches `PATH`
+-for a substitute target. Setup repairs a drifted managed alias; setup's
++for a substitute target. `openai-dange` and `anthropic-dange` delegate to their
++matching canonical vendor alias with exactly one added `-d` YOLO selection,
++then forward every caller argument unchanged; the canonical provider launcher
++accepts caller-leading `-d`, `--danger`, `--yolo`, and ordinary provider flags
++such as `--model` without an explicit `--`, and deduplicates danger selections
++to exactly one provider-native flag. Setup
++repairs a drifted managed alias; setup's
+ postcondition and `verify` refuse a missing alias, changed bytes or mode, a
+ wrong embedded target, and a missing/non-regular/non-executable sibling target.
+ The managed alias and sibling target must each be a regular file at its own
+@@ -230,6 +237,7 @@ That creates a local runtime layout under the project root:
+ - `.local/bin/`: helper CLIs for the local setup, including `agents-infra`
+ - `.local/bin/pi-infra`: managed sibling alias for `agents-infra pi`
+ - `.local/bin/openai-infra`, `.local/bin/anthropic-infra`, `.local/bin/qwen-infra`: canonical target aliases
++- `.local/bin/openai-dange`, `.local/bin/anthropic-dange`: direct canonical-provider YOLO aliases
+ 
+ Local setup reproduces the global runtime topology, not the global instruction
+ content. It does not copy source `.instructions/` modules into the project.
+@@ -1828,6 +1836,7 @@ established. The benchmark-only profiles pin both runtimes to a live-reported
+ | `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, clocks first-to-last generated deltas across `content`, `reasoning`, and `reasoning_content`, seals per-scenario cached-token telemetry so one-sided reuse or unknown reuse is refused, and samples both runtimes over warm-up, scenario, soak and process windows with the same `peak_resident_memory_upper_bound_bytes`: exact Mach physical footprint plus a conservative upper edge for resident `vmmap` mapped-file bytes, sampling the cheap Mach component at 20 Hz, refreshing mapped-file residency at a bounded 0.2 Hz, and sampling synchronously at window boundaries; raw samples seal independent Mach and mapped-file timestamps, reused mapped values retain their original timestamp, and a scored scenario/process window must prove each component has no timestamp gap above 125 ms, while sparse, stale, untimestamped, absent, failed, partial or malformed series are refused; it seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+ | `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use the exact schema-1 `agents-infra pi spawn` command emitted by the generic BuildLaunch graph | Alias launch, legacy standalone Pi JSONL for operators, bounded schema-1 turn results for generic consumers, or a non-launching plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
++| `openai-dange`, `anthropic-dange` | Direct sibling-only YOLO aliases for the matching canonical provider entrypoint; add one `-d`, preserve caller cwd and argument bytes/order, and rely on canonical launch resolution to emit one provider-native danger flag | `openai-dange`, `openai-dange exec "inspect this project"`, `anthropic-dange`, `anthropic-dange --print-config` | The same canonical provider launch or non-launching plan as `openai-infra` / `anthropic-infra`, with YOLO selected explicitly |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+ | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
+ | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
+diff --git a/SKILL.md b/SKILL.md
+index 509d6ca..392fb37 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -321,7 +321,16 @@ bytes or mode and a missing, wrong, or unusable sibling target. Both paths must
+ themselves be regular files; a symlink is drift even when it resolves to
+ byte-identical content. Setup also installs and repairs the exact sibling-only
+ `openai-infra`, `anthropic-infra`, and `qwen-infra` aliases, each delegating as
+-`agents-infra target <exact-entrypoint>` with no embedded target policy. They also
++`agents-infra target <exact-entrypoint>` with no embedded target policy. The
++source-managed `openai-dange` and `anthropic-dange` regular-file aliases sit
++beside them and delegate to the matching canonical alias with exactly one
++added `-d`, preserving caller cwd and every argument byte/order. Canonical
++launch resolution accepts caller-leading danger shortcuts and ordinary
++provider flags such as `--model` without an explicit `--`, still owns danger
++de-duplication, and emits exactly one native provider danger flag. Setup and
++`verify` repair or reject missing, drifted,
++symlinked, and non-executable direct YOLO aliases by the same exact-byte/mode
++contract. They also
+ validate the authoritative source/installed manifest at
+ `tools/agents-infra/internal/infra/pi-v0.84.2-darwin-arm64-tree-manifest.txt`
+ with SHA-256
+diff --git a/tools/agents-infra/canonical_target_main_test.go b/tools/agents-infra/canonical_target_main_test.go
+index d2f37ca..22bcd7c 100644
+--- a/tools/agents-infra/canonical_target_main_test.go
++++ b/tools/agents-infra/canonical_target_main_test.go
+@@ -3,6 +3,7 @@ package main
+ import (
+ 	"os"
+ 	"path/filepath"
++	"slices"
+ 	"strings"
+ 	"testing"
+ 
+@@ -212,6 +213,62 @@ func TestRunTargetDispatchPreservesCallerCWDAndLocksBeforeProviderSideEffects(t
+ 	}
+ }
+ 
++// Production call site: canonical provider alias -> runTarget ->
++// BuildCanonicalTargetLaunchPlan. runTarget owns only --print-config and the
++// first wrapper delimiter; all provider flags otherwise reach canonical
++// resolution without an explicit --.
++func TestRunTargetAcceptsLeadingProviderFlagsWithoutDelimiter(t *testing.T) {
++	home, project, binDir := t.TempDir(), t.TempDir(), t.TempDir()
++	writeMainCanonicalConfig(t, project, mainCanonicalHostedTOML())
++	for _, provider := range []string{"codex", "claude"} {
++		mustWrite(t, filepath.Join(binDir, provider), "#!/bin/sh\nexit 0\n")
++	}
++	t.Setenv("HOME", home)
++	t.Setenv("PATH", binDir)
++	t.Setenv(callerCWDEnv, project)
++
++	tests := []struct {
++		entrypoint string
++		nativeFlag string
++	}{
++		{entrypoint: "openai-infra", nativeFlag: "--dangerously-bypass-approvals-and-sandbox"},
++		{entrypoint: "anthropic-infra", nativeFlag: "--dangerously-skip-permissions"},
++	}
++	for _, testCase := range tests {
++		t.Run(testCase.entrypoint, func(t *testing.T) {
++			var runErr error
++			output := captureStdout(t, func() {
++				runErr = runTarget([]string{testCase.entrypoint, "-d", "--danger", "--yolo", "--print-config", "inspect token"})
++			})
++			if runErr != nil {
++				t.Fatalf("runTarget: %v", runErr)
++			}
++			if count := strings.Count(output, testCase.nativeFlag); count != 1 {
++				t.Fatalf("native danger flag count = %d, want 1\n%s", count, output)
++			}
++			if !strings.Contains(output, "inspect token") {
++				t.Fatalf("caller argument missing from launch plan:\n%s", output)
++			}
++		})
++	}
++}
++
++func TestParseDirectProviderYoloTargetArgsPreservesProviderBytesAndConsumesOnlyWrapperSyntax(t *testing.T) {
++	input := []string{"-d", "--danger", "--model", "model value", "", "line 1\nline 2", "--print-config", "--", "--print-config", "--", "tail"}
++	printConfig, providerArgs := parseDirectProviderYoloTargetArgs(input)
++	want := []string{"-d", "--danger", "--model", "model value", "", "line 1\nline 2", "--print-config", "--", "tail"}
++	if !printConfig || !slices.Equal(providerArgs, want) {
++		t.Fatalf("parseDirectProviderYoloTargetArgs = (%t, %#v), want (true, %#v)", printConfig, providerArgs, want)
++	}
++}
++
++func TestRunTargetCanonicalAliasStillRequiresBoundaryForUnknownWrapperFlag(t *testing.T) {
++	err := runTarget([]string{"openai-infra", "--danger"})
++	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -danger") {
++		t.Fatalf("ordinary canonical alias parsing changed: %v", err)
++	}
++}
++
+ // Production call site: runTarget -> BuildCanonicalTargetLaunchPlan ->
+ // lockCanonicalTargetArguments. The first delimiter in provider args belongs
+ // to the hosted wrapper, so identity selectors after it remain active and must
+diff --git a/tools/agents-infra/installed_binary_setup_test.go b/tools/agents-infra/installed_binary_setup_test.go
+index 0ad037c..d8ae575 100644
+--- a/tools/agents-infra/installed_binary_setup_test.go
++++ b/tools/agents-infra/installed_binary_setup_test.go
+@@ -683,6 +683,95 @@ func TestInstalledBinarySetupLocalPiInfraRepairsModeAndSymlinkDrift(t *testing.T
+ 	}
+ }
+ 
++// Production call sites: setup local installs dange -> canonical provider ->
++// generated agents-infra -> runTarget -> provider exec. This matrix fails
++// against revision 2, where runTarget stripped only one leading -d and rejected
++// the next caller-leading provider flag before canonical danger de-duplication.
++func TestInstalledLocalDirectProviderYoloAliasesForwardLeadingFlagsAndDeduplicateDanger(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("POSIX installed alias production test")
++	}
++	binary := buildInstalledBinary(t)
++	home := t.TempDir()
++	configDir := filepath.Join(home, "config")
++	writeInstallState(t, configDir, sourceRepoRoot(t))
++	project := t.TempDir()
++	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
++		t.Fatalf("installed binary setup local: %v\n%s", err, output)
++	}
++	writeMainCanonicalConfig(t, project, mainCanonicalHostedTOML())
++
++	fakeBin := t.TempDir()
++	recordDir := t.TempDir()
++	for _, provider := range []string{"codex", "claude"} {
++		record := filepath.Join(recordDir, provider)
++		mustWrite(t, filepath.Join(fakeBin, provider), "#!/bin/sh\nprintf '%s\\0' \"$@\" > \""+record+"\"\n")
++	}
++	tests := []struct {
++		name       string
++		alias      string
++		provider   string
++		nativeFlag string
++		args       []string
++		wantCaller []string
++	}{
++		{name: "openai caller short danger", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"-d", "exec", "space value", "Հայերեն"}, wantCaller: []string{"exec", "space value", "Հայերեն"}},
++		{name: "openai caller danger", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"--danger", "exec", "line 1\nline 2"}, wantCaller: []string{"exec", "line 1\nline 2"}},
++		{name: "openai caller yolo", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"--yolo", "exec", "tab\tvalue"}, wantCaller: []string{"exec", "tab\tvalue"}},
++		{name: "openai caller model", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"--model", "gpt-5.6-sol", "exec", "", "inspect token"}, wantCaller: []string{"--model", "gpt-5.6-sol", "exec", "", "inspect token"}},
++		{name: "openai redundant danger", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"-d", "--danger", "--yolo", "--dangerously-bypass-approvals-and-sandbox", "exec", "all danger"}, wantCaller: []string{"exec", "all danger"}},
++		{name: "anthropic caller short danger", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"-d", "space value", "Հայերեն"}, wantCaller: []string{"space value", "Հայերեն"}},
++		{name: "anthropic caller danger", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"--danger", "line 1\nline 2"}, wantCaller: []string{"line 1\nline 2"}},
++		{name: "anthropic caller yolo", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"--yolo", "tab\tvalue"}, wantCaller: []string{"tab\tvalue"}},
++		{name: "anthropic caller model", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"--model", "claude-opus-5", "", "inspect token"}, wantCaller: []string{"--model", "claude-opus-5", "", "inspect token"}},
++		{name: "anthropic redundant danger", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"-d", "--danger", "--yolo", "--dangerously-skip-permissions", "all danger"}, wantCaller: []string{"all danger"}},
++	}
++	for _, testCase := range tests {
++		t.Run(testCase.name, func(t *testing.T) {
++			command := exec.Command(filepath.Join(project, ".local", "bin", testCase.alias), testCase.args...)
++			command.Dir = project
++			command.Env = append(os.Environ(),
++				"HOME="+home,
++				"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
++				"AGENTS_INFRA_CONFIG_DIR="+configDir,
++				"AGENTS_INFRA_SOURCE_DIR=",
++				"AGENTS_INFRA_CALLER_CWD=",
++			)
++			command.Env = append(command.Env, sharedGoCacheEnv(t)...)
++			if output, err := command.CombinedOutput(); err != nil {
++				t.Fatalf("installed %s: %v\n%s", testCase.alias, err, output)
++			}
++			data, err := os.ReadFile(filepath.Join(recordDir, testCase.provider))
++			if err != nil {
++				t.Fatal(err)
++			}
++			args := strings.Split(strings.TrimSuffix(string(data), "\x00"), "\x00")
++			count := 0
++			for _, arg := range args {
++				if arg == testCase.nativeFlag {
++					count++
++				}
++			}
++			if count != 1 {
++				t.Fatalf("provider argv danger count = %d, want 1: %#v", count, args)
++			}
++			if !orderedSubsequence(args, testCase.wantCaller) {
++				t.Fatalf("provider argv did not preserve caller non-danger bytes/order: got %#v want subsequence %#v", args, testCase.wantCaller)
++			}
++		})
++	}
++}
++
++func orderedSubsequence(got, want []string) bool {
++	next := 0
++	for _, arg := range got {
++		if next < len(want) && arg == want[next] {
++			next++
++		}
++	}
++	return next == len(want)
++}
++
+ // Production call sites: the bootstrap-installed global pi-infra alias and the
+ // setup-generated project-local pi-infra wrapper. Both must reach RunPi's
+ // managed execution-environment gate before the configured runtime executable
+diff --git a/tools/agents-infra/internal/infra/canonical_alias_posix_test.go b/tools/agents-infra/internal/infra/canonical_alias_posix_test.go
+index 759d37a..d09d90b 100644
+--- a/tools/agents-infra/internal/infra/canonical_alias_posix_test.go
++++ b/tools/agents-infra/internal/infra/canonical_alias_posix_test.go
+@@ -3,6 +3,7 @@
+ package infra
+ 
+ import (
++	"bytes"
+ 	"io"
+ 	"os"
+ 	"os/exec"
+@@ -39,6 +40,41 @@ func TestCanonicalAliasReachesSiblingTargetAndPreservesCWDArgv(t *testing.T) {
+ 	}
+ }
+ 
++func TestDirectProviderYoloAliasesDelegateOnceAndPreserveCWDArgv(t *testing.T) {
++	for _, launcher := range directProviderYoloLaunchers {
++		t.Run(launcher.name, func(t *testing.T) {
++			binDir := t.TempDir()
++			project := t.TempDir()
++			record := filepath.Join(t.TempDir(), "record")
++			layout := Layout{Mode: ModeLocal, BinDir: binDir}
++			mustWrite(t, filepath.Join(binDir, launcher.canonicalTarget), "#!/bin/sh\nprintf '%s\\0' \"$PWD\" \"$@\" > \""+record+"\"\n")
++			if err := installDirectProviderYoloLaunchers(layout, io.Discard); err != nil {
++				t.Fatalf("installDirectProviderYoloLaunchers: %v", err)
++			}
++
++			args := []string{"--print-config", "", "a b", "line 1\nline 2", "tab\tvalue", "Հայերեն", "--", "-d"}
++			cmd := exec.Command(filepath.Join(binDir, launcher.name), args...)
++			cmd.Dir = project
++			if output, err := cmd.CombinedOutput(); err != nil {
++				t.Fatalf("%s: %v\n%s", launcher.name, err, output)
++			}
++			data, err := os.ReadFile(record)
++			if err != nil {
++				t.Fatal(err)
++			}
++			fields := bytes.Split(bytes.TrimSuffix(data, []byte{0}), []byte{0})
++			got := make([]string, len(fields))
++			for i, field := range fields {
++				got[i] = string(field)
++			}
++			want := append([]string{project, "-d"}, args...)
++			if !reflect.DeepEqual(got, want) {
++				t.Fatalf("alias record = %#v, want %#v", got, want)
++			}
++		})
++	}
++}
++
+ func TestCanonicalAliasRefusesMissingAndNonRegularSibling(t *testing.T) {
+ 	for _, state := range []string{"missing", "non_regular", "non_executable"} {
+ 		t.Run(state, func(t *testing.T) {
+diff --git a/tools/agents-infra/internal/infra/canonical_target_test.go b/tools/agents-infra/internal/infra/canonical_target_test.go
+index 7b48bc7..a83eb43 100644
+--- a/tools/agents-infra/internal/infra/canonical_target_test.go
++++ b/tools/agents-infra/internal/infra/canonical_target_test.go
+@@ -207,6 +207,34 @@ func TestCanonicalHostedPlanLocksIdentityAndKeepsLegacyPolicyUnrelated(t *testin
+ 	}
+ }
+ 
++func TestDirectProviderYoloDelegationResolvesExactlyOneNativeDangerFlag(t *testing.T) {
++	home := t.TempDir()
++	project := t.TempDir()
++	writeCanonicalConfig(t, project, canonicalHostedTargetsTOML())
++	tests := []struct {
++		entrypoint string
++		callerArgs []string
++		nativeFlag string
++	}{
++		{entrypoint: "openai-infra", callerArgs: []string{"--danger", "exec", "inspect"}, nativeFlag: codexDangerouslyBypassApprovalsAndSandbox},
++		{entrypoint: "anthropic-infra", callerArgs: []string{"--yolo", "inspect"}, nativeFlag: claudeDangerouslySkipPermissions},
++	}
++	for _, test := range tests {
++		t.Run(test.entrypoint, func(t *testing.T) {
++			// The generated direct-provider alias owns the leading -d and forwards
++			// the caller suffix unchanged into the canonical production resolver.
++			args := append([]string{"-d"}, test.callerArgs...)
++			plan, err := BuildCanonicalTargetLaunchPlan(test.entrypoint, project, home, args, ChildLaunchCompositionProducer{}, fakePrimarySessionLookPath(t))
++			if err != nil {
++				t.Fatalf("BuildCanonicalTargetLaunchPlan: %v", err)
++			}
++			if got := countArg(plan.LaunchVariants.Interactive.Argv, test.nativeFlag); got != 1 {
++				t.Fatalf("native danger flag count = %d in %#v, want exactly one", got, plan.LaunchVariants.Interactive.Argv)
++			}
++		})
++	}
++}
++
+ func TestCanonicalCodexSelectorsAcceptExactAndRefuseEveryDivergentForm(t *testing.T) {
+ 	home := t.TempDir()
+ 	project := t.TempDir()
+diff --git a/tools/agents-infra/internal/infra/infra.go b/tools/agents-infra/internal/infra/infra.go
+index 68d0e42..0ad2b5c 100644
+--- a/tools/agents-infra/internal/infra/infra.go
++++ b/tools/agents-infra/internal/infra/infra.go
+@@ -1069,6 +1069,9 @@ func setupHelpers(layout Layout, out io.Writer) error {
+ 	if err := installCanonicalTargetLaunchers(layout, out); err != nil {
+ 		return err
+ 	}
++	if err := installDirectProviderYoloLaunchers(layout, out); err != nil {
++		return err
++	}
+ 	if err := setupCodexLocalLauncher(layout, out); err != nil {
+ 		return err
+ 	}
+@@ -1077,6 +1080,16 @@ func setupHelpers(layout Layout, out io.Writer) error {
+ 
+ var canonicalTargetLauncherNames = []string{"openai-infra", "anthropic-infra", "qwen-infra"}
+ 
++type directProviderYoloLauncher struct {
++	name            string
++	canonicalTarget string
++}
++
++var directProviderYoloLaunchers = []directProviderYoloLauncher{
++	{name: "openai-dange", canonicalTarget: "openai-infra"},
++	{name: "anthropic-dange", canonicalTarget: "anthropic-infra"},
++}
++
+ func installCanonicalTargetLaunchers(layout Layout, out io.Writer) error {
+ 	for _, entrypoint := range canonicalTargetLauncherNames {
+ 		path := filepath.Join(layout.BinDir, canonicalTargetWrapperName(entrypoint, runtime.GOOS))
+@@ -1122,6 +1135,45 @@ exec "$TARGET" target %s "$@"
+ `, targetName, entrypoint, entrypoint)
+ }
+ 
++func installDirectProviderYoloLaunchers(layout Layout, out io.Writer) error {
++	for _, launcher := range directProviderYoloLaunchers {
++		path := filepath.Join(layout.BinDir, canonicalTargetWrapperName(launcher.name, runtime.GOOS))
++		body := directProviderYoloWrapperBody(launcher, runtime.GOOS)
++		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
++			modeMatches := runtime.GOOS == "windows" || info.Mode().Perm() == 0o755
++			if existing, readErr := os.ReadFile(path); readErr == nil && string(existing) == body && modeMatches {
++				logf(out, "Direct provider YOLO launcher already up to date: %s", path)
++				continue
++			}
++		}
++		if err := removeManagedPath(path, out); err != nil {
++			return err
++		}
++		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
++			return fmt.Errorf("write direct provider YOLO launcher %s: %w", launcher.name, err)
++		}
++		logf(out, "Installed direct provider YOLO launcher: %s", path)
++	}
++	return nil
++}
++
++func directProviderYoloWrapperBody(launcher directProviderYoloLauncher, goos string) string {
++	targetName := canonicalTargetWrapperName(launcher.canonicalTarget, goos)
++	if strings.EqualFold(goos, "windows") {
++		return fmt.Sprintf("@echo off\r\nsetlocal\r\nset \"DIR=%%~dp0\"\r\nif not exist \"%%DIR%%%s\" (\r\n  echo %s: missing canonical provider target %%DIR%%%s 1^>^&2\r\n  exit /b 127\r\n)\r\n\"%%DIR%%%s\" -d %%*\r\nexit /b %%ERRORLEVEL%%\r\n", targetName, launcher.name, targetName, targetName)
++	}
++	return fmt.Sprintf(`#!/usr/bin/env sh
++set -eu
++DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
++TARGET="$DIR/%s"
++if [ ! -f "$TARGET" ] || [ -L "$TARGET" ] || [ ! -x "$TARGET" ]; then
++  echo "%s: missing canonical provider target $TARGET" >&2
++  exit 127
++fi
++exec "$TARGET" -d "$@"
++`, targetName, launcher.name)
++}
++
+ func installPiInfraLauncher(layout Layout, out io.Writer) error {
+ 	path := filepath.Join(layout.BinDir, piInfraWrapperName(runtime.GOOS))
+ 	body := piInfraWrapperBody(runtime.GOOS, piInfraTargetName(layout.Mode, runtime.GOOS))
+diff --git a/tools/agents-infra/internal/infra/infra_test.go b/tools/agents-infra/internal/infra/infra_test.go
+index f174b4e..e0dd1ee 100644
+--- a/tools/agents-infra/internal/infra/infra_test.go
++++ b/tools/agents-infra/internal/infra/infra_test.go
+@@ -193,6 +193,23 @@ func TestPiInfraWrapperBodyForWindowsUsesExactSiblingTarget(t *testing.T) {
+ 	}
+ }
+ 
++func TestDirectProviderYoloWrapperBodyForWindowsUsesCanonicalSiblingOnce(t *testing.T) {
++	launcher := directProviderYoloLauncher{name: "openai-dange", canonicalTarget: "openai-infra"}
++	body := directProviderYoloWrapperBody(launcher, "windows")
++	for _, want := range []string{
++		`if not exist "%DIR%openai-infra.cmd"`,
++		`"%DIR%openai-infra.cmd" -d %*`,
++		"exit /b %ERRORLEVEL%",
++	} {
++		if !strings.Contains(body, want) {
++			t.Fatalf("windows direct provider YOLO wrapper missing %q:\n%s", want, body)
++		}
++	}
++	if strings.Count(body, ` -d `) != 1 {
++		t.Fatalf("windows direct provider YOLO wrapper must add exactly one -d selection:\n%s", body)
++	}
++}
++
+ func TestPiInfraUnixWrapperPreservesCallerCWDAndEveryArgument(t *testing.T) {
+ 	if runtime.GOOS == "windows" {
+ 		t.Skip("POSIX shell launcher test")
+@@ -282,6 +299,8 @@ func TestSetupLocalCreatesInstalledRuntime(t *testing.T) {
+ 	assertFileContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), `"$TARGET" attachments "$@"`)
+ 	assertFileNotContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), "python")
+ 	assertRegularFile(t, filepath.Join(project, ".local", "bin", piInfraWrapperName(runtime.GOOS)))
++	assertRegularFile(t, filepath.Join(project, ".local", "bin", canonicalTargetWrapperName("openai-dange", runtime.GOOS)))
++	assertRegularFile(t, filepath.Join(project, ".local", "bin", canonicalTargetWrapperName("anthropic-dange", runtime.GOOS)))
+ 	assertFileContains(t, filepath.Join(project, ".local", "bin", piInfraWrapperName(runtime.GOOS)), "agents-infra")
+ 	assertFileContains(t, filepath.Join(project, ".local", "bin", piInfraWrapperName(runtime.GOOS)), " pi ")
+ 
+@@ -686,6 +705,8 @@ func TestSetupGlobalDoesNotInstallCLIWrapper(t *testing.T) {
+ 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "openai-infra"))
+ 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "anthropic-infra"))
+ 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "qwen-infra"))
++	assertRegularFile(t, filepath.Join(home, ".local", "bin", "openai-dange"))
++	assertRegularFile(t, filepath.Join(home, ".local", "bin", "anthropic-dange"))
+ 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture)
+ 	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), modelAvailabilityPolicyFixture)
+ 	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture)
+diff --git a/tools/agents-infra/internal/infra/runtime_receipt.go b/tools/agents-infra/internal/infra/runtime_receipt.go
+index 5ee5c23..c173069 100644
+--- a/tools/agents-infra/internal/infra/runtime_receipt.go
++++ b/tools/agents-infra/internal/infra/runtime_receipt.go
+@@ -177,9 +177,44 @@ func runtimeArtifactFailures(layout Layout) []string {
+ 	failures = append(failures, managedSkillLinkFailures(layout)...)
+ 	failures = append(failures, piInfraLauncherFailures(layout)...)
+ 	failures = append(failures, canonicalTargetLauncherFailures(layout)...)
++	failures = append(failures, directProviderYoloLauncherFailures(layout)...)
+ 	return append(failures, launcherBackendFailures(layout)...)
+ }
+ 
++func directProviderYoloLauncherFailures(layout Layout) []string {
++	goos := runtime.GOOS
++	var failures []string
++	for _, launcher := range directProviderYoloLaunchers {
++		aliasPath := filepath.Join(layout.BinDir, canonicalTargetWrapperName(launcher.name, goos))
++		wantBody := directProviderYoloWrapperBody(launcher, goos)
++		info, err := os.Lstat(aliasPath)
++		switch {
++		case os.IsNotExist(err):
++			failures = append(failures, fmt.Sprintf("no generated %s launcher at %s", launcher.name, aliasPath))
++			continue
++		case err != nil:
++			failures = append(failures, fmt.Sprintf("cannot inspect %s launcher %s: %v", launcher.name, aliasPath, err))
++			continue
++		case !info.Mode().IsRegular():
++			failures = append(failures, fmt.Sprintf("%s launcher %s is not a regular file", launcher.name, aliasPath))
++			continue
++		}
++		body, err := os.ReadFile(aliasPath)
++		switch {
++		case err != nil:
++			failures = append(failures, fmt.Sprintf("unreadable %s launcher %s: %v", launcher.name, aliasPath, err))
++			continue
++		case string(body) != wantBody:
++			failures = append(failures, fmt.Sprintf("%s launcher %s has drifted from direct provider YOLO dispatch", launcher.name, aliasPath))
++			continue
++		}
++		if goos != "windows" && info.Mode().Perm() != 0o755 {
++			failures = append(failures, fmt.Sprintf("%s launcher %s mode is %04o, want 0755", launcher.name, aliasPath, info.Mode().Perm()))
++		}
++	}
++	return failures
++}
++
+ func canonicalTargetLauncherFailures(layout Layout) []string {
+ 	goos := runtime.GOOS
+ 	targetName := piInfraTargetName(layout.Mode, goos)
+diff --git a/tools/agents-infra/internal/infra/runtime_receipt_test.go b/tools/agents-infra/internal/infra/runtime_receipt_test.go
+index 234d2ea..ba963f8 100644
+--- a/tools/agents-infra/internal/infra/runtime_receipt_test.go
++++ b/tools/agents-infra/internal/infra/runtime_receipt_test.go
+@@ -110,6 +110,66 @@ func TestSetupRepairsAndVerifyNarrowsEveryCanonicalTargetAlias(t *testing.T) {
+ 	}
+ }
+ 
++func TestSetupRepairsAndVerifyRejectsDirectProviderYoloAliasDrift(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("POSIX alias file-kind and executable-mode contract")
++	}
++	source := seedSourceRepo(t)
++	project := t.TempDir()
++	layout, err := LocalLayout(source, project)
++	if err != nil {
++		t.Fatalf("LocalLayout: %v", err)
++	}
++	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
++		t.Fatalf("Setup: %v", err)
++	}
++
++	mutations := []struct {
++		name   string
++		alias  string
++		mutate func(t *testing.T, path string)
++	}{
++		{name: "missing", alias: "openai-dange", mutate: func(t *testing.T, path string) {
++			if err := os.Remove(path); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{name: "drifted", alias: "anthropic-dange", mutate: func(t *testing.T, path string) {
++			mustWrite(t, path, "#!/bin/sh\nexit 0\n")
++		}},
++		{name: "symlinked", alias: "openai-dange", mutate: func(t *testing.T, path string) {
++			external := filepath.Join(t.TempDir(), "alias")
++			mustWrite(t, external, string(mustReadRuntimeFile(t, path)))
++			if err := os.Remove(path); err != nil {
++				t.Fatal(err)
++			}
++			if err := os.Symlink(external, path); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{name: "non_executable", alias: "anthropic-dange", mutate: func(t *testing.T, path string) {
++			if err := os.Chmod(path, 0o644); err != nil {
++				t.Fatal(err)
++			}
++		}},
++	}
++	for _, mutation := range mutations {
++		t.Run(mutation.name, func(t *testing.T) {
++			path := filepath.Join(layout.BinDir, canonicalTargetWrapperName(mutation.alias, runtime.GOOS))
++			mutation.mutate(t, path)
++			if err := VerifyInstalledRuntime(layout); err == nil || !strings.Contains(err.Error(), mutation.alias) {
++				t.Fatalf("VerifyInstalledRuntime error = %v, want %s-specific refusal", err, mutation.alias)
++			}
++			if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
++				t.Fatalf("Setup repair: %v", err)
++			}
++			if err := VerifyInstalledRuntime(layout); err != nil {
++				t.Fatalf("VerifyInstalledRuntime after %s repair: %v", mutation.alias, err)
++			}
++		})
++	}
++}
++
+ func TestCanonicalConfigurationFailurePreventsSetupAndVerifyMutation(t *testing.T) {
+ 	source := seedSourceRepo(t)
+ 	project := t.TempDir()
+diff --git a/tools/agents-infra/main.go b/tools/agents-infra/main.go
+index 5b45c09..0360dda 100644
+--- a/tools/agents-infra/main.go
++++ b/tools/agents-infra/main.go
+@@ -856,9 +856,19 @@ func runTarget(args []string) error {
+ 	}
+ 	fs := flag.NewFlagSet("target "+entrypoint, flag.ContinueOnError)
+ 	fs.SetOutput(os.Stderr)
+-	printConfig := fs.Bool("print-config", false, "resolve and print the canonical target without launching")
+-	if err := fs.Parse(args[1:]); err != nil {
+-		return err
++	printConfigFlag := fs.Bool("print-config", false, "resolve and print the canonical target without launching")
++	printConfig := false
++	providerArgs := []string(nil)
++	if len(args) > 1 && args[1] == "-d" {
++		// Direct provider YOLO aliases own this leading -d. Their remaining
++		// tokens are provider input except for this wrapper's reserved syntax.
++		printConfig, providerArgs = parseDirectProviderYoloTargetArgs(args[1:])
++	} else {
++		if err := fs.Parse(args[1:]); err != nil {
++			return err
++		}
++		printConfig = *printConfigFlag
++		providerArgs = fs.Args()
+ 	}
+ 	startDir := os.Getenv(callerCWDEnv)
+ 	if startDir == "" {
+@@ -869,11 +879,11 @@ func runTarget(args []string) error {
+ 		}
+ 	}
+ 	producer := infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit}
+-	plan, err := infra.BuildCanonicalTargetLaunchPlan(entrypoint, startDir, "", fs.Args(), producer, nil)
++	plan, err := infra.BuildCanonicalTargetLaunchPlan(entrypoint, startDir, "", providerArgs, producer, nil)
+ 	if err != nil {
+ 		return err
+ 	}
+-	if *printConfig {
++	if printConfig {
+ 		fmt.Fprint(os.Stdout, infra.RenderCanonicalTargetLaunchPlan(plan))
+ 		return nil
+ 	}
+@@ -898,6 +908,32 @@ func runTarget(args []string) error {
+ 	return cmd.Run()
+ }
+ 
++// parseDirectProviderYoloTargetArgs reserves only --print-config for the
++// target wrapper after the alias-owned leading -d. Every other token before
++// the first -- is provider input, so the new direct aliases accept native
++// options without changing the canonical aliases' ordinary parsing contract.
++// The first -- remains the wrapper boundary and is consumed exactly as it was
++// by flag.FlagSet; later delimiters belong to the provider and are preserved.
++func parseDirectProviderYoloTargetArgs(args []string) (bool, []string) {
++	printConfig := false
++	providerArgs := make([]string, 0, len(args))
++	wrapperBoundarySeen := false
++	for _, arg := range args {
++		if !wrapperBoundarySeen {
++			switch arg {
++			case "--print-config":
++				printConfig = true
++				continue
++			case "--":
++				wrapperBoundarySeen = true
++				continue
++			}
++		}
++		providerArgs = append(providerArgs, arg)
++	}
++	return printConfig, providerArgs
++}
++
+ func runCompose(args []string) error {
+ 	fs := flag.NewFlagSet("compose", flag.ContinueOnError)
+ 	fs.SetOutput(os.Stderr)

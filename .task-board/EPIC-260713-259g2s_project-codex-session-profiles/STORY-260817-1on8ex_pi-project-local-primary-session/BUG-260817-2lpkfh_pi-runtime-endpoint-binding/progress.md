@@ -1,5 +1,5 @@
 ## Status
-to-review
+done
 
 ## Review
 required
@@ -28,10 +28,10 @@ estimated(fibonacci(5))
 - [x] Relevant build/validation commands run after changes and build not broken
 - [x] New outcome artifact attached on the board with a task-scoped name when the work produces notes, logs, screenshots, or other deliverables
 - [x] Important findings, decisions, anomalies, or regressions recorded in logbook when relevant
-- [ ] Implementation matches AC
-- [ ] Solution fits project architecture
-- [ ] Tests green
-- [ ] Gate, refusal, validation, authorization, and attestation behavior attacked, not read — positive-path-only evidence is not accepted
+- [x] Implementation matches AC
+- [x] Solution fits project architecture
+- [x] Tests green
+- [x] Gate, refusal, validation, authorization, and attestation behavior attacked, not read — positive-path-only evidence is not accepted
 - [ ] If review does not accept the work — verdict evidence added and status routed by the explicit verdict branches
 
 ## Notes
@@ -65,6 +65,14 @@ Non-blocking follow-ups for the story owner (not defects of this bug): (1) mainT
 Reviewer archetype supplies no commit_ack. Acceptance evidence is handed to the commit-owning mover, which commits its scope and then makes the final done transition with commit_ack=scope_committed.
 agent completed: [reviewer] reviewer (claude) (exit=0)
 spawn run completed: claude (run=RUN-260817-e5ed53, pid=61427, exit=0)
+spawn selection rationale tuple: {"role":"reviewer","pair":"gpt-5.6-sol/high","text":"Next parked to-review element in this story now that its lane is free; draining the review backlog is a goal clause."}
+spawn selection rationale for gpt-5.6-sol/high: Next parked to-review element in this story now that its lane is free; draining the review backlog is a goal clause.
+spawn agent resolution: Agent selection: codex via explicit_override (preferred_agentic_system: exclusive[codex], config: spawn.preferred_agentic_system)
+spawn launch composition: empty; contract=agents-infra.child-launch-composition; provider=codex; schema=1; producer=v1.6.1-92-g3295c7d; diagnostic=launch_composition_empty; no project MCP servers enabled
+spawn queued: [reviewer] reviewer (codex) (run=RUN-260830-ea6684, max_parallel=20)
+spawn run started: [reviewer] reviewer (codex) (run=RUN-260830-ea6684)
+agent completed: [reviewer] reviewer (codex) (exit=0)
+spawn run completed: codex (run=RUN-260830-ea6684, pid=62833, exit=0)
 
 ## Precondition Resources
 - [local-models-pi-endpoint-review.md](file://BUG-260817-2lpkfh/local-models-pi-endpoint-review.md) — Downstream reviewer evidence demonstrating wildcard-bind and port-drift production-compose bypasses.
@@ -74,12 +82,14 @@ spawn run completed: claude (run=RUN-260817-e5ed53, pid=61427, exit=0)
 - [BUG-260817-2lpkfh_results.md](file://BUG-260817-2lpkfh/BUG-260817-2lpkfh_results.md) — Endpoint-binding fix, production negatives, narrowing mutant, setup/install, and full validation evidence
 - [BUG-260817-2lpkfh_spawn-log_-reviewer--reviewer--claude-_RUN-260817-e5ed53.log](file://BUG-260817-2lpkfh/BUG-260817-2lpkfh_spawn-log_-reviewer--reviewer--claude-_RUN-260817-e5ed53.log) — System spawn log captured by task-board
 - [BUG-260817-2lpkfh_reviewer-verdict.md](file://BUG-260817-2lpkfh/BUG-260817-2lpkfh_reviewer-verdict.md) — Reviewer verdict: accepted. Gate attacked through two production entries (10 divergence forms), env-precedence bypass empirically refuted, three narrowing mutants proven to bite, full validation rerun.
+- [BUG-260817-2lpkfh_spawn-log_-reviewer--reviewer--codex-_RUN-260830-ea6684.log](file://BUG-260817-2lpkfh/BUG-260817-2lpkfh_spawn-log_-reviewer--reviewer--codex-_RUN-260830-ea6684.log) — System spawn log captured by task-board
+- [BUG-260817-2lpkfh_reviewer-verdict_RUN-260830-ea6684.md](file://BUG-260817-2lpkfh/BUG-260817-2lpkfh_reviewer-verdict_RUN-260830-ea6684.md) — Independent accepted reviewer verdict with production negatives, narrowing mutant, full validation, and setup anomaly recovery
 
 ## Created
 2026-08-17T17:15:38Z
 
 ## Last Update
-2026-08-17T18:33:38Z
+2026-08-30T02:38:09Z
 
 ## Assigned To
-[reviewer] reviewer (claude)
+[reviewer] reviewer (codex)

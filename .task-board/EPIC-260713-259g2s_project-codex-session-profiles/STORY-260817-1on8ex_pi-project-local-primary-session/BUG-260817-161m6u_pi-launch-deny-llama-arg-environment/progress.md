@@ -1,5 +1,5 @@
 ## Status
-to-review
+done
 
 ## Review
 required
@@ -70,6 +70,14 @@ spawn run started: [reviewer] reviewer (claude) (run=RUN-260817-92fe50)
 Cycle-2 reviewer verdict: ACCEPTED. Both cycle-1 blockers closed and independently re-verified. (1) Installed runtime: ./setup.sh rebuilt ~/.local/bin/agents-infra (SHA-256 df62cd..f42c3 -> 3cd24e..a0d, mtime 23:12); behavioral proof driving the installed pi-infra shim against a disposable managed-profile project with isolated HOME and env -i: clean control walks the full chain and creates Caches/agents-infra/pi/<state-key>/... then spawns the runtime child, while LLAMA_ARG_MODEL, LLAMA_ARG_CTX_SIZE and lowercase llama_arg_model are refused with the quoted name only, zero SECRET-value leakage in stdout/stderr, and no managed state at all. DYLD_* cannot be probed through the shim (macOS SIP strips it when exec-ing /usr/bin/env sh) - that gate stays source-level. ~/.agents is byte-identical to the repo for the three changed files, so the local-install lane also carries the gate. Artifact wording corrected: setup global refreshes ~/.agents only; verify global does not establish executable freshness. (2) Docs contract now gated at pi_operator_docs_test.go:28 - delete, narrow (drop LLAMA_ARG_* from the list), and ordering-weakening (before->after) README mutants all redden TestPiOperatorContractDocumentsCycle10Boundary; restore green. Source gate re-attacked on the cycle-2 tree with the Pi asset present so production negatives RUN not SKIP: deleting LLAMA_ARG_ and narrowing to LLAMA_ARG_MODEL both redden validator and production RunPi entry. Independent go test ./... -count=1 exit 0 (main 68.4s / attachments 2.9s / infra 107.4s), go vet clean, gofmt empty. Non-blocking carried forward: production Pi negatives still skip without the gitignored asset (story-wide convention); non-LLAMA_ARG_ llama.cpp env (LLAMA_CACHE/HF_TOKEN/HF_ENDPOINT) deserves a separate bug. Reviewer supplies no commit_ack: acceptance evidence is BUG-260817-161m6u_review-verdict-cycle2.md and BUG-260817-161m6u_review-evidence-cycle2.tgz; the commit-owning mover commits the scope and makes the final done transition with commit_ack=scope_committed.
 agent completed: [reviewer] reviewer (claude) (exit=0)
 spawn run completed: claude (run=RUN-260817-92fe50, pid=36032, exit=0)
+spawn selection rationale tuple: {"role":"reviewer","pair":"gpt-5.6-sol/high","text":"Routing the oldest parked to-review element in this story to a verdict; the review backlog is a goal clause and this story's worktree lease is free."}
+spawn selection rationale for gpt-5.6-sol/high: Routing the oldest parked to-review element in this story to a verdict; the review backlog is a goal clause and this story's worktree lease is free.
+spawn agent resolution: Agent selection: codex via explicit_override (preferred_agentic_system: exclusive[codex], config: spawn.preferred_agentic_system)
+spawn launch composition: empty; contract=agents-infra.child-launch-composition; provider=codex; schema=1; producer=v1.6.1-44-gd91d6fc; diagnostic=launch_composition_empty; no project MCP servers enabled
+spawn queued: [reviewer] reviewer (codex) (run=RUN-260829-eaf428, max_parallel=20)
+spawn run started: [reviewer] reviewer (codex) (run=RUN-260829-eaf428)
+agent completed: [reviewer] reviewer (codex) (exit=0)
+spawn run completed: codex (run=RUN-260829-eaf428, pid=49221, exit=0)
 
 ## Precondition Resources
 - [opus-review-cycle1.md](file://BUG-260817-161m6u/opus-review-cycle1.md) — Opus 5 cycle-1 blockers: rebuild bootstrap-owned installed binary and gate README environment contract in docs tests.
@@ -86,12 +94,14 @@ spawn run completed: claude (run=RUN-260817-92fe50, pid=36032, exit=0)
 - [BUG-260817-161m6u_spawn-log_-reviewer--reviewer--claude-_RUN-260817-92fe50.log](file://BUG-260817-161m6u/BUG-260817-161m6u_spawn-log_-reviewer--reviewer--claude-_RUN-260817-92fe50.log) — System spawn log captured by task-board
 - [BUG-260817-161m6u_review-verdict-cycle2.md](file://BUG-260817-161m6u/BUG-260817-161m6u_review-verdict-cycle2.md) — Cycle-2 reviewer verdict: ACCEPTED, with installed-runtime behavioral proof and docs/code mutants
 - [BUG-260817-161m6u_review-evidence-cycle2.tgz](file://BUG-260817-161m6u/BUG-260817-161m6u_review-evidence-cycle2.tgz) — Cycle-2 reviewer probe scripts and captured installed pi-infra stderr
+- [BUG-260817-161m6u_spawn-log_-reviewer--reviewer--codex-_RUN-260829-eaf428.log](file://BUG-260817-161m6u/BUG-260817-161m6u_spawn-log_-reviewer--reviewer--codex-_RUN-260829-eaf428.log) — System spawn log captured by task-board
+- [BUG-260817-161m6u_review-verdict-cycle3.md](file://BUG-260817-161m6u/BUG-260817-161m6u_review-verdict-cycle3.md) — Cycle-3 reviewer verdict: accepted; independent code/docs narrowing attacks and installed launcher behavioral proof
 
 ## Created
 2026-08-17T19:47:08Z
 
 ## Last Update
-2026-08-17T20:25:19Z
+2026-08-29T23:13:02Z
 
 ## Assigned To
-[reviewer] reviewer (claude)
+[reviewer] reviewer (codex)

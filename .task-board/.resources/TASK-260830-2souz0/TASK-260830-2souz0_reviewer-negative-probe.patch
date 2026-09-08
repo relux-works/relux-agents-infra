@@ -1,0 +1,126 @@
+diff --git a/tools/agents-infra/internal/infra/pi_lifecycle_reviewer_probe_test.go b/tools/agents-infra/internal/infra/pi_lifecycle_reviewer_probe_test.go
+new file mode 100644
+index 0000000..ba0545a
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_lifecycle_reviewer_probe_test.go
+@@ -0,0 +1,91 @@
++//go:build !windows
++
++package infra
++
++import (
++	"context"
++	"errors"
++	"os"
++	"path/filepath"
++	"syscall"
++	"testing"
++
++	"golang.org/x/sys/unix"
++)
++
++// Production call site: openPiSessionLog -> recoverPiLifecycle ->
++// recoverPiLifecycleDelete. The candidate validates the child, validates only
++// the tombstone directory again, then unlinks the child by name. A substitution
++// in that gap must be detected and preserved, not removed before returning
++// unknown.
++func TestReviewerDeleteRecoveryPreservesChildSubstitutedImmediatelyBeforeUnlink(t *testing.T) {
++	paths := newPiLifecycleTestState(t)
++	policy := testPiLifecyclePolicy()
++	log, err := openPiSessionLog(context.Background(), paths, policy)
++	if err != nil {
++		t.Fatal(err)
++	}
++	entry, id := log.entry, log.record.EntryID
++	if err := log.close(context.Background()); err != nil {
++		t.Fatal(err)
++	}
++	entries := filepath.Join(paths.LifecycleLogsRoot, "entries")
++	tombstone := ".deleting-" + id
++	tombstonePath := filepath.Join(entries, tombstone)
++	if err := os.Rename(filepath.Join(entries, entry), tombstonePath); err != nil {
++		t.Fatal(err)
++	}
++	rootFD, err := unix.Open(paths.LifecycleLogsRoot, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	even := readPiLifecycleGenerationForTest(t, rootFD)
++	if _, err := beginPiLifecycleOperation(rootFD, even, "delete", entry, tombstone, 0, 0, 0); err != nil {
++		t.Fatal(err)
++	}
++	unix.Close(rootFD)
++
++	replacement := []byte("reviewer-substitution\n")
++	substituted := false
++	piLifecycleReviewerBeforeDeleteUnlink = func(entryFD int, name string) error {
++		if name != "log.jsonl" || substituted {
++			return nil
++		}
++		substituted = true
++		if err := unix.Renameat(entryFD, name, entryFD, "log.jsonl.original"); err != nil {
++			return err
++		}
++		fd, err := unix.Openat(entryFD, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
++		if err != nil {
++			return err
++		}
++		if _, err := unix.Write(fd, replacement); err != nil {
++			unix.Close(fd)
++			return err
++		}
++		return unix.Close(fd)
++	}
++	t.Cleanup(func() { piLifecycleReviewerBeforeDeleteUnlink = nil })
++
++	next, recoveryErr := openPiSessionLog(context.Background(), paths, policy)
++	if next != nil {
++		defer next.close(context.Background())
++	}
++	if !substituted {
++		t.Fatal("reviewer scheduling hook did not reach the production unlink gap")
++	}
++	if !piErrorIs(recoveryErr, "lifecycle_log_evidence_unknown") {
++		t.Errorf("substitution did not return stable typed unknown: next=%v err=%v", next != nil, recoveryErr)
++	}
++	if _, err := os.Lstat(filepath.Join(tombstonePath, "log.jsonl.original")); err != nil {
++		t.Fatalf("original child was not preserved: %v", err)
++	}
++	data, err := os.ReadFile(filepath.Join(tombstonePath, "log.jsonl"))
++	if errors.Is(err, syscall.ENOENT) {
++		t.Error("substituted child was unlinked after its identity check")
++		return
++	}
++	if err != nil || string(data) != string(replacement) {
++		t.Fatalf("substituted evidence changed: data=%q err=%v", data, err)
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/pi_session_log.go b/tools/agents-infra/internal/infra/pi_session_log.go
+index 7d0e0eb..62545ea 100644
+--- a/tools/agents-infra/internal/infra/pi_session_log.go
++++ b/tools/agents-infra/internal/infra/pi_session_log.go
+@@ -1264,6 +1264,11 @@ func openAndValidatePiLifecycleDeleteChild(entryFD int, name string, expected *p
+ 	return fd, true, nil
+ }
+ 
++// Reviewer-only scheduling hook in the isolated probe tree. It does not alter
++// the candidate worktree and exists solely to place a substitution in the real
++// gap between the directory revalidation and the name-based unlink.
++var piLifecycleReviewerBeforeDeleteUnlink func(entryFD int, name string) error
++
+ func recoverPiLifecycleDelete(rootFD int, budget *piLifecycleBudget, generation piLifecycleGeneration) error {
+ 	entriesFD, _, err := openPiLifecycleDirectoryAt(rootFD, "entries")
+ 	if err != nil {
+@@ -1305,6 +1310,12 @@ func recoverPiLifecycleDelete(rootFD int, budget *piLifecycleBudget, generation
+ 			unix.Close(childFD)
+ 			return piError("lifecycle_log_evidence_unknown", err)
+ 		}
++		if piLifecycleReviewerBeforeDeleteUnlink != nil {
++			if err := piLifecycleReviewerBeforeDeleteUnlink(entryFD, child.name); err != nil {
++				unix.Close(childFD)
++				return piError("lifecycle_log_evidence_unknown", err)
++			}
++		}
+ 		if err := budget.mutate(1); err != nil {
+ 			unix.Close(childFD)
+ 			return err

@@ -1,0 +1,361 @@
+diff --git a/.instructions/INSTRUCTIONS_WORKFLOW.md b/.instructions/INSTRUCTIONS_WORKFLOW.md
+index 16a34cb..8998bd5 100644
+--- a/.instructions/INSTRUCTIONS_WORKFLOW.md
++++ b/.instructions/INSTRUCTIONS_WORKFLOW.md
+@@ -113,6 +113,14 @@ git switch -c <task-branch>
+   authorized repository-changing task. It does not broaden the task's product,
+   data, deployment, or external-system scope.
+ 
++### External-CI local mirror fallback
++
++* Use a local mirror only when hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair. Establish the cause from hosted provider evidence; an absent, failed, partial, malformed, or inconclusive status read is not proof of an external failure and does not authorize the fallback.
++* Reproduce every affected hosted job from an exact, clean checkout of the PR-head commit. Run the matching commands with the same toolchain versions, environment variables and non-secret configuration, dependent services, and target platform, architecture, device, or runtime. When an exact match is objectively unavailable, document the difference and why the chosen substitute is equivalent for the behavior under test; otherwise report the job as unverified.
++* Preserve auditable evidence for each mirrored job: PR-head SHA, hosted job name, external failure cause, local platform and target, tool versions, environment assumptions, services, exact commands, and every exit code. Redact secrets without omitting the fact that the corresponding configuration was present.
++* Repository-caused code, test, build, configuration, or integration failures remain blocking whether they appear in hosted CI or the local mirror. A passing mirror never overrides a repository failure and never converts an unknown hosted result into success.
++* Never forge, synthesize, edit, or otherwise misrepresent a hosted check or commit status. Local evidence supplements the unavailable hosted execution; it does not satisfy a required hosted status, authorize self-review, or bypass remote review, merge queues, or branch protection. The hosting platform's real review record and protection rules remain authoritative, and a required hosted check keeps the merge blocked until it reports legitimately or an authorized repository owner changes the rule.
++
+ ## Worktrees
+ 
+ * When you need to work on multiple revisions, parallel fixes, or isolated experiments in the same repo, prefer **`git worktree`** over juggling branches in one checkout.
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index fff878e..9a405b9 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,44 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-30
++
++### 0932 — Exact External-CI Block Rejects Additive Permissions
++- REGRESSION: Revision 1 asserted the complete exclusive trigger only by presence, so a second permission for repairable or merely inconvenient CI survived the production `Setup` parity test.
++- FIX: `tools/agents-infra/internal/infra/infra_test.go` now extracts the complete External-CI section and requires byte equality with the accepted revision-4 block across installed Agents, Claude, and Codex surfaces.
++- EVIDENCE: Production `Setup` parity exits 1 for the reviewer additive permission, a distinct partial-or-inconclusive-status exception, and the preserved replacement mutant; the restored four-test focused gate exits 0.
++
++### 0446 — Readiness Timing Flake Recurred Between Full Serial Runs
++- ANOMALY: The first serialized uncached full suite exited 0; after adding only this task's LOGBOOK outcome entry, the second full serial run exited 1 in `TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry/times_out_while_runtime_remains_alive` because `readiness-count` was not created.
++- EVIDENCE: The exact failing production-entry subtest immediately passed 5/5 uncached; the red broad run remains preserved and is not replaced by the isolated reproduction.
++- STATUS: No product or test source changed in response; a fresh complete serial suite is still required for handoff.
++
++### 0440 — Current-Trunk External-CI Replay Passes Full Parity
++- MILESTONE: Revision-4 policy semantics and the broadened-trigger repair are replayed on exact `origin/main` `3295c7da7151de128f176cf7560a57d54c8f6c0d` across the four declared paths.
++- EVIDENCE: Restored focused Setup regressions exit 0; broadened-trigger, Claude include-removal, and Codex include-removal live mutants each exit 1; serialized uncached `go test -p 1 ./... -count=1`, `go vet ./...`, `go build ./...`, diff integrity, canonical skip-LLDB setup, `verify global`, and installed parity exit 0.
++- STATUS: `AGENTS_INFRA_SKIP_LLDB_MCP=1` validates policy installation only; default Homebrew LLVM 23 LLDB helper compatibility remains the separately owned bug recorded below.
++
++### 0429 — External-CI Trigger Bound Rejects Broadened Repairable Cases
++- REGRESSION: The revision-4 Setup parity test accepted a policy broadened to repairable or merely inconvenient CI disruption because it asserted only the retained interior hosted-external-cause phrase.
++- FIX: `tools/agents-infra/internal/infra/infra_test.go` now asserts the complete exclusive trigger and names a production `Setup` regression that publishes the broadened mutant to Agents, Claude, and Codex surfaces and requires semantic validation to reject it.
++- EVIDENCE: The broadened mutant retains the former interior phrase but omits `Use a local mirror only when`; the restored focused test and named negative regression cover the exact source-to-installed chain.
++
++### 0403 — Installed Bytes Do Not Prove Claude Reachability
++- REGRESSION: The initial external-CI parity test stayed green when the workflow include was removed from `.instructions/INSTRUCTIONS.md`; copied workflow bytes existed, but Claude no longer had a production include path to them.
++- DECISION: Global instruction parity tests must drive `Setup` and assert the complete Claude chain: generated `.claude/CLAUDE.md` entrypoint, managed `instructions` symlink, source-equal installed `INSTRUCTIONS.md`, and its exact workflow include.
++- EVIDENCE: Removing only the workflow include now makes `TestSetupGlobalPublishesExternalCILocalMirrorPolicyToClaudeAndCodex` fail at the installed Claude index assertion; restoring it makes the focused test pass.
++
++### 0312 — LLVM 23 Removed The Expected LLDB MCP Helper
++- ANOMALY: `./setup.sh` exited 1 after Homebrew auto-upgraded `llvm` 22 to 23; `/opt/homebrew/opt/llvm/bin/lldb-mcp` no longer existed because Homebrew now ships LLD and LLDB separately.
++- DECISION: Keep the external-CI policy task scoped; rerun the canonical bootstrap with its documented `AGENTS_INFRA_SKIP_LLDB_MCP=1` switch, then verify global runtime parity independently.
++- STATUS: The failed setup log remains task evidence; default LLDB MCP bootstrap compatibility with LLVM 23 needs separate source-owned follow-up.
++
++### 0201 — External-CI Mirror Is Evidence, Not Status
++- DECISION: `.instructions/INSTRUCTIONS_WORKFLOW.md` permits local mirroring only for a verified external hosted-CI execution failure the agent cannot repair; unknown or malformed status evidence does not qualify.
++- SCOPE: Every affected job runs from the exact clean PR head with matching commands, toolchain, environment variables, services, and target or a documented equivalent; evidence records SHA, job, platform, tools, commands, and exits.
++- STATUS: Repository-caused failures, legitimate hosted status, remote review, merge queues, and branch protection remain authoritative and blocking.
++- OPERATIONAL: Runtime parity must be refreshed through the repository `./setup.sh` bootstrap so the current source builds and installs the current CLI before global setup. Calling an older installed CLI first can validate its older layout contract while leaving new instruction paths absent.
++
+ ## 2026-08-29
+ 
+ ### 2318 — Status Publication Revalidates Its Resource Decision
+diff --git a/README.md b/README.md
+index 1bcc496..e377659 100644
+--- a/README.md
++++ b/README.md
+@@ -1516,6 +1516,20 @@ Task-board child spawn ceilings belong to the separate
+ Agents-infra neither reads nor validates that `task-board.config.json` policy;
+ it owns only this primary-session TOML.
+ 
++### External-CI local mirror fallback
++
++The installed workflow permits a local CI mirror only after hosted CI is proven
++unable to execute repository steps for a verified external cause the agent cannot
++repair. Every affected job must run from an exact, clean PR-head checkout with
++matching commands, toolchain, environment variables, services, and target, or
++a documented equivalent. Evidence names the SHA, hosted job, platform, tools,
++commands, and exit codes.
++
++The mirror is evidence, not a replacement hosted status. Repository-caused
++failures remain blocking; agents must not forge checks or bypass remote review,
++merge queues, or branch protection. The hosting platform's review record and
++protection rules remain authoritative.
++
+ ### Parent primary-goal alignment
+ 
+ The installed workflow instructions also tell an eligible primary parent to
+diff --git a/tools/agents-infra/internal/infra/infra_test.go b/tools/agents-infra/internal/infra/infra_test.go
+index fc279e2..3924c82 100644
+--- a/tools/agents-infra/internal/infra/infra_test.go
++++ b/tools/agents-infra/internal/infra/infra_test.go
+@@ -2,6 +2,7 @@ package infra
+ 
+ import (
+ 	"bytes"
++	"fmt"
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
+@@ -14,12 +15,23 @@ import (
+ )
+ 
+ const (
+-	modelAvailabilityPolicyFixture = "retry the preferred model before choosing an autonomous fallback"
+-	forcedFitPolicyFixture         = "do not fake an impossible platform model with flags, stubs, or mocks"
+-	imageIntakeWorkflowFixture     = "agents-attachments stage-images"
+-	dirtyCheckoutPolicyFixture     = "validate in a task-scoped worktree before integrating a reviewed patch"
++	modelAvailabilityPolicyFixture        = "retry the preferred model before choosing an autonomous fallback"
++	forcedFitPolicyFixture                = "do not fake an impossible platform model with flags, stubs, or mocks"
++	imageIntakeWorkflowFixture            = "agents-attachments stage-images"
++	dirtyCheckoutPolicyFixture            = "validate in a task-scoped worktree before integrating a reviewed patch"
++	externalCILocalMirrorExclusiveTrigger = "Use a local mirror only when hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair."
++	externalCILocalMirrorPolicyHeading    = "### External-CI local mirror fallback"
++	externalCIWorkflowClaudeInclude       = "@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md"
+ )
+ 
++const externalCILocalMirrorPolicyBlock = `### External-CI local mirror fallback
++
++* Use a local mirror only when hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair. Establish the cause from hosted provider evidence; an absent, failed, partial, malformed, or inconclusive status read is not proof of an external failure and does not authorize the fallback.
++* Reproduce every affected hosted job from an exact, clean checkout of the PR-head commit. Run the matching commands with the same toolchain versions, environment variables and non-secret configuration, dependent services, and target platform, architecture, device, or runtime. When an exact match is objectively unavailable, document the difference and why the chosen substitute is equivalent for the behavior under test; otherwise report the job as unverified.
++* Preserve auditable evidence for each mirrored job: PR-head SHA, hosted job name, external failure cause, local platform and target, tool versions, environment assumptions, services, exact commands, and every exit code. Redact secrets without omitting the fact that the corresponding configuration was present.
++* Repository-caused code, test, build, configuration, or integration failures remain blocking whether they appear in hosted CI or the local mirror. A passing mirror never overrides a repository failure and never converts an unknown hosted result into success.
++* Never forge, synthesize, edit, or otherwise misrepresent a hosted check or commit status. Local evidence supplements the unavailable hosted execution; it does not satisfy a required hosted status, authorize self-review, or bypass remote review, merge queues, or branch protection. The hosting platform's real review record and protection rules remain authoritative, and a required hosted check keeps the merge blocked until it reports legitimately or an authorized repository owner changes the rule.`
++
+ func TestLocalLayout(t *testing.T) {
+ 	layout, err := LocalLayout("/src/repo", "/tmp/project")
+ 	if err != nil {
+@@ -681,6 +693,218 @@ func TestSetupGlobalDoesNotInstallCLIWrapper(t *testing.T) {
+ 	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), dirtyCheckoutPolicyFixture)
+ }
+ 
++func TestSetupGlobalPublishesExternalCILocalMirrorPolicyToClaudeAndCodex(t *testing.T) {
++	_, testFile, _, ok := runtime.Caller(0)
++	if !ok {
++		t.Fatal("resolve infra test source path")
++	}
++	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", "..", "..", ".."))
++	home := t.TempDir()
++	layout, err := GlobalLayout(repoRoot, home)
++	if err != nil {
++		t.Fatalf("GlobalLayout: %v", err)
++	}
++	seedGlobalAgentsInfraTarget(t, layout)
++
++	sourcePath := filepath.Join(repoRoot, ".instructions", "INSTRUCTIONS_WORKFLOW.md")
++	sourceBody, err := os.ReadFile(sourcePath)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", sourcePath, err)
++	}
++	sourceClaudeInstructionIndexPath := filepath.Join(repoRoot, ".instructions", "INSTRUCTIONS.md")
++	sourceClaudeInstructionIndex, err := os.ReadFile(sourceClaudeInstructionIndexPath)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", sourceClaudeInstructionIndexPath, err)
++	}
++
++	if err := Setup(Options{Layout: layout}); err != nil {
++		t.Fatalf("Setup: %v", err)
++	}
++
++	claudeEntrypointPath := filepath.Join(home, ".claude", "CLAUDE.md")
++	claudeEntrypoint, err := os.ReadFile(claudeEntrypointPath)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", claudeEntrypointPath, err)
++	}
++	if !bytes.Equal(claudeEntrypoint, []byte(generatedClaudeEntrypoint)) {
++		t.Fatalf("generated Claude entrypoint %s does not load the managed instruction index", claudeEntrypointPath)
++	}
++
++	claudeInstructionsPath := filepath.Join(home, ".claude", "instructions")
++	assertSymlink(t, claudeInstructionsPath, filepath.Join(home, ".agents", ".instructions"))
++	claudeInstructionIndexPath := filepath.Join(claudeInstructionsPath, "INSTRUCTIONS.md")
++	claudeInstructionIndex, err := os.ReadFile(claudeInstructionIndexPath)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", claudeInstructionIndexPath, err)
++	}
++	if !bytes.Equal(claudeInstructionIndex, sourceClaudeInstructionIndex) {
++		t.Fatalf("installed Claude instruction index %s does not match versioned source", claudeInstructionIndexPath)
++	}
++	if !bytes.Contains(claudeInstructionIndex, []byte(externalCIWorkflowClaudeInclude)) {
++		t.Fatalf("installed Claude instruction index does not include the external-CI workflow source through %q", externalCIWorkflowClaudeInclude)
++	}
++
++	for _, installedPath := range []string{
++		filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"),
++		filepath.Join(home, ".claude", "instructions", "INSTRUCTIONS_WORKFLOW.md"),
++	} {
++		installedBody, err := os.ReadFile(installedPath)
++		if err != nil {
++			t.Fatalf("ReadFile(%s): %v", installedPath, err)
++		}
++		if !bytes.Equal(installedBody, sourceBody) {
++			t.Fatalf("installed Claude workflow %s does not match versioned source", installedPath)
++		}
++		assertExternalCILocalMirrorPolicyBlock(t, installedPath, installedBody)
++	}
++
++	codexPath := filepath.Join(home, ".codex", "AGENTS.md")
++	codexBody, err := os.ReadFile(codexPath)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", codexPath, err)
++	}
++	if !bytes.Contains(codexBody, sourceBody) {
++		t.Fatalf("rendered Codex instructions %s do not contain the versioned workflow source", codexPath)
++	}
++	assertExternalCILocalMirrorPolicyBlock(t, codexPath, codexBody)
++}
++
++func TestSetupGlobalRejectsBroadenedRepairableOrMerelyInconvenientExternalCIMirrorTrigger(t *testing.T) {
++	source := seedSourceRepo(t)
++	workflowPath := filepath.Join(source, ".instructions", "INSTRUCTIONS_WORKFLOW.md")
++	workflowBody, err := os.ReadFile(workflowPath)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", workflowPath, err)
++	}
++	broadenedTrigger := "Use a local mirror for any repairable or merely inconvenient CI disruption; this includes cases where hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair."
++	if !strings.Contains(broadenedTrigger, "hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair") {
++		t.Fatal("broadened trigger does not retain the formerly asserted interior phrase")
++	}
++	mutatedWorkflow := bytes.Replace(workflowBody, []byte(externalCILocalMirrorExclusiveTrigger), []byte(broadenedTrigger), 1)
++	if bytes.Equal(mutatedWorkflow, workflowBody) {
++		t.Fatal("broadened trigger mutant did not alter the workflow fixture")
++	}
++	mustWrite(t, workflowPath, string(mutatedWorkflow))
++
++	home := t.TempDir()
++	layout, err := GlobalLayout(source, home)
++	if err != nil {
++		t.Fatalf("GlobalLayout: %v", err)
++	}
++	seedGlobalAgentsInfraTarget(t, layout)
++	if err := Setup(Options{Layout: layout}); err != nil {
++		t.Fatalf("Setup: %v", err)
++	}
++
++	for _, installedPath := range []string{
++		filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"),
++		filepath.Join(home, ".claude", "instructions", "INSTRUCTIONS_WORKFLOW.md"),
++		filepath.Join(home, ".codex", "AGENTS.md"),
++	} {
++		installedBody, err := os.ReadFile(installedPath)
++		if err != nil {
++			t.Fatalf("ReadFile(%s): %v", installedPath, err)
++		}
++		if !bytes.Contains(installedBody, []byte(broadenedTrigger)) {
++			t.Fatalf("production Setup did not publish the broadened trigger to %s", installedPath)
++		}
++		if err := validateExternalCILocalMirrorPolicyBlock(installedBody); err == nil {
++			t.Fatalf("broadened repairable-or-inconvenient trigger passed external-CI policy validation at %s", installedPath)
++		}
++	}
++}
++
++func TestSetupGlobalRejectsAdditiveRepairableOrMerelyInconvenientExternalCIMirrorPermission(t *testing.T) {
++	additionalPermission := "A local mirror is also allowed when hosted CI is repairable but merely inconvenient to use."
++	assertSetupRejectsAdditiveExternalCIMirrorPermission(t, additionalPermission)
++}
++
++func TestSetupGlobalRejectsAdditiveUnverifiedStatusExternalCIMirrorPermission(t *testing.T) {
++	additionalPermission := "Before provider evidence is available, agents may treat a partial or inconclusive status read as an external execution failure and mirror the job locally."
++	assertSetupRejectsAdditiveExternalCIMirrorPermission(t, additionalPermission)
++}
++
++func assertSetupRejectsAdditiveExternalCIMirrorPermission(t *testing.T, additionalPermission string) {
++	t.Helper()
++	source := seedSourceRepo(t)
++	workflowPath := filepath.Join(source, ".instructions", "INSTRUCTIONS_WORKFLOW.md")
++	workflowBody, err := os.ReadFile(workflowPath)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", workflowPath, err)
++	}
++	mutatedWorkflow := bytes.Replace(
++		workflowBody,
++		[]byte(externalCILocalMirrorExclusiveTrigger),
++		[]byte(externalCILocalMirrorExclusiveTrigger+"\n\n"+additionalPermission),
++		1,
++	)
++	if bytes.Equal(mutatedWorkflow, workflowBody) {
++		t.Fatal("additive external-CI permission mutant did not alter the workflow fixture")
++	}
++	if !bytes.Contains(mutatedWorkflow, []byte(externalCILocalMirrorExclusiveTrigger)) {
++		t.Fatal("additive external-CI permission mutant removed the complete exclusive trigger")
++	}
++	mustWrite(t, workflowPath, string(mutatedWorkflow))
++
++	home := t.TempDir()
++	layout, err := GlobalLayout(source, home)
++	if err != nil {
++		t.Fatalf("GlobalLayout: %v", err)
++	}
++	seedGlobalAgentsInfraTarget(t, layout)
++	if err := Setup(Options{Layout: layout}); err != nil {
++		t.Fatalf("Setup: %v", err)
++	}
++
++	for _, installedPath := range []string{
++		filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"),
++		filepath.Join(home, ".claude", "instructions", "INSTRUCTIONS_WORKFLOW.md"),
++		filepath.Join(home, ".codex", "AGENTS.md"),
++	} {
++		installedBody, err := os.ReadFile(installedPath)
++		if err != nil {
++			t.Fatalf("ReadFile(%s): %v", installedPath, err)
++		}
++		if !bytes.Contains(installedBody, []byte(additionalPermission)) {
++			t.Fatalf("production Setup did not publish the additive permission to %s", installedPath)
++		}
++		if !bytes.Contains(installedBody, []byte(externalCILocalMirrorExclusiveTrigger)) {
++			t.Fatalf("production Setup lost the retained exclusive trigger at %s", installedPath)
++		}
++		if err := validateExternalCILocalMirrorPolicyBlock(installedBody); err == nil {
++			t.Fatalf("additive external-CI permission passed exact policy-block validation at %s", installedPath)
++		}
++	}
++}
++
++func assertExternalCILocalMirrorPolicyBlock(t *testing.T, path string, body []byte) {
++	t.Helper()
++	if err := validateExternalCILocalMirrorPolicyBlock(body); err != nil {
++		t.Fatalf("external-CI policy at %s: %v", path, err)
++	}
++}
++
++func validateExternalCILocalMirrorPolicyBlock(body []byte) error {
++	heading := []byte(externalCILocalMirrorPolicyHeading)
++	start := bytes.Index(body, heading)
++	if start < 0 {
++		return fmt.Errorf("missing policy heading %q", externalCILocalMirrorPolicyHeading)
++	}
++	if bytes.Contains(body[start+len(heading):], heading) {
++		return fmt.Errorf("duplicate policy heading %q", externalCILocalMirrorPolicyHeading)
++	}
++	remainder := body[start:]
++	end := bytes.Index(remainder, []byte("\n## "))
++	if end < 0 {
++		return fmt.Errorf("policy block %q has no following top-level section", externalCILocalMirrorPolicyHeading)
++	}
++	actual := bytes.TrimSuffix(remainder[:end], []byte("\n"))
++	if !bytes.Equal(actual, []byte(externalCILocalMirrorPolicyBlock)) {
++		return fmt.Errorf("policy block %q differs from the accepted revision-4 contract", externalCILocalMirrorPolicyHeading)
++	}
++	return nil
++}
++
+ func TestSetupGlobalRemovesStaleProjectConfig(t *testing.T) {
+ 	source := seedSourceRepo(t)
+ 	home := t.TempDir()
+@@ -1343,7 +1567,7 @@ func seedSourceRepo(t *testing.T) string {
+ 	mustWrite(t, filepath.Join(root, ".instructions", "AGENTS.md"), "# Global Instructions\n\n@~/.agents/.instructions/INSTRUCTIONS_PLATFORM.md\n@~/.agents/.instructions/INSTRUCTIONS_ATTACHMENTS.md\n@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md\n")
+ 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_PLATFORM.md"), "platform instructions\n")
+ 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
+-	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n")
++	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n\n"+externalCILocalMirrorPolicyBlock+"\n\n## Worktrees\n\nworktree instructions\n")
+ 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
+ 	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.6-sol\"\nmodel_context_window = 272000\nmodel_auto_compact_token_limit = 245000\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
+ 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]

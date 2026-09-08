@@ -1,0 +1,852 @@
+diff --git a/.configs/codex-config.toml b/.configs/codex-config.toml
+index 7dc00bc..7b94818 100644
+--- a/.configs/codex-config.toml
++++ b/.configs/codex-config.toml
+@@ -3,10 +3,6 @@ model_reasoning_effort = "xhigh"
+ service_tier = "default"
+ project_doc_max_bytes = 131072
+ 
+-[profiles.fast]
+-model = "gpt-5.5"
+-model_reasoning_effort = "xhigh"
+-
+ [projects."/Users/aagrigore1"]
+ trust_level = "trusted"
+ 
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 76fda0d..9e8ea63 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,42 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-30
++
++### 0715 — LLDB MCP Bootstrap Fails Closed And Stays Idempotent
++- FIX: `scripts/setup.sh:91` now reuses `lldb-mcp` on `PATH`, refuses macOS hosts with neither helper nor Homebrew, and recognizes only a managed wrapper whose marker, exact Homebrew helper target, helper executable, and sibling `lldb` all validate.
++- EVIDENCE: Four tests drive real `./setup.sh`; missing prerequisites refuse, external helper admits, two managed runs preserve wrapper inode with one `brew install llvm`, and a marker-only wrong-target wrapper is replaced. Full Go tests, vet, build, shell syntax, and diff checks pass.
++- FINDING: The same production block and both regressions existed on local `main@5c9b4e4f`; applying the scoped function/test delta to a clean main snapshot passes the production-entry suite.
++- STATUS: `TASK-260707-1gnk6p` rework ready for review.
++
++### 0658 — LLDB MCP Bootstrap Fails Open And Reinstalls
++- REGRESSION: `scripts/setup.sh:101` returns success on macOS when Homebrew and `lldb-mcp` are absent, so setup completes while a project-local `lldb` opt-in remains broken.
++- REGRESSION: `scripts/setup.sh:112` skips only an external helper; the managed wrapper at the expected Homebrew path falls through to `brew install llvm` and is removed/recreated on every run.
++- EVIDENCE: Mocked production `./setup.sh` returned `0` without Homebrew; two consecutive production runs issued two `brew install llvm` calls and changed the wrapper inode. No LLDB bootstrap test exists, and producer Go evidence was cached.
++- STATUS: `TASK-260707-1gnk6p` review routes to rework with production-entry fail-closed and idempotency coverage.
++
++### 0217 — Global Instruction Reset Evidence Overstates Preservation
++- FINDING: `TASK-260707-xx9bdv` summary claims four stale installed project-local instruction files were preserved under `ios/swipe2cash/.temp/global-instructions-reset-260707`, but none exists there; only their basenames and matched project-specific lines remain.
++- EVIDENCE: The recoverable originals still exist under `/Users/alexis/src/x-platform-airdrop/.agents/.instructions`; source/installed pre-cleanup workflow files do preserve the removed Tap2Cash BLE rule.
++- STATUS: Review routed to rework; copy the four files into the task-scoped artifact and update outcome evidence to match bytes actually preserved.
++
++### 0217 — Pi Readiness Production Test Regresses On Main
++- REGRESSION: `go test ./... -count=1` on current `relux-agents-infra` main fails `TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry`.
++- EVIDENCE: Exact rerun with `-count=3` failed persistent-503 polling 3/3 and early-child-exit classification 2/3; including the full run, observed rates are 4/4 and 3/4.
++- STATUS: Not caused by the instruction-reset delta, but the task's green-suite gate is not currently reproducible.
++
++## 2026-08-24
++
++### 1815 — Managed Codex Sync Preserves User State
++- ROOT CAUSE: `tools/agents-infra/internal/infra/infra.go:274` copied global Codex config wholesale and skipped the local copy wholesale; repeat setup therefore either erased user trust/TUI state or retained withdrawn managed defaults.
++- FIX: `Setup -> syncRepo -> syncManagedCodexConfig` now refreshes source-owned defaults, merges installed `projects`/`notice` and non-fast custom profiles, removes `profiles.fast`, and refuses malformed installed TOML without replacement.
++- EVIDENCE: Production-path global/local resync tests preserve trust, notice, and primary-session state while installing `service_tier = "default"`; malformed-existing-config coverage attacks the fallback boundary.
++
++### 1753 — Fast-Profile Removal Meets Runtime Preservation Boundary
++- FINDING: Source `.configs/codex-config.toml` and both installed managed copies retain `[profiles.fast]`; the source-repository local copy also retains the withdrawn `service_tier = "fast"` state.
++- FINDING: Global installed config contains user-added trust entries and model selection absent from source; `setup global` would replace them from source, while `setup local` intentionally preserves existing `.agents/.configs/codex-config.toml` bytes.
++- DECISION: Remove the source profile and its README advertisement with production `Setup` regression coverage; validate supported installs on isolated destinations and defer live runtime synchronization until accepted source integration can preserve user-owned state explicitly.
++
+ ## 2026-08-18
+ 
+ ### 0504 — 503 Retry Accepted; Configured-Timeout Magnitude Still Unbound
+diff --git a/README.md b/README.md
+index 2b6812d..088862a 100644
+--- a/README.md
++++ b/README.md
+@@ -212,6 +212,13 @@ model, reasoning effort, service tier, trusted projects, and TUI notices are
+ owned by the global `~/.codex/config.toml` link by default. This prevents stale
+ project-local configs from silently overriding the current global model.
+ 
++Both global and local source sync refresh the managed
++`.agents/.configs/codex-config.toml` defaults while merging existing Codex
++user state: project trust decisions, TUI notice acknowledgements, and custom
++profiles other than the withdrawn `fast` profile. Source remains authoritative
++for model, reasoning, and `service_tier = "default"`. A malformed installed
++Codex config refuses synchronization without replacing that config.
++
+ During local setup in the default `preserve` mode, agents-infra removes managed
+ project-local Codex config artifacts it created: either the legacy symlink or a
+ rendered managed regular file. A custom project-local config is left in place
+@@ -811,7 +818,6 @@ Inspect either provider invocation without launching an agent:
+ ```bash
+ cd /abs/path/to/project
+ agents-infra codex --print-config
+-agents-infra codex --print-config --profile fast
+ agents-infra codex --print-config --model gpt-5.6-terra -c 'model_reasoning_effort="xhigh"'
+ 
+ agents-infra claude --print-config
+@@ -922,7 +928,7 @@ rg -n "Primary Parent Goal Actualization" \
+ 
+ | Tool | Purpose | Command | Outputs |
+ |------|---------|---------|---------|
+-| `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
++| `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` CLI and sync the global runtime; on macOS `./setup.sh` also runs `brew install llvm` when LLDB MCP prerequisites are absent | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `$(brew --prefix)/bin/lldb-mcp` on managed macOS installs, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
+ | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, and managed Pi sessions; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose JSON, hash-contained Pi state under the user cache directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+ | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
+@@ -1105,7 +1111,7 @@ Reference config with:
+ 
+ - Model: `gpt-5.5`
+ - Reasoning effort: `xhigh`
+-- Service tier: `default` (Standard). The named `fast` profile remains available for explicit model/reasoning selection; use `/fast on` for interactive Fast opt-in, and persistent Fast requires `service_tier = "fast"` with `[features].fast_mode = true`.
++- Service tier: `default` (Standard).
+ - Project docs byte limit: `131072`
+ - The approaching-rate-limit model switch reminder is suppressed with `[notice].hide_rate_limit_model_nudge = true` so Codex does not ask to move to a lower-credit model.
+ - As of the audited Codex CLI `0.144.1`, the separate safety-buffering chooser (`Retry with a faster model` / `Keep waiting`) has no supported `config.toml` setting for suppression, a default choice, or automatic waiting. It is runtime UI shown before agent instructions can act; terminal key automation or a patched Codex binary is intentionally out of scope.
+@@ -1302,11 +1308,17 @@ enabled_servers = ["lldb"]
+ ```
+ 
+ LLDB's MCP integration uses `lldb-mcp`, which bridges stdio to the LLDB MCP
+-server socket. On macOS, `./setup.sh` installs Homebrew `llvm` when `lldb-mcp`
+-is missing and writes a narrow `$(brew --prefix)/bin/lldb-mcp` wrapper that
+-execs Homebrew's helper without overriding `LLDB_EXE_PATH`. This lets
+-`lldb-mcp` use the `lldb` binary next to itself by default, matching LLDB's
+-documented behavior. The wrapper also prunes dead-PID
++server socket. On macOS, `./setup.sh` first reuses an executable `lldb-mcp` on
++`PATH`. Otherwise it requires Homebrew, runs the exact command `brew install
++llvm`, verifies `$(brew --prefix llvm)/bin/lldb-mcp` and its sibling `lldb`,
++then writes the managed wrapper to `$(brew --prefix)/bin/lldb-mcp`. If neither
++an existing helper nor Homebrew is available, setup exits non-zero and tells
++the operator how to provide one instead of completing with a broken opt-in.
++After a successful managed install, repeat `./setup.sh` runs verify the wrapper
++marker, exact helper target, and both executables, then leave the wrapper and
++Homebrew package untouched. The wrapper execs Homebrew's helper without
++overriding `LLDB_EXE_PATH`, so `lldb-mcp` uses the `lldb` binary next to itself
++by default, matching LLDB's documented behavior. It also prunes dead-PID
+ `~/.lldb/lldb-mcp-*.json` discovery files before launch so stale sockets do not
+ break the MCP initialize handshake. Set `AGENTS_INFRA_SKIP_LLDB_MCP=1` to skip
+ that bootstrap. If a project uses an LLDB build with the helper elsewhere,
+diff --git a/SKILL.md b/SKILL.md
+index b1fb57e..09968ee 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -107,6 +107,13 @@ Project-local instructions are an overlay, not a copy of global policy:
+ 
+ Keep local agent runtime setup separate from Codex model/reasoning config.
+ 
++Every global or local source sync refreshes the managed
++`.agents/.configs/codex-config.toml` defaults while merging existing project
++trust decisions, TUI notice acknowledgements, and custom profiles other than
++the withdrawn `fast` profile. Source remains authoritative for model,
++reasoning, and service tier. Malformed installed TOML refuses synchronization
++without replacing that config.
++
+ Default project-local setup should not create `.codex/config.toml`:
+ 
+ ```bash
+@@ -436,13 +443,16 @@ servers to global `~/.codex/config.toml` just to make plain `codex` work.
+ 
+ Definitions may be streamable HTTP servers with `url` or stdio servers with
+ `command` and optional `args`. `lldb` is available as an opt-in stdio definition
+-using `command = "lldb-mcp"`. On macOS, `./setup.sh` installs Homebrew `llvm`
+-when needed and writes an `lldb-mcp` wrapper into the Homebrew bin directory.
+-The wrapper execs Homebrew's helper without overriding `LLDB_EXE_PATH`, so the
+-helper uses the `lldb` binary next to itself by default, and it prunes dead-PID
+-`~/.lldb/lldb-mcp-*.json` discovery files before launch. Set
+-`AGENTS_INFRA_SKIP_LLDB_MCP=1` to skip that bootstrap. Projects may override the
+-registry locally with an absolute helper path when needed.
++using `command = "lldb-mcp"`. On macOS, `./setup.sh` reuses an executable helper
++on `PATH`; otherwise it requires Homebrew, runs `brew install llvm`, and writes
++an `lldb-mcp` wrapper into the Homebrew bin directory. If neither an existing
++helper nor Homebrew is available, setup fails instead of leaving the opt-in
++unusable. A valid managed wrapper and its Homebrew helper binaries make later
++setup runs a no-op. The wrapper execs Homebrew's helper without overriding
++`LLDB_EXE_PATH`, so the helper uses the `lldb` binary next to itself by default,
++and it prunes dead-PID `~/.lldb/lldb-mcp-*.json` discovery files before launch.
++Set `AGENTS_INFRA_SKIP_LLDB_MCP=1` to skip that bootstrap. Projects may override
++the registry locally with an absolute helper path when needed.
+ 
+ `safari` is available as an opt-in stdio definition using Safari Technology
+ Preview's `safaridriver`:
+diff --git a/scripts/setup.sh b/scripts/setup.sh
+index 4f196d2..9aec498 100755
+--- a/scripts/setup.sh
++++ b/scripts/setup.sh
+@@ -98,26 +98,41 @@ install_lldb_mcp() {
+     return
+   fi
+ 
++  local existing
++  existing="$(command -v lldb-mcp 2>/dev/null || true)"
++
+   if ! command -v brew >/dev/null 2>&1; then
+-    yellow "Homebrew not found; skipping lldb-mcp setup."
+-    yellow "Install Homebrew or provide lldb-mcp on PATH for LLDB MCP support."
+-    return
++    if [[ -n "$existing" ]]; then
++      green "lldb-mcp already installed: $existing"
++      return
++    fi
++    red "Cannot install LLDB MCP prerequisites: neither lldb-mcp on PATH nor Homebrew is available."
++    red "Install Homebrew from https://brew.sh and rerun ./setup.sh (it runs 'brew install llvm'), or install lldb-mcp on PATH."
++    exit 1
+   fi
+ 
+-  local brew_prefix wrapper existing
++  local brew_prefix wrapper
+   brew_prefix="$(brew --prefix)"
+   wrapper="$brew_prefix/bin/lldb-mcp"
+-  existing="$(command -v lldb-mcp 2>/dev/null || true)"
+ 
+   if [[ -n "$existing" && "$existing" != "$wrapper" ]]; then
+     green "lldb-mcp already installed: $existing"
+     return
+   fi
+ 
++  local llvm_prefix helper
++  llvm_prefix="$(brew --prefix llvm 2>/dev/null || true)"
++  helper="$llvm_prefix/bin/lldb-mcp"
++  if [[ -n "$llvm_prefix" && -x "$wrapper" && ! -L "$wrapper" && -x "$helper" && -x "$llvm_prefix/bin/lldb" ]] &&
++     grep -Fq "$LLDB_MCP_WRAPPER_MARKER" "$wrapper" &&
++     grep -Fqx "exec \"$helper\" \"\$@\"" "$wrapper"; then
++    green "Managed lldb-mcp wrapper already installed: $wrapper"
++    return
++  fi
++
+   yellow "Ensuring Homebrew llvm and lldb-mcp wrapper for LLDB MCP support..."
+   brew install llvm
+ 
+-  local llvm_prefix helper
+   llvm_prefix="$(brew --prefix llvm)"
+   helper="$llvm_prefix/bin/lldb-mcp"
+   if [[ ! -x "$helper" ]]; then
+diff --git a/tools/agents-infra/bootstrap_lldb_mcp_test.go b/tools/agents-infra/bootstrap_lldb_mcp_test.go
+new file mode 100644
+index 0000000..d766851
+--- /dev/null
++++ b/tools/agents-infra/bootstrap_lldb_mcp_test.go
+@@ -0,0 +1,251 @@
++package main
++
++import (
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++type bootstrapLLDBHarness struct {
++	root       string
++	home       string
++	mockBin    string
++	brewPrefix string
++	brewLog    string
++	binDir     string
++	configDir  string
++}
++
++func newBootstrapLLDBHarness(t *testing.T) *bootstrapLLDBHarness {
++	t.Helper()
++	root := sourceRepoRoot(t)
++	sandbox := t.TempDir()
++	harness := &bootstrapLLDBHarness{
++		root:       root,
++		home:       filepath.Join(sandbox, "home"),
++		mockBin:    filepath.Join(sandbox, "mock-bin"),
++		brewPrefix: filepath.Join(sandbox, "homebrew"),
++		brewLog:    filepath.Join(sandbox, "brew.log"),
++		binDir:     filepath.Join(sandbox, "installed-bin"),
++		configDir:  filepath.Join(sandbox, "config"),
++	}
++	for _, directory := range []string{harness.home, harness.mockBin, filepath.Join(harness.brewPrefix, "bin")} {
++		if err := os.MkdirAll(directory, 0o755); err != nil {
++			t.Fatalf("MkdirAll(%s): %v", directory, err)
++		}
++	}
++
++	writeBootstrapExecutable(t, filepath.Join(harness.mockBin, "uname"), `#!/bin/sh
++case "${1:-}" in
++  -s) printf 'Darwin\n' ;;
++  -m) printf 'arm64\n' ;;
++  *) printf 'Darwin\n' ;;
++esac
++`)
++	writeBootstrapExecutable(t, filepath.Join(harness.mockBin, "go"), `#!/bin/sh
++set -eu
++if [ "${1:-}" = "version" ]; then
++  printf 'go version go1.25.0 darwin/arm64\n'
++  exit 0
++fi
++output=''
++previous=''
++for argument in "$@"; do
++  if [ "$previous" = "-o" ]; then
++    output="$argument"
++    break
++  fi
++  previous="$argument"
++done
++if [ -z "$output" ]; then
++  printf 'fake go: missing -o output\n' >&2
++  exit 64
++fi
++mkdir -p "$(dirname "$output")"
++printf '#!/bin/sh\nexit 0\n' > "$output"
++chmod +x "$output"
++`)
++
++	return harness
++}
++
++func (h *bootstrapLLDBHarness) installFakeBrew(t *testing.T) {
++	t.Helper()
++	writeBootstrapExecutable(t, filepath.Join(h.mockBin, "brew"), `#!/bin/sh
++set -eu
++case "${1:-}" in
++  --prefix)
++    if [ "${2:-}" = "llvm" ]; then
++      printf '%s\n' "$TEST_BREW_PREFIX/opt/llvm"
++    else
++      printf '%s\n' "$TEST_BREW_PREFIX"
++    fi
++    ;;
++  install)
++    if [ "${2:-}" != "llvm" ]; then
++      printf 'fake brew: unexpected formula %s\n' "${2:-}" >&2
++      exit 64
++    fi
++    printf 'install llvm\n' >> "$TEST_BREW_LOG"
++    mkdir -p "$TEST_BREW_PREFIX/opt/llvm/bin"
++    printf '#!/bin/sh\nexit 0\n' > "$TEST_BREW_PREFIX/opt/llvm/bin/lldb-mcp"
++    printf '#!/bin/sh\nexit 0\n' > "$TEST_BREW_PREFIX/opt/llvm/bin/lldb"
++    chmod +x "$TEST_BREW_PREFIX/opt/llvm/bin/lldb-mcp" "$TEST_BREW_PREFIX/opt/llvm/bin/lldb"
++    ;;
++  *)
++    printf 'fake brew: unexpected arguments: %s\n' "$*" >&2
++    exit 64
++    ;;
++esac
++`)
++}
++
++func (h *bootstrapLLDBHarness) seedFakeLLVM(t *testing.T) {
++	t.Helper()
++	llvmBin := filepath.Join(h.brewPrefix, "opt", "llvm", "bin")
++	if err := os.MkdirAll(llvmBin, 0o755); err != nil {
++		t.Fatalf("MkdirAll(%s): %v", llvmBin, err)
++	}
++	for _, name := range []string{"lldb-mcp", "lldb"} {
++		writeBootstrapExecutable(t, filepath.Join(llvmBin, name), "#!/bin/sh\nexit 0\n")
++	}
++}
++
++func (h *bootstrapLLDBHarness) run(t *testing.T) (string, error) {
++	t.Helper()
++	command := exec.Command(filepath.Join(h.root, "setup.sh"))
++	command.Dir = h.root
++	command.Env = []string{
++		"PATH=" + filepath.Join(h.brewPrefix, "bin") + ":" + h.mockBin + ":/usr/bin:/bin",
++		"HOME=" + h.home,
++		"BIN_DIR=" + h.binDir,
++		"AGENTS_INFRA_CONFIG_DIR=" + h.configDir,
++		"AGENTS_INFRA_SKIP_LLDB_MCP=",
++		"TEST_BREW_PREFIX=" + h.brewPrefix,
++		"TEST_BREW_LOG=" + h.brewLog,
++		"LANG=C",
++	}
++	output, err := command.CombinedOutput()
++	return string(output), err
++}
++
++func writeBootstrapExecutable(t *testing.T, path, body string) {
++	t.Helper()
++	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
++		t.Fatalf("WriteFile(%s): %v", path, err)
++	}
++}
++
++func TestBootstrapSetupRefusesMissingHomebrewAndLLDBMCP(t *testing.T) {
++	harness := newBootstrapLLDBHarness(t)
++
++	output, err := harness.run(t)
++	if err == nil {
++		t.Fatalf("./setup.sh accepted a macOS host with neither Homebrew nor lldb-mcp:\n%s", output)
++	}
++	for _, want := range []string{"Homebrew", "lldb-mcp", "brew install llvm"} {
++		if !strings.Contains(output, want) {
++			t.Fatalf("./setup.sh refusal missing %q:\n%s", want, output)
++		}
++	}
++	if strings.Contains(output, "=== Done ===") {
++		t.Fatalf("./setup.sh advertised success after refusing missing LLDB prerequisites:\n%s", output)
++	}
++}
++
++func TestBootstrapSetupAcceptsExistingLLDBMCPWithoutHomebrew(t *testing.T) {
++	harness := newBootstrapLLDBHarness(t)
++	existing := filepath.Join(harness.mockBin, "lldb-mcp")
++	writeBootstrapExecutable(t, existing, "#!/bin/sh\nexit 0\n")
++
++	output, err := harness.run(t)
++	if err != nil {
++		t.Fatalf("./setup.sh rejected existing lldb-mcp without Homebrew: %v\n%s", err, output)
++	}
++	if !strings.Contains(output, "lldb-mcp already installed: "+existing) {
++		t.Fatalf("./setup.sh did not recognize the existing lldb-mcp:\n%s", output)
++	}
++}
++
++func TestBootstrapSetupInstallsLLDBMCPOnceAcrossTwoRealRuns(t *testing.T) {
++	harness := newBootstrapLLDBHarness(t)
++	harness.installFakeBrew(t)
++
++	firstOutput, err := harness.run(t)
++	if err != nil {
++		t.Fatalf("first ./setup.sh run: %v\n%s", err, firstOutput)
++	}
++	wrapper := filepath.Join(harness.brewPrefix, "bin", "lldb-mcp")
++	firstInfo, err := os.Stat(wrapper)
++	if err != nil {
++		t.Fatalf("Stat(%s) after first run: %v", wrapper, err)
++	}
++
++	secondOutput, err := harness.run(t)
++	if err != nil {
++		t.Fatalf("second ./setup.sh run: %v\n%s", err, secondOutput)
++	}
++	secondInfo, err := os.Stat(wrapper)
++	if err != nil {
++		t.Fatalf("Stat(%s) after second run: %v", wrapper, err)
++	}
++	if !os.SameFile(firstInfo, secondInfo) {
++		t.Fatalf("second ./setup.sh run replaced managed wrapper %s", wrapper)
++	}
++
++	brewLog, err := os.ReadFile(harness.brewLog)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", harness.brewLog, err)
++	}
++	if got := strings.Count(string(brewLog), "install llvm\n"); got != 1 {
++		t.Fatalf("brew install llvm calls = %d, want 1; log:\n%s", got, brewLog)
++	}
++	if !strings.Contains(secondOutput, "Managed lldb-mcp wrapper already installed") {
++		t.Fatalf("second ./setup.sh run did not report the idempotent path:\n%s", secondOutput)
++	}
++}
++
++func TestBootstrapSetupRepairsManagedLLDBMCPWrapperWithWrongTarget(t *testing.T) {
++	harness := newBootstrapLLDBHarness(t)
++	harness.installFakeBrew(t)
++	harness.seedFakeLLVM(t)
++	wrapper := filepath.Join(harness.brewPrefix, "bin", "lldb-mcp")
++	writeBootstrapExecutable(t, wrapper, `#!/bin/sh
++# agents-infra managed lldb-mcp wrapper.
++exec "/forged/lldb-mcp" "$@"
++`)
++	forgedInfo, err := os.Stat(wrapper)
++	if err != nil {
++		t.Fatalf("Stat(%s) before setup: %v", wrapper, err)
++	}
++
++	output, err := harness.run(t)
++	if err != nil {
++		t.Fatalf("./setup.sh did not repair forged managed wrapper: %v\n%s", err, output)
++	}
++	repairedInfo, err := os.Stat(wrapper)
++	if err != nil {
++		t.Fatalf("Stat(%s) after setup: %v", wrapper, err)
++	}
++	if os.SameFile(forgedInfo, repairedInfo) {
++		t.Fatalf("./setup.sh accepted marker-only managed wrapper with the wrong helper target")
++	}
++
++	brewLog, err := os.ReadFile(harness.brewLog)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", harness.brewLog, err)
++	}
++	if got := strings.Count(string(brewLog), "install llvm\n"); got != 1 {
++		t.Fatalf("brew install llvm calls while repairing forged wrapper = %d, want 1; log:\n%s", got, brewLog)
++	}
++	helpTarget := filepath.Join(harness.brewPrefix, "opt", "llvm", "bin", "lldb-mcp")
++	repaired, err := os.ReadFile(wrapper)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", wrapper, err)
++	}
++	if !strings.Contains(string(repaired), "exec \""+helpTarget+"\" \"$@\"") {
++		t.Fatalf("repaired wrapper does not target %s:\n%s", helpTarget, repaired)
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/codex_config.go b/tools/agents-infra/internal/infra/codex_config.go
+index 6eca6f8..19f5e69 100644
+--- a/tools/agents-infra/internal/infra/codex_config.go
++++ b/tools/agents-infra/internal/infra/codex_config.go
+@@ -8,6 +8,105 @@ import (
+ 	"github.com/pelletier/go-toml/v2"
+ )
+ 
++const managedCodexConfigRelativePath = ".configs/codex-config.toml"
++
++func syncManagedCodexConfig(sourcePath, destinationPath string, mode os.FileMode) error {
++	sourceData, err := os.ReadFile(sourcePath)
++	if err != nil {
++		return fmt.Errorf("read source-managed Codex config %s: %w", sourcePath, err)
++	}
++	installedData, err := os.ReadFile(destinationPath)
++	if os.IsNotExist(err) {
++		if err := writeProjectConfigAtomically(destinationPath, sourceData, mode); err != nil {
++			return fmt.Errorf("install source-managed Codex config %s: %w", destinationPath, err)
++		}
++		return nil
++	}
++	if err != nil {
++		return fmt.Errorf("read existing managed Codex config %s: %w", destinationPath, err)
++	}
++
++	var sourceDocument map[string]any
++	if err := toml.Unmarshal(sourceData, &sourceDocument); err != nil {
++		return fmt.Errorf("parse source-managed Codex config %s: %w", sourcePath, err)
++	}
++	var installedDocument map[string]any
++	if err := toml.Unmarshal(installedData, &installedDocument); err != nil {
++		return fmt.Errorf("parse existing managed Codex config %s: %w", destinationPath, err)
++	}
++
++	// Codex mutates these user-level tables while it runs. Preserve installed
++	// trust decisions and TUI acknowledgement state while source remains the
++	// authority for model, reasoning, service tier, and other managed defaults.
++	for _, key := range []string{"projects", "notice"} {
++		merged, err := mergeCodexConfigTable(sourceDocument, installedDocument, key, "")
++		if err != nil {
++			return fmt.Errorf("merge existing managed Codex config %s: %w", destinationPath, err)
++		}
++		if len(merged) == 0 {
++			delete(sourceDocument, key)
++		} else {
++			sourceDocument[key] = merged
++		}
++	}
++
++	// Profiles are user-level configuration. Carry forward custom profiles, but
++	// never retain the withdrawn fast profile from an older managed install.
++	profiles, err := mergeCodexConfigTable(sourceDocument, installedDocument, "profiles", "fast")
++	if err != nil {
++		return fmt.Errorf("merge existing managed Codex config %s: %w", destinationPath, err)
++	}
++	if len(profiles) == 0 {
++		delete(sourceDocument, "profiles")
++	} else {
++		sourceDocument["profiles"] = profiles
++	}
++
++	mergedData, err := toml.Marshal(sourceDocument)
++	if err != nil {
++		return fmt.Errorf("encode merged managed Codex config %s: %w", destinationPath, err)
++	}
++	if err := writeProjectConfigAtomically(destinationPath, mergedData, mode); err != nil {
++		return fmt.Errorf("write merged managed Codex config %s: %w", destinationPath, err)
++	}
++	return nil
++}
++
++func mergeCodexConfigTable(sourceDocument, installedDocument map[string]any, key, excludedKey string) (map[string]any, error) {
++	sourceTable, err := codexConfigTable(sourceDocument, key)
++	if err != nil {
++		return nil, fmt.Errorf("source field %s: %w", key, err)
++	}
++	installedTable, err := codexConfigTable(installedDocument, key)
++	if err != nil {
++		return nil, fmt.Errorf("installed field %s: %w", key, err)
++	}
++	merged := make(map[string]any, len(sourceTable)+len(installedTable))
++	for name, value := range sourceTable {
++		if name != excludedKey {
++			merged[name] = value
++		}
++	}
++	for name, value := range installedTable {
++		if name != excludedKey {
++			merged[name] = value
++		}
++	}
++	return merged, nil
++}
++
++func codexConfigTable(document map[string]any, key string) (map[string]any, error) {
++	raw, found := document[key]
++	if !found {
++		return nil, nil
++	}
++	table, ok := raw.(map[string]any)
++	if !ok {
++		return nil, fmt.Errorf("expected table, got %T", raw)
++	}
++	return table, nil
++}
++
+ func renderProjectCodexConfig(sourcePath, destinationPath string, out io.Writer) error {
+ 	data, err := os.ReadFile(sourcePath)
+ 	if err != nil {
+diff --git a/tools/agents-infra/internal/infra/infra.go b/tools/agents-infra/internal/infra/infra.go
+index e587c57..f2f9a11 100644
+--- a/tools/agents-infra/internal/infra/infra.go
++++ b/tools/agents-infra/internal/infra/infra.go
+@@ -309,6 +309,9 @@ func syncRepo(layout Layout) error {
+ 		if err != nil {
+ 			return err
+ 		}
++		if filepath.ToSlash(rel) == managedCodexConfigRelativePath {
++			return syncManagedCodexConfig(path, dst, info.Mode())
++		}
+ 
+ 		if d.Type()&os.ModeSymlink != 0 {
+ 			target, err := os.Readlink(path)
+@@ -366,7 +369,7 @@ func shouldPreserveExistingLocalConfig(mode Mode, rel, dst string) bool {
+ 		return false
+ 	}
+ 	switch filepath.ToSlash(rel) {
+-	case ".configs/codex-config.toml", ".configs/claude-settings.json":
++	case ".configs/claude-settings.json":
+ 		return true
+ 	default:
+ 		return false
+diff --git a/tools/agents-infra/internal/infra/infra_test.go b/tools/agents-infra/internal/infra/infra_test.go
+index 1a6c88d..546c1be 100644
+--- a/tools/agents-infra/internal/infra/infra_test.go
++++ b/tools/agents-infra/internal/infra/infra_test.go
+@@ -791,10 +791,35 @@ func TestSetupLocalPreservesExistingNativeAgentConfigsOnResync(t *testing.T) {
+ 
+ 	codexConfig := filepath.Join(project, ".agents", ".configs", "codex-config.toml")
+ 	claudeSettings := filepath.Join(project, ".agents", ".configs", "claude-settings.json")
+-	mustWrite(t, codexConfig, "model = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"xhigh\"\n")
++	mustWrite(t, codexConfig, `model = "user-overrides-managed-model"
++service_tier = "fast"
++
++[profiles.fast]
++model = "gpt-5.5"
++
++[profiles.custom]
++model = "custom-model"
++
++[projects."/user/trusted"]
++trust_level = "trusted"
++
++[notice]
++hide_full_access_warning = true
++`)
+ 	mustWrite(t, claudeSettings, "{\n  \"model\": \"claude-sonnet-5\",\n  \"permissions\": {\"defaultMode\": \"bypassPermissions\"}\n}\n")
++	projectConfig := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
++	projectConfigState := "[agents.codex.primary_session]\nmodel = \"primary-model\"\nyolo_mode = false\n"
++	mustWrite(t, projectConfig, projectConfigState)
++
++	mustWrite(t, filepath.Join(source, ".configs", "codex-config.toml"), `model = "source-default-overwrite"
++service_tier = "default"
++
++[projects."/source/trusted"]
++trust_level = "trusted"
+ 
+-	mustWrite(t, filepath.Join(source, ".configs", "codex-config.toml"), "model = \"source-default-overwrite\"\n")
++[notice]
++hide_rate_limit_model_nudge = true
++`)
+ 	mustWrite(t, filepath.Join(source, ".configs", "claude-settings.json"), "{\"model\":\"source-default-overwrite\"}\n")
+ 	mustWrite(t, filepath.Join(source, ".configs", "codex-mcp-servers.toml"), `[servers.updated]
+ url = "https://example.test/mcp"
+@@ -804,15 +829,34 @@ url = "https://example.test/mcp"
+ 		t.Fatalf("second Setup: %v", err)
+ 	}
+ 
+-	assertFileContains(t, codexConfig, "gpt-5.6-terra")
+-	assertFileNotContains(t, codexConfig, "source-default-overwrite")
++	assertFileContains(t, codexConfig, "source-default-overwrite")
++	assertFileContains(t, codexConfig, "service_tier = 'default'")
++	assertFileNotContains(t, codexConfig, "user-overrides-managed-model")
++	assertFileNotContains(t, codexConfig, "[profiles.fast]")
++	assertFileContains(t, codexConfig, "[profiles.custom]")
++	assertFileContains(t, codexConfig, "[projects.'/user/trusted']")
++	assertFileContains(t, codexConfig, "[projects.'/source/trusted']")
++	assertFileContains(t, codexConfig, "hide_full_access_warning = true")
++	assertFileContains(t, codexConfig, "hide_rate_limit_model_nudge = true")
+ 	assertFileContains(t, claudeSettings, "claude-sonnet-5")
+ 	assertFileContains(t, claudeSettings, "bypassPermissions")
+ 	assertFileNotContains(t, claudeSettings, "source-default-overwrite")
+ 	assertFileContains(t, filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.updated]")
+-	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "gpt-5.6-terra")
+-	assertFileNotContains(t, filepath.Join(project, ".codex", "config.toml"), "source-default-overwrite")
++	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "source-default-overwrite")
++	assertFileNotContains(t, filepath.Join(project, ".codex", "config.toml"), "[profiles.custom]")
+ 	assertSymlink(t, filepath.Join(project, ".claude", "settings.json"), claudeSettings)
++	report := mustDoctor(t, layout)
++	if !report.CodexConfigPresent || !report.CodexConfigGenerated || !report.CodexPrimarySession.Model.Present || report.CodexPrimarySession.Model.Value != "primary-model" || !report.CodexPrimarySession.YoloMode.Present || report.CodexPrimarySession.YoloMode.Value {
++		t.Fatalf("unexpected local doctor report after managed config migration: %+v", report)
++	}
++	if err := VerifyInstalledRuntime(layout); err != nil {
++		t.Fatalf("VerifyInstalledRuntime: %v", err)
++	}
++	if got, err := os.ReadFile(projectConfig); err != nil {
++		t.Fatalf("ReadFile(%s): %v", projectConfig, err)
++	} else if string(got) != projectConfigState {
++		t.Fatalf("primary-session policy changed during resync:\ngot:  %q\nwant: %q", string(got), projectConfigState)
++	}
+ }
+ 
+ func TestSetupLocalProjectMCPOptInInstallsCodexLocalLauncher(t *testing.T) {
+@@ -1111,7 +1155,8 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
+ 
+ 	assertSymlink(t, filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".agents", ".configs", "codex-config.toml"))
+ 	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "hide_rate_limit_model_nudge = true")
+-	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "[profiles.fast]")
++	assertFileContains(t, filepath.Join(home, ".codex", "config.toml"), "service_tier = \"default\"")
++	assertFileNotContains(t, filepath.Join(home, ".codex", "config.toml"), "[profiles.fast]")
+ 	report := mustDoctor(t, layout)
+ 	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" {
+ 		t.Fatalf("unexpected global Codex config doctor report: %+v", report)
+@@ -1119,6 +1164,85 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
+ 	assertFileNotContains(t, filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.figma]")
+ }
+ 
++func TestSetupGlobalMigratesManagedCodexConfigPreservingUserState(t *testing.T) {
++	source := seedSourceRepo(t)
++	home := t.TempDir()
++	layout, err := GlobalLayout(source, home)
++	if err != nil {
++		t.Fatalf("GlobalLayout: %v", err)
++	}
++	seedGlobalAgentsInfraTarget(t, layout)
++	existingConfigPath := filepath.Join(home, ".agents", managedCodexConfigRelativePath)
++	mustMkdir(t, filepath.Dir(existingConfigPath))
++	mustWrite(t, existingConfigPath, `model = "old-managed-model"
++service_tier = "fast"
++
++[profiles.fast]
++model = "gpt-5.5"
++
++[profiles.custom]
++model = "custom-model"
++
++[projects."/user/trusted"]
++trust_level = "trusted"
++
++[notice]
++hide_rate_limit_model_nudge = false
++hide_full_access_warning = true
++`)
++
++	if err := Setup(Options{Layout: layout}); err != nil {
++		t.Fatalf("Setup: %v", err)
++	}
++
++	configPath := filepath.Join(home, ".codex", "config.toml")
++	assertSymlink(t, configPath, existingConfigPath)
++	assertFileContains(t, configPath, "model = 'gpt-5.5'")
++	assertFileContains(t, configPath, "service_tier = 'default'")
++	assertFileNotContains(t, configPath, "old-managed-model")
++	assertFileNotContains(t, configPath, "[profiles.fast]")
++	assertFileContains(t, configPath, "[profiles.custom]")
++	assertFileContains(t, configPath, "[projects.'/user/trusted']")
++	assertFileContains(t, configPath, "hide_rate_limit_model_nudge = false")
++	assertFileContains(t, configPath, "hide_full_access_warning = true")
++	report := mustDoctor(t, layout)
++	if !report.CodexConfigPresent || !report.CodexConfigLinked || report.CodexConfigEffective != "global" {
++		t.Fatalf("unexpected global doctor report after managed config migration: %+v", report)
++	}
++	if err := VerifyInstalledRuntime(layout); err != nil {
++		t.Fatalf("VerifyInstalledRuntime: %v", err)
++	}
++}
++
++func TestSetupGlobalRejectsMalformedExistingCodexConfigWithoutReplacingIt(t *testing.T) {
++	source := seedSourceRepo(t)
++	home := t.TempDir()
++	layout, err := GlobalLayout(source, home)
++	if err != nil {
++		t.Fatalf("GlobalLayout: %v", err)
++	}
++	seedGlobalAgentsInfraTarget(t, layout)
++	existingConfigPath := filepath.Join(home, ".agents", managedCodexConfigRelativePath)
++	mustMkdir(t, filepath.Dir(existingConfigPath))
++	existingConfig := []byte("model = \"user-model\"\n[projects.\"/user\"\ntrust_level = \"trusted\"\n")
++	mustWrite(t, existingConfigPath, string(existingConfig))
++
++	err = Setup(Options{Layout: layout})
++	if err == nil {
++		t.Fatal("Setup succeeded with malformed existing managed Codex config")
++	}
++	if !strings.Contains(err.Error(), "parse existing managed Codex config") || !strings.Contains(err.Error(), existingConfigPath) {
++		t.Fatalf("unexpected malformed existing config error: %v", err)
++	}
++	after, readErr := os.ReadFile(existingConfigPath)
++	if readErr != nil {
++		t.Fatalf("ReadFile(%s): %v", existingConfigPath, readErr)
++	}
++	if !bytes.Equal(after, existingConfig) {
++		t.Fatalf("failed migration replaced malformed existing config:\nbefore: %q\nafter:  %q", existingConfig, after)
++	}
++}
++
+ func TestSetupPreservesExistingPublicSkillsRegistryEntries(t *testing.T) {
+ 	source := seedSourceRepo(t)
+ 	project := t.TempDir()
+@@ -1216,7 +1340,7 @@ func seedSourceRepo(t *testing.T) string {
+ 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture+"\n")
+ 	mustWrite(t, filepath.Join(root, ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture+"\n"+forcedFitPolicyFixture+"\n"+dirtyCheckoutPolicyFixture+"\n")
+ 	mustWrite(t, filepath.Join(root, ".configs", "claude-settings.json"), "{}")
+-	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\n\n[profiles.fast]\nmodel = \"gpt-5.5\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
++	mustWrite(t, filepath.Join(root, ".configs", "codex-config.toml"), "model = \"gpt-5.5\"\nservice_tier = \"default\"\n\n[notice]\nhide_rate_limit_model_nudge = true\n")
+ 	mustWrite(t, filepath.Join(root, ".configs", "codex-mcp-servers.toml"), `[servers.figma]
+ url = "https://mcp.figma.com/mcp"
+ 
+diff --git a/tools/agents-infra/setup_test.go b/tools/agents-infra/setup_test.go
+index a68bf15..4cb0ed8 100644
+--- a/tools/agents-infra/setup_test.go
++++ b/tools/agents-infra/setup_test.go
+@@ -5,8 +5,48 @@ import (
+ 	"path/filepath"
+ 	"strings"
+ 	"testing"
++
++	"github.com/pelletier/go-toml/v2"
+ )
+ 
++func TestSourceManagedCodexConfigUsesStandardTierWithoutFastProfile(t *testing.T) {
++	root := sourceRepoRoot(t)
++	path := filepath.Join(root, ".configs", "codex-config.toml")
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", path, err)
++	}
++
++	var config map[string]any
++	if err := toml.Unmarshal(data, &config); err != nil {
++		t.Fatalf("Unmarshal(%s): %v", path, err)
++	}
++	if got := config["service_tier"]; got != "default" {
++		t.Fatalf("service_tier = %#v, want default", got)
++	}
++	if profiles, ok := config["profiles"].(map[string]any); ok {
++		if _, found := profiles["fast"]; found {
++			t.Fatalf("source-managed Codex config still advertises profiles.fast: %#v", profiles["fast"])
++		}
++	}
++}
++
++func TestREADMEDoesNotAdvertiseRemovedCodexFastProfile(t *testing.T) {
++	path := filepath.Join(sourceRepoRoot(t), "README.md")
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("ReadFile(%s): %v", path, err)
++	}
++	for _, removed := range []string{
++		"agents-infra codex --print-config --profile fast",
++		"named `fast` profile remains available",
++	} {
++		if strings.Contains(string(data), removed) {
++			t.Fatalf("README.md still advertises removed fast profile with %q", removed)
++		}
++	}
++}
++
+ func TestRunSetupLocalAcceptsPrimaryFlagsAfterProjectDirectory(t *testing.T) {
+ 	source := sourceRepoRoot(t)
+ 	project := t.TempDir()

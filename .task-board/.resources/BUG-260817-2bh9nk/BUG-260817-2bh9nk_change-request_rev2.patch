@@ -1,0 +1,274 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index fff878e..762fd96 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,30 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-30
++
++### 0319 — Production Binary Owns Launcher Origin Regression
++- FIX: `tools/agents-infra/runtime_main_darwin_test.go` builds the real CLI, passes caller-owned fd 3, mints a valid PID/runtime-key/exec-plan frame, and drives `runtime runtime-launch` through `tools/agents-infra/main.go:628`.
++- EVIDENCE: Clean environment execs the configured target; exact `HF_ENDPOINT` and `MODEL_ENDPOINT` each refuse before target exec without value leakage. HF-only and MODEL-only gate mutants each make the production test exit 1.
++- STATUS: Restored source passes the production/internal negatives, installed global/local launcher and docs gates, full uncached module suite, vet, build, formatting, and diff checks.
++
++### 0255 — Shared Runtime Launcher Enforces Model Origin At Exec Boundary
++- FIX: `tools/agents-infra/internal/infra/pi_shared_launcher_darwin.go` validates the launcher's actual environment immediately before `sharedRuntimeExecve`; independently callable `runtime runtime-launch` can no longer bypass the managed Pi model-origin gate.
++- EVIDENCE: A valid caller-minted authorization frame plus each exact denied name refuses without target exec or value leakage; HF-only and MODEL-only narrowing mutants each make the production-entry test exit 1.
++- FINDING: `sharedRuntimeExecve` has one production call site. `RunSharedRuntimeLauncher` is reached by the CLI runtime entry and the broker child path; unsupported-platform definitions never spawn a runtime.
++- STATUS: `BUG-260817-2bh9nk` rework validated by installed global/local launcher gates, docs gates, full serial tests, vet, build, formatting, and diff checks.
++
++### 0218 — Shared Runtime Launcher Bypasses Model-Origin Environment Gate
++- REGRESSION: `tools/agents-infra/internal/infra/pi_shared_launcher_darwin.go:93` execs the managed runtime with `options.Environ` without `ValidatePiExecutionEnvironment`; a valid self-minted authorization frame carries both `HF_ENDPOINT` and `MODEL_ENDPOINT` into the runtime target.
++- ROOT CAUSE: The later shared-runtime broker scrubs its child environment, but the independently callable `runtime runtime-launch` boundary relies on argv-only authorization and does not enforce the model-origin environment policy itself.
++- EVIDENCE: Disposable production child-exec test `TestReviewerSharedRuntimeLauncherCarriesDeniedModelOriginEnvironment` observed each canary in the target after the launcher accepted the frame; both cases passed, proving the forbidden state is reachable.
++- STATUS: `BUG-260817-2bh9nk` review requests rework: fail closed at `RunSharedRuntimeLauncher` before `execve`, add both-name production negatives and a narrowing mutant.
++
++### 0207 — Readiness Bound Flaked Under Full-Suite Load
++- ANOMALY: `go test ./... -count=1` for `BUG-260817-161m6u` review failed only `TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry`: one case never created its polling counter and the child-exit case timed out instead of reporting early exit.
++- EVIDENCE: Immediate isolated `-count=3` rerun passed both production subtests 3/3; the LLAMA environment helper/production gates and their narrowing mutant were independently green/red as expected.
++- STATUS: Non-reproducing load-sensitive signal, not attributed to the LLAMA gate; full-run failure remains recorded as exit 1 rather than relabelled green.
++
+ ## 2026-08-29
+ 
+ ### 2318 — Status Publication Revalidates Its Resource Decision
+diff --git a/tools/agents-infra/internal/infra/pi_shared_launcher_darwin.go b/tools/agents-infra/internal/infra/pi_shared_launcher_darwin.go
+index ab13a7c..283d9a9 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_launcher_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_launcher_darwin.go
+@@ -91,6 +91,9 @@ func RunSharedRuntimeLauncher(options SharedRuntimeLauncherOptions) error {
+ 	if environ == nil {
+ 		environ = os.Environ()
+ 	}
++	if err := ValidatePiExecutionEnvironment(environ); err != nil {
++		return err
++	}
+ 	argv := append([]string{resolved.Profile.Runtime.Executable}, resolved.Profile.Runtime.Argv...)
+ 	if err := sharedRuntimeExecve(resolved.Profile.Runtime.Executable, argv, environ); err != nil {
+ 		return sharedRuntimeError("runtime_start_failed", err)
+diff --git a/tools/agents-infra/internal/infra/pi_shared_launcher_test.go b/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+index aec1be3..784d177 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+@@ -143,7 +143,13 @@ func startSharedLauncherRunWithFiles(t *testing.T, fixture sharedLauncherFixture
+ 	args := []string{"runtime", "runtime-launch", "--runtime-key", runtimeKey, "--profile-project", fixture.project, "--profile", "profile"}
+ 	command := exec.Command(os.Args[0], args...)
+ 	command.Dir = fixture.resolved.Paths.RuntimeCWD
+-	command.Env = append(os.Environ(), "HOME="+fixture.home, sharedAuthEvidenceEnv+"="+fixture.evidencePath)
++	command.Env = []string{"HOME=" + fixture.home, sharedAuthEvidenceEnv + "=" + fixture.evidencePath}
++	if path := os.Getenv("PATH"); path != "" {
++		command.Env = append(command.Env, "PATH="+path)
++	}
++	if tempDir := os.Getenv("TMPDIR"); tempDir != "" {
++		command.Env = append(command.Env, "TMPDIR="+tempDir)
++	}
+ 	command.Env = append(command.Env, extraEnv...)
+ 	stderr := new(bytes.Buffer)
+ 	command.Stderr = stderr
+@@ -428,6 +434,46 @@ func TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry(t
+ 	}
+ }
+ 
++// Production call site: RunSharedRuntimeLauncher immediately before
++// sharedRuntimeExecve, driven through the runtime runtime-launch process entry.
++func TestSharedRuntimeLauncherRefusesModelOriginEnvironmentAtProductionEntry(t *testing.T) {
++	fixture := newSharedLauncherFixture(t)
++	requireSharedLauncherValidControl(t, fixture)
++
++	for _, testCase := range []struct {
++		name  string
++		value string
++	}{
++		{name: "HF_ENDPOINT", value: "https://direct-hf-origin.invalid/secret"},
++		{name: "MODEL_ENDPOINT", value: "https://direct-model-origin.invalid/secret"},
++	} {
++		t.Run(testCase.name, func(t *testing.T) {
++			_ = os.Remove(fixture.marker)
++			run := startSharedLauncherRunWithEnv(t, fixture, true, testCase.name+"="+testCase.value)
++			run.authorize(t, rawSharedLauncherFrame(t, validSharedLauncherFrame(fixture, run.command.Process.Pid)))
++
++			waitErr := run.wait(t, 3*time.Second)
++			if waitErr == nil {
++				t.Fatalf("runtime runtime-launch admitted %s", testCase.name)
++			}
++			want := fmt.Sprintf("runtime-affecting environment name %q is denied", testCase.name)
++			got := strings.TrimSpace(run.stderr.String())
++			if got != want {
++				t.Fatalf("runtime runtime-launch refusal=%q want=%q", got, want)
++			}
++			if strings.Contains(got, testCase.value) {
++				t.Fatalf("runtime runtime-launch refusal exposed %s value: %q", testCase.name, got)
++			}
++			if run.carriedTarget() {
++				t.Fatalf("runtime runtime-launch carried %s through sharedRuntimeExecve", testCase.name)
++			}
++			if _, err := os.Stat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
++				t.Fatalf("runtime runtime-launch executed target with %s: %v", testCase.name, err)
++			}
++		})
++	}
++}
++
+ func TestSharedRuntimeLauncherRejectsAuthorizationChannelGuardBypassesAtProductionEntry(t *testing.T) {
+ 	fixture := newSharedLauncherFixture(t)
+ 	tests := []struct {
+diff --git a/tools/agents-infra/runtime_main_darwin_test.go b/tools/agents-infra/runtime_main_darwin_test.go
+index ef49cdd..7d870df 100644
+--- a/tools/agents-infra/runtime_main_darwin_test.go
++++ b/tools/agents-infra/runtime_main_darwin_test.go
+@@ -3,14 +3,154 @@
+ package main
+ 
+ import (
++	"bytes"
+ 	"encoding/json"
+ 	"os"
++	"os/exec"
+ 	"path/filepath"
++	"strconv"
++	"strings"
+ 	"testing"
+ 
+ 	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/infra"
+ )
+ 
++type productionRuntimeAuthorizationFrame struct {
++	Schema          string `json:"schema"`
++	ProtocolVersion int    `json:"protocol_version"`
++	RuntimeKey      string `json:"runtime_key"`
++	LauncherPID     int    `json:"launcher_pid"`
++	ExecPlanDigest  string `json:"exec_plan_digest"`
++}
++
++// Production call site: runRuntime's runtime-launch dispatch in main.go,
++// exercised through the built agents-infra binary with caller-minted fd 3
++// authorization evidence.
++func TestProductionRuntimeLaunchRefusesModelOriginEnvironment(t *testing.T) {
++	binary := buildInstalledBinary(t)
++	home, err := os.MkdirTemp("/tmp", "x")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(home) })
++	cache := filepath.Join(home, "Library", "Caches")
++	mustMkdir(t, cache)
++	project := t.TempDir()
++	marker := filepath.Join(t.TempDir(), "runtime-started")
++	runtimeExecutable := filepath.Join(t.TempDir(), "runtime")
++	mustWrite(t, runtimeExecutable, "#!/bin/sh\nprintf launched > "+strconv.Quote(marker)+"\n")
++	if err := os.Chmod(runtimeExecutable, 0o755); err != nil {
++		t.Fatal(err)
++	}
++	port := 18033
++	runtimeArgv := []string{"serve", "--model", "Model", "--host", "127.0.0.1", "--port", strconv.Itoa(port)}
++	body := mainTestPiConfig(runtimeExecutable, port) + `
++[agents.pi.profiles.profile.runtime.sharing]
++mode = "shared"
++linger_seconds = 0
++max_leases = 4
++max_segment_bytes = 1048576
++max_segments = 7
++heartbeat_interval_seconds = 1
++lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
++broker_start_timeout_seconds = 40
++resource_pressure_mode = "disabled"
++`
++	configPath := filepath.Join(project, ".agents", ".configs", "project-config.toml")
++	mustMkdir(t, filepath.Dir(configPath))
++	mustWrite(t, configPath, body)
++	status, err := infra.SharedRuntimeStatusReport(infra.SharedRuntimeOperatorOptions{
++		ProjectDir: project,
++		HomeDir:    home,
++		CacheRoot:  cache,
++		Profile:    "profile",
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := infra.CreateSharedRuntimeTree(status.Paths); err != nil {
++		t.Fatal(err)
++	}
++	execPlanDigest := infra.SharedRuntimeExecPlanDigest(infra.PiProfile{Runtime: infra.PiRuntime{
++		Executable:            runtimeExecutable,
++		Argv:                  runtimeArgv,
++		StartupTimeoutSeconds: 5,
++	}}, status.Paths.RuntimeCWD)
++
++	launch := func(t *testing.T, extraEnv ...string) (string, error) {
++		t.Helper()
++		readEnd, writeEnd, err := os.Pipe()
++		if err != nil {
++			t.Fatal(err)
++		}
++		command := exec.Command(binary, "runtime", "runtime-launch", "--runtime-key", status.RuntimeKey, "--profile-project", project, "--profile", "profile")
++		command.Dir = status.Paths.RuntimeCWD
++		command.Env = append([]string{"HOME=" + home}, extraEnv...)
++		command.ExtraFiles = []*os.File{readEnd}
++		var output bytes.Buffer
++		command.Stdout = &output
++		command.Stderr = &output
++		if err := command.Start(); err != nil {
++			_ = readEnd.Close()
++			_ = writeEnd.Close()
++			t.Fatal(err)
++		}
++		_ = readEnd.Close()
++		frame := productionRuntimeAuthorizationFrame{
++			Schema:          "agents-infra.pi.shared-runtime.auth.v1",
++			ProtocolVersion: infra.SharedRuntimeProtocolVersion,
++			RuntimeKey:      status.RuntimeKey,
++			LauncherPID:     command.Process.Pid,
++			ExecPlanDigest:  execPlanDigest,
++		}
++		if err := json.NewEncoder(writeEnd).Encode(frame); err != nil {
++			_ = writeEnd.Close()
++			_ = command.Process.Kill()
++			_ = command.Wait()
++			t.Fatal(err)
++		}
++		if err := writeEnd.Close(); err != nil {
++			_ = command.Process.Kill()
++			_ = command.Wait()
++			t.Fatal(err)
++		}
++		waitErr := command.Wait()
++		return output.String(), waitErr
++	}
++
++	t.Run("clean control", func(t *testing.T) {
++		output, err := launch(t)
++		if err != nil {
++			t.Fatalf("clean runtime-launch failed: %v\n%s", err, output)
++		}
++		if _, err := os.Stat(marker); err != nil {
++			t.Fatalf("clean runtime-launch did not exec target: %v", err)
++		}
++	})
++	for _, name := range []string{"HF_ENDPOINT", "MODEL_ENDPOINT"} {
++		t.Run(name, func(t *testing.T) {
++			_ = os.Remove(marker)
++			secret := "https://caller-origin.invalid/" + strings.ToLower(name)
++			output, err := launch(t, name+"="+secret)
++			want := "runtime-affecting environment name " + strconv.Quote(name) + " is denied"
++			if err == nil || strings.TrimSpace(output) != want {
++				t.Fatalf("production runtime-launch admitted %s: err=%v output=%q", name, err, output)
++			}
++			if strings.Contains(output, secret) {
++				t.Fatalf("production runtime-launch leaked %s value: %q", name, output)
++			}
++			if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
++				t.Fatalf("production runtime-launch executed target with %s: %v", name, statErr)
++			}
++		})
++	}
++}
++
+ func TestRunRuntimeStatusJSONIsAbsentAndSideEffectFree(t *testing.T) {
+ 	project := t.TempDir()
+ 	home, err := os.MkdirTemp("/tmp", "x")

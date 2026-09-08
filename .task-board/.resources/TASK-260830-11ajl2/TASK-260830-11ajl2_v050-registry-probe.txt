@@ -1,0 +1,51 @@
+=== probe source (compiled against skill-agents-management v0.5.0) ===
+package main
+
+import (
+	"fmt"
+
+	"github.com/relux-works/skill-agents-management/pkg/agentic"
+	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/agy"
+	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/claude"
+	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/codex"
+	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/gemini"
+	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/muse"
+	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
+	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/qwen"
+	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
+)
+
+func main() {
+	fmt.Println("registered agentic systems:", agentic.Default.IDs())
+	fmt.Println("agents-infra admitted environments: [codex claude-code pi]")
+	fmt.Println("--- runtimes (system x vendor) ---")
+	for _, rt := range vendorplugin.Default.RuntimeDeclarations() {
+		fmt.Printf("  runtime=%-8s system=%-12s vendor=%s\n", rt.ID, rt.System, rt.Vendor)
+	}
+	for _, id := range []string{"pi", "local-models"} {
+		_, ok := vendorplugin.Default.RuntimeDeclarationOf(vendorplugin.RuntimeID(id))
+		fmt.Printf("  lookup runtime %q -> found=%v\n", id, ok)
+	}
+	// The pi system plugin's own launch target, from agents-infra's perspective.
+	sys, _ := agentic.Default.Lookup("pi")
+	bin, err := sys.ResolveBinary(agentic.LaunchRequest{Env: []string{"PATH=/usr/bin:/bin"}})
+	fmt.Printf("--- pi system ResolveBinary -> %q err=%v\n", bin, err)
+}
+
+=== go get output ===
+go: upgraded go 1.21.0 => 1.25.5
+go: added github.com/relux-works/skill-agents-management v0.5.0
+
+=== probe output ===
+registered agentic systems: [antigravity claude-code codex gemini-cli muse pi qwen-code]
+agents-infra admitted environments: [codex claude-code pi]
+--- runtimes (system x vendor) ---
+  runtime=agy      system=antigravity  vendor=google
+  runtime=claude   system=claude-code  vendor=anthropic
+  runtime=codex    system=codex        vendor=openai
+  runtime=gemini   system=gemini-cli   vendor=google
+  runtime=muse     system=muse         vendor=
+  runtime=qwen     system=qwen-code    vendor=alibaba
+  lookup runtime "pi" -> found=false
+  lookup runtime "local-models" -> found=false
+--- pi system ResolveBinary -> "" err=launchenv: "agents-infra" not found in the launch environment's PATH

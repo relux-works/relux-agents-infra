@@ -1,0 +1,11 @@
+### Final validation matrix — 2026-08-30T16:18:48Z
+plan sha256: 083a602386b78ed8b6e5542b5aa4422e47e603d34cffd9a2b0c2bb9b28cddbaa
+
+validate-revision6.sh  bash  plan=rev6  exit=0  probes=54 failures=0
+validate-revision6.sh  zsh  plan=rev6  exit=0  probes=54 failures=0
+validate-revision6.sh  bash  plan=rev5  exit=1  probes=12 failures=8
+validate-revision6.sh  zsh  plan=rev5  exit=1  probes=12 failures=8
+probe-rev5-failopen.sh bash  plan=rev5  exit=1  failures=4
+probe-rev5-failopen.sh zsh  plan=rev5  exit=1  failures=4
+validate-revision5.bash     plan=rev6  exit=0  overall_fail=0
+validate-revision5.zsh      plan=rev6  exit=0  overall_fail=0

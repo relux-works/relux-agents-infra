@@ -1,0 +1,6 @@
+mutation	go_test_exit	status
+trusted-composition-interface	1	killed
+readiness-requires-residency	1	killed
+unsupported-refusal	1	killed
+required-speculative-active-presence	1	killed
+required-restart-max-presence	1	killed

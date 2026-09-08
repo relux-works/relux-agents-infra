@@ -1,5 +1,5 @@
 ## Status
-to-review
+done
 
 ## Review
 required
@@ -75,6 +75,14 @@ spawn run started: [reviewer] reviewer (codex) (run=RUN-260817-7a31ff)
 Reviewer cycle 2 accepted: cycle-1 F1/F2 are closed by production setup/verify attacks against mode drift and byte-identical alias/target symlinks. Full uncached tests, vet, build, diff check, and board validation pass. Acceptance evidence: TASK-260817-3a0zr3_reviewer-verdict-cycle-2.md. Final done requires the commit-owning mover to commit its scope and supply commit_ack=scope_committed; reviewer did not and must not attest to that.
 agent completed: [reviewer] reviewer (codex) (exit=0)
 spawn run completed: codex (run=RUN-260817-7a31ff, pid=67765, exit=0)
+spawn selection rationale tuple: {"role":"reviewer","pair":"gpt-5.6-sol/high","text":"Last parked to-review element in this story; the pi-infra alias and its documented operator workflow."}
+spawn selection rationale for gpt-5.6-sol/high: Last parked to-review element in this story; the pi-infra alias and its documented operator workflow.
+spawn agent resolution: Agent selection: codex via explicit_override (preferred_agentic_system: exclusive[codex], config: spawn.preferred_agentic_system)
+spawn launch composition: empty; contract=agents-infra.child-launch-composition; provider=codex; schema=1; producer=v1.6.1-92-g3295c7d; diagnostic=launch_composition_empty; no project MCP servers enabled
+spawn queued: [reviewer] reviewer (codex) (run=RUN-260830-136b2b, max_parallel=20)
+spawn run started: [reviewer] reviewer (codex) (run=RUN-260830-136b2b)
+agent completed: [reviewer] reviewer (codex) (exit=0)
+spawn run completed: codex (run=RUN-260830-136b2b, pid=34014, exit=0)
 
 ## Precondition Resources
 - [TASK-260817-3a0zr3_pi-local-model-launch-contract.md](file://TASK-260817-3a0zr3/TASK-260817-3a0zr3_pi-local-model-launch-contract.md) — Cycle-10 alias and operator documentation contract with hash-only contained profile state and practical trust-boundary non-claims
@@ -93,12 +101,14 @@ spawn run completed: codex (run=RUN-260817-7a31ff, pid=67765, exit=0)
 - [TASK-260817-3a0zr3_reviewer-verdict-cycle-2.md](file://TASK-260817-3a0zr3/TASK-260817-3a0zr3_reviewer-verdict-cycle-2.md) — Cycle-2 accepted reviewer verdict with production symlink/mode gate-defeat evidence and commit handoff
 - [TASK-260817-3a0zr3_reviewer-manual-attack-02.log](file://TASK-260817-3a0zr3/TASK-260817-3a0zr3_reviewer-manual-attack-02.log) — Reviewer production setup/verify attack transcript for mode and symlink drift
 - [TASK-260817-3a0zr3_reviewer-go-test-full-01.log](file://TASK-260817-3a0zr3/TASK-260817-3a0zr3_reviewer-go-test-full-01.log) — Reviewer uncached full Go test evidence
+- [TASK-260817-3a0zr3_spawn-log_-reviewer--reviewer--codex-_RUN-260830-136b2b.log](file://TASK-260817-3a0zr3/TASK-260817-3a0zr3_spawn-log_-reviewer--reviewer--codex-_RUN-260830-136b2b.log) — System spawn log captured by task-board
+- [TASK-260817-3a0zr3_reviewer-verdict-RUN-260830-136b2b.md](file://TASK-260817-3a0zr3/TASK-260817-3a0zr3_reviewer-verdict-RUN-260830-136b2b.md) — Accepted reviewer verdict with production gate-defeat evidence, exact-head validation, and corrected current-main anomaly boundary
 
 ## Created
 2026-08-17T10:15:28Z
 
 ## Last Update
-2026-08-17T16:04:23Z
+2026-08-30T03:46:50Z
 
 ## Assigned To
 [reviewer] reviewer (codex)

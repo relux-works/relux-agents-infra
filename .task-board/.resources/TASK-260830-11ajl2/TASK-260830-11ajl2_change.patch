@@ -1,0 +1,588 @@
+diff --git a/README.md b/README.md
+index a179278..9ff86de 100644
+--- a/README.md
++++ b/README.md
+@@ -146,10 +146,15 @@ without mutating the tree being verified.
+ 
+ Two consequences worth knowing:
+ 
+-- `setup local` and `verify local` need a Go toolchain. The generated launcher
+-  already needs one on every invocation, so this is not a new requirement for
+-  the runtime — but it does mean a host without Go cannot install a local
+-  runtime instead of installing a broken one.
++- `setup local` and `verify local` need a Go toolchain, and `tools/agents-infra/go.mod`
++  now declares `go 1.25.5` — the floor its `skill-agents-management` dependency
++  imposes. The generated launcher already needs a toolchain on every invocation,
++  so this is not a new requirement for the runtime, but the version floor is
++  higher than it was: a host below it refuses outright under `GOTOOLCHAIN=local`
++  (`go.mod requires go >= 1.25.5`) and downloads the matching toolchain under the
++  default `GOTOOLCHAIN=auto`, which needs network. A host without Go, or one
++  pinned below the floor with no network, cannot install a local runtime instead
++  of installing a broken one.
+ - Setup and `verify local` build to the launcher's own output path, so the
+   launcher's first invocation finds an artifact that is already there. Nothing
+   is written into the source tree.
+diff --git a/tools/agents-infra/go.mod b/tools/agents-infra/go.mod
+index 4c1fe5d..8e1dc11 100644
+--- a/tools/agents-infra/go.mod
++++ b/tools/agents-infra/go.mod
+@@ -1,9 +1,11 @@
+ module github.com/relux-works/relux-agents-infra/tools/agents-infra
+ 
+-go 1.21.0
++go 1.25.5
+ 
+ require (
+ 	github.com/natefinch/atomic v1.0.1
+ 	github.com/pelletier/go-toml/v2 v2.4.3
+ 	golang.org/x/sys v0.30.0
+ )
++
++require github.com/relux-works/skill-agents-management v0.5.0
+diff --git a/tools/agents-infra/go.sum b/tools/agents-infra/go.sum
+index 86b907c..2a83b39 100644
+--- a/tools/agents-infra/go.sum
++++ b/tools/agents-infra/go.sum
+@@ -2,5 +2,7 @@ github.com/natefinch/atomic v1.0.1 h1:ZPYKxkqQOx3KZ+RsbnP/YsgvxWQPGxjC0oBt2AhwV0
+ github.com/natefinch/atomic v1.0.1/go.mod h1:N/D/ELrljoqDyT3rZrsUmtsuzvHkeB/wWjHV22AZRbM=
+ github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
+ github.com/pelletier/go-toml/v2 v2.4.3/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
++github.com/relux-works/skill-agents-management v0.5.0 h1:yy/j8YgKrXLWcb6zzoAld79a7iamTvOI5eZd/9MaAIk=
++github.com/relux-works/skill-agents-management v0.5.0/go.mod h1:wi+oH6fVUBF0bBOPs2bU7iyUhJveSAFh369CQB91ryk=
+ golang.org/x/sys v0.30.0 h1:QjkSwP/36a20jFYWkSue1YwXzLmsV5Gfq7Eiy72C1uc=
+ golang.org/x/sys v0.30.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
+diff --git a/tools/agents-infra/internal/infra/agentic_identity.go b/tools/agents-infra/internal/infra/agentic_identity.go
+new file mode 100644
+index 0000000..e8ca4e7
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agentic_identity.go
+@@ -0,0 +1,103 @@
++package infra
++
++import (
++	"errors"
++	"fmt"
++
++	"github.com/relux-works/skill-agents-management/pkg/agentic"
++
++	// The three agentic system plugins this tool admits, registered into
++	// agentic.Default by their init functions.
++	//
++	// They are linked in for IDENTITY ONLY. agents-infra never asks them to
++	// resolve a binary, build a plan, run a preflight or validate a
++	// composition, and agentic_identity_guard_test.go fails the build's tests
++	// if any production file starts to. The reason is not taste: the shipped
++	// pi plugin resolves the binary "agents-infra" on PATH and reads readiness
++	// by shelling out to `agents-infra runtime status --json`, so those
++	// surfaces describe THIS program from the outside. A consumer that called
++	// them from inside agents-infra would re-exec itself and shell out to
++	// itself for its own readiness. Registration itself performs no work — the
++	// plugins only hand the registry a declaration — so importing them costs
++	// nothing but the one fact this file wants: that the identifier exists on
++	// the plugin plane.
++	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/claude"
++	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/codex"
++	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/pi"
++)
++
++// admittedTargetEnvironments is the closed set of environments a configured
++// target may name, and it is the ONLY place that set is spelled.
++//
++// It is deliberately not derived from the plugin registry. Registry membership
++// is WIDER than this set — v0.5.0 registers seven systems and agents-infra can
++// launch three — so admitting whatever is registered would silently widen the
++// gate to gemini-cli, muse and antigravity targets for which this program has
++// no launcher at all. The registry is consulted as a cross-check on identifiers
++// this list already admits, never as the source of the list.
++var admittedTargetEnvironments = []string{"codex", "claude-code", "pi"}
++
++// errEnvironmentNotAdmitted is the refusal a target gets for naming an
++// environment outside admittedTargetEnvironments. Its wording is the one
++// configured targets have always received and is part of the CLI's surface.
++var errEnvironmentNotAdmitted = errors.New("must be one of codex, claude-code, pi")
++
++// agenticSystemRegistry is the plugin-plane registry the production admission
++// gate cross-checks against: the default registry the blank imports above
++// populate.
++func agenticSystemRegistry() *agentic.Registry { return agentic.Default }
++
++// resolveAdmittedEnvironmentSystemID is the whole environment admission gate,
++// called from validateProjectTarget (project_config.go) for every configured
++// target. It answers the plugin-plane SystemID an admitted environment names,
++// and refuses in four separate ways.
++//
++// The gate is a CONJUNCTION, and the order matters. Membership in
++// admittedTargetEnvironments is checked FIRST and on its own, so the plugin
++// plane can never admit anything this program cannot launch. Only then is the
++// identifier taken to the plugin plane, where it must
++//
++//   - normalize at all,
++//   - normalize to the spelling agents-infra already uses, because two
++//     spellings of one system is how downstream state keyed by the identifier
++//     gets silently orphaned, and
++//   - actually name a registered plugin.
++//
++// The last three refusals cannot fire against v0.5.0 with the imports above:
++// "codex", "claude-code" and "pi" are their own normal forms and all three are
++// registered. That is the point. They are drift alarms, and the drift they
++// catch is real — an environment added to admittedTargetEnvironments without
++// its plugin, or a library release that renames or drops one. Dropping any one
++// of the three blank imports above turns every project config naming that
++// environment into a parse-time refusal, which is the loud failure this gate
++// exists to produce instead of a launch that discovers the disagreement later.
++//
++// The environment name is used as the identifier directly, with no lookup
++// table. agents-infra's environments and the plugin ids they name are the same
++// three strings, and writing the correspondence down as a map would be a second
++// binding that can drift from the first. The equality is asserted here instead
++// of assumed: if it ever stops holding, the registry lookup fails rather than
++// resolving to the wrong system.
++//
++// The VENDOR half of a target is deliberately not cross-checked. agents-infra's
++// vendor label "qwen" means Pi driving a local Qwen profile; the plugin plane's
++// only "qwen" is qwen-code x alibaba, an unrelated system. Matching those by
++// name would bind a target to the wrong vendor, so the vendor stays an
++// agents-infra product label until a runtime binding exists that means what
++// agents-infra means.
++func resolveAdmittedEnvironmentSystemID(registry *agentic.Registry, environment string) (agentic.SystemID, error) {
++	if !containsString(admittedTargetEnvironments, environment) {
++		return "", errEnvironmentNotAdmitted
++	}
++	id, err := agentic.NormalizeSystemID(environment)
++	if err != nil {
++		return "", fmt.Errorf("is admitted here but does not name an agentic system plugin: %w", err)
++	}
++	if string(id) != environment {
++		return "", fmt.Errorf("is admitted as %q but normalizes to %q on the plugin plane, which would key state under two spellings of one system", environment, string(id))
++	}
++	if _, registered := registry.Lookup(id); !registered {
++		return "", fmt.Errorf("is admitted here but no agentic system plugin %q is registered, so this build cannot name the system it would launch", string(id))
++	}
++	return id, nil
++}
+diff --git a/tools/agents-infra/internal/infra/agentic_identity_guard_test.go b/tools/agents-infra/internal/infra/agentic_identity_guard_test.go
+new file mode 100644
+index 0000000..fe85791
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agentic_identity_guard_test.go
+@@ -0,0 +1,197 @@
++package infra
++
++import (
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"io/fs"
++	"os"
++	"path/filepath"
++	"runtime"
++	"sort"
++	"strconv"
++	"strings"
++	"testing"
++)
++
++const agentsManagementModule = "github.com/relux-works/skill-agents-management"
++
++// identityOnlyImports is the complete set of agents-management packages
++// agents-infra production code may link. Everything else in that module —
++// pkg/localruntime, pkg/vendorplugin, pkg/inferenceengine, pkg/plugin — either
++// describes agents-infra from the outside or belongs to a surface this program
++// owns itself.
++var identityOnlyImports = map[string]bool{
++	agentsManagementModule + "/pkg/agentic":                true,
++	agentsManagementModule + "/pkg/agentic/systems/claude": true,
++	agentsManagementModule + "/pkg/agentic/systems/codex":  true,
++	agentsManagementModule + "/pkg/agentic/systems/pi":     true,
++}
++
++// identityOnlySelectors is the complete set of names production code may take
++// from pkg/agentic. Nothing here builds a plan, resolves a binary, runs a
++// preflight or validates a composition.
++var identityOnlySelectors = map[string]bool{
++	"NormalizeSystemID": true,
++	"SystemID":          true,
++	"Registry":          true,
++	"Default":           true,
++}
++
++// agenticIdentityFile is the one production file allowed to name the
++// dependency at all, so a second entry point cannot appear without this test
++// naming the file it appeared in.
++const agenticIdentityFile = "internal/infra/agentic_identity.go"
++
++func agentsInfraModuleRoot(t *testing.T) string {
++	t.Helper()
++	_, testFile, _, ok := runtime.Caller(0)
++	if !ok {
++		t.Fatal("resolve guard test source path")
++	}
++	root := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", ".."))
++	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
++		t.Fatalf("module root %s has no go.mod: %v", root, err)
++	}
++	return root
++}
++
++func productionGoFiles(t *testing.T, root string) []string {
++	t.Helper()
++	var files []string
++	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
++		if err != nil {
++			return err
++		}
++		if d.IsDir() {
++			base := d.Name()
++			if path != root && (strings.HasPrefix(base, ".") || base == "testdata" || base == "vendor") {
++				return fs.SkipDir
++			}
++			return nil
++		}
++		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
++			return nil
++		}
++		files = append(files, path)
++		return nil
++	})
++	if err != nil {
++		t.Fatalf("WalkDir(%s): %v", root, err)
++	}
++	if len(files) == 0 {
++		t.Fatalf("no production Go files found under %s; the scan scope is wrong, which would make this guard pass vacuously", root)
++	}
++	return files
++}
++
++// The dependency direction, pinned mechanically.
++//
++// The shipped pi plugin resolves the binary "agents-infra" and reads readiness
++// through `agents-infra runtime status --json`; pkg/vendorplugin's local-models
++// vendor points at an agents-infra checkout. Those packages describe this
++// program from the outside. A production file here that imported them would
++// make agents-infra drive itself, and the failure would surface as a re-exec or
++// a self-shell-out at launch time rather than at review time.
++func TestProductionCodeImportsAgentsManagementForIdentityOnly(t *testing.T) {
++	root := agentsInfraModuleRoot(t)
++	fset := token.NewFileSet()
++	importingFiles := map[string][]string{}
++	for _, path := range productionGoFiles(t, root) {
++		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
++		if err != nil {
++			t.Fatalf("ParseFile(%s): %v", path, err)
++		}
++		rel, err := filepath.Rel(root, path)
++		if err != nil {
++			t.Fatalf("Rel(%s): %v", path, err)
++		}
++		rel = filepath.ToSlash(rel)
++		for _, spec := range file.Imports {
++			importPath, err := strconv.Unquote(spec.Path.Value)
++			if err != nil {
++				t.Fatalf("unquote import %s in %s: %v", spec.Path.Value, rel, err)
++			}
++			if importPath != agentsManagementModule && !strings.HasPrefix(importPath, agentsManagementModule+"/") {
++				continue
++			}
++			if !identityOnlyImports[importPath] {
++				t.Errorf("%s imports %s, which is outside the identity-only surface; agents-infra owns its own launch, composition and runtime lifecycle", rel, importPath)
++				continue
++			}
++			if rel != agenticIdentityFile {
++				t.Errorf("%s imports %s; the dependency may only be named in %s", rel, importPath, agenticIdentityFile)
++			}
++			importingFiles[rel] = append(importingFiles[rel], importPath)
++		}
++	}
++	if len(importingFiles[agenticIdentityFile]) != len(identityOnlyImports) {
++		t.Fatalf("%s imports %v, want exactly the %d identity-only packages; a missing plugin import silently narrows the plugin plane the admission gate cross-checks against", agenticIdentityFile, importingFiles[agenticIdentityFile], len(identityOnlyImports))
++	}
++}
++
++// Importing pkg/agentic is not the bound — what is taken from it is. This is
++// the narrowing half of the guard: it fails the moment a production file
++// reaches for BuildPlan, System, Composition or anything else that would make
++// agents-infra a consumer of the plugins' behaviour rather than their names.
++func TestIdentityFileUsesOnlyTheIdentitySurfaceOfPkgAgentic(t *testing.T) {
++	root := agentsInfraModuleRoot(t)
++	path := filepath.Join(root, filepath.FromSlash(agenticIdentityFile))
++	fset := token.NewFileSet()
++	file, err := parser.ParseFile(fset, path, nil, 0)
++	if err != nil {
++		t.Fatalf("ParseFile(%s): %v", path, err)
++	}
++
++	local := ""
++	for _, spec := range file.Imports {
++		importPath, err := strconv.Unquote(spec.Path.Value)
++		if err != nil {
++			t.Fatalf("unquote import %s: %v", spec.Path.Value, err)
++		}
++		if importPath != agentsManagementModule+"/pkg/agentic" {
++			continue
++		}
++		local = "agentic"
++		if spec.Name != nil {
++			local = spec.Name.Name
++		}
++	}
++	if local == "" || local == "_" {
++		t.Fatalf("%s does not import %s/pkg/agentic under a usable name; this guard would pass vacuously", agenticIdentityFile, agentsManagementModule)
++	}
++
++	used := map[string]bool{}
++	ast.Inspect(file, func(n ast.Node) bool {
++		selector, ok := n.(*ast.SelectorExpr)
++		if !ok {
++			return true
++		}
++		ident, ok := selector.X.(*ast.Ident)
++		if !ok || ident.Name != local || ident.Obj != nil {
++			return true
++		}
++		used[selector.Sel.Name] = true
++		return true
++	})
++
++	for name := range used {
++		if !identityOnlySelectors[name] {
++			t.Errorf("%s uses %s.%s, which is outside the identity surface (%s)", agenticIdentityFile, local, name, sortedNames(identityOnlySelectors))
++		}
++	}
++	for name := range identityOnlySelectors {
++		if !used[name] {
++			t.Errorf("%s no longer uses %s.%s; the allowlist must describe what the file actually does, or it stops constraining anything", agenticIdentityFile, local, name)
++		}
++	}
++}
++
++func sortedNames(set map[string]bool) string {
++	names := make([]string, 0, len(set))
++	for name := range set {
++		names = append(names, name)
++	}
++	sort.Strings(names)
++	return strings.Join(names, ", ")
++}
+diff --git a/tools/agents-infra/internal/infra/agentic_identity_test.go b/tools/agents-infra/internal/infra/agentic_identity_test.go
+new file mode 100644
+index 0000000..bf72eec
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/agentic_identity_test.go
+@@ -0,0 +1,202 @@
++package infra
++
++import (
++	"strings"
++	"testing"
++
++	"github.com/relux-works/skill-agents-management/pkg/agentic"
++	"github.com/relux-works/skill-agents-management/pkg/agentic/systems/claude"
++	"github.com/relux-works/skill-agents-management/pkg/agentic/systems/codex"
++
++	// The test binary deliberately registers MORE agentic system plugins than
++	// production links in. agents-infra itself imports only codex, claude and
++	// pi (agentic_identity.go); these four extra registrations make the test
++	// binary's plugin plane strictly wider than the admitted set, which is the
++	// only way to demonstrate that a system being registered is not by itself
++	// enough to be launchable here.
++	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/agy"
++	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/gemini"
++	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/muse"
++	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/qwen"
++)
++
++func projectConfigWithEnvironment(vendor, environment string) []byte {
++	return []byte("[agents.targets.bad]\nvendor=\"" + vendor + "\"\nenvironment=\"" + environment + "\"\nmodel=\"m\"\nreasoning=\"high\"\n")
++}
++
++// The positive direction: every environment agents-infra admits resolves,
++// through the production registry accessor, to a plugin registered under the
++// same spelling. If a blank import in agentic_identity.go were dropped this
++// fails here first, and then again in every existing test that parses a
++// project config naming that environment.
++func TestAdmittedEnvironmentsResolveToRegisteredAgenticSystems(t *testing.T) {
++	for _, environment := range admittedTargetEnvironments {
++		id, err := resolveAdmittedEnvironmentSystemID(agenticSystemRegistry(), environment)
++		if err != nil {
++			t.Fatalf("admitted environment %q does not resolve on the plugin plane: %v", environment, err)
++		}
++		if string(id) != environment {
++			t.Fatalf("admitted environment %q resolved to system id %q; the two must be one spelling", environment, string(id))
++		}
++	}
++}
++
++// Widening the PLUGIN PLANE must not widen the gate. The test binary registers
++// systems agents-infra cannot launch; each of them must still be refused by the
++// real parse entry point, with the wording a configured target has always got.
++//
++// This is the failure the audit named: driving admission off registry
++// membership would turn every registered system into a launchable target.
++func TestParseProjectConfigRefusesRegisteredSystemsThatAgentsInfraDoesNotAdmit(t *testing.T) {
++	registered := agenticSystemRegistry().IDs()
++	if len(registered) <= len(admittedTargetEnvironments) {
++		t.Fatalf("registry holds %d systems and %d are admitted; this test cannot prove non-widening unless the plane is wider", len(registered), len(admittedTargetEnvironments))
++	}
++	checked := 0
++	for _, id := range registered {
++		environment := string(id)
++		if containsString(admittedTargetEnvironments, environment) {
++			continue
++		}
++		checked++
++		t.Run(environment, func(t *testing.T) {
++			_, err := parseProjectConfig(projectConfigWithEnvironment("openai", environment), "/project/.agents/.configs/project-config.toml")
++			if err == nil {
++				t.Fatalf("registered system %q was admitted as a target environment", environment)
++			}
++			if !strings.Contains(err.Error(), "agents.targets.bad.environment") || !strings.Contains(err.Error(), "must be one of codex, claude-code, pi") {
++				t.Fatalf("registered system %q refused with the wrong reason: %v", environment, err)
++			}
++		})
++	}
++	if checked == 0 {
++		t.Fatal("no registered-but-unadmitted system was exercised")
++	}
++}
++
++// The naming trap, pinned. agents-infra's own provider label for the
++// claude-code environment is "claude", which is NOT a system id on the plugin
++// plane. Anything that resolved identity from the provider label instead of the
++// environment would look up a name nobody registers.
++func TestProviderLabelIsNotAnAgenticSystemID(t *testing.T) {
++	label := canonicalProviderForEnvironment("claude-code")
++	if label != "claude" {
++		t.Fatalf("provider label for claude-code = %q, want %q", label, "claude")
++	}
++	if _, registered := agenticSystemRegistry().Lookup(agentic.SystemID(label)); registered {
++		t.Fatalf("provider label %q resolves as a system id; the two vocabularies must stay separate", label)
++	}
++	if _, err := resolveAdmittedEnvironmentSystemID(agenticSystemRegistry(), label); err == nil {
++		t.Fatalf("provider label %q was admitted as an environment", label)
++	}
++}
++
++// The vendor trap, pinned. agents-infra's vendor "qwen" means Pi driving a
++// local Qwen profile. The plugin plane's nearest spelling is the unrelated
++// system qwen-code (Alibaba's harness), and there is no pi x local-models
++// runtime in v0.5.0 to mean what agents-infra means. So vendors are not
++// cross-checked, and neither vendor spelling may be admitted as an environment.
++func TestAgentsInfraVendorLabelsAreNotAgenticSystemIdentities(t *testing.T) {
++	if _, registered := agenticSystemRegistry().Lookup(agentic.SystemID("qwen")); registered {
++		t.Fatal(`a system is registered under "qwen"; agents-infra's vendor label must not be able to collide with a system id`)
++	}
++	if _, registered := agenticSystemRegistry().Lookup(agentic.SystemID("qwen-code")); !registered {
++		t.Fatal("qwen-code is not registered, so this test is no longer pinning the collision it was written for")
++	}
++	for _, vendor := range []string{"openai", "anthropic", "qwen"} {
++		if _, err := resolveAdmittedEnvironmentSystemID(agenticSystemRegistry(), vendor); err == nil {
++			t.Fatalf("vendor label %q was admitted as an environment", vendor)
++		}
++	}
++}
++
++// Widening the ADMITTED LIST must not widen the gate either. Each case adds one
++// environment agents-infra would accept on its own and drives the real parse
++// entry point; the plugin plane refuses it, so the target never lands.
++//
++// Restoring the list is the point of the cleanup: these are mutants of the
++// production gate, applied for one test each.
++func TestParseProjectConfigRefusesAdmittedEnvironmentsThePluginPlaneRejects(t *testing.T) {
++	tests := []struct {
++		name        string
++		environment string
++		wantReason  string
++	}{
++		{
++			name:        "no registered plugin",
++			environment: "opencode",
++			wantReason:  `no agentic system plugin "opencode" is registered`,
++		},
++		{
++			name:        "second spelling of a registered system",
++			environment: "Claude-Code",
++			wantReason:  `normalizes to "claude-code" on the plugin plane`,
++		},
++		{
++			name:        "not an identifier at all",
++			environment: "claude_code",
++			wantReason:  "does not name an agentic system plugin",
++		},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			restore := admittedTargetEnvironments
++			admittedTargetEnvironments = append(append([]string(nil), restore...), test.environment)
++			t.Cleanup(func() { admittedTargetEnvironments = restore })
++
++			_, err := parseProjectConfig(projectConfigWithEnvironment("anthropic", test.environment), "/project/.agents/.configs/project-config.toml")
++			if err == nil {
++				t.Fatalf("environment %q was admitted with no plugin-plane identity", test.environment)
++			}
++			if !strings.Contains(err.Error(), "agents.targets.bad.environment") {
++				t.Fatalf("refusal did not name the environment field: %v", err)
++			}
++			if !strings.Contains(err.Error(), test.wantReason) {
++				t.Fatalf("refusal for %q = %v, want it to state %q", test.environment, err, test.wantReason)
++			}
++		})
++	}
++}
++
++// The drift the cross-check exists to catch, driven through the same function
++// the production gate calls, against a plane that is missing a plugin rather
++// than one that has an extra.
++func TestAdmittedEnvironmentGateRefusesASystemThePlaneDoesNotRegister(t *testing.T) {
++	empty := agentic.NewRegistry()
++	for _, environment := range admittedTargetEnvironments {
++		id, err := resolveAdmittedEnvironmentSystemID(empty, environment)
++		if err == nil {
++			t.Fatalf("environment %q resolved to %q against an empty plugin plane", environment, string(id))
++		}
++		if !strings.Contains(err.Error(), `no agentic system plugin "`+environment+`" is registered`) {
++			t.Fatalf("refusal for %q = %v, want it to name the missing plugin", environment, err)
++		}
++	}
++
++	// A plane that registers two of the three is the realistic drift: one
++	// import dropped, the rest still fine. The gate must refuse exactly the
++	// missing one and keep admitting the others.
++	partial := agentic.NewRegistry()
++	for _, sys := range []agentic.System{claude.New(), codex.New()} {
++		if err := partial.Register(sys); err != nil {
++			t.Fatalf("Register: %v", err)
++		}
++	}
++	for _, environment := range []string{"claude-code", "codex"} {
++		if _, err := resolveAdmittedEnvironmentSystemID(partial, environment); err != nil {
++			t.Fatalf("environment %q refused against a plane that registers it: %v", environment, err)
++		}
++	}
++	if _, err := resolveAdmittedEnvironmentSystemID(partial, "pi"); err == nil {
++		t.Fatal(`environment "pi" resolved against a plane that does not register it`)
++	}
++}
++
++// Nil is a plane that cannot answer, not a plane that answered "registered".
++func TestAdmittedEnvironmentGateFailsClosedOnANilRegistry(t *testing.T) {
++	for _, environment := range admittedTargetEnvironments {
++		if _, err := resolveAdmittedEnvironmentSystemID(nil, environment); err == nil {
++			t.Fatalf("environment %q resolved against a nil registry", environment)
++		}
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/project_config.go b/tools/agents-infra/internal/infra/project_config.go
+index f2843cf..2a8007a 100644
+--- a/tools/agents-infra/internal/infra/project_config.go
++++ b/tools/agents-infra/internal/infra/project_config.go
+@@ -381,8 +381,8 @@ func validateProjectTarget(target ProjectTarget) error {
+ 	if !containsString([]string{"openai", "anthropic", "qwen"}, target.Vendor) {
+ 		return fieldError("vendor", errors.New("must be one of openai, anthropic, qwen"))
+ 	}
+-	if !containsString([]string{"codex", "claude-code", "pi"}, target.Environment) {
+-		return fieldError("environment", errors.New("must be one of codex, claude-code, pi"))
++	if _, err := resolveAdmittedEnvironmentSystemID(agenticSystemRegistry(), target.Environment); err != nil {
++		return fieldError("environment", err)
+ 	}
+ 	profileForbidden := func() error {
+ 		switch {

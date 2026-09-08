@@ -1,0 +1,1488 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 0369fa0..8134f99 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,23 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-08-29
++
++### 1612 — Shared Runtime Restart Ledger Reaches Production
++- DECISION: `tools/agents-infra/internal/infra/pi_shared_supervision.go` owns one runtime-key-scoped persisted ledger; every shared profile supplies restart limit, initial/max backoff, stable-run, and quarantine durations explicitly.
++- FIX: `RunSharedRuntimeBroker` persists readiness/failure facts, `acquireSharedRuntimeLease` automatically retries only ledger-proven runtime failures, and status/manual quarantine use the same resolved path contract.
++- EVIDENCE: Real `handleConnection` and `runSharedPiSession` abrupt-death fixtures release leases; focused race, full infra/root packages, vet, Darwin/Linux/Windows builds, formatting, and diff checks exit 0. Narrowed backoff and active-lock bypass mutants each exit 1 on their named negative test.
++- STATUS: `TASK-260829-2t5xmi` implementation ready for review.
++
++### 1545 — Baseline Ran Outside Story Worktree
++- ANOMALY: The contended baseline commands used the primary checkout `tools/agents-infra` directory instead of the assigned Story worktree; their exit status does not describe candidate `ee8ae3c` and must not be cited as task validation.
++- DECISION: Every subsequent Go command uses the absolute Story worktree module path and records its real exit code.
++
++### 1540 — Shared-Runtime Baseline Was Contended
++- ANOMALY: Two uncached `go test ./internal/infra -count=1` processes overlapped after the first 30-second yield lost its session handle; the observed 262.406s exit 1 contained three readiness/fan-in fixture failures and is not valid single-run baseline evidence.
++- DECISION: Run one directly tracked test process at a time and use focused `-run` masks before the bounded package split.
++- STATUS: No overlapping `go test ./internal/infra` process remained after the failed run.
++
+ ## 2026-08-27
+ 
+ ### 0144 — Historical Test Fixtures Survived As Orphans
+diff --git a/README.md b/README.md
+index f194ac4..f35e522 100644
+--- a/README.md
++++ b/README.md
+@@ -58,6 +58,8 @@ The canonical interface after bootstrap is:
+ - `agents-infra pi spawn --prompt TEXT [--deadline DURATION] [--print-config]`
+ - `agents-infra runtime status [--project DIR] [--profile NAME] [--json]`
+ - `agents-infra runtime stop [--project DIR] [--profile NAME] [--force] [--timeout SECONDS]`
++- `agents-infra runtime quarantine [--project DIR] [--profile NAME]`
++- `agents-infra runtime unquarantine [--project DIR] [--profile NAME]`
+ - `pi-infra [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
+ - `openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
+ - `qwen-infra spawn --prompt TEXT [--deadline DURATION] [--print-config]`
+@@ -474,6 +476,11 @@ linger_seconds = 15
+ max_leases = 8
+ heartbeat_interval_seconds = 5
+ lease_stale_seconds = 30
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 160
+ 
+ [agents.pi.profiles."muse-glimmer-30b-dflash"]
+@@ -650,6 +657,18 @@ The first broker fixes the effective sharing policy for its lifetime. Inspect
+ both configured and effective values, the attested broker/runtime identities,
+ and live leases without starting or connecting from `pi --print-config`:
+ 
++Shared profiles also require explicit restart supervision values. Runtime
++failures increment a mode-0600 `restart-ledger.json` under the resolved
++shared-runtime root. Each elected broker honors the persisted, exponentially
++increasing `restart_initial_backoff_seconds` delay capped by
++`restart_max_backoff_seconds`; a run that remains ready for
++`stable_run_seconds` resets the count. Reaching `restart_limit` quarantines the
++runtime for `quarantine_seconds`; the next broker attempt after that deadline
++is the automatic half-open probe. `runtime quarantine` and
++`runtime unquarantine` mutate the same ledger only while no broker owns it, so
++stop an active broker before changing manual quarantine. Status JSON always
++includes `restart_count`, `quarantined_until`, and `last_readiness_match`.
++
+ When a profile change produces a new runtime identity while the previous
+ shared runtime is still releasing the same fixed listener, acquisition retries
+ the broker's structured `runtime_listener_occupied` exit. The same bounded
+@@ -666,6 +685,8 @@ agents-infra runtime status --profile qwen-3.8-27b
+ agents-infra runtime status --profile qwen-3.8-27b --json
+ agents-infra runtime stop --profile qwen-3.8-27b
+ agents-infra runtime stop --profile qwen-3.8-27b --force --timeout 30
++agents-infra runtime quarantine --profile qwen-3.8-27b
++agents-infra runtime unquarantine --profile qwen-3.8-27b
+ ```
+ 
+ Ordinary stop refuses while leases are active. Forced stop first attests a
+@@ -1392,7 +1413,7 @@ rg -n "Primary Parent Goal Actualization" \
+ | Tool | Purpose | Command | Outputs |
+ |------|---------|---------|---------|
+ | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
+-| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or stop shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
++| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect, stop, quarantine, or unquarantine shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra target qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30`, `agents-infra runtime quarantine --profile NAME`, `agents-infra runtime unquarantine --profile NAME` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose or standalone launch-plan JSON, standalone Pi JSONL output and exit status, hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+ | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+ | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+diff --git a/tools/agents-infra/internal/infra/pi_config.go b/tools/agents-infra/internal/infra/pi_config.go
+index 975fa42..87681c8 100644
+--- a/tools/agents-infra/internal/infra/pi_config.go
++++ b/tools/agents-infra/internal/infra/pi_config.go
+@@ -99,12 +99,17 @@ type PiRuntime struct {
+ }
+ 
+ type PiRuntimeSharing struct {
+-	Mode                      string `json:"mode"`
+-	LingerSeconds             int    `json:"linger_seconds"`
+-	MaxLeases                 int    `json:"max_leases"`
+-	HeartbeatIntervalSeconds  int    `json:"heartbeat_interval_seconds"`
+-	LeaseStaleSeconds         int    `json:"lease_stale_seconds"`
+-	BrokerStartTimeoutSeconds int    `json:"broker_start_timeout_seconds"`
++	Mode                         string `json:"mode"`
++	LingerSeconds                int    `json:"linger_seconds"`
++	MaxLeases                    int    `json:"max_leases"`
++	HeartbeatIntervalSeconds     int    `json:"heartbeat_interval_seconds"`
++	LeaseStaleSeconds            int    `json:"lease_stale_seconds"`
++	BrokerStartTimeoutSeconds    int    `json:"broker_start_timeout_seconds"`
++	RestartLimit                 int    `json:"restart_limit"`
++	RestartInitialBackoffSeconds int    `json:"restart_initial_backoff_seconds"`
++	RestartMaxBackoffSeconds     int    `json:"restart_max_backoff_seconds"`
++	StableRunSeconds             int    `json:"stable_run_seconds"`
++	QuarantineSeconds            int    `json:"quarantine_seconds"`
+ }
+ 
+ type PiDFlash struct {
+@@ -440,7 +445,7 @@ func parsePiRuntime(table map[string]any, field string) (PiRuntime, error) {
+ }
+ 
+ func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime) (PiRuntimeSharing, error) {
+-	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds"); err != nil {
++	if err := rejectUnknownFields(table, field, "mode", "linger_seconds", "max_leases", "heartbeat_interval_seconds", "lease_stale_seconds", "broker_start_timeout_seconds", "restart_limit", "restart_initial_backoff_seconds", "restart_max_backoff_seconds", "stable_run_seconds", "quarantine_seconds"); err != nil {
+ 		return PiRuntimeSharing{}, err
+ 	}
+ 	var sharing PiRuntimeSharing
+@@ -473,6 +478,27 @@ func parsePiRuntimeSharing(table map[string]any, field string, runtime PiRuntime
+ 	if sharing.BrokerStartTimeoutSeconds < minimum {
+ 		return sharing, fieldError(field+".broker_start_timeout_seconds", fmt.Errorf("must be at least runtime startup + shutdown + 30 seconds (%d)", minimum))
+ 	}
++	if sharing.RestartLimit, err = requiredPositiveInt(table, "restart_limit"); err != nil {
++		return sharing, fieldError(field+".restart_limit", err)
++	}
++	if sharing.RestartInitialBackoffSeconds, err = requiredPositiveInt(table, "restart_initial_backoff_seconds"); err != nil {
++		return sharing, fieldError(field+".restart_initial_backoff_seconds", err)
++	}
++	if sharing.RestartMaxBackoffSeconds, err = requiredPositiveInt(table, "restart_max_backoff_seconds"); err != nil {
++		return sharing, fieldError(field+".restart_max_backoff_seconds", err)
++	}
++	if sharing.RestartMaxBackoffSeconds < sharing.RestartInitialBackoffSeconds {
++		return sharing, fieldError(field+".restart_max_backoff_seconds", errors.New("must be greater than or equal to restart_initial_backoff_seconds"))
++	}
++	if sharing.RestartMaxBackoffSeconds >= sharing.BrokerStartTimeoutSeconds {
++		return sharing, fieldError(field+".restart_max_backoff_seconds", errors.New("must be less than broker_start_timeout_seconds"))
++	}
++	if sharing.StableRunSeconds, err = requiredPositiveInt(table, "stable_run_seconds"); err != nil {
++		return sharing, fieldError(field+".stable_run_seconds", err)
++	}
++	if sharing.QuarantineSeconds, err = requiredPositiveInt(table, "quarantine_seconds"); err != nil {
++		return sharing, fieldError(field+".quarantine_seconds", err)
++	}
+ 	return sharing, nil
+ }
+ 
+diff --git a/tools/agents-infra/internal/infra/pi_shared_attestation_test.go b/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
+index 3e9bbee..3aae2f1 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_attestation_test.go
+@@ -57,6 +57,11 @@ linger_seconds = 0
+ max_leases = 4
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 35
+ `
+ 	writePiProjectConfig(t, project, body)
+diff --git a/tools/agents-infra/internal/infra/pi_shared_broker_admission_test.go b/tools/agents-infra/internal/infra/pi_shared_broker_admission_test.go
+index 7aa33c1..053fa9f 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_broker_admission_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_broker_admission_test.go
+@@ -9,6 +9,7 @@ import (
+ 	"net"
+ 	"os"
+ 	"os/exec"
++	"path/filepath"
+ 	"reflect"
+ 	"syscall"
+ 	"testing"
+@@ -47,7 +48,8 @@ func newSharedBrokerAdmissionFixture(t *testing.T) sharedBrokerAdmissionFixture
+ 		RuntimeKey: resolved.RuntimeKey, ProfileDigest: resolved.ProfileDigest,
+ 		Runtime: &SharedRuntimeProcessRecord{PID: 5252, Endpoint: resolved.Profile.BaseURL},
+ 	}
+-	server := newSharedBrokerServer(resolved, record, nil)
++	ledger := newSharedRuntimeRestartLedger(resolved.RuntimeKey, resolved.ProfileDigest)
++	server := newSharedBrokerServer(resolved, record, &ledger, nil)
+ 	server.admission = sharedBrokerAdmissionDependencies{
+ 		peerIdentity: func(*net.UnixConn) (uint32, int, error) {
+ 			return observation.UID, observation.PID, nil
+@@ -229,6 +231,56 @@ func TestSharedBrokerProductionConnectionRejectsWireFrameBoundWidening(t *testin
+ 	}
+ }
+ 
++// Production call site: sharedBrokerServer.handleConnection. Closing the real
++// AF_UNIX peer without a release frame must run the handler defer and remove
++// both the in-memory lease and its persisted mirror.
++func TestSharedBrokerHandleConnectionReleasesLeaseAfterAbruptClientDeath(t *testing.T) {
++	fixture := newSharedBrokerAdmissionFixture(t)
++	serverConnection, clientConnection := sharedBrokerUnixConnectionPair(t)
++	wrapped := &sharedBrokerConnection{
++		connection: serverConnection,
++		reader:     bufio.NewReaderSize(serverConnection, sharedRuntimeMaxFrameBytes+1),
++	}
++	fixture.server.connections[wrapped] = true
++	done := make(chan struct{})
++	go func() {
++		fixture.server.handleConnection(wrapped)
++		close(done)
++	}()
++	clientReader := bufio.NewReaderSize(clientConnection, sharedRuntimeMaxFrameBytes+1)
++	if err := writeSharedWireMessage(clientConnection, fixture.hello); err != nil {
++		t.Fatal(err)
++	}
++	if message, err := readSharedWireMessage(clientReader); err != nil || message.Type != "hello_ok" {
++		t.Fatalf("hello response=%#v err=%v", message, err)
++	}
++	if err := writeSharedWireMessage(clientConnection, sharedWireMessage{Type: "acquire", ClientKey: "abrupt-client"}); err != nil {
++		t.Fatal(err)
++	}
++	leaseMessage, err := readSharedWireMessage(clientReader)
++	if err != nil || leaseMessage.Type != "lease" || leaseMessage.LeaseID == "" {
++		t.Fatalf("lease response=%#v err=%v", leaseMessage, err)
++	}
++	mirror := filepath.Join(fixture.server.resolved.Paths.LeasesDir, leaseMessage.LeaseID+".json")
++	if _, err := os.Stat(mirror); err != nil {
++		t.Fatalf("lease mirror was not published: %v", err)
++	}
++	if err := clientConnection.Close(); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-done:
++	case <-time.After(3 * time.Second):
++		t.Fatal("handleConnection did not observe abrupt client death")
++	}
++	if leaseCount, _ := fixture.server.leaseFacts(); leaseCount != 0 {
++		t.Fatalf("handleConnection retained %d lease(s) after client death", leaseCount)
++	}
++	if _, err := os.Stat(mirror); !errors.Is(err, os.ErrNotExist) {
++		t.Fatalf("lease mirror survived abrupt client death: %v", err)
++	}
++}
++
+ func sharedBrokerUnixConnectionPair(t *testing.T) (*net.UnixConn, *net.UnixConn) {
+ 	t.Helper()
+ 	root, err := os.MkdirTemp("/tmp", "x")
+diff --git a/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go b/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go
+index b34a0b4..71dc09d 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_broker_darwin.go
+@@ -209,6 +209,20 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
+ 	if err := writeSharedJSONAtomic(paths.BrokerState, record); err != nil {
+ 		return err
+ 	}
++	ledger, err := readSharedRuntimeRestartLedger(paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
++	if err != nil {
++		return err
++	}
++	if err := sharedRuntimeBeginAttempt(&ledger, time.Now().UTC()); err != nil {
++		return err
++	}
++	if err := writeSharedRuntimeRestartLedger(paths.RestartLedger, ledger); err != nil {
++		return err
++	}
++	if delay := sharedRuntimeRestartDelay(ledger, time.Now().UTC()); delay > 0 {
++		timer := time.NewTimer(delay)
++		<-timer.C
++	}
+ 	if err := preflightPiListener(resolved.Profile.BaseURL); err != nil {
+ 		var launch *PiLaunchError
+ 		if errors.As(err, &launch) {
+@@ -217,6 +231,20 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
+ 		return err
+ 	}
+ 
++	runtimeReady := false
++	defer func() {
++		if result == nil || runtimeReady {
++			return
++		}
++		decision := sharedRuntimeRecordFailure(&ledger, resolved.Sharing, time.Now().UTC())
++		if ledgerErr := writeSharedRuntimeRestartLedger(paths.RestartLedger, ledger); ledgerErr != nil {
++			result = ledgerErr
++			return
++		}
++		if decision.Quarantined {
++			result = &SharedRuntimeError{Code: "shared_runtime_quarantined", Details: map[string]any{"restart_count": ledger.RestartCount, "quarantined_until": ledger.QuarantinedUntil}, Err: result}
++		}
++	}()
+ 	runtimeCommand, runtimeWait, authorizationWriter, err := startUnauthorizedRuntime(resolved, options.Environ)
+ 	if err != nil {
+ 		return err
+@@ -279,6 +307,11 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
+ 		return err
+ 	}
+ 	readyAt := time.Now().UTC()
++	runtimeReady = true
++	sharedRuntimeRecordReadiness(&ledger, readyAt)
++	if err := writeSharedRuntimeRestartLedger(paths.RestartLedger, ledger); err != nil {
++		return err
++	}
+ 	record.State = "serving"
+ 	record.Runtime.Stage = "running"
+ 	record.ReadyAt = &readyAt
+@@ -294,7 +327,7 @@ func RunSharedRuntimeBroker(options SharedRuntimeBrokerOptions) (result error) {
+ 		return sharedRuntimeError("shared_runtime_state_path_invalid", err)
+ 	}
+ 
+-	server := newSharedBrokerServer(resolved, &record, listener)
++	server := newSharedBrokerServer(resolved, &record, &ledger, listener)
+ 	serveErr := server.serve(runtimeWait, options.Signals)
+ 	listener.Close()
+ 	if server.forcedStop() {
+@@ -532,6 +565,7 @@ var sharedBrokerAdmissionSystem = sharedBrokerAdmissionDependencies{
+ type sharedBrokerServer struct {
+ 	resolved    sharedResolvedProfile
+ 	record      *SharedBrokerRecord
++	ledger      *SharedRuntimeRestartLedger
+ 	listener    *net.UnixListener
+ 	mu          sync.Mutex
+ 	state       string
+@@ -548,9 +582,9 @@ var sharedFirstLeaseGraceDuration = func(sharing PiRuntimeSharing) time.Duration
+ 	return time.Duration(sharing.BrokerStartTimeoutSeconds) * time.Second
+ }
+ 
+-func newSharedBrokerServer(resolved sharedResolvedProfile, record *SharedBrokerRecord, listener *net.UnixListener) *sharedBrokerServer {
++func newSharedBrokerServer(resolved sharedResolvedProfile, record *SharedBrokerRecord, ledger *SharedRuntimeRestartLedger, listener *net.UnixListener) *sharedBrokerServer {
+ 	return &sharedBrokerServer{
+-		resolved: resolved, record: record, listener: listener, state: "serving",
++		resolved: resolved, record: record, ledger: ledger, listener: listener, state: "serving",
+ 		connections: map[*sharedBrokerConnection]bool{}, leases: map[string]*SharedLeaseRecord{},
+ 		events: make(chan sharedBrokerEvent, 32), readyAt: dereferenceReadyAt(record.ReadyAt),
+ 		admission: sharedBrokerAdmissionSystem,
+@@ -590,6 +624,13 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
+ 	}
+ 	firstLeaseGrace := time.NewTimer(firstLeaseDelay)
+ 	defer firstLeaseGrace.Stop()
++	stableDelay := time.Until(server.readyAt.Add(time.Duration(server.resolved.Sharing.StableRunSeconds) * time.Second))
++	if stableDelay < 0 {
++		stableDelay = 0
++	}
++	stableRun := time.NewTimer(stableDelay)
++	defer stableRun.Stop()
++	stableRunChannel := stableRun.C
+ 	var linger *time.Timer
+ 	var lingerChannel <-chan time.Time
+ 	for {
+@@ -606,7 +647,24 @@ func (server *sharedBrokerServer) serve(runtimeWait *piProcessWait, signals <-ch
+ 			}
+ 			return sharedRuntimeError("broker_unreachable", err)
+ 		case <-runtimeWait.done:
+-			return sharedRuntimeError("runtime_exited_early", fmt.Errorf("runtime exited while broker served: %v", runtimeWait.err))
++			if time.Since(server.readyAt) >= time.Duration(server.resolved.Sharing.StableRunSeconds)*time.Second {
++				sharedRuntimeResetStableRun(server.ledger)
++			}
++			decision := sharedRuntimeRecordFailure(server.ledger, server.resolved.Sharing, time.Now().UTC())
++			if err := writeSharedRuntimeRestartLedger(server.resolved.Paths.RestartLedger, *server.ledger); err != nil {
++				return err
++			}
++			runtimeErr := fmt.Errorf("runtime exited while broker served: %v", runtimeWait.err)
++			if decision.Quarantined {
++				return &SharedRuntimeError{Code: "shared_runtime_quarantined", Details: map[string]any{"restart_count": server.ledger.RestartCount, "quarantined_until": server.ledger.QuarantinedUntil}, Err: runtimeErr}
++			}
++			return sharedRuntimeError("runtime_exited_early", runtimeErr)
++		case <-stableRunChannel:
++			sharedRuntimeResetStableRun(server.ledger)
++			if err := writeSharedRuntimeRestartLedger(server.resolved.Paths.RestartLedger, *server.ledger); err != nil {
++				return err
++			}
++			stableRunChannel = nil
+ 		case <-signals:
+ 			server.setDraining()
+ 			return nil
+diff --git a/tools/agents-infra/internal/infra/pi_shared_client_darwin.go b/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
+index 89ef8c2..9553311 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
+@@ -191,11 +191,27 @@ func acquireSharedRuntimeLease(resolved sharedResolvedProfile, state PiStatePath
+ 					brokerChild = nil
+ 					nextAttempt = time.Now().Add(handoffBackoff)
+ 					handoffBackoff = nextSharedRuntimeHandoffBackoff(handoffBackoff)
++				} else if exitCode == sharedRuntimeExitQuarantined {
++					ledger, ledgerErr := readSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
++					if ledgerErr != nil {
++						return nil, ledgerErr
++					}
++					return nil, &SharedRuntimeError{Code: "shared_runtime_quarantined", Details: map[string]any{
++						"restart_count": ledger.RestartCount, "quarantined_until": ledger.QuarantinedUntil, "manual": ledger.ManualQuarantine,
++					}, Err: errors.New("shared runtime broker is quarantined")}
+ 				} else if exitCode == 0 {
+ 					brokerChild = nil
+ 					nextAttempt = time.Now()
+ 				} else {
+-					return nil, &SharedRuntimeError{Code: "broker_start_failed", Details: map[string]any{"exit_status": exitCode, "broker_log_tail": sharedBrokerLogTail(resolved.Paths.BrokerLog)}, Err: waitErr}
++					ledger, ledgerErr := readSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
++					if ledgerErr != nil {
++						return nil, ledgerErr
++					}
++					if ledger.RestartCount == 0 || ledger.ManualQuarantine || ledger.QuarantinedUntil != nil {
++						return nil, &SharedRuntimeError{Code: "broker_start_failed", Details: map[string]any{"exit_status": exitCode, "broker_log_tail": sharedBrokerLogTail(resolved.Paths.BrokerLog)}, Err: waitErr}
++					}
++					brokerChild = nil
++					nextAttempt = time.Now().Add(sharedRuntimeRestartDelay(ledger, time.Now().UTC()))
+ 				}
+ 			}
+ 		}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_integration_test.go b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+index 794505e..4b3c340 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_integration_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_integration_test.go
+@@ -320,6 +320,11 @@ linger_seconds = 0
+ max_leases = 4
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+@@ -438,6 +443,11 @@ linger_seconds = 1
+ max_leases = 4
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
+ `, sharedTestProfileName)
+ 	}
+@@ -540,6 +550,11 @@ linger_seconds = 1
+ max_leases = 4
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+@@ -653,6 +668,11 @@ linger_seconds = 0
+ max_leases = 4
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+@@ -727,6 +747,11 @@ linger_seconds = 0
+ max_leases = 1
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+@@ -804,6 +829,11 @@ linger_seconds = 0
+ max_leases = 8
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 47
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+@@ -900,6 +930,11 @@ linger_seconds = 0
+ max_leases = 4
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
+ `, sharedTestProfileName)
+ 	writePiProjectConfig(t, project, body)
+@@ -963,7 +998,17 @@ func main() {
+   pidFile := flags.String("pid-file", "", "")
+   readyFile := flags.String("ready-file", "", "")
+   spawnLog := flags.String("spawn-log", "", "")
++  attemptFile := flags.String("attempt-file", "", "")
++  failFirst := flags.Int("fail-first", 0, "")
+   _ = flags.Parse(args)
++	if *attemptFile != "" {
++		attempt := 1
++		if data, err := os.ReadFile(*attemptFile); err == nil {
++			if previous, parseErr := strconv.Atoi(string(data)); parseErr == nil { attempt = previous + 1 }
++		}
++		_ = os.WriteFile(*attemptFile, []byte(strconv.Itoa(attempt)), 0600)
++		if attempt <= *failFirst { os.Exit(42) }
++	}
+   if *pidFile != "" { _ = os.WriteFile(*pidFile, []byte(strconv.Itoa(os.Getpid())), 0600) }
+   if *spawnLog != "" {
+     file, err := os.OpenFile(*spawnLog, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+@@ -1078,6 +1123,146 @@ func TestSharedRuntimeAcquisitionHonorsCancelledContextWithoutElection(t *testin
+ 	}
+ }
+ 
++// Production call site: SetSharedRuntimeManualQuarantine. A live broker lock
++// is a negative witness: the operator mutation must not race an active owner.
++func TestSetSharedRuntimeManualQuarantineRefusesActiveBrokerBeforeLedgerMutation(t *testing.T) {
++	project, home, cache, resolved := newSharedIntegrationProfile(t)
++	lock, err := openSharedBrokerLock(resolved.Paths.BrokerLock)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer lock.Close()
++	_, err = SetSharedRuntimeManualQuarantine(SharedRuntimeOperatorOptions{
++		ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile",
++	}, true)
++	if sharedRuntimeErrorCode(err) != "shared_runtime_active" {
++		t.Fatalf("active broker admitted manual quarantine mutation: %v", err)
++	}
++	if _, err := os.Stat(resolved.Paths.RestartLedger); !errors.Is(err, os.ErrNotExist) {
++		t.Fatalf("refused manual quarantine wrote ledger: %v", err)
++	}
++}
++
++// Production call site: RunSharedRuntimeBroker. The broker must read the
++// resolved cross-broker ledger before launching any runtime process.
++func TestRunSharedRuntimeBrokerRefusesPersistedManualQuarantineBeforeRuntimeLaunch(t *testing.T) {
++	project, home, _, resolved := newSharedIntegrationProfile(t)
++	if _, err := setSharedRuntimeManualQuarantine(resolved.Paths, resolved.RuntimeKey, resolved.ProfileDigest, true); err != nil {
++		t.Fatal(err)
++	}
++	command := exec.Command(os.Args[0], "runtime", "broker", "--runtime-key", resolved.RuntimeKey, "--profile-project", project, "--profile", "profile")
++	command.Env = append(os.Environ(), "HOME="+home)
++	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
++	output, err := command.CombinedOutput()
++	if err == nil || !bytes.Contains(output, []byte(`"code":"shared_runtime_quarantined"`)) {
++		t.Fatalf("manual quarantine broker gate err=%v output=%s", err, output)
++	}
++	if _, err := os.Stat(resolved.Paths.BrokerState); !errors.Is(err, os.ErrNotExist) {
++		t.Fatalf("quarantined broker left owner state: %v", err)
++	}
++}
++
++// Production call site: acquireSharedRuntimeLease. The client must preserve
++// the broker's quarantine refusal instead of laundering exit 77 into a generic
++// broker_start_failed result.
++func TestAcquireSharedRuntimeLeaseSurfacesPersistedManualQuarantine(t *testing.T) {
++	_, _, cache, resolved := newSharedIntegrationProfile(t)
++	if _, err := setSharedRuntimeManualQuarantine(resolved.Paths, resolved.RuntimeKey, resolved.ProfileDigest, true); err != nil {
++		t.Fatal(err)
++	}
++	state, err := ResolvePiClientStatePaths(cache, resolved.Project, resolved.ProfileName, "RUN-quarantined")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := CreatePiStateTree(state); err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
++	defer cancel()
++	_, err = acquireSharedRuntimeLease(resolved, state, "RUN-quarantined", append(os.Environ(), "HOME="+resolved.HomeDir), nil, ctx)
++	if sharedRuntimeErrorCode(err) != "shared_runtime_quarantined" {
++		t.Fatalf("acquisition lost quarantine reason: %v", err)
++	}
++}
++
++// Production call site: acquireSharedRuntimeLease -> startSharedRuntimeBroker
++// -> RunSharedRuntimeBroker. The static runtime fixture fails twice before it
++// serves readiness, forcing two distinct elected brokers to share one ledger.
++func TestAcquireSharedRuntimeLeaseAutomaticallyRestartsAcrossBrokers(t *testing.T) {
++	testRoot, err := os.MkdirTemp("/tmp", "x")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(testRoot) })
++	project := filepath.Join(testRoot, "project")
++	home := filepath.Join(testRoot, "home")
++	cache := filepath.Join(home, "Library", "Caches")
++	for _, directory := range []string{project, cache} {
++		if err := os.MkdirAll(directory, 0o700); err != nil {
++			t.Fatal(err)
++		}
++	}
++	listener, err := net.Listen("tcp4", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	port := listener.Addr().(*net.TCPAddr).Port
++	listener.Close()
++	attemptFile := filepath.Join(testRoot, "attempts")
++	runtimeExecutable := buildSharedFakeRuntime(t, testRoot)
++	body := validPiProfileWithArgv(t, "profile", runtimeExecutable, port, []string{
++		"serve", "--model", "Model", "--host", "127.0.0.1", "--port", fmt.Sprint(port),
++		"--attempt-file", attemptFile, "--fail-first", "2",
++	}, 8)
++	body += `
++[agents.pi.profiles.profile.runtime.sharing]
++mode = "shared"
++linger_seconds = 0
++max_leases = 4
++heartbeat_interval_seconds = 1
++lease_stale_seconds = 5
++restart_limit = 4
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 2
++stable_run_seconds = 10
++quarantine_seconds = 30
++broker_start_timeout_seconds = 40
++`
++	writePiProjectConfig(t, project, body)
++	resolved, err := resolveSharedProfile(project, home, cache, "profile")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := CreateSharedRuntimeTree(resolved.Paths); err != nil {
++		t.Fatal(err)
++	}
++	state, err := ResolvePiClientStatePaths(cache, resolved.Project, resolved.ProfileName, "RUN-auto-restart")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := CreatePiStateTree(state); err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
++	defer cancel()
++	lease, err := acquireSharedRuntimeLease(resolved, state, "RUN-auto-restart", append(os.Environ(), "HOME="+home), nil, ctx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer lease.close()
++	data, err := os.ReadFile(attemptFile)
++	if err != nil || strings.TrimSpace(string(data)) != "3" {
++		t.Fatalf("runtime attempts=%q err=%v want=3", data, err)
++	}
++	ledger, err := readSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if ledger.RestartCount != 2 || ledger.LastReadinessMatch == nil || ledger.QuarantinedUntil != nil {
++		t.Fatalf("cross-broker restart ledger=%#v", ledger)
++	}
++}
++
+ func TestSharedRuntimeCorruptRecordIsNeverAbsence(t *testing.T) {
+ 	project, home, cache, resolved := newSharedIntegrationProfile(t)
+ 	if err := os.WriteFile(resolved.Paths.BrokerState, []byte(`{"stage":`), 0o600); err != nil {
+diff --git a/tools/agents-infra/internal/infra/pi_shared_launcher_test.go b/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+index b4f3f75..af7352c 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_launcher_test.go
+@@ -63,6 +63,11 @@ linger_seconds = 0
+ max_leases = 4
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 35
+ `
+ 	writePiProjectConfig(t, project, body)
+diff --git a/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go b/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go
+index cd8374b..ac4c503 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_operator_darwin.go
+@@ -68,15 +68,19 @@ type SharedRuntimeSharingStatus struct {
+ }
+ 
+ type SharedRuntimeStatus struct {
+-	RuntimeKey    string                      `json:"runtime_key"`
+-	ProfileDigest string                      `json:"profile_digest"`
+-	Endpoint      string                      `json:"endpoint"`
+-	Sharing       SharedRuntimeSharingStatus  `json:"sharing"`
+-	Broker        SharedRuntimeBrokerStatus   `json:"broker"`
+-	Runtime       *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+-	Leases        []SharedLeaseStatus         `json:"leases"`
+-	Attestation   []SharedRuntimeGateOutcome  `json:"attestation"`
+-	Paths         SharedRuntimePaths          `json:"paths"`
++	RuntimeKey         string                      `json:"runtime_key"`
++	ProfileDigest      string                      `json:"profile_digest"`
++	Endpoint           string                      `json:"endpoint"`
++	RestartCount       int                         `json:"restart_count"`
++	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
++	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
++	ManualQuarantine   bool                        `json:"manual_quarantine"`
++	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
++	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
++	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
++	Leases             []SharedLeaseStatus         `json:"leases"`
++	Attestation        []SharedRuntimeGateOutcome  `json:"attestation"`
++	Paths              SharedRuntimePaths          `json:"paths"`
+ }
+ 
+ type SharedRuntimeStopResult struct {
+@@ -93,6 +97,11 @@ func SharedRuntimeStatusReport(options SharedRuntimeOperatorOptions) (SharedRunt
+ 		return SharedRuntimeStatus{}, err
+ 	}
+ 	report := newSharedRuntimeStatus(resolved)
++	ledger, err := readSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
++	if err != nil {
++		return SharedRuntimeStatus{}, err
++	}
++	applySharedRuntimeLedgerStatus(&report, ledger)
+ 	attested, err := connectAndAttestSharedRuntime(resolved, state, "", options.HTTPClient, time.Second)
+ 	if err == nil {
+ 		defer attested.close()
+@@ -113,6 +122,11 @@ func SharedRuntimeStatusReport(options SharedRuntimeOperatorOptions) (SharedRunt
+ 		report.Sharing.Effective = message.EffectiveSharing
+ 		report.Sharing.FixedByPID = message.Broker.PID
+ 		report.Sharing.FixedAt = &message.Broker.StartTime
++		ledger, err := readSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, resolved.RuntimeKey, resolved.ProfileDigest)
++		if err != nil {
++			return SharedRuntimeStatus{}, err
++		}
++		applySharedRuntimeLedgerStatus(&report, ledger)
+ 		return report, nil
+ 	}
+ 	if !isSharedBrokerUnreachable(err) {
+@@ -121,6 +135,33 @@ func SharedRuntimeStatusReport(options SharedRuntimeOperatorOptions) (SharedRunt
+ 	return sharedRuntimeRecordStatus(resolved, report)
+ }
+ 
++func applySharedRuntimeLedgerStatus(report *SharedRuntimeStatus, ledger SharedRuntimeRestartLedger) {
++	report.RestartCount = ledger.RestartCount
++	report.QuarantinedUntil = ledger.QuarantinedUntil
++	report.LastReadinessMatch = ledger.LastReadinessMatch
++	report.ManualQuarantine = ledger.ManualQuarantine
++}
++
++func SetSharedRuntimeManualQuarantine(options SharedRuntimeOperatorOptions, enabled bool) (SharedRuntimeRestartLedger, error) {
++	resolved, _, err := resolveSharedRuntimeOperator(options)
++	if err != nil {
++		return SharedRuntimeRestartLedger{}, err
++	}
++	if err := CreateSharedRuntimeTree(resolved.Paths); err != nil {
++		return SharedRuntimeRestartLedger{}, err
++	}
++	lock, err := openSharedBrokerLock(resolved.Paths.BrokerLock)
++	if err != nil {
++		var shared *SharedRuntimeError
++		if errors.As(err, &shared) && shared.Code == "broker_election_lost" {
++			return SharedRuntimeRestartLedger{}, sharedRuntimeError("shared_runtime_active", errors.New("stop the active broker before changing manual quarantine"))
++		}
++		return SharedRuntimeRestartLedger{}, err
++	}
++	defer lock.Close()
++	return setSharedRuntimeManualQuarantine(resolved.Paths, resolved.RuntimeKey, resolved.ProfileDigest, enabled)
++}
++
+ func StopSharedRuntime(options SharedRuntimeOperatorOptions, force bool, timeout time.Duration) (SharedRuntimeStopResult, error) {
+ 	if timeout <= 0 {
+ 		return SharedRuntimeStopResult{}, sharedRuntimeError("invalid_runtime_stop_timeout", errors.New("timeout must be positive"))
+diff --git a/tools/agents-infra/internal/infra/pi_shared_protocol.go b/tools/agents-infra/internal/infra/pi_shared_protocol.go
+index c828c9d..de46641 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_protocol.go
++++ b/tools/agents-infra/internal/infra/pi_shared_protocol.go
+@@ -30,6 +30,7 @@ const (
+ 	sharedRuntimeKeySchema        = "agents-infra.pi.shared-runtime.v1"
+ 	sharedRuntimeExitElectionLost = 75
+ 	sharedRuntimeExitListenerBusy = 76
++	sharedRuntimeExitQuarantined  = 77
+ 	sharedRuntimeMaxFrameBytes    = 65536
+ )
+ 
+@@ -92,6 +93,9 @@ func SharedRuntimeExitCode(err error) (int, bool) {
+ 	if shared.Code == "runtime_listener_occupied" {
+ 		return sharedRuntimeExitListenerBusy, true
+ 	}
++	if shared.Code == "shared_runtime_quarantined" {
++		return sharedRuntimeExitQuarantined, true
++	}
+ 	return 1, true
+ }
+ 
+@@ -201,6 +205,7 @@ type SharedRuntimePaths struct {
+ 	Root               string `json:"root"`
+ 	BrokerLock         string `json:"broker_lock"`
+ 	BrokerState        string `json:"broker_state"`
++	RestartLedger      string `json:"restart_ledger"`
+ 	BrokerLog          string `json:"broker_log"`
+ 	RuntimeLog         string `json:"runtime_log"`
+ 	LeasesDir          string `json:"leases_dir"`
+@@ -243,6 +248,7 @@ func ResolveSharedRuntimePaths(cacheRoot, runtimeKey string) (SharedRuntimePaths
+ 		Root:               root,
+ 		BrokerLock:         filepath.Join(root, "broker.lock"),
+ 		BrokerState:        filepath.Join(root, "broker-state.json"),
++		RestartLedger:      filepath.Join(root, "restart-ledger.json"),
+ 		BrokerLog:          filepath.Join(root, "broker.log"),
+ 		RuntimeLog:         filepath.Join(root, "runtime.log"),
+ 		LeasesDir:          filepath.Join(root, "leases"),
+diff --git a/tools/agents-infra/internal/infra/pi_shared_protocol_test.go b/tools/agents-infra/internal/infra/pi_shared_protocol_test.go
+index 4035f75..22172d4 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_protocol_test.go
++++ b/tools/agents-infra/internal/infra/pi_shared_protocol_test.go
+@@ -20,6 +20,13 @@ func TestSharedRuntimeListenerBusyHasNominalBrokerExitCode(t *testing.T) {
+ 	}
+ }
+ 
++func TestSharedRuntimeQuarantineHasNominalBrokerExitCode(t *testing.T) {
++	code, ok := SharedRuntimeExitCode(sharedRuntimeError("shared_runtime_quarantined", errors.New("quarantined")))
++	if !ok || code != sharedRuntimeExitQuarantined {
++		t.Fatalf("quarantine exit=(%d,%t) want=(%d,true)", code, ok, sharedRuntimeExitQuarantined)
++	}
++}
++
+ func TestSharedRuntimeDigestsExcludeSharingAndCoverTheExecutionPlan(t *testing.T) {
+ 	profile := mustParsedPiProfile(t, false)
+ 	profile.Runtime.Sharing = &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 1, HeartbeatIntervalSeconds: 1, LeaseStaleSeconds: 2, BrokerStartTimeoutSeconds: 40}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_supervision.go b/tools/agents-infra/internal/infra/pi_shared_supervision.go
+new file mode 100644
+index 0000000..99cc121
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_shared_supervision.go
+@@ -0,0 +1,134 @@
++//go:build !windows
++
++package infra
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"os"
++	"time"
++)
++
++const sharedRuntimeRestartLedgerSchema = "agents-infra.pi.shared-runtime.restart-ledger.v1"
++
++type SharedRuntimeRestartLedger struct {
++	Schema             string     `json:"schema"`
++	RuntimeKey         string     `json:"runtime_key"`
++	ProfileDigest      string     `json:"profile_digest"`
++	RestartCount       int        `json:"restart_count"`
++	RestartNotBefore   *time.Time `json:"restart_not_before"`
++	QuarantinedUntil   *time.Time `json:"quarantined_until"`
++	LastReadinessMatch *time.Time `json:"last_readiness_match"`
++	ManualQuarantine   bool       `json:"manual_quarantine"`
++	HalfOpen           bool       `json:"half_open"`
++}
++
++type sharedRuntimeRestartDecision struct {
++	Backoff     time.Duration
++	Quarantined bool
++}
++
++func newSharedRuntimeRestartLedger(runtimeKey, profileDigest string) SharedRuntimeRestartLedger {
++	return SharedRuntimeRestartLedger{Schema: sharedRuntimeRestartLedgerSchema, RuntimeKey: runtimeKey, ProfileDigest: profileDigest}
++}
++
++func readSharedRuntimeRestartLedger(path, runtimeKey, profileDigest string) (SharedRuntimeRestartLedger, error) {
++	data, err := os.ReadFile(path)
++	if errors.Is(err, os.ErrNotExist) {
++		return newSharedRuntimeRestartLedger(runtimeKey, profileDigest), nil
++	}
++	if err != nil {
++		return SharedRuntimeRestartLedger{}, sharedRuntimeError("shared_runtime_state_unreadable", err)
++	}
++	decoder := json.NewDecoder(bytes.NewReader(data))
++	decoder.DisallowUnknownFields()
++	var ledger SharedRuntimeRestartLedger
++	if err := decoder.Decode(&ledger); err != nil || requireJSONEOF(decoder) != nil {
++		return SharedRuntimeRestartLedger{}, sharedRuntimeError("shared_runtime_state_unreadable", errors.New("restart ledger is malformed"))
++	}
++	if ledger.Schema != sharedRuntimeRestartLedgerSchema || ledger.RuntimeKey != runtimeKey || ledger.ProfileDigest != profileDigest || ledger.RestartCount < 0 {
++		return SharedRuntimeRestartLedger{}, sharedRuntimeError("shared_runtime_state_unreadable", errors.New("restart ledger identity or counters differ"))
++	}
++	return ledger, nil
++}
++
++func writeSharedRuntimeRestartLedger(path string, ledger SharedRuntimeRestartLedger) error {
++	return writeSharedJSONAtomic(path, ledger)
++}
++
++func sharedRuntimeBeginAttempt(ledger *SharedRuntimeRestartLedger, now time.Time) error {
++	if ledger.ManualQuarantine {
++		return &SharedRuntimeError{Code: "shared_runtime_quarantined", Details: map[string]any{"manual": true}, Err: errors.New("shared runtime is manually quarantined")}
++	}
++	if ledger.QuarantinedUntil == nil {
++		return nil
++	}
++	if now.Before(*ledger.QuarantinedUntil) {
++		return &SharedRuntimeError{Code: "shared_runtime_quarantined", Details: map[string]any{"quarantined_until": *ledger.QuarantinedUntil}, Err: errors.New("shared runtime quarantine is active")}
++	}
++	ledger.QuarantinedUntil = nil
++	ledger.RestartNotBefore = nil
++	ledger.HalfOpen = true
++	return nil
++}
++
++func sharedRuntimeRecordReadiness(ledger *SharedRuntimeRestartLedger, now time.Time) {
++	matched := now.UTC()
++	ledger.LastReadinessMatch = &matched
++	ledger.RestartNotBefore = nil
++}
++
++func sharedRuntimeResetStableRun(ledger *SharedRuntimeRestartLedger) {
++	ledger.RestartCount = 0
++	ledger.HalfOpen = false
++}
++
++func sharedRuntimeRecordFailure(ledger *SharedRuntimeRestartLedger, policy PiRuntimeSharing, now time.Time) sharedRuntimeRestartDecision {
++	ledger.RestartCount++
++	if ledger.HalfOpen || ledger.RestartCount >= policy.RestartLimit {
++		until := now.UTC().Add(time.Duration(policy.QuarantineSeconds) * time.Second)
++		ledger.QuarantinedUntil = &until
++		ledger.HalfOpen = false
++		ledger.RestartNotBefore = nil
++		return sharedRuntimeRestartDecision{Quarantined: true}
++	}
++	delay := time.Duration(policy.RestartInitialBackoffSeconds) * time.Second
++	for count := 1; count < ledger.RestartCount && delay < time.Duration(policy.RestartMaxBackoffSeconds)*time.Second; count++ {
++		delay *= 2
++	}
++	maximum := time.Duration(policy.RestartMaxBackoffSeconds) * time.Second
++	if delay > maximum {
++		delay = maximum
++	}
++	notBefore := now.UTC().Add(delay)
++	ledger.RestartNotBefore = &notBefore
++	return sharedRuntimeRestartDecision{Backoff: delay}
++}
++
++func sharedRuntimeRestartDelay(ledger SharedRuntimeRestartLedger, now time.Time) time.Duration {
++	if ledger.RestartNotBefore == nil || !now.Before(*ledger.RestartNotBefore) {
++		return 0
++	}
++	return ledger.RestartNotBefore.Sub(now)
++}
++
++func setSharedRuntimeManualQuarantine(paths SharedRuntimePaths, runtimeKey, profileDigest string, enabled bool) (SharedRuntimeRestartLedger, error) {
++	ledger, err := readSharedRuntimeRestartLedger(paths.RestartLedger, runtimeKey, profileDigest)
++	if err != nil {
++		return SharedRuntimeRestartLedger{}, err
++	}
++	ledger.ManualQuarantine = enabled
++	if enabled {
++		ledger.HalfOpen = false
++		ledger.RestartNotBefore = nil
++	} else {
++		ledger.QuarantinedUntil = nil
++		ledger.HalfOpen = false
++	}
++	if err := writeSharedRuntimeRestartLedger(paths.RestartLedger, ledger); err != nil {
++		return SharedRuntimeRestartLedger{}, fmt.Errorf("write manual shared runtime quarantine: %w", err)
++	}
++	return ledger, nil
++}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_supervision_test.go b/tools/agents-infra/internal/infra/pi_shared_supervision_test.go
+new file mode 100644
+index 0000000..cc64926
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_shared_supervision_test.go
+@@ -0,0 +1,204 @@
++//go:build darwin
++
++package infra
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"net"
++	"os"
++	"testing"
++	"time"
++)
++
++func testSharedRuntimeSupervisionPolicy() PiRuntimeSharing {
++	return PiRuntimeSharing{RestartLimit: 4, RestartInitialBackoffSeconds: 2, RestartMaxBackoffSeconds: 5, StableRunSeconds: 9, QuarantineSeconds: 30}
++}
++
++func shortSharedRuntimeCache(t *testing.T) string {
++	t.Helper()
++	directory, err := os.MkdirTemp("/tmp", "sr-ledger-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(directory) })
++	return directory
++}
++
++func TestSharedRuntimeRestartLedgerPersistsAcrossBrokerInstancesAtResolvedPath(t *testing.T) {
++	cache := shortSharedRuntimeCache(t)
++	key := exactStateKey("restart-ledger")
++	paths, err := ResolveSharedRuntimePaths(cache, key)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := CreateSharedRuntimeTree(paths); err != nil {
++		t.Fatal(err)
++	}
++	ledger := newSharedRuntimeRestartLedger(key, "profile")
++	ledger.RestartCount = 3
++	sharedRuntimeRecordReadiness(&ledger, time.Unix(100, 0))
++	if err := writeSharedRuntimeRestartLedger(paths.RestartLedger, ledger); err != nil {
++		t.Fatal(err)
++	}
++	restartedBrokerLedger, err := readSharedRuntimeRestartLedger(paths.RestartLedger, key, "profile")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if restartedBrokerLedger.RestartCount != 3 || restartedBrokerLedger.LastReadinessMatch == nil || !restartedBrokerLedger.LastReadinessMatch.Equal(time.Unix(100, 0)) {
++		t.Fatalf("persisted ledger=%#v", restartedBrokerLedger)
++	}
++}
++
++func TestSharedRuntimeRestartPolicyIsBoundedStableAndHalfOpen(t *testing.T) {
++	policy := testSharedRuntimeSupervisionPolicy()
++	ledger := newSharedRuntimeRestartLedger("runtime", "profile")
++	now := time.Unix(1000, 0).UTC()
++	wants := []time.Duration{2 * time.Second, 4 * time.Second, 5 * time.Second}
++	for index, want := range wants {
++		decision := sharedRuntimeRecordFailure(&ledger, policy, now)
++		if decision.Quarantined || decision.Backoff != want {
++			t.Fatalf("failure %d decision=%#v want backoff=%s", index+1, decision, want)
++		}
++	}
++	decision := sharedRuntimeRecordFailure(&ledger, policy, now)
++	if !decision.Quarantined || ledger.QuarantinedUntil == nil || !ledger.QuarantinedUntil.Equal(now.Add(30*time.Second)) {
++		t.Fatalf("quarantine decision=%#v ledger=%#v", decision, ledger)
++	}
++	if err := sharedRuntimeBeginAttempt(&ledger, now.Add(29*time.Second)); sharedRuntimeErrorCode(err) != "shared_runtime_quarantined" {
++		t.Fatalf("active quarantine admitted: %v", err)
++	}
++	if err := sharedRuntimeBeginAttempt(&ledger, now.Add(30*time.Second)); err != nil || !ledger.HalfOpen || ledger.QuarantinedUntil != nil {
++		t.Fatalf("automatic half-open failed: ledger=%#v err=%v", ledger, err)
++	}
++	decision = sharedRuntimeRecordFailure(&ledger, policy, now.Add(31*time.Second))
++	if !decision.Quarantined {
++		t.Fatalf("failed half-open did not re-quarantine: %#v", decision)
++	}
++	sharedRuntimeResetStableRun(&ledger)
++	if ledger.RestartCount != 0 || ledger.HalfOpen {
++		t.Fatalf("stable run did not reset ledger: %#v", ledger)
++	}
++	if got := sharedRuntimeRecordFailure(&ledger, policy, now).Backoff; got != 2*time.Second {
++		t.Fatalf("post-stable backoff=%s want=2s", got)
++	}
++}
++
++func TestSharedRuntimeManualQuarantinePersistsAndRefusesAttempt(t *testing.T) {
++	cache := shortSharedRuntimeCache(t)
++	key := exactStateKey("manual-quarantine")
++	paths, err := ResolveSharedRuntimePaths(cache, key)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := CreateSharedRuntimeTree(paths); err != nil {
++		t.Fatal(err)
++	}
++	ledger, err := setSharedRuntimeManualQuarantine(paths, key, "profile", true)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !ledger.ManualQuarantine || sharedRuntimeErrorCode(sharedRuntimeBeginAttempt(&ledger, time.Now())) != "shared_runtime_quarantined" {
++		t.Fatalf("manual quarantine admitted: %#v", ledger)
++	}
++	loaded, err := readSharedRuntimeRestartLedger(paths.RestartLedger, key, "profile")
++	if err != nil || !loaded.ManualQuarantine {
++		t.Fatalf("persisted manual quarantine=%#v err=%v", loaded, err)
++	}
++	loaded, err = setSharedRuntimeManualQuarantine(paths, key, "profile", false)
++	if err != nil || loaded.ManualQuarantine {
++		t.Fatalf("manual clear=%#v err=%v", loaded, err)
++	}
++}
++
++func sharedRuntimeErrorCode(err error) string {
++	var shared *SharedRuntimeError
++	if errors.As(err, &shared) {
++		return shared.Code
++	}
++	return ""
++}
++
++func TestSharedRuntimeStatusJSONCarriesLifecycleFacts(t *testing.T) {
++	now := time.Unix(2000, 0).UTC()
++	report := SharedRuntimeStatus{RestartCount: 2, QuarantinedUntil: &now, LastReadinessMatch: &now}
++	data, err := json.Marshal(report)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, field := range []string{`"restart_count":2`, `"quarantined_until":`, `"last_readiness_match":`} {
++		if !bytes.Contains(data, []byte(field)) {
++			t.Fatalf("status JSON %s lacks %s", data, field)
++		}
++	}
++}
++
++// Production call site: SharedRuntimeStatusReport. A malformed ledger is a
++// failed read, not an absent ledger with zero-valued lifecycle facts.
++func TestSharedRuntimeStatusRefusesMalformedRestartLedger(t *testing.T) {
++	project, home, cache, resolved := newSharedIntegrationProfile(t)
++	if err := os.WriteFile(resolved.Paths.RestartLedger, []byte(`{"schema":`), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	_, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{
++		ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile",
++	})
++	if sharedRuntimeErrorCode(err) != "shared_runtime_state_unreadable" {
++		t.Fatalf("malformed ledger was treated as absence: %v", err)
++	}
++}
++
++// Production call site: sharedBrokerServer.serve. Runtime death is the event
++// that persists the cross-broker failure count and quarantine decision.
++func TestSharedBrokerServePersistsStableResetAndFailedHalfOpen(t *testing.T) {
++	for _, tc := range []struct {
++		name           string
++		readyAgo       time.Duration
++		halfOpen       bool
++		restartCount   int
++		wantCount      int
++		wantCode       string
++		wantQuarantine bool
++	}{
++		{name: "stable run resets before next failure", readyAgo: 2 * time.Second, restartCount: 3, wantCount: 1, wantCode: "runtime_exited_early"},
++		{name: "failed half-open re-quarantines", halfOpen: true, restartCount: 3, wantCount: 4, wantCode: "shared_runtime_quarantined", wantQuarantine: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			fixture := newSharedBrokerAdmissionFixture(t)
++			fixture.server.resolved.Sharing.RestartLimit = 4
++			fixture.server.resolved.Sharing.RestartInitialBackoffSeconds = 1
++			fixture.server.resolved.Sharing.RestartMaxBackoffSeconds = 2
++			fixture.server.resolved.Sharing.StableRunSeconds = 1
++			fixture.server.resolved.Sharing.QuarantineSeconds = 30
++			readyAt := time.Now().UTC().Add(-tc.readyAgo)
++			fixture.server.readyAt = readyAt
++			fixture.server.record.ReadyAt = &readyAt
++			fixture.server.ledger.RestartCount = tc.restartCount
++			fixture.server.ledger.HalfOpen = tc.halfOpen
++			if err := writeSharedRuntimeRestartLedger(fixture.server.resolved.Paths.RestartLedger, *fixture.server.ledger); err != nil {
++				t.Fatal(err)
++			}
++			root := shortSharedRuntimeCache(t)
++			listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: root + "/serve.sock", Net: "unix"})
++			if err != nil {
++				t.Fatal(err)
++			}
++			fixture.server.listener = listener
++			runtimeWait := &piProcessWait{done: make(chan struct{}), err: errors.New("fixture runtime died")}
++			close(runtimeWait.done)
++			err = fixture.server.serve(runtimeWait, make(chan os.Signal))
++			_ = listener.Close()
++			if sharedRuntimeErrorCode(err) != tc.wantCode {
++				t.Fatalf("serve error=%v want code=%s", err, tc.wantCode)
++			}
++			ledger, err := readSharedRuntimeRestartLedger(fixture.server.resolved.Paths.RestartLedger, fixture.server.resolved.RuntimeKey, fixture.server.resolved.ProfileDigest)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if ledger.RestartCount != tc.wantCount || (ledger.QuarantinedUntil != nil) != tc.wantQuarantine {
++				t.Fatalf("persisted serve ledger=%#v", ledger)
++			}
++		})
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go b/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go
+index b871762..ce5b0d2 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go
++++ b/tools/agents-infra/internal/infra/pi_shared_unsupported_posix.go
+@@ -43,12 +43,20 @@ type SharedRuntimeSharingStatus struct {
+ }
+ 
+ type SharedRuntimeStatus struct {
+-	RuntimeKey    string                      `json:"runtime_key"`
+-	ProfileDigest string                      `json:"profile_digest"`
+-	Broker        SharedRuntimeBrokerStatus   `json:"broker"`
+-	Sharing       SharedRuntimeSharingStatus  `json:"sharing"`
+-	Runtime       *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+-	Leases        []any                       `json:"leases"`
++	RuntimeKey         string                      `json:"runtime_key"`
++	ProfileDigest      string                      `json:"profile_digest"`
++	RestartCount       int                         `json:"restart_count"`
++	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
++	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
++	ManualQuarantine   bool                        `json:"manual_quarantine"`
++	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
++	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
++	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
++	Leases             []any                       `json:"leases"`
++}
++
++func SetSharedRuntimeManualQuarantine(SharedRuntimeOperatorOptions, bool) (SharedRuntimeRestartLedger, error) {
++	return SharedRuntimeRestartLedger{}, unsupportedSharedRuntimePlatform()
+ }
+ 
+ type SharedRuntimeStopResult struct {
+diff --git a/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go b/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go
+index defb586..b41bd9e 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go
++++ b/tools/agents-infra/internal/infra/pi_shared_unsupported_windows.go
+@@ -24,7 +24,20 @@ func SharedRuntimeExitCode(err error) (int, bool) {
+ }
+ 
+ type SharedRuntimePaths struct {
+-	RuntimeKey string `json:"runtime_key"`
++	RuntimeKey    string `json:"runtime_key"`
++	RestartLedger string `json:"restart_ledger"`
++}
++
++type SharedRuntimeRestartLedger struct {
++	Schema             string     `json:"schema"`
++	RuntimeKey         string     `json:"runtime_key"`
++	ProfileDigest      string     `json:"profile_digest"`
++	RestartCount       int        `json:"restart_count"`
++	RestartNotBefore   *time.Time `json:"restart_not_before"`
++	QuarantinedUntil   *time.Time `json:"quarantined_until"`
++	LastReadinessMatch *time.Time `json:"last_readiness_match"`
++	ManualQuarantine   bool       `json:"manual_quarantine"`
++	HalfOpen           bool       `json:"half_open"`
+ }
+ 
+ func SharedRuntimeProfileDigest(profile PiProfile) string {
+@@ -77,12 +90,20 @@ type SharedRuntimeSharingStatus struct {
+ }
+ 
+ type SharedRuntimeStatus struct {
+-	RuntimeKey    string                      `json:"runtime_key"`
+-	ProfileDigest string                      `json:"profile_digest"`
+-	Broker        SharedRuntimeBrokerStatus   `json:"broker"`
+-	Sharing       SharedRuntimeSharingStatus  `json:"sharing"`
+-	Runtime       *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
+-	Leases        []any                       `json:"leases"`
++	RuntimeKey         string                      `json:"runtime_key"`
++	ProfileDigest      string                      `json:"profile_digest"`
++	RestartCount       int                         `json:"restart_count"`
++	QuarantinedUntil   *time.Time                  `json:"quarantined_until"`
++	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
++	ManualQuarantine   bool                        `json:"manual_quarantine"`
++	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
++	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
++	Runtime            *SharedRuntimeProcessStatus `json:"runtime,omitempty"`
++	Leases             []any                       `json:"leases"`
++}
++
++func SetSharedRuntimeManualQuarantine(SharedRuntimeOperatorOptions, bool) (SharedRuntimeRestartLedger, error) {
++	return SharedRuntimeRestartLedger{}, unsupportedSharedRuntimePlatform()
+ }
+ 
+ type SharedRuntimeStopResult struct {
+diff --git a/tools/agents-infra/internal/infra/pi_standalone_shared_test.go b/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
+index 0797e18..1d10ff3 100644
+--- a/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
++++ b/tools/agents-infra/internal/infra/pi_standalone_shared_test.go
+@@ -95,6 +95,11 @@ linger_seconds = 0
+ max_leases = 4
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
+ `
+ 	writePiProjectConfig(t, project, body)
+diff --git a/tools/agents-infra/internal/infra/pi_standalone_test.go b/tools/agents-infra/internal/infra/pi_standalone_test.go
+index a854a27..665d541 100644
+--- a/tools/agents-infra/internal/infra/pi_standalone_test.go
++++ b/tools/agents-infra/internal/infra/pi_standalone_test.go
+@@ -29,6 +29,11 @@ linger_seconds = 0
+ max_leases = 8
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
+ `
+ 	}
+diff --git a/tools/agents-infra/internal/infra/pi_test.go b/tools/agents-infra/internal/infra/pi_test.go
+index b0d8009..06a5133 100644
+--- a/tools/agents-infra/internal/infra/pi_test.go
++++ b/tools/agents-infra/internal/infra/pi_test.go
+@@ -165,6 +165,11 @@ linger_seconds = 0
+ max_leases = 8
+ heartbeat_interval_seconds = 15
+ lease_stale_seconds = 60
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
+ `, name)
+ }
+@@ -183,24 +188,40 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	want := &PiRuntimeSharing{Mode: "shared", LingerSeconds: 0, MaxLeases: 8, HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 40}
++	want := &PiRuntimeSharing{
++		Mode: "shared", LingerSeconds: 0, MaxLeases: 8,
++		HeartbeatIntervalSeconds: 15, LeaseStaleSeconds: 60, BrokerStartTimeoutSeconds: 40,
++		RestartLimit: 3, RestartInitialBackoffSeconds: 1, RestartMaxBackoffSeconds: 4,
++		StableRunSeconds: 10, QuarantineSeconds: 30,
++	}
+ 	if got := shared.PiProfiles["profile"].Runtime.Sharing; !reflect.DeepEqual(got, want) {
+ 		t.Fatalf("sharing=%#v want=%#v", got, want)
+ 	}
+ 
+ 	tests := map[string]string{
+-		"unknown field":              strings.Replace(sharedBody, `mode = "shared"`, "mode = \"shared\"\nsurprise = 1", 1),
+-		"missing mode":               strings.Replace(sharedBody, "mode = \"shared\"\n", "", 1),
+-		"missing linger":             strings.Replace(sharedBody, "linger_seconds = 0\n", "", 1),
+-		"missing max leases":         strings.Replace(sharedBody, "max_leases = 8\n", "", 1),
+-		"missing heartbeat":          strings.Replace(sharedBody, "heartbeat_interval_seconds = 15\n", "", 1),
+-		"missing stale":              strings.Replace(sharedBody, "lease_stale_seconds = 60\n", "", 1),
+-		"missing broker timeout":     strings.Replace(sharedBody, "broker_start_timeout_seconds = 40\n", "", 1),
+-		"unknown mode":               strings.Replace(sharedBody, `mode = "shared"`, `mode = "automatic"`, 1),
+-		"negative linger":            strings.Replace(sharedBody, "linger_seconds = 0", "linger_seconds = -1", 1),
+-		"zero max leases":            strings.Replace(sharedBody, "max_leases = 8", "max_leases = 0", 1),
+-		"heartbeat equals stale":     strings.Replace(sharedBody, "heartbeat_interval_seconds = 15", "heartbeat_interval_seconds = 60", 1),
+-		"broker timeout below bound": strings.Replace(sharedBody, "broker_start_timeout_seconds = 40", "broker_start_timeout_seconds = 36", 1),
++		"unknown field":                  strings.Replace(sharedBody, `mode = "shared"`, "mode = \"shared\"\nsurprise = 1", 1),
++		"missing mode":                   strings.Replace(sharedBody, "mode = \"shared\"\n", "", 1),
++		"missing linger":                 strings.Replace(sharedBody, "linger_seconds = 0\n", "", 1),
++		"missing max leases":             strings.Replace(sharedBody, "max_leases = 8\n", "", 1),
++		"missing heartbeat":              strings.Replace(sharedBody, "heartbeat_interval_seconds = 15\n", "", 1),
++		"missing stale":                  strings.Replace(sharedBody, "lease_stale_seconds = 60\n", "", 1),
++		"missing broker timeout":         strings.Replace(sharedBody, "broker_start_timeout_seconds = 40\n", "", 1),
++		"missing restart limit":          strings.Replace(sharedBody, "restart_limit = 3\n", "", 1),
++		"missing initial backoff":        strings.Replace(sharedBody, "restart_initial_backoff_seconds = 1\n", "", 1),
++		"missing maximum backoff":        strings.Replace(sharedBody, "restart_max_backoff_seconds = 4\n", "", 1),
++		"missing stable run":             strings.Replace(sharedBody, "stable_run_seconds = 10\n", "", 1),
++		"missing quarantine":             strings.Replace(sharedBody, "quarantine_seconds = 30\n", "", 1),
++		"unknown mode":                   strings.Replace(sharedBody, `mode = "shared"`, `mode = "automatic"`, 1),
++		"negative linger":                strings.Replace(sharedBody, "linger_seconds = 0", "linger_seconds = -1", 1),
++		"zero max leases":                strings.Replace(sharedBody, "max_leases = 8", "max_leases = 0", 1),
++		"heartbeat equals stale":         strings.Replace(sharedBody, "heartbeat_interval_seconds = 15", "heartbeat_interval_seconds = 60", 1),
++		"broker timeout below bound":     strings.Replace(sharedBody, "broker_start_timeout_seconds = 40", "broker_start_timeout_seconds = 36", 1),
++		"zero restart limit":             strings.Replace(sharedBody, "restart_limit = 3", "restart_limit = 0", 1),
++		"zero initial backoff":           strings.Replace(sharedBody, "restart_initial_backoff_seconds = 1", "restart_initial_backoff_seconds = 0", 1),
++		"maximum below initial":          strings.Replace(sharedBody, "restart_initial_backoff_seconds = 1", "restart_initial_backoff_seconds = 5", 1),
++		"maximum reaches broker timeout": strings.Replace(sharedBody, "restart_max_backoff_seconds = 4", "restart_max_backoff_seconds = 40", 1),
++		"zero stable run":                strings.Replace(sharedBody, "stable_run_seconds = 10", "stable_run_seconds = 0", 1),
++		"zero quarantine":                strings.Replace(sharedBody, "quarantine_seconds = 30", "quarantine_seconds = 0", 1),
+ 	}
+ 	for name, body := range tests {
+ 		t.Run(name, func(t *testing.T) {
+diff --git a/tools/agents-infra/main.go b/tools/agents-infra/main.go
+index 3657b85..7f7507c 100644
+--- a/tools/agents-infra/main.go
++++ b/tools/agents-infra/main.go
+@@ -552,7 +552,7 @@ func runPiStandaloneCLI(entrypoint string, args []string) error {
+ 
+ func runRuntime(args []string) error {
+ 	if len(args) == 0 {
+-		return errors.New("runtime requires status, stop, broker, or runtime-launch")
++		return errors.New("runtime requires status, stop, quarantine, unquarantine, broker, or runtime-launch")
+ 	}
+ 	switch args[0] {
+ 	case "status":
+@@ -594,6 +594,22 @@ func runRuntime(args []string) error {
+ 			return err
+ 		}
+ 		return json.NewEncoder(os.Stdout).Encode(result)
++	case "quarantine", "unquarantine":
++		fs := flag.NewFlagSet("runtime "+args[0], flag.ContinueOnError)
++		fs.SetOutput(os.Stderr)
++		project := fs.String("project", callerProjectDir(), "project directory")
++		profile := fs.String("profile", "", "managed Pi profile")
++		if err := fs.Parse(args[1:]); err != nil {
++			return err
++		}
++		if len(fs.Args()) != 0 {
++			return fmt.Errorf("runtime %s does not accept positional arguments: %q", args[0], fs.Args())
++		}
++		ledger, err := infra.SetSharedRuntimeManualQuarantine(infra.SharedRuntimeOperatorOptions{ProjectDir: *project, Profile: *profile}, args[0] == "quarantine")
++		if err != nil {
++			return err
++		}
++		return json.NewEncoder(os.Stdout).Encode(ledger)
+ 	case "broker", "runtime-launch":
+ 		fs := flag.NewFlagSet("runtime "+args[0], flag.ContinueOnError)
+ 		fs.SetOutput(os.Stderr)
+@@ -629,6 +645,10 @@ func callerProjectDir() string {
+ func printSharedRuntimeStatus(report infra.SharedRuntimeStatus) {
+ 	fmt.Fprintf(os.Stdout, "runtime_key: %s\n", report.RuntimeKey)
+ 	fmt.Fprintf(os.Stdout, "profile_digest: %s\n", report.ProfileDigest)
++	fmt.Fprintf(os.Stdout, "restart_count: %d\n", report.RestartCount)
++	fmt.Fprintf(os.Stdout, "quarantined_until: %v\n", report.QuarantinedUntil)
++	fmt.Fprintf(os.Stdout, "last_readiness_match: %v\n", report.LastReadinessMatch)
++	fmt.Fprintf(os.Stdout, "manual_quarantine: %t\n", report.ManualQuarantine)
+ 	fmt.Fprintf(os.Stdout, "broker.state: %s\n", report.Broker.State)
+ 	if report.Broker.PID != 0 {
+ 		fmt.Fprintf(os.Stdout, "broker.pid: %d\n", report.Broker.PID)
+diff --git a/tools/agents-infra/runtime_main_darwin_test.go b/tools/agents-infra/runtime_main_darwin_test.go
+index d935c85..3eb24e1 100644
+--- a/tools/agents-infra/runtime_main_darwin_test.go
++++ b/tools/agents-infra/runtime_main_darwin_test.go
+@@ -29,6 +29,11 @@ linger_seconds = 0
+ max_leases = 4
+ heartbeat_interval_seconds = 1
+ lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
+ broker_start_timeout_seconds = 40
+ `
+ 	mustWrite(t, configPath, body)
+@@ -45,7 +50,62 @@ broker_start_timeout_seconds = 40
+ 	if status.Broker.State != "absent" || status.Sharing.Configured.Mode != "shared" || status.Sharing.Effective != nil {
+ 		t.Fatalf("absent status=%#v", status)
+ 	}
++	var fields map[string]json.RawMessage
++	if err := json.Unmarshal([]byte(output), &fields); err != nil {
++		t.Fatal(err)
++	}
++	for _, name := range []string{"restart_count", "quarantined_until", "last_readiness_match"} {
++		if _, present := fields[name]; !present {
++			t.Fatalf("runtime status JSON omitted %q: %s", name, output)
++		}
++	}
+ 	if _, err := os.Stat(status.Paths.Root); !os.IsNotExist(err) {
+ 		t.Fatalf("runtime status created shared state: %v", err)
+ 	}
+ }
++
++func TestRunRuntimeManualQuarantineRoundTripUsesResolvedLedger(t *testing.T) {
++	project := t.TempDir()
++	home, err := os.MkdirTemp("/tmp", "x")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(home) })
++	cache := filepath.Join(home, "Library", "Caches")
++	mustMkdir(t, cache)
++	configPath := filepath.Join(project, ".agents", ".configs", "project-config.toml")
++	mustMkdir(t, filepath.Dir(configPath))
++	body := mainTestPiConfig("/bin/echo", 18022) + `
++[agents.pi.profiles.profile.runtime.sharing]
++mode = "shared"
++linger_seconds = 0
++max_leases = 4
++heartbeat_interval_seconds = 1
++lease_stale_seconds = 5
++restart_limit = 3
++restart_initial_backoff_seconds = 1
++restart_max_backoff_seconds = 4
++stable_run_seconds = 10
++quarantine_seconds = 30
++broker_start_timeout_seconds = 40
++`
++	mustWrite(t, configPath, body)
++	t.Setenv("HOME", home)
++	for _, tc := range []struct {
++		command string
++		want    bool
++	}{{"quarantine", true}, {"unquarantine", false}} {
++		output := captureStdout(t, func() {
++			if err := runRuntime([]string{tc.command, "--project", project, "--profile", "profile"}); err != nil {
++				t.Fatalf("runtime %s: %v", tc.command, err)
++			}
++		})
++		var ledger infra.SharedRuntimeRestartLedger
++		if err := json.Unmarshal([]byte(output), &ledger); err != nil {
++			t.Fatal(err)
++		}
++		if ledger.ManualQuarantine != tc.want {
++			t.Fatalf("runtime %s manual_quarantine=%t want=%t", tc.command, ledger.ManualQuarantine, tc.want)
++		}
++	}
++}

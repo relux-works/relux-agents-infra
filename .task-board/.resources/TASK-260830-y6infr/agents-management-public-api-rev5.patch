@@ -1,0 +1,2481 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 012837a..0d04881 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,44 @@
+ 
+ ## 2026-08-30
+ 
++### 1431 — No-live observer guard discovers production files
++- ROOT CAUSE: `observerBoundaryRequiredFiles` named a closed set of files, so a called helper in a new `pkg/vendorplugin/*.go` file could perform an aliased `os.ReadFile` while the guard remained green. `pkg/vendorplugin/observer_no_live_test.go`.
++- FIX: The guard enumerates every non-test Go source in the production package and retains explicit static/fake observer test coverage; new production files enter the scan without manual registration.
++- TEST: A called `observer_live.go` user-config-read mutant is rejected; narrowing discovery to `engine.go` makes the named regression exit 1, and restoration exits 0.
++
++### 1417 — Caller profile authority is checked before observation
++- ROOT CAUSE: `checkLaunchFidelity` omitted `SpawnRequest.Profile`, so a vendor could redirect a non-empty caller profile and pass the redirected value to a cooperative observation adapter. `pkg/vendorplugin/spawn.go`.
++- FIX: Vendor profile filling remains legal only when the caller profile is absent; a supplied profile must match byte-for-byte before adapter lookup, preparation, preflight, or plan effects.
++- TEST: A narrowed gate admitting non-empty redirects made the real `BuildLaunch` regression fail exit 1 with zero expected refusal; restored focused/full/static tests, vet, scratch build, regress, format, and diff gates exit 0.
++
++### 1400 — Result framing must reject a prefix before decoding
++- ROOT CAUSE: `encoding/json.Decoder.Token` skipped leading JSON whitespace, so `ValidateTurnResult` accepted a non-exact stdout prefix. `pkg/agentic/systems/pi/result.go`.
++- FIX: Schema-1 decoding requires byte zero to be `{`; only bounded trailing ASCII whitespace remains legal.
++- TEST: Public `ValidateTurnResult` cases independently refuse leading space, tab, CR, and LF while accepting all four after the object.
++
++### 1400 — Parser guards resolve imports by path
++- ROOT CAUSE: The sole-parser guard recognized only calls qualified by the literal identifier `json`; `import j "encoding/json"` created an unreported permissive parser. `pkg/agentic/systems/pi/result_parser_guard_test.go`.
++- FIX: The guard resolves `encoding/json` import aliases and dot imports before classifying `NewDecoder` and `Unmarshal` calls.
++- TEST: Ordinary, aliased, and dot-import permissive-parser mutants are independently rejected.
++
++### 1400 — No-live observer scope uses a closed import set
++- ROOT CAUSE: The observer guard denied selected process/network calls but admitted production `os.ReadFile` access to user configuration. `pkg/vendorplugin/observer_no_live_test.go`.
++- FIX: The composed production/test boundary now permits only its reviewed pure imports; filesystem, process, network, local-runtime, and future unreviewed dependencies fail closed.
++- TEST: The exact aliased `os.ReadFile($HOME/.config/agents-infra/config.toml)` reviewer mutant is rejected.
++
++### 1342 — Pi prompt refusal moved ahead of every observation
++- ROOT CAUSE: `BuildLaunch` first reached `pi.ErrTurnPromptInvalid` inside late `agentic.BuildPlan`, after engine observation or Pi preflight could already run. `pkg/vendorplugin/spawn.go`.
++- FIX: Optional `agentic.LaunchRequestPreparer` is a pure, identity-preserving prompt-only gate; Pi snapshots `PromptPath` bytes before adapter lookup/preflight and the later plan consumes that copy.
++- TEST: Delaying only the early preparation call compiled but made all missing/unreadable/invalid-UTF-8/NUL production cases fail with adapter/preflight calls; restored test exited 0. The no-live guard now requires `engine.go`, `spawn.go`, and `registry.go` in its composed scan and rejects a scope narrowed by one production file.
++- STATUS: Reviewer revision-1 findings F1-F3 resolved for `TASK-260830-1fy32f` revision 2; public docs now describe only the immutable construction-time adapter.
++
++### 1320 — Observer trust order and Pi outer wire are executable contracts
++- ROOT CAUSE: v0.5.0 called the private engine fact source before vendor `Spawn`, so observation saw the caller profile rather than the vendor-resolved authoritative profile. `pkg/vendorplugin/spawn.go`.
++- FIX: Registry construction snapshots one public adapter declaration; non-dry-run `BuildLaunch` performs pure vendor launch/profile construction before one bounded, versioned, identity- and freshness-checked observation, then permits preflight/plan. Generic core has no concrete engine branch.
++- FIX: Pi emits exact `pi spawn --profile/--prompt/--deadline/--result-schema` argv with EOF stdin; `ValidateTurnResult` is the closed 1 MiB schema-1 classifier over actual exit, intervention and cleanup. `pkg/agentic/systems/pi`.
++- TEST: Unknown-schema narrowing admitted schema 2 and made the named production-entry test fail exit 1; restored static/fake tests, vet, build, regress, format and diff gates exit 0 without live probes.
++- SCOPE: `TASK-260830-1fy32f`; concrete adapter, raw Pi translation and all Process-B lifecycle remain in agents-infra.
++
+ ### 1245 — Pi result classification has one public owner
+ - ROOT CAUSE: ADR revision 3 specified result precedence without a callable API and omitted schema-1 mappings for Process-A refusals before Pi child creation; consumers could parse permissively or collapse known refusals into protocol invalidity.
+ - DECISION: `pkg/agentic/systems/pi.ValidateTurnResult` owns bounded stdout, actual Process-A exit, consumer intervention, and cleanup classification. Agents-infra installs the schema-1 writer before profile/environment/config/authorization/identity/runtime validation and emits one exact closed refusal code with exit `1`.
+diff --git a/README.md b/README.md
+index 9a4a76a..45b0617 100644
+--- a/README.md
++++ b/README.md
+@@ -388,6 +388,17 @@ The vendor plugin contract, its registry, and the runtime declarations.
+   Genericity is bounded by production-entry identity-renaming tests plus an
+   exact shipped-literal placement boundary; it does not claim whole-program Go
+   semantic detection.
++- Engine-bound production launches obtain evidence only from adapters supplied
++  at trusted registry assembly with
++  `NewRegistryWithEngineObservationAdapters`. The constructor reads each
++  declaration once, copies its identity/version/kind, and installs an immutable
++  engine-ref map. `BuildLaunch` first resolves the vendor-owned profile as a
++  pure value, then makes one cooperative 10-second observation, and validates
++  exact version, query identity, freshness and the closed inference-engine
++  readings before preflight or plan construction. `NewRegistry` installs no
++  positive adapter, so non-dry-run engine launches fail closed while legacy
++  zero-engine and dry-run plans remain observation-free. Process B lifecycle
++  stays wholly in agents-infra.
+ - `Availability` is a structured verdict, not a boolean: healthy,
+   limited-until(time, evidence), unreachable(evidence), or unknown — with
+   "checked and found nothing" distinguishable from "nobody looked" and from "the
+@@ -439,6 +450,15 @@ The vendor plugin contract, its registry, and the runtime declarations.
+   EXECUTION is not here — that is a consumer responsibility. This branch does
+   not claim production reachability until the coordinated consumer candidate
+   calls this API from its real `buildLaunchPlan` path.
++- Pi Process-A plans are exact:
++  `agents-infra pi spawn --profile <exact> --prompt <one UTF-8 argv value>
++  --deadline 30m --result-schema 1`. Stdin is detached/EOF; dry-run substitutes
++  `<prompt>` without reading `PromptPath`; agents-management emits no inner Pi
++  flags. Consumers classify bounded schema-1 stdout, actual Process-A exit,
++  intervention and cleanup only through `pi.ValidateTurnResult`. The closed
++  classifier rejects duplicate/unknown fields, unknown versions/codes,
++  exit/document disagreement and documents over 1 MiB, while preserving
++  cancellation and cleanup precedence.
+ 
+ The single-source guard covers both layers from ONE list, keyed by the FACT
+ being bound. Three entries are dispatch key types (`SystemID`, `VendorID`,
+@@ -728,18 +748,19 @@ guard exists to prevent.
+ 
+ `pkg/inferenceengine` exposes the static, no-runtime-contact schemas used to
+ validate engine reads. Production authorization lives at
+-`vendorplugin.BuildLaunch`: every non-dry-run engine launch asks the Registry's
+-package-private `engineFactSource` before `Vendor.Spawn`, system `Preflight`, or
+-plan materialization. `NewRegistry` installs that source itself and accepts no
+-reader, observer, callback, origin label, or caller value. The shipped graph ID
+-`mlx` maps to the trusted `native-transformer` implementation kind; configured
+-IDs and implementation kinds remain separate identities.
++`vendorplugin.BuildLaunch`: every non-dry-run engine launch first constructs the
++vendor-owned authoritative profile as a pure value, then asks the immutable
++adapter selected by the resolved engine ref before system `Preflight` or plan
++materialization. Trusted assembly installs adapters only through
++`NewRegistryWithEngineObservationAdapters`; `NewRegistry` installs none.
++Configured IDs and implementation kinds remain separate identities, with no
++concrete engine branch in generic core.
+ 
+ `inferenceengine.ValidateReadings` is only the closed schema validator used by
+ that gate. Callers may construct its untrusted `Reading` inputs, but doing so
+ does not install an engine source or authorize a launch. The built-in MLX
+-source currently returns a typed unsupported refusal until agents-infra ships
+-the concrete observation adapter; it never invents positive runtime facts.
++path therefore returns the typed missing-adapter refusal until agents-infra
++ships the concrete observation adapter; it never invents positive runtime facts.
+ 
+ Every measured fact has a closed value grammar. Readiness requires resident
+ weights, inference-busy is boolean, lifecycle transitions carry matching
+@@ -805,7 +826,7 @@ concluding that a missing golden is permission.
+ | qwen/gemini/muse/agy mutation harness | narrow every gate the four remaining ports wrote, plus the two shared internals, and confirm the suite goes red | `python3 .temp/TASK-260822-xz8rj5/mutants.py` | `.temp/TASK-260822-xz8rj5/mutants-*.log` |
+ | limit-state capture | capture the operator's live limit state, a suppression written by the SOURCE module, and the source's own report over bytes this repo wrote | `.scripts/capture-limit-state.sh [SOURCE_REPO=/path/to/skill-project-management]` | `pkg/providerlimits/testdata/{real-state,source-written,source-read,source-tables.json}`, scratch in `.temp/TASK-260822-2jouz3/xrt/` |
+ | limit-plane mutation harness | narrow every identity, schema, verdict, ladder and guard gate the limit-plane port wrote and confirm the suite goes red | `python3 .temp/TASK-260822-2jouz3/mutants.py` | `.temp/TASK-260822-2jouz3/mutants-*.log` |
+-| inference-engine contract tests | validate concrete composition, fact schemas, typed outcomes, and local/SSH refusal before runtime contact | `go test ./pkg/inferenceengine -count=1` | terminal output; task evidence under `.temp/TASK-260830-q4vvvn/` |
++| inference-engine and Pi contract tests | validate public observation adapters, production-entry refusal, exact Pi Process-A plans, and closed result classification without runtime contact | `go test ./pkg/vendorplugin ./pkg/agentic/systems/pi -count=1` | terminal output; task evidence under `.temp/` and board outcome resources |
+ | vendor-layer mutation harness | narrow every gate the vendor port wrote — the admission expansion, the digest serialization, the ported rows and the per-vendor guard homes — and confirm the suite goes red | `python3 .temp/TASK-260822-3cknas/mutants.py` | `.temp/TASK-260822-3cknas/mutants-*.log` |
+ | board-facts mutation harness | narrow every gate the board-facts port added — lifecycle, score, supersession, recommendation, context window, pricing, the vendor-unresolved runtime's rows, the derived lineup and the digest serialization — and confirm the suite goes red naming the right test. Every mutant is a compile-clean NARROWING rather than a deletion, so a kill proves the class is covered rather than the line is present | `python3 .temp/TASK-260824-y7gyco/mutants.py` | `.temp/TASK-260824-y7gyco/mutants-01.log` |
+ | regress mutation harness | narrow every gate `make regress` claims to hold, one at a time, and confirm the net goes red naming the right test | `python3 .temp/TASK-260823-4f5t1m/mutants.py` | `.temp/TASK-260823-4f5t1m/mutants-*.log` |
+diff --git a/docs/architecture.md b/docs/architecture.md
+index fa0a061..2566784 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -68,7 +68,7 @@ plugin per system:
+ | `gemini-cli` | Gemini CLI |
+ | `antigravity` | Antigravity CLI |
+ | `muse` | Muse CLI |
+-| `pi` | Process A: `agents-infra pi --profile <name> -- <turn args>`, the short-lived wrapper that holds a shared local-runtime lease and execs the real `pi` binary as its own child |
++| `pi` | Process A: exact `agents-infra pi spawn --profile <name> --prompt <prompt> --deadline 30m --result-schema 1`, with EOF stdin; agents-infra owns the shared-runtime lease, inner Pi policy, execution and cleanup |
+ 
+ An agentic-system plugin declares (this mirrors the adapter table the
+ extraction source already proved out):
+@@ -328,13 +328,21 @@ part of this candidate.
+ `pkg/localruntime`'s read-only status subprocess call is the one exception to
+ "no `os/exec` in this vendor's import graph", and a static test enforces it.
+ 
+-Pi's own turn-argument/stdin wire protocol for a real turn is a NAMED OPEN
+-ITEM, not an oversight: it depends on a pinned `earendil-works/pi` binary/docs
+-fixture nothing in this repository supplies yet, so `pkg/agentic/systems/pi`
+-builds only the pinned argv prefix (`["pi", "--profile", <profile>, "--"]`,
+-resolved against `agents-infra` on PATH) and attaches the assignment on stdin
+-using this module's existing precedented fallback, rather than inventing an
+-unpinned grammar.
++`pkg/agentic/systems/pi` now pins the complete outer Process-A contract:
++`["pi", "spawn", "--profile", <exact-profile>, "--prompt", <one UTF-8 value>,
++"--deadline", "30m", "--result-schema", "1"]`, resolved against
++`agents-infra` on the launch environment's PATH. Stdin is detached/EOF and
++dry-run uses `<prompt>` without reading the prompt file. This module emits no
++inner Pi flags. agents-infra remains the sole owner of inner Pi policy,
++Process-A execution/cleanup, raw Pi parsing and schema translation.
++
++The corresponding public consumer boundary is `pi.ValidateTurnResult`. It is
++the sole parser for the closed, 1 MiB-bounded
++`agents-infra.pi-turn-result` schema 1 document and classifies it against the
++actual Process-A exit, recorded consumer intervention and cleanup outcome.
++Cancellation/deadline survives an induced signal or missing post-kill document
++after successful cleanup; cleanup failure has higher precedence. Process B is
++never signalled or supervised by this module.
+ 
+ **Module-side M2 status-consumer candidate:** relux-agents-infra PR #10
+ publishes the persisted `restart_not_before`, `quarantined_until`, restart and
+@@ -352,20 +360,30 @@ coordinated `skill-project-management` consumer remain separately owned work.
+ 
+ ### Inference-engine observation boundary
+ 
+-The observation plane has one production owner. `vendorplugin.NewRegistry`
+-installs a package-private `engineFactSource`; no public constructor, option,
+-registry method, or `BuildLaunch` parameter can replace it. For a non-dry-run
+-engine launch, `BuildLaunch` resolves the configured graph ID, maps the shipped
+-`mlx` ID to its trusted `native-transformer` implementation kind, validates the
+-source's reads, and refuses before `Vendor.Spawn`, system `Preflight`, or plan
+-materialization. Configured plugin ID and implementation kind are separate.
++The observation plane has one production owner. Trusted consumer assembly uses
++`vendorplugin.NewRegistryWithEngineObservationAdapters`; each adapter declares
++exactly one inference-engine ref, implementation kind and contract version.
++Construction rejects nil/typed-nil, malformed, duplicate and unknown-version
++declarations atomically, reads each declaration exactly once, and stores a
++copied immutable identity snapshot. `NewRegistry` remains source-compatible
++and installs no positive adapter.
++
++For a non-dry-run engine launch, `BuildLaunch` resolves graph/model/effort,
++checks caller cancellation, asks the vendor to construct the authoritative
++launch/profile as a pure value, then invokes the registered adapter once under
++a cooperative 10-second bound. Exact response version, query identity,
++freshness and copied closed readings must validate before system `Preflight` or
++plan materialization. Missing evidence fails closed. There is no concrete
++engine, runtime, model or profile branch in generic core, and no adapter enters
++`SpawnRequest` or `BuildLaunch`.
+ 
+ `inferenceengine.ValidateReadings` is a schema boundary, not an authorization
+ entry. Its inputs are explicitly untrusted; constructing them cannot alter the
+-Registry's production source or reach launch effects. Package-internal tests
+-replace the private source to exercise every result class without contacting a
+-live runtime. The shipped MLX source reports unsupported until agents-infra
+-provides the concrete adapter rather than manufacturing positive evidence.
++Registry's adapter table or reach launch effects. Package tests install fake
++public adapters only at immutable registry construction and exercise every
++result class without contacting a live runtime. `NewRegistry` has no positive
++adapter: an engine-bound exec launch fails closed until trusted agents-infra
++assembly supplies the concrete adapter.
+ 
+ `pkg/inferenceengine` owns validation, not execution. Its v2 contract closes
+ the 17 measured facts independently and preserves observed value, observed
+diff --git a/docs/consuming-the-module.md b/docs/consuming-the-module.md
+index 95d71ee..418b274 100644
+--- a/docs/consuming-the-module.md
++++ b/docs/consuming-the-module.md
+@@ -159,6 +159,24 @@ Prefer isolated registries in tests. `agentic.NewRegistry()` and
+ `vendorplugin.SeedFrozenRuntimes(registry)` gives you the frozen table without
+ touching the process-wide default.
+ 
++For a non-dry-run engine-bound runtime, trusted assembly must instead install
++the consumer-owned read-only adapter at construction:
++
++```go
++registry, err := vendorplugin.NewRegistryWithEngineObservationAdapters(
++    systems,
++    agentsInfraEngineAdapter,
++)
++```
++
++The adapter declaration is read once and cannot be replaced later. Its
++`ObserveEngine` input contains the graph-resolved engine plus authoritative
++runtime, model and vendor-resolved profile. Return only the versioned sanitized
++timestamps and `[]inferenceengine.Reading`; lifecycle handles, raw status,
++credentials and process operations do not belong on this API. A registry built
++with `NewRegistry` still supports zero-engine and dry-run launches, but refuses
++a live engine-bound launch with `ErrEngineObservationAdapterMissing`.
++
+ For a new plugin kind, use the general graph directly. The registry does not
+ need an edit for the kind:
+ 
+@@ -213,7 +231,8 @@ digests, and a rebind orphans that state with no error anywhere.
+ | Add engine/sidecar process nodes | `agentic.BuildMultiNodePlan(primary, primaryDependencies, nodes...)` → the same primary fields plus dependency-ordered `Plan.Nodes` | execute, supervise or attest a process |
+ | The same, resolved through a runtime launch binding | `vendorplugin.BuildLaunch(ctx, registry, SpawnRequest{…}, mode)` — resolves either an established vendor binding or an explicit declaration-owned system-only binding, validates the effort word against the owning model row, preserves typed `RunContext`, asks a vendor for a `LaunchRequest` when one exists (refusing redirects, including changed/dropped tracked-run identity), otherwise projects the validated declaration losslessly, runs the resolved system's `Preflightable` check unless dry-run, then hands it to `BuildPlan` | execute anything, fabricate a vendor for a system-only runtime, inject a default effort, or ask callers to duplicate run identity in `Env` |
+ | Versioned configured/resolved engine metadata | `plan.ConsumerProvenance()` → `LaunchProvenanceV1`; after unmarshalling call `registry.ValidateLaunchProvenance(record)`, which obtains configured authority from runtime/model declarations and resolved authority from that registry's graph; `ValidateAgainst(configured, resolved)` is the lower-level gate and neither argument may come from the record; inspect mandatory `engine_binding` (`none|required`); `none` requires a system-only legacy shape | execute or attest a model runtime; treat two equal persisted refs as corroboration; accept a downgraded engine-bound shape or absent/partial/malformed/wrong-kind/unconfigured/mismatched required engine refs |
+-| Observed engine contract | call `vendorplugin.BuildLaunch(ctx, registry, request, nonDryRunMode)`; its package-owned source resolves `mlx` to `native-transformer` and validates facts before `Spawn`, `Preflight`, or plan materialization | inject a reader/observer/value through public API; treat schema validation as authorization; treat absence as read failure; run process, SSH, pressure, or supervision actions in this module |
++| A Pi Process-A result | `pi.ValidateTurnResult(pi.TurnResultInput{Stdout: boundedStdout, Exit: actualExit, Intervention: recordedIntervention, Cleanup: cleanupOutcome})` | parse raw Pi JSONL, accept unknown schema fields/codes, infer a missing refusal document, or supervise Process B |
++| Observed engine contract | at trusted assembly call `vendorplugin.NewRegistryWithEngineObservationAdapters`, then call `BuildLaunch`; it resolves the vendor-owned launch/profile first and validates the registered adapter's exact version, identity, freshness and readings before `Preflight` or plan materialization | pass an adapter or observation through `SpawnRequest`; mutate adapter identity after construction; treat schema validation as authorization; treat absence as read failure; run process, SSH, pressure, or supervision actions in this module |
+ | Whether a launch is admissible right now | `providerlimits.Store.AvailabilityFor(VerdictQuery{Runtime, Model, Home})` → `vendorplugin.Availability` | write anything — not the state file, not the index, not a probe claim |
+ 
+ ## What stays yours
+diff --git a/docs/shipped-state.md b/docs/shipped-state.md
+index 040596f..1381664 100644
+--- a/docs/shipped-state.md
++++ b/docs/shipped-state.md
+@@ -316,27 +316,28 @@ What is still open, and owned elsewhere:
+   `Unknown` for a legacy response missing `restart_not_before` and never
+   infers a current limit from `restart_count` or `half_open`. Partial
+   restart-status cohorts are read failures, never legacy absence.
+-- **Pi's own turn-argument/stdin wire protocol for a real turn** — blocked on
+-  a pinned `earendil-works/pi` binary/docs fixture nothing supplies yet
+-  (adversarial plan case 17); `pkg/agentic/systems/pi` builds only the pinned
+-  argv prefix and stdin fallback until that fixture exists.
++- **The concrete agents-infra Pi translator and observer adapter** — owned by
++  the companion consumer task. This module now publishes the exact outer
++  `pi spawn --profile/--prompt/--deadline/--result-schema` plan, EOF stdin,
++  immutable observer interface, and closed `pi.ValidateTurnResult` consumer;
++  it intentionally does not parse raw Pi JSONL or implement Process-B work.
+ 
+ **Owner: this repository** for the three packages above; the four bullets
+ just above are each owned by the repository named next to them.
+ 
+ ### 5.1 Observed inference-engine contract candidate
+ 
+-The module now carries `observed-process/v2`: 17 measured facts, closed
++The module carries `observed-process/v2`: 17 measured facts, closed
+ fact-specific schemas, three typed outcomes, and distinct refusing causes for
+-read failure, malformed data, and unsupported observations. The production
+-entry is the non-dry-run `vendorplugin.BuildLaunch` path. Its Registry-owned,
+-package-private source maps the configured `mlx` ID to the concrete
+-`native-transformer` kind and validates readings before `Spawn`, `Preflight`,
+-or plan materialization. No public constructor or launch parameter accepts a
+-caller observation implementation. `inferenceengine.ValidateReadings` remains
+-an untrusted schema helper, not an authorization surface. Until agents-infra
+-ships the concrete MLX adapter, the built-in source refuses as unsupported
+-instead of inventing runtime evidence.
++read failure, malformed data, and unsupported observations. Trusted assembly
++registers a public `EngineObservationAdapter` only through
++`NewRegistryWithEngineObservationAdapters`; the declaration is copied once and
++the response must match its authoritative engine/runtime/model/profile query
++and live validity interval. The non-dry-run `vendorplugin.BuildLaunch` entry
++invokes this gate after pure vendor profile resolution and before `Preflight`
++or plan materialization. `inferenceengine.ValidateReadings` remains an
++untrusted schema helper, not an authorization surface. Without a concrete
++agents-infra adapter, the launch refuses as missing evidence.
+ 
+ Model-harness expansion is a validated sum type in behavior: local executable
+ and argv require positive SSH absence, while SSH forwarding requires both local
+diff --git a/pkg/agentic/plan.go b/pkg/agentic/plan.go
+index 42d22f8..cec31b9 100644
+--- a/pkg/agentic/plan.go
++++ b/pkg/agentic/plan.go
+@@ -115,6 +115,10 @@ func BuildPlan(r *Registry, req LaunchRequest, mode LaunchMode) (Plan, error) {
+ 	if !mode.Valid() || !caps.SupportsMode(mode) {
+ 		return Plan{}, fmt.Errorf("%w: %s does not declare %s", ErrUnsupportedLaunchMode, id, mode)
+ 	}
++	req, err = PrepareLaunchRequest(sys, req, mode)
++	if err != nil {
++		return Plan{}, fmt.Errorf("agentic: %s rejected the launch request before planning: %w", id, err)
++	}
+ 
+ 	effort := strings.TrimSpace(req.Effort)
+ 	if !caps.EffortTransport.CanCarry(req.Model.Effort) {
+diff --git a/pkg/agentic/system.go b/pkg/agentic/system.go
+index f9a3640..c191bf0 100644
+--- a/pkg/agentic/system.go
++++ b/pkg/agentic/system.go
+@@ -492,6 +492,44 @@ type System interface {
+ 	ValidateComposition(c Composition) error
+ }
+ 
++// LaunchRequestPreparer is an optional, pure pre-plan gate for a system that
++// must validate or snapshot request-owned input before any caller performs an
++// observation or preflight. Implementations may read request-named files, but
++// must not inspect ambient state, start a process, contact a service, or mutate
++// external state. BuildPlan calls the same gate, so direct Layer-1 consumers
++// cannot bypass it.
++//
++// LaunchRequestPreparation is deliberately limited to the two prompt fields a
++// preparer may replace. It cannot redirect system, model, profile, runtime,
++// environment, run identity, composition, or any other authoritative input.
++type LaunchRequestPreparation struct {
++	PromptPath string
++	Prompt     []byte
++}
++
++// Returning a LaunchRequestPreparation lets a system replace a path-backed
++// prompt with a copied value. That keeps an earlier production-entry gate and
++// the later plan on the same bytes instead of reading a mutable file twice.
++type LaunchRequestPreparer interface {
++	PrepareLaunchRequest(LaunchRequest, LaunchMode) (LaunchRequestPreparation, error)
++}
++
++// PrepareLaunchRequest applies a system's optional pure pre-plan gate. Systems
++// without one preserve the request byte-for-byte.
++func PrepareLaunchRequest(system System, req LaunchRequest, mode LaunchMode) (LaunchRequest, error) {
++	preparer, ok := system.(LaunchRequestPreparer)
++	if !ok {
++		return req, nil
++	}
++	preparation, err := preparer.PrepareLaunchRequest(req, mode)
++	if err != nil {
++		return LaunchRequest{}, err
++	}
++	req.PromptPath = preparation.PromptPath
++	req.Prompt = append([]byte(nil), preparation.Prompt...)
++	return req, nil
++}
++
+ // Capabilities is a system's static declaration. It is a value, not an
+ // interface: these are facts a plugin states once, and a caller must be able
+ // to read them without the risk of a method that computes a different answer
+diff --git a/pkg/agentic/systems/pi/args.go b/pkg/agentic/systems/pi/args.go
+index ba4a197..7f33707 100644
+--- a/pkg/agentic/systems/pi/args.go
++++ b/pkg/agentic/systems/pi/args.go
+@@ -1,41 +1,80 @@
+ package pi
+ 
+ import (
++	"errors"
+ 	"fmt"
++	"os"
+ 	"strings"
++	"unicode/utf8"
+ 
+ 	"github.com/relux-works/skill-agents-management/pkg/agentic"
+ )
+ 
+-// THIS FILE IS THE ONE PLACE PI'S OWN ARGV PREFIX IS SPELLED.
+-//
+-// # What is pinned, and what is deliberately not
+-//
+-// The architecture decision names the exact shape of `agents-infra pi`'s
+-// invocation: `["agents-infra", "pi", "--profile", <profile>, "--", <turn
+-// args>]`. Everything up to and including the bare `--` is pinned here,
+-// unconditionally, for both launch modes — there is nothing mode-dependent
+-// about it, unlike every other ported system in this module, because
+-// nothing about WHICH profile a wrapper attaches to differs between a real
+-// launch and its dry-run mirror.
+-//
+-// `<turn args>` — what actually follows `--` for the real `pi` binary to
+-// read — is NOT built here. It depends on a pinned `earendil-works/pi`
+-// binary/docs fixture the architecture decision names as an open item and
+-// does not supply, and the parity gate that would pin it (adversarial plan
+-// case 17) explicitly cannot exist before that fixture does. Building a
+-// plausible-looking turn-argument grammar here without that pin would be
+-// exactly the forced fit this module's own standing orders refuse: a
+-// capability claim ("this is pi's real turn-argument contract") with no
+-// evidence behind it, and a later correction would silently rewrite this
+-// launch's observable surface. The assignment therefore travels on stdin
+-// instead, using this module's existing, precedented PromptPath/Prompt
+-// fallback (stdin.go) — a real transport this module already proves
+-// elsewhere, not a guess at pi's own wire protocol.
++var (
++	ErrProfileMissing    = errors.New("pi: launch profile is missing")
++	ErrTurnPromptInvalid = errors.New("pi: turn prompt is invalid")
++)
++
++// Args builds the exact Process-A exec argv. It remains exported for callers
++// that used the v0.5.0 helper; System.Argv additionally supplies the launch
++// mode so dry-run can avoid reading PromptPath.
+ func Args(req agentic.LaunchRequest) ([]string, error) {
+-	profile := strings.TrimSpace(req.Profile)
+-	if profile == "" {
+-		return nil, fmt.Errorf("pi: launch request carries no profile; the local-models vendor's Spawn must resolve one from its own pointer before this system can build argv")
++	return args(req, agentic.LaunchModeExec)
++}
++
++func args(req agentic.LaunchRequest, mode agentic.LaunchMode) ([]string, error) {
++	prepared, err := prepareLaunchRequest(req, mode)
++	if err != nil {
++		return nil, err
++	}
++	profile := prepared.Profile
++	prompt := "<prompt>"
++	if mode != agentic.LaunchModeDryRun {
++		prompt = string(prepared.Prompt)
++	}
++	return []string{
++		"pi", "spawn",
++		"--profile", profile,
++		"--prompt", prompt,
++		"--deadline", "30m",
++		"--result-schema", "1",
++	}, nil
++}
++
++func prepareLaunchRequest(req agentic.LaunchRequest, mode agentic.LaunchMode) (agentic.LaunchRequest, error) {
++	if strings.TrimSpace(req.Profile) == "" {
++		return agentic.LaunchRequest{}, fmt.Errorf("%w: the vendor must resolve an exact profile before planning", ErrProfileMissing)
++	}
++	if mode == agentic.LaunchModeDryRun {
++		return req, nil
++	}
++	data, err := turnPrompt(req)
++	if err != nil {
++		return agentic.LaunchRequest{}, err
++	}
++	prepared := req
++	prepared.PromptPath = ""
++	prepared.Prompt = data
++	return prepared, nil
++}
++
++func turnPrompt(req agentic.LaunchRequest) ([]byte, error) {
++	data := req.Prompt
++	if path := strings.TrimSpace(req.PromptPath); path != "" {
++		var err error
++		data, err = os.ReadFile(path)
++		if err != nil {
++			return nil, fmt.Errorf("%w: reading PromptPath: %w", ErrTurnPromptInvalid, err)
++		}
++	}
++	if len(data) == 0 {
++		return nil, fmt.Errorf("%w: prompt is empty", ErrTurnPromptInvalid)
++	}
++	if !utf8.Valid(data) {
++		return nil, fmt.Errorf("%w: prompt is not UTF-8", ErrTurnPromptInvalid)
++	}
++	if strings.IndexByte(string(data), 0) >= 0 {
++		return nil, fmt.Errorf("%w: prompt contains NUL", ErrTurnPromptInvalid)
+ 	}
+-	return []string{"pi", "--profile", profile, "--"}, nil
++	return append([]byte(nil), data...), nil
+ }
+diff --git a/pkg/agentic/systems/pi/pi.go b/pkg/agentic/systems/pi/pi.go
+index 06ed3ed..62d111e 100644
+--- a/pkg/agentic/systems/pi/pi.go
++++ b/pkg/agentic/systems/pi/pi.go
+@@ -1,5 +1,6 @@
+ // Package pi is the agentic-system plugin for Process A: `agents-infra pi
+-// --profile <name> -- <turn args>`, the short-lived wrapper that holds the
++// spawn --profile <name> --prompt <prompt> --deadline 30m --result-schema 1`,
++// the short-lived wrapper that holds the
+ // shared-runtime lease connection for its own lifetime and execs the real
+ // `pi` binary as its child.
+ //
+@@ -11,19 +12,9 @@
+ // belongs entirely to relux-agents-infra's own shared-runtime broker, reached
+ // only through the read-only pkg/localruntime status client.
+ //
+-// # The open item this package carries forward, stated where a reader meets it
+-//
+-// Pi's own argv/stdin/env wire protocol for one turn — what actually follows
+-// `--` in `agents-infra pi --profile <name> --` — is genuinely unresolved: it
+-// depends on a pinned `earendil-works/pi` binary/docs fixture the
+-// architecture decision names but does not (yet) supply, and the parity gate
+-// that would pin it (adversarial plan case 17) cannot exist before that
+-// fixture does. This package therefore builds ONLY the well-specified,
+-// already-pinned prefix — `["pi", "--profile", <profile>, "--"]`, resolved
+-// against `agents-infra` on PATH — and attaches the assignment on stdin using
+-// this module's existing, precedented PromptPath/Prompt fallback (see
+-// stdin.go), rather than inventing an unpinned turn-argument grammar. args.go
+-// says exactly what is deferred and why.
++// It owns only the deterministic outer Process-A surface. agents-infra owns
++// Pi's inner flags, child environment, process group, result translation and
++// cleanup; Process B lifecycle remains outside this module.
+ package pi
+ 
+ import (
+@@ -103,7 +94,22 @@ func (s *System) Argv(req agentic.LaunchRequest, mode agentic.LaunchMode) ([]str
+ 	if !s.Capabilities().SupportsMode(mode) {
+ 		return nil, fmt.Errorf("pi: launch mode %s is not declared by this system", mode)
+ 	}
+-	return Args(req)
++	return args(req, mode)
++}
++
++// PrepareLaunchRequest validates and snapshots the exact profile/prompt input
++// before vendorplugin may observe an engine or invoke Preflight. PromptPath is
++// read once and replaced with copied bytes, so the later BuildPlan cannot see a
++// different file value. Dry-run retains its no-read placeholder behavior.
++func (s *System) PrepareLaunchRequest(req agentic.LaunchRequest, mode agentic.LaunchMode) (agentic.LaunchRequestPreparation, error) {
++	if !s.Capabilities().SupportsMode(mode) {
++		return agentic.LaunchRequestPreparation{}, fmt.Errorf("pi: launch mode %s is not declared by this system", mode)
++	}
++	prepared, err := prepareLaunchRequest(req, mode)
++	if err != nil {
++		return agentic.LaunchRequestPreparation{}, err
++	}
++	return agentic.LaunchRequestPreparation{PromptPath: prepared.PromptPath, Prompt: prepared.Prompt}, nil
+ }
+ 
+ // ChildEnv passes the parent environment through UNFILTERED, plus the
+@@ -114,8 +120,8 @@ func (*System) ChildEnv(parent []string, req agentic.LaunchRequest) ([]string, e
+ 	return childEnv(parent, req), nil
+ }
+ 
+-// Stdin is the assignment transport: the PromptPath file's bytes, or the
+-// Prompt bytes directly, or nothing attached at all. See stdin.go.
++// Stdin is always detached. The prompt is one named argv value and Process A
++// observes EOF on stdin.
+ func (*System) Stdin(req agentic.LaunchRequest) (agentic.StdinPayload, error) {
+ 	return stdin(req)
+ }
+diff --git a/pkg/agentic/systems/pi/pi_test.go b/pkg/agentic/systems/pi/pi_test.go
+index fb8314f..d835318 100644
+--- a/pkg/agentic/systems/pi/pi_test.go
++++ b/pkg/agentic/systems/pi/pi_test.go
+@@ -2,8 +2,10 @@ package pi
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"os"
+ 	"path/filepath"
++	"reflect"
+ 	"testing"
+ 
+ 	"github.com/relux-works/skill-agents-management/pkg/agentic"
+@@ -64,28 +66,37 @@ func writeExecutable(t *testing.T, path string) {
+ 	}
+ }
+ 
+-func TestArgvBuildsThePinnedPrefixAndRequiresAProfile(t *testing.T) {
++func TestArgvBuildsExactProcessAContract(t *testing.T) {
+ 	system := New(&fakeStatusReader{})
+ 	t.Run("no profile is refused", func(t *testing.T) {
+-		if _, err := system.Argv(agentic.LaunchRequest{}, agentic.LaunchModeExec); err == nil {
+-			t.Fatal("Argv with no profile returned no error")
++		if _, err := system.Argv(agentic.LaunchRequest{Prompt: []byte("turn")}, agentic.LaunchModeExec); !errors.Is(err, ErrProfileMissing) {
++			t.Fatalf("Argv with no profile = %v, want ErrProfileMissing", err)
+ 		}
+ 	})
+-	t.Run("pinned prefix", func(t *testing.T) {
+-		for _, mode := range []agentic.LaunchMode{agentic.LaunchModeExec, agentic.LaunchModeDryRun} {
+-			argv, err := system.Argv(agentic.LaunchRequest{Profile: "local-qwen"}, mode)
+-			if err != nil {
+-				t.Fatalf("Argv(%s): %v", mode, err)
+-			}
+-			want := []string{"pi", "--profile", "local-qwen", "--"}
+-			if len(argv) != len(want) {
+-				t.Fatalf("argv = %v, want %v", argv, want)
+-			}
+-			for i := range want {
+-				if argv[i] != want[i] {
+-					t.Fatalf("argv = %v, want %v", argv, want)
+-				}
+-			}
++	t.Run("exec bytes", func(t *testing.T) {
++		argv, err := system.Argv(agentic.LaunchRequest{Profile: "local-qwen", Prompt: []byte("-inspect @repo")}, agentic.LaunchModeExec)
++		if err != nil {
++			t.Fatalf("Argv(exec): %v", err)
++		}
++		want := []string{"pi", "spawn", "--profile", "local-qwen", "--prompt", "-inspect @repo", "--deadline", "30m", "--result-schema", "1"}
++		if !reflect.DeepEqual(argv, want) {
++			t.Fatalf("argv = %v, want %v", argv, want)
++		}
++	})
++	t.Run("dry run uses placeholder without reading file", func(t *testing.T) {
++		argv, err := system.Argv(agentic.LaunchRequest{Profile: "local-qwen", PromptPath: filepath.Join(t.TempDir(), "missing")}, agentic.LaunchModeDryRun)
++		if err != nil {
++			t.Fatalf("Argv(dry-run): %v", err)
++		}
++		want := []string{"pi", "spawn", "--profile", "local-qwen", "--prompt", "<prompt>", "--deadline", "30m", "--result-schema", "1"}
++		if !reflect.DeepEqual(argv, want) {
++			t.Fatalf("argv = %v, want %v", argv, want)
++		}
++	})
++	t.Run("profile bytes are not normalized", func(t *testing.T) {
++		argv, err := system.Argv(agentic.LaunchRequest{Profile: " Exact-Profile ", Prompt: []byte("turn")}, agentic.LaunchModeExec)
++		if err != nil || argv[3] != " Exact-Profile " {
++			t.Fatalf("argv=%v err=%v, want byte-exact profile", argv, err)
+ 		}
+ 	})
+ 	t.Run("unsupported mode is refused", func(t *testing.T) {
+@@ -113,17 +124,36 @@ func TestChildEnvPassesAgentsInfraCallerCWDThroughUnfiltered(t *testing.T) {
+ 	}
+ }
+ 
+-func TestStdinAttachesPromptPathThenPromptThenNothing(t *testing.T) {
++func TestPromptPathPrecedesPromptAndInvalidPromptsRefuse(t *testing.T) {
+ 	system := New(&fakeStatusReader{})
+-
+-	payload, err := system.Stdin(agentic.LaunchRequest{})
+-	if err != nil || payload.Attached {
+-		t.Fatalf("no prompt at all: payload=%+v err=%v, want nothing attached", payload, err)
++	path := filepath.Join(t.TempDir(), "prompt.txt")
++	if err := os.WriteFile(path, []byte("from file"), 0o600); err != nil {
++		t.Fatal(err)
+ 	}
++	argv, err := system.Argv(agentic.LaunchRequest{Profile: "p", PromptPath: path, Prompt: []byte("fallback")}, agentic.LaunchModeExec)
++	if err != nil || argv[5] != "from file" {
++		t.Fatalf("PromptPath precedence argv=%v err=%v", argv, err)
++	}
++	for name, req := range map[string]agentic.LaunchRequest{
++		"missing":      {Profile: "p"},
++		"unreadable":   {Profile: "p", PromptPath: filepath.Join(t.TempDir(), "missing")},
++		"invalid utf8": {Profile: "p", Prompt: []byte{0xff}},
++		"nul":          {Profile: "p", Prompt: []byte("a\x00b")},
++	} {
++		t.Run(name, func(t *testing.T) {
++			if _, err := system.Argv(req, agentic.LaunchModeExec); !errors.Is(err, ErrTurnPromptInvalid) {
++				t.Fatalf("Argv = %v, want ErrTurnPromptInvalid", err)
++			}
++		})
++	}
++}
++
++func TestStdinIsAlwaysDetachedEOF(t *testing.T) {
++	system := New(&fakeStatusReader{})
+ 
+-	payload, err = system.Stdin(agentic.LaunchRequest{Prompt: []byte("do the thing")})
+-	if err != nil || !payload.Attached || string(payload.Bytes) != "do the thing" {
+-		t.Fatalf("Prompt bytes: payload=%+v err=%v", payload, err)
++	payload, err := system.Stdin(agentic.LaunchRequest{Prompt: []byte("do the thing")})
++	if err != nil || !reflect.DeepEqual(payload, agentic.StdinPayload{}) {
++		t.Fatalf("stdin payload=%+v err=%v, want detached EOF", payload, err)
+ 	}
+ }
+ 
+diff --git a/pkg/agentic/systems/pi/result.go b/pkg/agentic/systems/pi/result.go
+new file mode 100644
+index 0000000..1c0787f
+--- /dev/null
++++ b/pkg/agentic/systems/pi/result.go
+@@ -0,0 +1,299 @@
++package pi
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"unicode/utf8"
++)
++
++const TurnResultContract = "agents-infra.pi-turn-result"
++const TurnResultSchemaVersion = 1
++const TurnResultMaxStdoutBytes = 1 << 20
++
++type TurnResultClass string
++
++const (
++	TurnResultOK               TurnResultClass = "ok"
++	TurnResultProcessARefused  TurnResultClass = "process-a-refused"
++	TurnResultChildFailed      TurnResultClass = "child-failed"
++	TurnResultToolFailed       TurnResultClass = "tool-failed"
++	TurnResultCancelled        TurnResultClass = "cancelled"
++	TurnResultDeadlineExceeded TurnResultClass = "deadline-exceeded"
++	TurnResultInvalid          TurnResultClass = "result-invalid"
++	TurnResultCleanupFailed    TurnResultClass = "cleanup-failed"
++)
++
++type TurnResultCode string
++
++const (
++	TurnCodeCleanupFailed        TurnResultCode = "pi_turn_cleanup_failed"
++	TurnCodeRequestInvalid       TurnResultCode = "pi_turn_request_invalid"
++	TurnCodeProfileMissing       TurnResultCode = "pi_turn_profile_missing"
++	TurnCodeProfileUnknown       TurnResultCode = "pi_turn_profile_unknown"
++	TurnCodeProfileMismatch      TurnResultCode = "pi_turn_profile_mismatch"
++	TurnCodeEnvironmentMalformed TurnResultCode = "pi_turn_environment_malformed"
++	TurnCodeEnvironmentDenied    TurnResultCode = "pi_turn_environment_denied"
++	TurnCodeConfigurationInvalid TurnResultCode = "pi_turn_configuration_invalid"
++	TurnCodeAuthorizationDenied  TurnResultCode = "pi_turn_authorization_denied"
++	TurnCodeIdentityInvalid      TurnResultCode = "pi_turn_identity_invalid"
++	TurnCodeRuntimeRefused       TurnResultCode = "pi_turn_runtime_refused"
++	TurnCodeChildFailed          TurnResultCode = "pi_turn_child_failed"
++	TurnCodeToolFailed           TurnResultCode = "pi_turn_tool_failed"
++	TurnCodeCancelled            TurnResultCode = "pi_turn_cancelled"
++	TurnCodeDeadlineExceeded     TurnResultCode = "pi_turn_deadline_exceeded"
++	TurnCodeResultInvalid        TurnResultCode = "pi_turn_result_invalid"
++)
++
++type TurnIntervention string
++
++const (
++	TurnInterventionNone     TurnIntervention = "none"
++	TurnInterventionCancel   TurnIntervention = "cancel"
++	TurnInterventionDeadline TurnIntervention = "deadline"
++)
++
++type ProcessACleanupOutcome string
++
++const (
++	ProcessACleanupNotRequired ProcessACleanupOutcome = "not-required"
++	ProcessACleanupSucceeded   ProcessACleanupOutcome = "succeeded"
++	ProcessACleanupFailed      ProcessACleanupOutcome = "failed"
++)
++
++type ProcessAExit struct {
++	Code     int
++	Signaled bool
++}
++
++type TurnResultInput struct {
++	Stdout          []byte
++	StdoutTruncated bool
++	Exit            ProcessAExit
++	Intervention    TurnIntervention
++	Cleanup         ProcessACleanupOutcome
++}
++
++type TurnResult struct {
++	Class     TurnResultClass
++	Code      TurnResultCode
++	FinalText string
++}
++
++type TurnResultError struct {
++	Class TurnResultClass
++	Code  TurnResultCode
++}
++
++func (e *TurnResultError) Error() string {
++	return fmt.Sprintf("pi turn result: class=%s code=%s", e.Class, e.Code)
++}
++
++func (e *TurnResultError) Unwrap() error {
++	switch e.Class {
++	case TurnResultProcessARefused:
++		return ErrTurnProcessARefused
++	case TurnResultChildFailed:
++		return ErrTurnChildFailed
++	case TurnResultToolFailed:
++		return ErrTurnToolFailed
++	case TurnResultCancelled:
++		return context.Canceled
++	case TurnResultDeadlineExceeded:
++		return context.DeadlineExceeded
++	case TurnResultCleanupFailed:
++		return ErrTurnCleanupFailed
++	default:
++		return ErrTurnResultInvalid
++	}
++}
++
++var (
++	ErrTurnResultInvalid   = errors.New("pi: turn result is invalid")
++	ErrTurnProcessARefused = errors.New("pi: Process A refused the turn")
++	ErrTurnChildFailed     = errors.New("pi: child process failed")
++	ErrTurnToolFailed      = errors.New("pi: tool failed")
++	ErrTurnCleanupFailed   = errors.New("pi: Process A cleanup failed")
++)
++
++// ValidateTurnResult is the sole schema-1 parser and classifier. It copies
++// stdout before validation and never includes document contents in errors.
++func ValidateTurnResult(input TurnResultInput) (TurnResult, error) {
++	stdout := append([]byte(nil), input.Stdout...)
++	switch input.Intervention {
++	case TurnInterventionNone:
++		if input.Cleanup != ProcessACleanupNotRequired || input.Exit.Signaled {
++			return invalidTurnResult()
++		}
++	case TurnInterventionCancel, TurnInterventionDeadline:
++		if input.Cleanup != ProcessACleanupSucceeded && input.Cleanup != ProcessACleanupFailed {
++			return invalidTurnResult()
++		}
++		if input.Cleanup == ProcessACleanupFailed {
++			return errorTurnResult(TurnResultCleanupFailed, TurnCodeCleanupFailed)
++		}
++		if input.Intervention == TurnInterventionCancel {
++			return errorTurnResult(TurnResultCancelled, TurnCodeCancelled)
++		}
++		return errorTurnResult(TurnResultDeadlineExceeded, TurnCodeDeadlineExceeded)
++	default:
++		return invalidTurnResult()
++	}
++	if input.StdoutTruncated || len(stdout) > TurnResultMaxStdoutBytes {
++		return invalidTurnResult()
++	}
++
++	if input.Exit.Code < 0 || input.Exit.Code > 3 {
++		return invalidTurnResult()
++	}
++	document, err := decodeTurnResultDocument(stdout)
++	if err != nil || document.contract != TurnResultContract || document.schemaVersion != TurnResultSchemaVersion {
++		return invalidTurnResult()
++	}
++
++	if document.status == "ok" {
++		if input.Exit.Code != 0 || !document.finalTextPresent || document.errorPresent {
++			return invalidTurnResult()
++		}
++		return TurnResult{Class: TurnResultOK, FinalText: document.finalText}, nil
++	}
++	if document.status != "error" || document.finalTextPresent || !document.errorPresent {
++		return invalidTurnResult()
++	}
++	class, expectedExit, ok := turnCodeClass(document.code)
++	if !ok || input.Exit.Code != expectedExit {
++		return invalidTurnResult()
++	}
++	return errorTurnResult(class, document.code)
++}
++
++func invalidTurnResult() (TurnResult, error) {
++	return errorTurnResult(TurnResultInvalid, TurnCodeResultInvalid)
++}
++
++func errorTurnResult(class TurnResultClass, code TurnResultCode) (TurnResult, error) {
++	result := TurnResult{Class: class, Code: code}
++	return result, &TurnResultError{Class: class, Code: code}
++}
++
++func turnCodeClass(code TurnResultCode) (TurnResultClass, int, bool) {
++	switch code {
++	case TurnCodeCleanupFailed:
++		return TurnResultCleanupFailed, 1, true
++	case TurnCodeRequestInvalid, TurnCodeProfileMissing, TurnCodeProfileUnknown, TurnCodeProfileMismatch,
++		TurnCodeEnvironmentMalformed, TurnCodeEnvironmentDenied, TurnCodeConfigurationInvalid,
++		TurnCodeAuthorizationDenied, TurnCodeIdentityInvalid, TurnCodeRuntimeRefused:
++		return TurnResultProcessARefused, 1, true
++	case TurnCodeChildFailed:
++		return TurnResultChildFailed, 1, true
++	case TurnCodeToolFailed:
++		return TurnResultToolFailed, 1, true
++	case TurnCodeCancelled:
++		return TurnResultCancelled, 2, true
++	case TurnCodeDeadlineExceeded:
++		return TurnResultDeadlineExceeded, 2, true
++	case TurnCodeResultInvalid:
++		return TurnResultInvalid, 3, true
++	default:
++		return "", 0, false
++	}
++}
++
++type turnResultDocument struct {
++	contract         string
++	schemaVersion    int
++	status           string
++	finalText        string
++	finalTextPresent bool
++	errorPresent     bool
++	code             TurnResultCode
++}
++
++func decodeTurnResultDocument(data []byte) (turnResultDocument, error) {
++	if !utf8.Valid(data) {
++		return turnResultDocument{}, errors.New("invalid UTF-8")
++	}
++	// encoding/json deliberately skips leading JSON whitespace. Schema 1 is
++	// narrower: stdout starts with the one result object, while only trailing
++	// ASCII whitespace is permitted after it.
++	if len(data) == 0 || data[0] != '{' {
++		return turnResultDocument{}, errors.New("result does not start with an object")
++	}
++	decoder := json.NewDecoder(bytes.NewReader(data))
++	start, err := decoder.Token()
++	if err != nil || start != json.Delim('{') {
++		return turnResultDocument{}, errors.New("result is not an object")
++	}
++	var result turnResultDocument
++	seen := map[string]bool{}
++	for decoder.More() {
++		nameToken, err := decoder.Token()
++		if err != nil {
++			return turnResultDocument{}, err
++		}
++		name, ok := nameToken.(string)
++		if !ok || seen[name] {
++			return turnResultDocument{}, errors.New("duplicate or invalid member")
++		}
++		seen[name] = true
++		switch name {
++		case "contract":
++			err = decoder.Decode(&result.contract)
++		case "schema_version":
++			err = decoder.Decode(&result.schemaVersion)
++		case "status":
++			err = decoder.Decode(&result.status)
++		case "final_text":
++			result.finalTextPresent = true
++			err = decoder.Decode(&result.finalText)
++		case "error":
++			result.errorPresent = true
++			result.code, err = decodeTurnError(decoder)
++		default:
++			return turnResultDocument{}, errors.New("unknown member")
++		}
++		if err != nil {
++			return turnResultDocument{}, err
++		}
++	}
++	if end, err := decoder.Token(); err != nil || end != json.Delim('}') {
++		return turnResultDocument{}, errors.New("unterminated result object")
++	}
++	if _, err := decoder.Token(); err != io.EOF {
++		return turnResultDocument{}, errors.New("trailing JSON value")
++	}
++	if !seen["contract"] || !seen["schema_version"] || !seen["status"] {
++		return turnResultDocument{}, errors.New("missing result member")
++	}
++	return result, nil
++}
++
++func decodeTurnError(decoder *json.Decoder) (TurnResultCode, error) {
++	start, err := decoder.Token()
++	if err != nil || start != json.Delim('{') {
++		return "", errors.New("error is not an object")
++	}
++	var code TurnResultCode
++	seenCode := false
++	for decoder.More() {
++		nameToken, err := decoder.Token()
++		if err != nil {
++			return "", err
++		}
++		name, ok := nameToken.(string)
++		if !ok || name != "code" || seenCode {
++			return "", errors.New("unknown or duplicate error member")
++		}
++		seenCode = true
++		if err := decoder.Decode(&code); err != nil {
++			return "", err
++		}
++	}
++	if end, err := decoder.Token(); err != nil || end != json.Delim('}') || !seenCode {
++		return "", errors.New("invalid error object")
++	}
++	return code, nil
++}
+diff --git a/pkg/agentic/systems/pi/result_parser_guard_test.go b/pkg/agentic/systems/pi/result_parser_guard_test.go
+new file mode 100644
+index 0000000..a06737b
+--- /dev/null
++++ b/pkg/agentic/systems/pi/result_parser_guard_test.go
+@@ -0,0 +1,133 @@
++package pi
++
++import (
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"os"
++	"path"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"testing"
++)
++
++func TestTurnResultHasOneProductionJSONParser(t *testing.T) {
++	entries, err := os.ReadDir(".")
++	if err != nil {
++		t.Fatal(err)
++	}
++	sources := map[string]string{}
++	for _, entry := range entries {
++		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
++			continue
++		}
++		body, err := os.ReadFile(filepath.Join(".", entry.Name()))
++		if err != nil {
++			t.Fatal(err)
++		}
++		sources[entry.Name()] = string(body)
++	}
++	violations := resultParserViolations(t, sources)
++	if len(violations) != 0 {
++		t.Fatalf("schema-1 parser bypasses ValidateTurnResult: %v", violations)
++	}
++}
++
++// This narrowed mutant adds a second permissive production parser while
++// retaining the authoritative parser. The guard must reject that bypass shape;
++// deleting ValidateTurnResult entirely is not the mutation being proved.
++func TestTurnResultParserGuardRejectsNarrowPermissiveBypass(t *testing.T) {
++	tests := map[string]string{
++		"ordinary import": `package pi
++import "encoding/json"
++func consumeProcessAResult(b []byte) { var v any; _ = json.Unmarshal(b, &v) }
++`,
++		"aliased import": `package pi
++import j "encoding/json"
++func consumeProcessAResult(b []byte) { var v any; _ = j.Unmarshal(b, &v) }
++`,
++		"dot import": `package pi
++import . "encoding/json"
++func consumeProcessAResult(b []byte) { var v any; _ = Unmarshal(b, &v) }
++`,
++	}
++	for name, consumer := range tests {
++		t.Run(name, func(t *testing.T) {
++			sources := map[string]string{
++				"result.go": `package pi
++import "encoding/json"
++func decodeTurnResultDocument([]byte) { json.NewDecoder(nil) }
++`,
++				"consumer.go": consumer,
++			}
++			violations := resultParserViolations(t, sources)
++			if len(violations) != 1 || !strings.Contains(violations[0], "consumer.go") {
++				t.Fatalf("narrow permissive bypass admitted: %v", violations)
++			}
++		})
++	}
++}
++
++func resultParserViolations(t *testing.T, sources map[string]string) []string {
++	t.Helper()
++	var violations []string
++	for name, source := range sources {
++		file, err := parser.ParseFile(token.NewFileSet(), name, source, 0)
++		if err != nil {
++			t.Fatalf("parse %s: %v", name, err)
++		}
++		jsonQualifiers := map[string]bool{}
++		dotJSON := false
++		for _, imported := range file.Imports {
++			importPath, err := strconv.Unquote(imported.Path.Value)
++			if err != nil {
++				t.Fatalf("unquote import in %s: %v", name, err)
++			}
++			if importPath != "encoding/json" {
++				continue
++			}
++			qualifier := path.Base(importPath)
++			if imported.Name != nil {
++				qualifier = imported.Name.Name
++			}
++			if qualifier == "." {
++				dotJSON = true
++			} else if qualifier != "_" {
++				jsonQualifiers[qualifier] = true
++			}
++		}
++		for _, declaration := range file.Decls {
++			function, ok := declaration.(*ast.FuncDecl)
++			if !ok || function.Body == nil {
++				continue
++			}
++			ast.Inspect(function.Body, func(node ast.Node) bool {
++				call, ok := node.(*ast.CallExpr)
++				if !ok {
++					return true
++				}
++				callName := ""
++				switch called := call.Fun.(type) {
++				case *ast.SelectorExpr:
++					owner, ok := called.X.(*ast.Ident)
++					if ok && jsonQualifiers[owner.Name] {
++						callName = called.Sel.Name
++					}
++				case *ast.Ident:
++					if dotJSON {
++						callName = called.Name
++					}
++				}
++				if callName != "NewDecoder" && callName != "Unmarshal" {
++					return true
++				}
++				if name != "result.go" || function.Name.Name != "decodeTurnResultDocument" || callName != "NewDecoder" {
++					violations = append(violations, name+":"+function.Name.Name+":"+callName)
++				}
++				return true
++			})
++		}
++	}
++	return violations
++}
+diff --git a/pkg/agentic/systems/pi/result_test.go b/pkg/agentic/systems/pi/result_test.go
+new file mode 100644
+index 0000000..eb3c0d3
+--- /dev/null
++++ b/pkg/agentic/systems/pi/result_test.go
+@@ -0,0 +1,157 @@
++package pi
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"strings"
++	"testing"
++)
++
++func okTurnDocument(text string) []byte {
++	return []byte(fmt.Sprintf(`{"contract":"%s","schema_version":1,"status":"ok","final_text":%q}`, TurnResultContract, text))
++}
++
++func errorTurnDocument(code TurnResultCode) []byte {
++	return []byte(fmt.Sprintf(`{"contract":"%s","schema_version":1,"status":"error","error":{"code":%q}}`, TurnResultContract, code))
++}
++
++func uninterruptedInput(stdout []byte, exit int) TurnResultInput {
++	return TurnResultInput{Stdout: stdout, Exit: ProcessAExit{Code: exit}, Intervention: TurnInterventionNone, Cleanup: ProcessACleanupNotRequired}
++}
++
++func TestValidateTurnResultAcceptsOnlyClosedExitDocumentTable(t *testing.T) {
++	result, err := ValidateTurnResult(uninterruptedInput(okTurnDocument("answer"), 0))
++	if err != nil || result != (TurnResult{Class: TurnResultOK, FinalText: "answer"}) {
++		t.Fatalf("ok result=%+v err=%v", result, err)
++	}
++
++	tests := []struct {
++		code     TurnResultCode
++		class    TurnResultClass
++		sentinel error
++		exit     int
++	}{
++		{TurnCodeCleanupFailed, TurnResultCleanupFailed, ErrTurnCleanupFailed, 1},
++		{TurnCodeRequestInvalid, TurnResultProcessARefused, ErrTurnProcessARefused, 1},
++		{TurnCodeProfileMissing, TurnResultProcessARefused, ErrTurnProcessARefused, 1},
++		{TurnCodeProfileUnknown, TurnResultProcessARefused, ErrTurnProcessARefused, 1},
++		{TurnCodeProfileMismatch, TurnResultProcessARefused, ErrTurnProcessARefused, 1},
++		{TurnCodeEnvironmentMalformed, TurnResultProcessARefused, ErrTurnProcessARefused, 1},
++		{TurnCodeEnvironmentDenied, TurnResultProcessARefused, ErrTurnProcessARefused, 1},
++		{TurnCodeConfigurationInvalid, TurnResultProcessARefused, ErrTurnProcessARefused, 1},
++		{TurnCodeAuthorizationDenied, TurnResultProcessARefused, ErrTurnProcessARefused, 1},
++		{TurnCodeIdentityInvalid, TurnResultProcessARefused, ErrTurnProcessARefused, 1},
++		{TurnCodeRuntimeRefused, TurnResultProcessARefused, ErrTurnProcessARefused, 1},
++		{TurnCodeChildFailed, TurnResultChildFailed, ErrTurnChildFailed, 1},
++		{TurnCodeToolFailed, TurnResultToolFailed, ErrTurnToolFailed, 1},
++		{TurnCodeCancelled, TurnResultCancelled, context.Canceled, 2},
++		{TurnCodeDeadlineExceeded, TurnResultDeadlineExceeded, context.DeadlineExceeded, 2},
++		{TurnCodeResultInvalid, TurnResultInvalid, ErrTurnResultInvalid, 3},
++	}
++	for _, test := range tests {
++		t.Run(string(test.code), func(t *testing.T) {
++			result, err := ValidateTurnResult(uninterruptedInput(errorTurnDocument(test.code), test.exit))
++			if !errors.Is(err, test.sentinel) || result.Class != test.class || result.Code != test.code {
++				t.Fatalf("result=%+v err=%v, want class=%s code=%s sentinel=%v", result, err, test.class, test.code, test.sentinel)
++			}
++			var typed *TurnResultError
++			if !errors.As(err, &typed) || typed.Class != test.class || typed.Code != test.code {
++				t.Fatalf("typed error=%+v from %v", typed, err)
++			}
++		})
++	}
++}
++
++func TestValidateTurnResultInterventionAndCleanupPrecedence(t *testing.T) {
++	for _, test := range []struct {
++		name         string
++		intervention TurnIntervention
++		cleanup      ProcessACleanupOutcome
++		class        TurnResultClass
++		sentinel     error
++	}{
++		{"cancel cleanup succeeds", TurnInterventionCancel, ProcessACleanupSucceeded, TurnResultCancelled, context.Canceled},
++		{"deadline cleanup succeeds", TurnInterventionDeadline, ProcessACleanupSucceeded, TurnResultDeadlineExceeded, context.DeadlineExceeded},
++		{"cancel cleanup fails", TurnInterventionCancel, ProcessACleanupFailed, TurnResultCleanupFailed, ErrTurnCleanupFailed},
++		{"deadline cleanup fails", TurnInterventionDeadline, ProcessACleanupFailed, TurnResultCleanupFailed, ErrTurnCleanupFailed},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			result, err := ValidateTurnResult(TurnResultInput{
++				Stdout: []byte("not-json and deliberately disagreeing"), StdoutTruncated: true, Exit: ProcessAExit{Code: 137, Signaled: true},
++				Intervention: test.intervention, Cleanup: test.cleanup,
++			})
++			if !errors.Is(err, test.sentinel) || result.Class != test.class {
++				t.Fatalf("result=%+v err=%v", result, err)
++			}
++		})
++	}
++}
++
++func TestValidateTurnResultRefusesProtocolAndInputAttacks(t *testing.T) {
++	validOK := string(okTurnDocument("answer"))
++	validError := string(errorTurnDocument(TurnCodeChildFailed))
++	tests := []struct {
++		name  string
++		input TurnResultInput
++	}{
++		{"absent", uninterruptedInput(nil, 0)},
++		{"duplicate contract", uninterruptedInput([]byte(strings.Replace(validOK, `"contract":`, `"contract":"forged","contract":`, 1)), 0)},
++		{"duplicate nested code", uninterruptedInput([]byte(strings.Replace(validError, `"code":`, `"code":"pi_turn_child_failed","code":`, 1)), 1)},
++		{"unknown field", uninterruptedInput([]byte(strings.Replace(validOK, `"status":`, `"extra":1,"status":`, 1)), 0)},
++		{"leading space", uninterruptedInput([]byte(" "+validOK), 0)},
++		{"leading tab", uninterruptedInput([]byte("\t"+validOK), 0)},
++		{"leading carriage return", uninterruptedInput([]byte("\r"+validOK), 0)},
++		{"leading line feed", uninterruptedInput([]byte("\n"+validOK), 0)},
++		{"second value", uninterruptedInput([]byte(validOK+` {}`), 0)},
++		{"non-whitespace trailing", uninterruptedInput([]byte(validOK+` x`), 0)},
++		{"invalid utf8", uninterruptedInput([]byte{0xff}, 0)},
++		{"unknown contract", uninterruptedInput([]byte(strings.Replace(validOK, TurnResultContract, "forged", 1)), 0)},
++		{"unknown schema", uninterruptedInput([]byte(strings.Replace(validOK, `"schema_version":1`, `"schema_version":2`, 1)), 0)},
++		{"unknown status", uninterruptedInput([]byte(strings.Replace(validOK, `"status":"ok"`, `"status":"maybe"`, 1)), 0)},
++		{"ok with error", uninterruptedInput([]byte(strings.Replace(validOK, `}`, `,"error":{"code":"pi_turn_child_failed"}}`, 1)), 0)},
++		{"error with final text", uninterruptedInput([]byte(strings.Replace(validError, `,"error"`, `,"final_text":"forged","error"`, 1)), 1)},
++		{"unknown code", uninterruptedInput(errorTurnDocument("pi_turn_future"), 1)},
++		{"zero with error", uninterruptedInput(errorTurnDocument(TurnCodeChildFailed), 0)},
++		{"one with ok", uninterruptedInput(okTurnDocument("answer"), 1)},
++		{"wrong error exit", uninterruptedInput(errorTurnDocument(TurnCodeCancelled), 1)},
++		{"signal without intervention", TurnResultInput{Stdout: okTurnDocument("answer"), Exit: ProcessAExit{Code: 0, Signaled: true}, Intervention: TurnInterventionNone, Cleanup: ProcessACleanupNotRequired}},
++		{"unknown exit", uninterruptedInput(okTurnDocument("answer"), 4)},
++		{"truncated", TurnResultInput{Stdout: okTurnDocument("answer"), StdoutTruncated: true, Exit: ProcessAExit{Code: 0}, Intervention: TurnInterventionNone, Cleanup: ProcessACleanupNotRequired}},
++		{"cleanup without intervention", TurnResultInput{Stdout: okTurnDocument("answer"), Exit: ProcessAExit{Code: 0}, Intervention: TurnInterventionNone, Cleanup: ProcessACleanupSucceeded}},
++		{"intervention without cleanup", TurnResultInput{Intervention: TurnInterventionCancel, Cleanup: ProcessACleanupNotRequired}},
++		{"unknown intervention", TurnResultInput{Intervention: "future", Cleanup: ProcessACleanupSucceeded}},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			result, err := ValidateTurnResult(test.input)
++			if !errors.Is(err, ErrTurnResultInvalid) || result.Class != TurnResultInvalid || result.Code != TurnCodeResultInvalid {
++				t.Fatalf("result=%+v err=%v, want closed invalid class", result, err)
++			}
++		})
++	}
++}
++
++func TestValidateTurnResultEnforcesOneMiBBoundAndPermitsTrailingASCIIWhitespace(t *testing.T) {
++	document := okTurnDocument("answer")
++	trailing := []byte(" \t\r\n")
++	if _, err := ValidateTurnResult(uninterruptedInput(append(append([]byte(nil), document...), trailing...), 0)); err != nil {
++		t.Fatalf("trailing ASCII whitespace refused: %v", err)
++	}
++	exact := append(append([]byte(nil), document...), []byte(strings.Repeat(" ", TurnResultMaxStdoutBytes-len(document)))...)
++	if _, err := ValidateTurnResult(uninterruptedInput(exact, 0)); err != nil {
++		t.Fatalf("exact bound refused: %v", err)
++	}
++	over := append(exact, ' ')
++	if _, err := ValidateTurnResult(uninterruptedInput(over, 0)); !errors.Is(err, ErrTurnResultInvalid) {
++		t.Fatalf("over bound = %v, want ErrTurnResultInvalid", err)
++	}
++}
++
++func TestTurnResultErrorDoesNotExposeDocumentContents(t *testing.T) {
++	secret := "profile=/secret/path token=hunter2"
++	_, err := ValidateTurnResult(uninterruptedInput(okTurnDocument(secret), 1))
++	if err == nil || strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "hunter2") {
++		t.Fatalf("sanitized error = %q", err)
++	}
++}
+diff --git a/pkg/agentic/systems/pi/stdin.go b/pkg/agentic/systems/pi/stdin.go
+index 18907db..cdb2473 100644
+--- a/pkg/agentic/systems/pi/stdin.go
++++ b/pkg/agentic/systems/pi/stdin.go
+@@ -1,30 +1,7 @@
+ package pi
+ 
+-import (
+-	"fmt"
+-	"os"
+-	"strings"
++import "github.com/relux-works/skill-agents-management/pkg/agentic"
+ 
+-	"github.com/relux-works/skill-agents-management/pkg/agentic"
+-)
+-
+-// stdin is the assignment transport, until case 17's pinned fixture
+-// establishes pi's real wire protocol (see args.go): the PromptPath file's
+-// bytes when supplied, the Prompt bytes directly otherwise, or nothing
+-// attached at all — the same precedented fallback gemini's Stdin uses.
+-//
+-// A read FAILURE is an error, never an empty payload: an absent prompt and
+-// an unreadable one are different facts.
+-func stdin(req agentic.LaunchRequest) (agentic.StdinPayload, error) {
+-	if path := strings.TrimSpace(req.PromptPath); path != "" {
+-		data, err := os.ReadFile(path)
+-		if err != nil {
+-			return agentic.StdinPayload{}, fmt.Errorf("pi: reading the assignment prompt: %w", err)
+-		}
+-		return agentic.StdinPayload{Attached: true, Bytes: data}, nil
+-	}
+-	if len(req.Prompt) > 0 {
+-		return agentic.StdinPayload{Attached: true, Bytes: append([]byte(nil), req.Prompt...)}, nil
+-	}
++func stdin(agentic.LaunchRequest) (agentic.StdinPayload, error) {
+ 	return agentic.StdinPayload{}, nil
+ }
+diff --git a/pkg/inferenceengine/contract.go b/pkg/inferenceengine/contract.go
+index f84bbf6..e925cf2 100644
+--- a/pkg/inferenceengine/contract.go
++++ b/pkg/inferenceengine/contract.go
+@@ -202,8 +202,9 @@ func ReadFailure(cause NotObservedCause, detail string) ReadOutcome {
+ 
+ // Reading is an untrusted value at the schema boundary. Constructing one does
+ // not authorize a launch: vendorplugin.BuildLaunch obtains readings only from
+-// its package-owned engineFactSource and calls ValidateReadings before Spawn,
+-// Preflight, plan materialization, or any execution effect.
++// an immutable registry-installed EngineObservationAdapter after the vendor
++// has produced the authoritative launch/profile, then calls ValidateReadings
++// before Preflight, plan materialization, or any execution effect.
+ type Reading struct {
+ 	fact    Fact
+ 	outcome ReadOutcome
+diff --git a/pkg/vendorplugin/engine.go b/pkg/vendorplugin/engine.go
+index 9faa920..3d9159e 100644
+--- a/pkg/vendorplugin/engine.go
++++ b/pkg/vendorplugin/engine.go
+@@ -4,54 +4,126 @@ import (
+ 	"context"
+ 	"errors"
+ 	"fmt"
++	"reflect"
++	"time"
+ 
+ 	"github.com/relux-works/skill-agents-management/internal/ident"
+ 	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
+-	"github.com/relux-works/skill-agents-management/pkg/inferenceengine/engines/mlx"
+ 	"github.com/relux-works/skill-agents-management/pkg/plugin"
+ )
+ 
+-type engineObservationQuery struct {
++const EngineObservationAdapterContract = "agents-management.engine-observation-adapter"
++const EngineObservationAdapterSchemaVersion = 1
++
++// EngineObservationAdapterDeclaration is the immutable identity and schema
++// snapshot taken once when a Registry is constructed. EngineContract is the
++// inferenceengine observation contract the adapter implements.
++type EngineObservationAdapterDeclaration struct {
++	Contract       string
++	SchemaVersion  int
++	Engine         plugin.Ref
++	EngineKind     inferenceengine.EngineKind
++	EngineContract string
++}
++
++// EngineObservationQuery contains only authoritative values resolved by
++// BuildLaunch. A launch caller cannot supply an adapter or an observation.
++type EngineObservationQuery struct {
++	Engine  plugin.Ref
+ 	Runtime RuntimeID
+-	Profile string
+ 	Model   ModelID
++	Profile string
+ }
+ 
+-// engineFactSource is deliberately package-private. NewRegistry installs the
+-// concrete production implementation and no public constructor accepts a
+-// replacement, so an ordinary BuildLaunch caller cannot register or retain an
+-// evidence producer. Tests in this package use newRegistryWithEngineFactSource
+-// to fake the agents-infra boundary without live process, SSH, or network I/O.
+-type engineFactSource interface {
+-	ReadEngineFacts(context.Context, plugin.Ref, engineObservationQuery) (inferenceengine.EngineKind, []inferenceengine.Reading, error)
++// EngineObservation is the sanitized, versioned response accepted from an
++// agents-infra-owned, bounded, read-only adapter.
++type EngineObservation struct {
++	Contract      string
++	SchemaVersion int
++	Engine        plugin.Ref
++	Runtime       RuntimeID
++	Model         ModelID
++	Profile       string
++	ObservedAt    time.Time
++	ValidUntil    time.Time
++	Readings      []inferenceengine.Reading
+ }
+ 
+-type productionEngineFactSource struct{}
++// EngineObservationAdapter performs one cooperative bounded observation. It
++// does not own engine lifecycle; Process B remains owned by agents-infra.
++type EngineObservationAdapter interface {
++	EngineObservationAdapterDeclaration() EngineObservationAdapterDeclaration
++	ObserveEngine(context.Context, EngineObservationQuery) (EngineObservation, error)
++}
+ 
+-func (productionEngineFactSource) ReadEngineFacts(_ context.Context, ref plugin.Ref, _ engineObservationQuery) (inferenceengine.EngineKind, []inferenceengine.Reading, error) {
+-	if ref.Kind != inferenceengine.Kind {
+-		return "", nil, fmt.Errorf("%w: observation reference names kind %q, want %q", ErrInferenceEngineInvalid, ref.Kind, inferenceengine.Kind)
++type registeredEngineObservationAdapter struct {
++	declaration EngineObservationAdapterDeclaration
++	adapter     EngineObservationAdapter
++}
++
++var (
++	ErrEngineObservationAdapterMissing = errors.New("vendorplugin: inference-engine observation adapter is missing")
++	ErrEngineObservationAdapterInvalid = errors.New("vendorplugin: inference-engine observation adapter is invalid")
++	ErrEngineObservationVersion        = errors.New("vendorplugin: inference-engine observation version is unsupported")
++	ErrEngineObservationIdentity       = errors.New("vendorplugin: inference-engine observation identity does not match the query")
++	ErrEngineObservationStale          = errors.New("vendorplugin: inference-engine observation is stale")
++)
++
++func validateEngineObservationAdapter(adapter EngineObservationAdapter) (registeredEngineObservationAdapter, error) {
++	if nilEngineObservationAdapter(adapter) {
++		return registeredEngineObservationAdapter{}, fmt.Errorf("%w: nil adapter", ErrEngineObservationAdapterInvalid)
++	}
++	declaration := adapter.EngineObservationAdapterDeclaration()
++	if declaration.Contract != EngineObservationAdapterContract || declaration.SchemaVersion != EngineObservationAdapterSchemaVersion || declaration.EngineContract != inferenceengine.ContractVersion {
++		return registeredEngineObservationAdapter{}, fmt.Errorf("%w: contract=%q schema=%d engine_contract=%q", ErrEngineObservationVersion, declaration.Contract, declaration.SchemaVersion, declaration.EngineContract)
+ 	}
+-	if ref.ID != mlx.ID {
+-		return "", nil, fmt.Errorf("%w: configured engine %q has no trusted concrete implementation", inferenceengine.ErrEngineContractMissing, ref.ID)
++	if err := validateInferenceEngineRef("observation adapter", declaration.Engine); err != nil || declaration.Engine == (plugin.Ref{}) {
++		return registeredEngineObservationAdapter{}, fmt.Errorf("%w: engine declaration: %v", ErrEngineObservationAdapterInvalid, err)
+ 	}
+-	readings := make([]inferenceengine.Reading, 0, len(inferenceengine.MeasuredFacts()))
+-	for _, definition := range inferenceengine.MeasuredFacts() {
+-		readings = append(readings, inferenceengine.NewReading(definition.Fact,
+-			inferenceengine.ReadFailure(inferenceengine.NotObservedUnsupported, "agents-infra has not supplied the concrete MLX observation adapter")))
++	switch declaration.EngineKind {
++	case inferenceengine.EngineKindNativeTransformer, inferenceengine.EngineKindGGUFServer:
++	default:
++		return registeredEngineObservationAdapter{}, fmt.Errorf("%w: engine kind %q", ErrEngineObservationAdapterInvalid, declaration.EngineKind)
+ 	}
+-	return inferenceengine.EngineKindNativeTransformer, readings, nil
++	return registeredEngineObservationAdapter{declaration: declaration, adapter: adapter}, nil
+ }
+ 
+-func resolveEngineObservations(ctx context.Context, source engineFactSource, ref plugin.Ref, query engineObservationQuery) (inferenceengine.Resolution, error) {
+-	if source == nil {
+-		return inferenceengine.Resolution{}, fmt.Errorf("%w: engine fact source is absent", inferenceengine.ErrEngineContractMissing)
++func nilEngineObservationAdapter(adapter EngineObservationAdapter) bool {
++	if adapter == nil {
++		return true
++	}
++	value := reflect.ValueOf(adapter)
++	switch value.Kind() {
++	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
++		return value.IsNil()
++	default:
++		return false
+ 	}
+-	kind, readings, err := source.ReadEngineFacts(ctx, ref, query)
++}
++
++func resolveEngineObservations(ctx context.Context, registered registeredEngineObservationAdapter, query EngineObservationQuery) (inferenceengine.Resolution, error) {
++	observation, err := registered.adapter.ObserveEngine(ctx, query)
+ 	if err != nil {
++		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
++			return inferenceengine.Resolution{}, err
++		}
++		return inferenceengine.Resolution{}, fmt.Errorf("%w: %w", inferenceengine.ErrObservationRead, err)
++	}
++	if err := ctx.Err(); err != nil {
+ 		return inferenceengine.Resolution{}, err
+ 	}
+-	return inferenceengine.ValidateReadings(ref.ID, kind, readings)
++	if observation.Contract != EngineObservationAdapterContract || observation.SchemaVersion != EngineObservationAdapterSchemaVersion {
++		return inferenceengine.Resolution{}, fmt.Errorf("%w: contract=%q schema=%d", ErrEngineObservationVersion, observation.Contract, observation.SchemaVersion)
++	}
++	if observation.Engine != query.Engine || observation.Runtime != query.Runtime || observation.Model != query.Model || observation.Profile != query.Profile {
++		return inferenceengine.Resolution{}, fmt.Errorf("%w: response identity differs from authoritative query", ErrEngineObservationIdentity)
++	}
++	now := time.Now()
++	if observation.ObservedAt.IsZero() || observation.ValidUntil.IsZero() || observation.ObservedAt.After(now) || !observation.ValidUntil.After(observation.ObservedAt) || !now.Before(observation.ValidUntil) {
++		return inferenceengine.Resolution{}, ErrEngineObservationStale
++	}
++	readings := append([]inferenceengine.Reading(nil), observation.Readings...)
++	return inferenceengine.ValidateReadings(query.Engine.ID, registered.declaration.EngineKind, readings)
+ }
+ 
+ var (
+diff --git a/pkg/vendorplugin/engine_launch_test.go b/pkg/vendorplugin/engine_launch_test.go
+index 67f652b..7cb8762 100644
+--- a/pkg/vendorplugin/engine_launch_test.go
++++ b/pkg/vendorplugin/engine_launch_test.go
+@@ -8,6 +8,7 @@ import (
+ 	"reflect"
+ 	"sort"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/relux-works/skill-agents-management/pkg/agentic"
+ 	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
+@@ -16,21 +17,43 @@ import (
+ 
+ var testEngineRef = plugin.Ref{ID: "test-engine", Kind: inferenceengine.Kind}
+ 
+-type scriptedEngineFactSource struct {
+-	kind      inferenceengine.EngineKind
+-	overrides map[inferenceengine.Fact]inferenceengine.ReadOutcome
+-	calls     int
+-	before    func()
++type scriptedEngineObservationAdapter struct {
++	engine       plugin.Ref
++	kind         inferenceengine.EngineKind
++	overrides    map[inferenceengine.Fact]inferenceengine.ReadOutcome
++	calls        int
++	before       func()
++	mutate       func(*EngineObservation)
++	err          error
++	hang         bool
++	queries      []EngineObservationQuery
++	declarations int
++}
++
++func (source *scriptedEngineObservationAdapter) EngineObservationAdapterDeclaration() EngineObservationAdapterDeclaration {
++	source.declarations++
++	kind := source.kind
++	if kind == "" {
++		kind = inferenceengine.EngineKindNativeTransformer
++	}
++	return EngineObservationAdapterDeclaration{
++		Contract: EngineObservationAdapterContract, SchemaVersion: EngineObservationAdapterSchemaVersion,
++		Engine: source.engine, EngineKind: kind, EngineContract: inferenceengine.ContractVersion,
++	}
+ }
+ 
+-func (source *scriptedEngineFactSource) ReadEngineFacts(_ context.Context, _ plugin.Ref, _ engineObservationQuery) (inferenceengine.EngineKind, []inferenceengine.Reading, error) {
++func (source *scriptedEngineObservationAdapter) ObserveEngine(ctx context.Context, query EngineObservationQuery) (EngineObservation, error) {
+ 	source.calls++
++	source.queries = append(source.queries, query)
+ 	if source.before != nil {
+ 		source.before()
+ 	}
+-	kind := source.kind
+-	if kind == "" {
+-		kind = inferenceengine.EngineKindNativeTransformer
++	if source.hang {
++		<-ctx.Done()
++		return EngineObservation{}, ctx.Err()
++	}
++	if source.err != nil {
++		return EngineObservation{}, source.err
+ 	}
+ 	values := map[inferenceengine.Fact]inferenceengine.ReadOutcome{
+ 		inferenceengine.FactSSHForwarding: inferenceengine.ReadAbsent(),
+@@ -46,7 +69,16 @@ func (source *scriptedEngineFactSource) ReadEngineFacts(_ context.Context, _ plu
+ 		}
+ 		readings = append(readings, inferenceengine.NewReading(definition.Fact, outcome))
+ 	}
+-	return kind, readings, nil
++	now := time.Now()
++	observation := EngineObservation{
++		Contract: EngineObservationAdapterContract, SchemaVersion: EngineObservationAdapterSchemaVersion,
++		Engine: query.Engine, Runtime: query.Runtime, Model: query.Model, Profile: query.Profile,
++		ObservedAt: now.Add(-time.Second), ValidUntil: now.Add(time.Minute), Readings: readings,
++	}
++	if source.mutate != nil {
++		source.mutate(&observation)
++	}
++	return observation, nil
+ }
+ 
+ func goodEngineFactValue(fact inferenceengine.Fact) string {
+@@ -93,7 +125,11 @@ func goodEngineFactValue(fact inferenceengine.Fact) string {
+ func engineRegistry(t *testing.T, runtimeEngine, modelEngine plugin.Ref) *Registry {
+ 	t.Helper()
+ 	systems := systemsWithPangolin(t)
+-	registry := newRegistryWithEngineFactSource(systems, &scriptedEngineFactSource{})
++	adapter := &scriptedEngineObservationAdapter{engine: testEngineRef}
++	registry, err := NewRegistryWithEngineObservationAdapters(systems, adapter)
++	if err != nil {
++		t.Fatalf("NewRegistryWithEngineObservationAdapters: %v", err)
++	}
+ 	if err := registry.RegisterPlugin(inferenceengine.NewConfigured("test-engine")); err != nil {
+ 		t.Fatalf("RegisterPlugin(engine): %v", err)
+ 	}
+@@ -143,18 +179,16 @@ func TestBuildLaunchRunsTrustedMLXObservationGateBeforeLaunchEffects(t *testing.
+ 	ids := launchIdentityCorpus()[0]
+ 	engine := plugin.Ref{ID: "mlx", Kind: inferenceengine.Kind}
+ 	fixture := newIdentityLaunchFixture(t, ids, engine, engine)
+-	source := &scriptedEngineFactSource{
+-		kind: inferenceengine.EngineKindNativeTransformer,
+-		overrides: map[inferenceengine.Fact]inferenceengine.ReadOutcome{
+-			inferenceengine.FactSpeculativeDecoding: inferenceengine.ReadAbsent(),
+-		},
++	source := fixture.adapter
++	source.kind = inferenceengine.EngineKindNativeTransformer
++	source.overrides = map[inferenceengine.Fact]inferenceengine.ReadOutcome{
++		inferenceengine.FactSpeculativeDecoding: inferenceengine.ReadAbsent(),
+ 	}
+ 	source.before = func() {
+-		if fixture.vendor.calls["Spawn"] != 0 || fixture.system.preflightCalls != 0 {
++		if fixture.vendor.calls["Spawn"] != 1 || fixture.system.preflightCalls != 0 {
+ 			t.Fatalf("engine gate ran after launch effects: Spawn=%d Preflight=%d", fixture.vendor.calls["Spawn"], fixture.system.preflightCalls)
+ 		}
+ 	}
+-	fixture.registry.engineFacts = source
+ 
+ 	plan, err := BuildLaunch(context.Background(), fixture.registry, fixture.request, agentic.LaunchModeExec)
+ 	if err != nil {
+@@ -172,13 +206,13 @@ func TestBuildLaunchProductionSourceRefusesUnknownConfiguredEngineIDBeforeEffect
+ 	ids := launchIdentityCorpus()[1]
+ 	engine := plugin.Ref{ID: plugin.ID(ids.engine), Kind: inferenceengine.Kind}
+ 	fixture := newIdentityLaunchFixture(t, ids, engine, engine)
+-	fixture.registry.engineFacts = productionEngineFactSource{}
++	fixture.registry.engineAdapters = nil
+ 
+ 	_, err := BuildLaunch(context.Background(), fixture.registry, fixture.request, agentic.LaunchModeExec)
+-	if !errors.Is(err, inferenceengine.ErrEngineContractMissing) {
+-		t.Fatalf("BuildLaunch unknown production engine = %v, want ErrEngineContractMissing", err)
++	if !errors.Is(err, ErrEngineObservationAdapterMissing) || !errors.Is(err, inferenceengine.ErrEngineContractMissing) {
++		t.Fatalf("BuildLaunch unknown production engine = %v, want missing adapter and engine contract", err)
+ 	}
+-	if fixture.vendor.calls["Spawn"] != 0 || fixture.system.preflightCalls != 0 {
++	if fixture.vendor.calls["Spawn"] != 1 || fixture.system.preflightCalls != 0 {
+ 		t.Fatalf("unknown engine reached launch effects: Spawn=%d Preflight=%d", fixture.vendor.calls["Spawn"], fixture.system.preflightCalls)
+ 	}
+ }
+@@ -187,16 +221,13 @@ func TestBuildLaunchProductionMLXPathRefusesWithoutAgentsInfraObservationAdapter
+ 	ids := launchIdentityCorpus()[0]
+ 	engine := plugin.Ref{ID: "mlx", Kind: inferenceengine.Kind}
+ 	fixture := newIdentityLaunchFixture(t, ids, engine, engine)
+-	fixture.registry.engineFacts = productionEngineFactSource{}
++	fixture.registry.engineAdapters = nil
+ 
+ 	_, err := BuildLaunch(context.Background(), fixture.registry, fixture.request, agentic.LaunchModeExec)
+-	if !errors.Is(err, inferenceengine.ErrObservationUnsupported) {
+-		t.Fatalf("BuildLaunch production mlx path = %v, want ErrObservationUnsupported", err)
+-	}
+-	if errors.Is(err, inferenceengine.ErrEngineContractMissing) {
+-		t.Fatalf("shipped mlx identity did not reach its concrete implementation: %v", err)
++	if !errors.Is(err, ErrEngineObservationAdapterMissing) || !errors.Is(err, inferenceengine.ErrEngineContractMissing) {
++		t.Fatalf("BuildLaunch production mlx path = %v, want missing adapter", err)
+ 	}
+-	if fixture.vendor.calls["Spawn"] != 0 || fixture.system.preflightCalls != 0 {
++	if fixture.vendor.calls["Spawn"] != 1 || fixture.system.preflightCalls != 0 {
+ 		t.Fatalf("unsupported observation reached launch effects: Spawn=%d Preflight=%d", fixture.vendor.calls["Spawn"], fixture.system.preflightCalls)
+ 	}
+ }
+@@ -255,13 +286,13 @@ func TestBuildLaunchObservationRefusalsPrecedeEveryLaunchEffect(t *testing.T) {
+ 			ids := launchIdentityCorpus()[0]
+ 			engine := plugin.Ref{ID: "mlx", Kind: inferenceengine.Kind}
+ 			fixture := newIdentityLaunchFixture(t, ids, engine, engine)
+-			fixture.registry.engineFacts = &scriptedEngineFactSource{overrides: test.overrides}
++			fixture.adapter.overrides = test.overrides
+ 
+ 			_, err := BuildLaunch(context.Background(), fixture.registry, fixture.request, agentic.LaunchModeExec)
+ 			if !errors.Is(err, test.want) {
+ 				t.Fatalf("BuildLaunch error = %v, want %v", err, test.want)
+ 			}
+-			if fixture.vendor.calls["Spawn"] != 0 || fixture.system.preflightCalls != 0 {
++			if fixture.vendor.calls["Spawn"] != 1 || fixture.system.preflightCalls != 0 {
+ 				t.Fatalf("refusal reached launch effects: Spawn=%d Preflight=%d", fixture.vendor.calls["Spawn"], fixture.system.preflightCalls)
+ 			}
+ 		})
+@@ -280,9 +311,9 @@ func TestPublicProductionEntryHasNoCallerSuppliedObservationChannel(t *testing.T
+ 			t.Fatalf("BuildLaunch exposes caller observation input %v", input)
+ 		}
+ 	}
+-	field, ok := reflect.TypeOf(Registry{}).FieldByName("engineFacts")
++	field, ok := reflect.TypeOf(Registry{}).FieldByName("engineAdapters")
+ 	if !ok || field.PkgPath == "" {
+-		t.Fatalf("Registry.engineFacts is caller-settable: %#v", field)
++		t.Fatalf("Registry.engineAdapters is caller-settable: %#v", field)
+ 	}
+ }
+ 
+@@ -401,11 +432,21 @@ func (s *identitySystem) Preflight(context.Context, agentic.LaunchRequest) (agen
+ 	return agentic.PreflightEvidence{}, nil
+ }
+ 
+-type identityVendor struct{ *narwhalVendor }
++type identityVendor struct {
++	*narwhalVendor
++	resolvedProfile string
++	profileOverride string
++}
+ 
+ func (v *identityVendor) Spawn(sc SpawnContext) (agentic.LaunchRequest, error) {
+ 	launch, err := v.narwhalVendor.Spawn(sc)
+ 	launch.Profile = sc.Request.Profile
++	if launch.Profile == "" {
++		launch.Profile = v.resolvedProfile
++	}
++	if v.profileOverride != "" {
++		launch.Profile = v.profileOverride
++	}
+ 	return launch, err
+ }
+ 
+@@ -413,6 +454,7 @@ type identityLaunchFixture struct {
+ 	registry *Registry
+ 	system   *identitySystem
+ 	vendor   *identityVendor
++	adapter  *scriptedEngineObservationAdapter
+ 	request  SpawnRequest
+ }
+ 
+@@ -426,7 +468,12 @@ func newIdentityLaunchFixture(t *testing.T, ids launchIdentityTuple, runtimeEngi
+ 		t.Fatalf("Register(%s system): %v", ids.system, err)
+ 	}
+ 
+-	registry := newRegistryWithEngineFactSource(systems, &scriptedEngineFactSource{})
++	engineRef := plugin.Ref{ID: plugin.ID(ids.engine), Kind: inferenceengine.Kind}
++	adapter := &scriptedEngineObservationAdapter{engine: engineRef}
++	registry, err := NewRegistryWithEngineObservationAdapters(systems, adapter)
++	if err != nil {
++		t.Fatalf("NewRegistryWithEngineObservationAdapters: %v", err)
++	}
+ 	registered := make(map[plugin.Ref]bool)
+ 	for _, ref := range append([]plugin.Ref{{ID: plugin.ID(ids.engine), Kind: inferenceengine.Kind}}, extraEngines...) {
+ 		if ref == (plugin.Ref{}) || registered[ref] {
+@@ -466,7 +513,7 @@ func newIdentityLaunchFixture(t *testing.T, ids launchIdentityTuple, runtimeEngi
+ 	request.Profile = ids.profile
+ 	request.Model = ModelID(ids.model)
+ 	request.Engine = runtimeEngine
+-	return identityLaunchFixture{registry: registry, system: system, vendor: vendor, request: request}
++	return identityLaunchFixture{registry: registry, system: system, vendor: vendor, adapter: adapter, request: request}
+ }
+ 
+ // BuildLaunch is deliberately the acceptance surface. The fixture changes all
+diff --git a/pkg/vendorplugin/observer_api_external_test.go b/pkg/vendorplugin/observer_api_external_test.go
+new file mode 100644
+index 0000000..bc33ba7
+--- /dev/null
++++ b/pkg/vendorplugin/observer_api_external_test.go
+@@ -0,0 +1,40 @@
++package vendorplugin_test
++
++import (
++	"context"
++	"testing"
++	"time"
++
++	"github.com/relux-works/skill-agents-management/pkg/agentic"
++	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
++	"github.com/relux-works/skill-agents-management/pkg/plugin"
++	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
++)
++
++type externalObservationAdapter struct{}
++
++func (externalObservationAdapter) EngineObservationAdapterDeclaration() vendorplugin.EngineObservationAdapterDeclaration {
++	return vendorplugin.EngineObservationAdapterDeclaration{
++		Contract:       vendorplugin.EngineObservationAdapterContract,
++		SchemaVersion:  vendorplugin.EngineObservationAdapterSchemaVersion,
++		Engine:         plugin.Ref{ID: "external-engine", Kind: inferenceengine.Kind},
++		EngineKind:     inferenceengine.EngineKindNativeTransformer,
++		EngineContract: inferenceengine.ContractVersion,
++	}
++}
++
++func (externalObservationAdapter) ObserveEngine(_ context.Context, query vendorplugin.EngineObservationQuery) (vendorplugin.EngineObservation, error) {
++	now := time.Now()
++	return vendorplugin.EngineObservation{
++		Contract: vendorplugin.EngineObservationAdapterContract, SchemaVersion: vendorplugin.EngineObservationAdapterSchemaVersion,
++		Engine: query.Engine, Runtime: query.Runtime, Model: query.Model, Profile: query.Profile,
++		ObservedAt: now, ValidUntil: now.Add(time.Minute),
++	}, nil
++}
++
++func TestPublicObservationAdapterAPICompilesForExternalConsumer(t *testing.T) {
++	registry, err := vendorplugin.NewRegistryWithEngineObservationAdapters(agentic.NewRegistry(), externalObservationAdapter{})
++	if err != nil || registry == nil {
++		t.Fatalf("NewRegistryWithEngineObservationAdapters=%p, %v", registry, err)
++	}
++}
+diff --git a/pkg/vendorplugin/observer_api_test.go b/pkg/vendorplugin/observer_api_test.go
+new file mode 100644
+index 0000000..a737862
+--- /dev/null
++++ b/pkg/vendorplugin/observer_api_test.go
+@@ -0,0 +1,210 @@
++package vendorplugin
++
++import (
++	"context"
++	"errors"
++	"reflect"
++	"testing"
++	"time"
++
++	"github.com/relux-works/skill-agents-management/pkg/agentic"
++	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
++	"github.com/relux-works/skill-agents-management/pkg/plugin"
++)
++
++type declaredObservationAdapter struct {
++	declaration EngineObservationAdapterDeclaration
++}
++
++func (a *declaredObservationAdapter) EngineObservationAdapterDeclaration() EngineObservationAdapterDeclaration {
++	return a.declaration
++}
++
++func (*declaredObservationAdapter) ObserveEngine(context.Context, EngineObservationQuery) (EngineObservation, error) {
++	return EngineObservation{}, errors.New("not called")
++}
++
++func validAdapterDeclaration(engine plugin.Ref) EngineObservationAdapterDeclaration {
++	return EngineObservationAdapterDeclaration{
++		Contract: EngineObservationAdapterContract, SchemaVersion: EngineObservationAdapterSchemaVersion,
++		Engine: engine, EngineKind: inferenceengine.EngineKindNativeTransformer, EngineContract: inferenceengine.ContractVersion,
++	}
++}
++
++func TestNewRegistryWithEngineObservationAdaptersRefusesInvalidBatchAtomically(t *testing.T) {
++	valid := validAdapterDeclaration(testEngineRef)
++	var typedNil *declaredObservationAdapter
++	tests := []struct {
++		name     string
++		adapters []EngineObservationAdapter
++		want     error
++	}{
++		{"nil", []EngineObservationAdapter{nil}, ErrEngineObservationAdapterInvalid},
++		{"typed nil", []EngineObservationAdapter{typedNil}, ErrEngineObservationAdapterInvalid},
++		{"empty engine", []EngineObservationAdapter{&declaredObservationAdapter{declaration: func() EngineObservationAdapterDeclaration { d := valid; d.Engine = plugin.Ref{}; return d }()}}, ErrEngineObservationAdapterInvalid},
++		{"wrong engine kind", []EngineObservationAdapter{&declaredObservationAdapter{declaration: func() EngineObservationAdapterDeclaration { d := valid; d.Engine.Kind = "vendor"; return d }()}}, ErrEngineObservationAdapterInvalid},
++		{"unknown implementation kind", []EngineObservationAdapter{&declaredObservationAdapter{declaration: func() EngineObservationAdapterDeclaration { d := valid; d.EngineKind = "future"; return d }()}}, ErrEngineObservationAdapterInvalid},
++		{"unknown adapter contract", []EngineObservationAdapter{&declaredObservationAdapter{declaration: func() EngineObservationAdapterDeclaration { d := valid; d.Contract = "future"; return d }()}}, ErrEngineObservationVersion},
++		{"unknown adapter schema", []EngineObservationAdapter{&declaredObservationAdapter{declaration: func() EngineObservationAdapterDeclaration { d := valid; d.SchemaVersion = 2; return d }()}}, ErrEngineObservationVersion},
++		{"unknown engine contract", []EngineObservationAdapter{&declaredObservationAdapter{declaration: func() EngineObservationAdapterDeclaration {
++			d := valid
++			d.EngineContract = "observed-process/v3"
++			return d
++		}()}}, ErrEngineObservationVersion},
++		{"duplicate", []EngineObservationAdapter{&declaredObservationAdapter{declaration: valid}, &declaredObservationAdapter{declaration: valid}}, ErrEngineObservationAdapterInvalid},
++		{"valid then invalid remains atomic", []EngineObservationAdapter{&declaredObservationAdapter{declaration: valid}, nil}, ErrEngineObservationAdapterInvalid},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			registry, err := NewRegistryWithEngineObservationAdapters(agentic.NewRegistry(), test.adapters...)
++			if registry != nil || !errors.Is(err, test.want) {
++				t.Fatalf("registry=%p err=%v, want nil and %v", registry, err, test.want)
++			}
++		})
++	}
++}
++
++func TestAdapterDeclarationIsReadOnceAndSnapshotted(t *testing.T) {
++	ids := launchIdentityCorpus()[1]
++	engine := plugin.Ref{ID: plugin.ID(ids.engine), Kind: inferenceengine.Kind}
++	fixture := newIdentityLaunchFixture(t, ids, engine, engine)
++	fixture.adapter.engine = plugin.Ref{ID: "redirected-engine", Kind: inferenceengine.Kind}
++	fixture.adapter.kind = "future-kind"
++
++	if _, err := BuildLaunch(context.Background(), fixture.registry, fixture.request, agentic.LaunchModeExec); err != nil {
++		t.Fatalf("BuildLaunch after adapter mutation: %v", err)
++	}
++	if fixture.adapter.declarations != 1 || fixture.adapter.calls != 1 {
++		t.Fatalf("declaration/observe calls=%d/%d, want 1/1", fixture.adapter.declarations, fixture.adapter.calls)
++	}
++}
++
++func TestBuildLaunchValidatesObservationVersionIdentityAndFreshnessBeforePreflight(t *testing.T) {
++	ids := launchIdentityCorpus()[1]
++	engine := plugin.Ref{ID: plugin.ID(ids.engine), Kind: inferenceengine.Kind}
++	tests := []struct {
++		name   string
++		mutate func(*EngineObservation)
++		want   error
++	}{
++		{"missing contract", func(o *EngineObservation) { o.Contract = "" }, ErrEngineObservationVersion},
++		{"unknown schema", func(o *EngineObservation) { o.SchemaVersion = 2 }, ErrEngineObservationVersion},
++		{"engine redirect", func(o *EngineObservation) { o.Engine.ID = "other" }, ErrEngineObservationIdentity},
++		{"runtime redirect", func(o *EngineObservation) { o.Runtime = "other" }, ErrEngineObservationIdentity},
++		{"model redirect", func(o *EngineObservation) { o.Model = "other" }, ErrEngineObservationIdentity},
++		{"profile redirect", func(o *EngineObservation) { o.Profile = "other" }, ErrEngineObservationIdentity},
++		{"zero observed", func(o *EngineObservation) { o.ObservedAt = time.Time{} }, ErrEngineObservationStale},
++		{"future observed", func(o *EngineObservation) {
++			o.ObservedAt = time.Now().Add(time.Minute)
++			o.ValidUntil = time.Now().Add(2 * time.Minute)
++		}, ErrEngineObservationStale},
++		{"expired", func(o *EngineObservation) { o.ValidUntil = time.Now().Add(-time.Second) }, ErrEngineObservationStale},
++		{"inverted", func(o *EngineObservation) { o.ValidUntil = o.ObservedAt.Add(-time.Second) }, ErrEngineObservationStale},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			fixture := newIdentityLaunchFixture(t, ids, engine, engine)
++			fixture.adapter.mutate = test.mutate
++			_, err := BuildLaunch(context.Background(), fixture.registry, fixture.request, agentic.LaunchModeExec)
++			if !errors.Is(err, test.want) {
++				t.Fatalf("BuildLaunch=%v, want %v", err, test.want)
++			}
++			if fixture.vendor.calls["Spawn"] != 1 || fixture.adapter.calls != 1 || fixture.system.preflightCalls != 0 {
++				t.Fatalf("Spawn/Observe/Preflight=%d/%d/%d, want 1/1/0", fixture.vendor.calls["Spawn"], fixture.adapter.calls, fixture.system.preflightCalls)
++			}
++		})
++	}
++}
++
++func TestBuildLaunchObservationReadAndContextFailuresDoNotReachPreflight(t *testing.T) {
++	ids := launchIdentityCorpus()[1]
++	engine := plugin.Ref{ID: plugin.ID(ids.engine), Kind: inferenceengine.Kind}
++
++	t.Run("read failure preserves cause", func(t *testing.T) {
++		fixture := newIdentityLaunchFixture(t, ids, engine, engine)
++		cause := errors.New("bounded status read failed")
++		fixture.adapter.err = cause
++		_, err := BuildLaunch(context.Background(), fixture.registry, fixture.request, agentic.LaunchModeExec)
++		if !errors.Is(err, inferenceengine.ErrObservationRead) || !errors.Is(err, cause) || fixture.system.preflightCalls != 0 {
++			t.Fatalf("err=%v preflight=%d", err, fixture.system.preflightCalls)
++		}
++	})
++
++	t.Run("pre-cancelled refuses before pure vendor and adapter", func(t *testing.T) {
++		fixture := newIdentityLaunchFixture(t, ids, engine, engine)
++		ctx, cancel := context.WithCancel(context.Background())
++		cancel()
++		_, err := BuildLaunch(ctx, fixture.registry, fixture.request, agentic.LaunchModeExec)
++		if !errors.Is(err, context.Canceled) || fixture.vendor.calls["Spawn"] != 0 || fixture.adapter.calls != 0 || fixture.system.preflightCalls != 0 {
++			t.Fatalf("err=%v Spawn/Observe/Preflight=%d/%d/%d", err, fixture.vendor.calls["Spawn"], fixture.adapter.calls, fixture.system.preflightCalls)
++		}
++	})
++
++	t.Run("earlier caller deadline bounds cooperative adapter", func(t *testing.T) {
++		fixture := newIdentityLaunchFixture(t, ids, engine, engine)
++		fixture.adapter.hang = true
++		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
++		defer cancel()
++		_, err := BuildLaunch(ctx, fixture.registry, fixture.request, agentic.LaunchModeExec)
++		if !errors.Is(err, context.DeadlineExceeded) || fixture.adapter.calls != 1 || fixture.system.preflightCalls != 0 {
++			t.Fatalf("err=%v Observe/Preflight=%d/%d", err, fixture.adapter.calls, fixture.system.preflightCalls)
++		}
++	})
++
++	t.Run("late response after cancellation is never admitted", func(t *testing.T) {
++		fixture := newIdentityLaunchFixture(t, ids, engine, engine)
++		ctx, cancel := context.WithCancel(context.Background())
++		fixture.adapter.before = cancel
++		_, err := BuildLaunch(ctx, fixture.registry, fixture.request, agentic.LaunchModeExec)
++		if !errors.Is(err, context.Canceled) || fixture.system.preflightCalls != 0 {
++			t.Fatalf("err=%v preflight=%d", err, fixture.system.preflightCalls)
++		}
++	})
++}
++
++func TestBuildLaunchAdapterReceivesOnlyAuthoritativeVendorProfile(t *testing.T) {
++	ids := launchIdentityCorpus()[1]
++	engine := plugin.Ref{ID: plugin.ID(ids.engine), Kind: inferenceengine.Kind}
++	fixture := newIdentityLaunchFixture(t, ids, engine, engine)
++	fixture.request.Profile = ""
++	fixture.vendor.resolvedProfile = ids.profile
++
++	plan, err := BuildLaunch(context.Background(), fixture.registry, fixture.request, agentic.LaunchModeExec)
++	if err != nil {
++		t.Fatalf("BuildLaunch: %v", err)
++	}
++	if len(fixture.adapter.queries) != 1 || fixture.adapter.queries[0].Profile != ids.profile || plan.Provenance.Profile != ids.profile {
++		t.Fatalf("query=%+v provenance=%+v, want profile %q", fixture.adapter.queries, plan.Provenance, ids.profile)
++	}
++}
++
++// BuildLaunch is the production gate. A cooperative adapter would echo a
++// vendor-redirected profile and make the response look self-consistent, so the
++// caller/vendor conflict must refuse before adapter lookup or Preflight.
++func TestBuildLaunchRefusesVendorProfileRedirectBeforeObservation(t *testing.T) {
++	ids := launchIdentityCorpus()[1]
++	engine := plugin.Ref{ID: plugin.ID(ids.engine), Kind: inferenceengine.Kind}
++	fixture := newIdentityLaunchFixture(t, ids, engine, engine)
++	fixture.vendor.profileOverride = "redirected-profile"
++
++	plan, err := BuildLaunch(context.Background(), fixture.registry, fixture.request, agentic.LaunchModeExec)
++	if !errors.Is(err, ErrVendorContract) {
++		t.Fatalf("BuildLaunch profile redirect error=%v, want ErrVendorContract", err)
++	}
++	if !reflect.DeepEqual(plan, agentic.Plan{}) || fixture.adapter.calls != 0 || fixture.system.preflightCalls != 0 {
++		t.Fatalf("plan=%+v Observe/Preflight=%d/%d, want zero effects", plan, fixture.adapter.calls, fixture.system.preflightCalls)
++	}
++}
++
++func TestBuildLaunchDryRunSkipsObservationEvenWithoutAdapter(t *testing.T) {
++	ids := launchIdentityCorpus()[1]
++	engine := plugin.Ref{ID: plugin.ID(ids.engine), Kind: inferenceengine.Kind}
++	fixture := newIdentityLaunchFixture(t, ids, engine, engine)
++	fixture.registry.engineAdapters = nil
++	if _, err := BuildLaunch(context.Background(), fixture.registry, fixture.request, agentic.LaunchModeDryRun); err != nil {
++		t.Fatalf("BuildLaunch(dry-run): %v", err)
++	}
++	if fixture.adapter.calls != 0 || fixture.system.preflightCalls != 0 {
++		t.Fatalf("Observe/Preflight=%d/%d, want 0/0", fixture.adapter.calls, fixture.system.preflightCalls)
++	}
++}
+diff --git a/pkg/vendorplugin/observer_no_live_test.go b/pkg/vendorplugin/observer_no_live_test.go
+new file mode 100644
+index 0000000..c51ab1b
+--- /dev/null
++++ b/pkg/vendorplugin/observer_no_live_test.go
+@@ -0,0 +1,189 @@
++package vendorplugin
++
++import (
++	"fmt"
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"os"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"testing"
++)
++
++var observerBoundaryRequiredTestFiles = []string{
++	"engine_launch_test.go",
++	"observer_api_test.go",
++	"observer_api_external_test.go",
++}
++
++var observerBoundaryAllowedImports = map[string]bool{
++	"context": true, "crypto/sha256": true, "encoding/hex": true,
++	"errors": true, "fmt": true, "math": true, "math/rand": true,
++	"reflect": true, "regexp": true, "sort": true, "strings": true, "sync": true,
++	"testing": true, "time": true,
++	"github.com/relux-works/skill-agents-management/internal/ident":      true,
++	"github.com/relux-works/skill-agents-management/pkg/agentic":         true,
++	"github.com/relux-works/skill-agents-management/pkg/inferenceengine": true,
++	"github.com/relux-works/skill-agents-management/pkg/plugin":          true,
++	"github.com/relux-works/skill-agents-management/pkg/vendorplugin":    true,
++}
++
++// TestObserverBoundaryHasNoLiveProbeSurface keeps this task's production and
++// attack tests static/fake. Concrete status/process/socket/model reads belong
++// to the agents-infra adapter, not this module or its observer tests.
++func TestObserverBoundaryHasNoLiveProbeSurface(t *testing.T) {
++	productionFiles := observerBoundaryProductionFiles(t, ".")
++	requiredFiles := append(append([]string(nil), productionFiles...), observerBoundaryRequiredTestFiles...)
++	violations := observerBoundaryViolations(t, ".", requiredFiles, requiredFiles)
++	if len(violations) != 0 {
++		t.Fatalf("observer production boundary permits live probes: %v", violations)
++	}
++}
++
++// The review mutant narrows only the composed scan scope while leaving the
++// live-probe rules intact. Omitting either real production entry must make the
++// guard itself red instead of silently reducing what "no live probes" means.
++func TestObserverBoundaryGuardRejectsNarrowedProductionScope(t *testing.T) {
++	productionFiles := observerBoundaryProductionFiles(t, ".")
++	requiredFiles := append(append([]string(nil), productionFiles...), observerBoundaryRequiredTestFiles...)
++	for _, omitted := range []string{"spawn.go", "registry.go"} {
++		t.Run(omitted, func(t *testing.T) {
++			var narrowed []string
++			for _, name := range requiredFiles {
++				if name != omitted {
++					narrowed = append(narrowed, name)
++				}
++			}
++			violations := observerBoundaryViolations(t, ".", narrowed, requiredFiles)
++			if len(violations) != 1 || !strings.Contains(violations[0], omitted) {
++				t.Fatalf("narrowed scope admitted: %v", violations)
++			}
++		})
++	}
++}
++
++// This is the exact called-helper reviewer mutant. A newly added production
++// file is discovered without being named by the guard, and its aliased
++// user-config read is rejected even though the observer entry contains only a
++// same-package helper call.
++func TestObserverBoundaryGuardRejectsCalledProductionHelperUserConfigRead(t *testing.T) {
++	dir := t.TempDir()
++	files := map[string]string{
++		"engine.go": `package vendorplugin
++func resolveEngineObservations() { reviewerLiveProbe() }
++`,
++		"observer_live.go": `package vendorplugin
++import hostos "os"
++func reviewerLiveProbe() { _, _ = hostos.ReadFile("/user/config") }
++`,
++	}
++	for name, source := range files {
++		if err := os.WriteFile(filepath.Join(dir, name), []byte(source), 0o600); err != nil {
++			t.Fatalf("write static mutant %s: %v", name, err)
++		}
++	}
++
++	productionFiles := observerBoundaryProductionFiles(t, dir)
++	violations := observerBoundaryViolations(t, dir, productionFiles, productionFiles)
++	if len(violations) == 0 || !strings.Contains(strings.Join(violations, " "), "observer_live.go imports os") {
++		t.Fatalf("called production-helper user-config read bypass admitted: %v", violations)
++	}
++}
++
++// This is the exact reviewer mutant: the production observer reaches into the
++// user's agents-infra config with os.ReadFile. The import allowlist must make
++// that narrower live-access bypass red without relying on the qualifier name.
++func TestObserverBoundaryGuardRejectsUserConfigRead(t *testing.T) {
++	source := []byte(`package vendorplugin
++import hostos "os"
++func resolveEngineObservations() { _, _ = hostos.ReadFile(hostos.Getenv("HOME") + "/.config/agents-infra/config.toml") }
++`)
++	violations := observerFileViolations(t, "engine.go", source)
++	if len(violations) == 0 || !strings.Contains(strings.Join(violations, " "), "imports os") {
++		t.Fatalf("user-config read bypass admitted: %v", violations)
++	}
++}
++
++func observerBoundaryProductionFiles(t *testing.T, dir string) []string {
++	t.Helper()
++	entries, err := os.ReadDir(dir)
++	if err != nil {
++		t.Fatalf("read observer package %s: %v", dir, err)
++	}
++	var files []string
++	for _, entry := range entries {
++		name := entry.Name()
++		if entry.Type().IsRegular() && strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
++			files = append(files, name)
++		}
++	}
++	return files
++}
++
++func observerBoundaryViolations(t *testing.T, dir string, files, requiredFiles []string) []string {
++	t.Helper()
++	included := make(map[string]bool, len(files))
++	for _, name := range files {
++		included[name] = true
++	}
++	var violations []string
++	for _, required := range requiredFiles {
++		if !included[required] {
++			violations = append(violations, fmt.Sprintf("scope omits %s", required))
++		}
++	}
++	for _, name := range files {
++		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, 0)
++		if err != nil {
++			t.Fatalf("parse %s: %v", name, err)
++		}
++		violations = append(violations, observerParsedFileViolations(t, name, file)...)
++	}
++	return violations
++}
++
++func observerFileViolations(t *testing.T, name string, source []byte) []string {
++	t.Helper()
++	file, err := parser.ParseFile(token.NewFileSet(), name, source, 0)
++	if err != nil {
++		t.Fatalf("parse %s: %v", name, err)
++	}
++	return observerParsedFileViolations(t, name, file)
++}
++
++func observerParsedFileViolations(t *testing.T, name string, file *ast.File) []string {
++	t.Helper()
++	var violations []string
++	for _, imported := range file.Imports {
++		path, err := strconv.Unquote(imported.Path.Value)
++		if err != nil {
++			t.Fatalf("unquote import in %s: %v", name, err)
++		}
++		if !observerBoundaryAllowedImports[path] {
++			violations = append(violations, fmt.Sprintf("%s imports %s", name, path))
++		}
++	}
++	ast.Inspect(file, func(node ast.Node) bool {
++		call, ok := node.(*ast.CallExpr)
++		if !ok {
++			return true
++		}
++		selector, ok := call.Fun.(*ast.SelectorExpr)
++		if !ok {
++			return true
++		}
++		owner, ok := selector.X.(*ast.Ident)
++		if !ok {
++			return true
++		}
++		key := owner.Name + "." + selector.Sel.Name
++		switch key {
++		case "exec.Command", "exec.CommandContext", "net.Dial", "net.DialTimeout", "http.Get", "http.Post", "os.FindProcess", "os.StartProcess", "syscall.Kill":
++			violations = append(violations, fmt.Sprintf("%s calls %s", name, key))
++		}
++		return true
++	})
++	return violations
++}
+diff --git a/pkg/vendorplugin/registry.go b/pkg/vendorplugin/registry.go
+index 5d95ca8..9f2e2b8 100644
+--- a/pkg/vendorplugin/registry.go
++++ b/pkg/vendorplugin/registry.go
+@@ -33,13 +33,13 @@ const PluginKind plugin.Kind = "model-vendor"
+ // its model-derived system edges into the general graph and refuses a vendor
+ // naming a system nobody registered.
+ type Registry struct {
+-	mu          sync.RWMutex
+-	systems     *agentic.Registry
+-	vendors     map[VendorID]Vendor
+-	runtimes    map[RuntimeID]RuntimeDeclaration
+-	diagnostics map[RuntimeID]RegistrationDiagnostic
+-	graph       *plugin.Registry
+-	engineFacts engineFactSource
++	mu             sync.RWMutex
++	systems        *agentic.Registry
++	vendors        map[VendorID]Vendor
++	runtimes       map[RuntimeID]RuntimeDeclaration
++	diagnostics    map[RuntimeID]RegistrationDiagnostic
++	graph          *plugin.Registry
++	engineAdapters map[plugin.Ref]registeredEngineObservationAdapter
+ }
+ 
+ // NewRegistry returns an empty registry bound to the agentic registry its
+@@ -50,19 +50,33 @@ type Registry struct {
+ // rather than admitting vendors whose declared systems nobody could check.
+ func NewRegistry(systems *agentic.Registry) *Registry {
+ 	return &Registry{
+-		systems:     systems,
+-		vendors:     map[VendorID]Vendor{},
+-		runtimes:    map[RuntimeID]RuntimeDeclaration{},
+-		diagnostics: map[RuntimeID]RegistrationDiagnostic{},
+-		graph:       plugin.NewRegistry(),
+-		engineFacts: productionEngineFactSource{},
++		systems:        systems,
++		vendors:        map[VendorID]Vendor{},
++		runtimes:       map[RuntimeID]RuntimeDeclaration{},
++		diagnostics:    map[RuntimeID]RegistrationDiagnostic{},
++		graph:          plugin.NewRegistry(),
++		engineAdapters: map[plugin.Ref]registeredEngineObservationAdapter{},
+ 	}
+ }
+ 
+-func newRegistryWithEngineFactSource(systems *agentic.Registry, source engineFactSource) *Registry {
++// NewRegistryWithEngineObservationAdapters returns an empty registry with an
++// immutable, declaration-snapshotted adapter table. The batch is atomic: if
++// any adapter is invalid, no Registry is returned and none is installed.
++func NewRegistryWithEngineObservationAdapters(systems *agentic.Registry, adapters ...EngineObservationAdapter) (*Registry, error) {
++	registered := make(map[plugin.Ref]registeredEngineObservationAdapter, len(adapters))
++	for index, adapter := range adapters {
++		entry, err := validateEngineObservationAdapter(adapter)
++		if err != nil {
++			return nil, fmt.Errorf("vendorplugin: observation adapter %d: %w", index, err)
++		}
++		if _, duplicate := registered[entry.declaration.Engine]; duplicate {
++			return nil, fmt.Errorf("%w: duplicate engine %#v", ErrEngineObservationAdapterInvalid, entry.declaration.Engine)
++		}
++		registered[entry.declaration.Engine] = entry
++	}
+ 	registry := NewRegistry(systems)
+-	registry.engineFacts = source
+-	return registry
++	registry.engineAdapters = registered
++	return registry, nil
+ }
+ 
+ // Default is the registry vendor plugin packages register into from their init
+diff --git a/pkg/vendorplugin/spawn.go b/pkg/vendorplugin/spawn.go
+index 2b1eb29..13dd2d5 100644
+--- a/pkg/vendorplugin/spawn.go
++++ b/pkg/vendorplugin/spawn.go
+@@ -9,6 +9,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/relux-works/skill-agents-management/pkg/agentic"
++	"github.com/relux-works/skill-agents-management/pkg/inferenceengine"
+ 	"github.com/relux-works/skill-agents-management/pkg/plugin"
+ )
+ 
+@@ -18,6 +19,7 @@ import (
+ // timeouts already use: a named constant, never an inline literal, so a
+ // test can shrink the effective bound without editing this file.
+ const preflightTimeout = 10 * time.Second
++const engineObservationTimeout = 10 * time.Second
+ 
+ var (
+ 	// ErrUnknownModel is returned when a spawn names a model the resolved
+@@ -155,14 +157,8 @@ func BuildLaunch(ctx context.Context, r *Registry, req SpawnRequest, mode agenti
+ 	if err != nil {
+ 		return agentic.Plan{}, err
+ 	}
+-	if requestedEngine != (plugin.Ref{}) && mode != agentic.LaunchModeDryRun {
+-		if _, err := resolveEngineObservations(ctx, r.engineFacts, requestedEngine, engineObservationQuery{
+-			Runtime: binding.ID,
+-			Profile: req.Profile,
+-			Model:   model.ID,
+-		}); err != nil {
+-			return agentic.Plan{}, fmt.Errorf("vendorplugin: inference-engine observations refused before launch: %w", err)
+-		}
++	if err := ctx.Err(); err != nil {
++		return agentic.Plan{}, err
+ 	}
+ 
+ 	var launch agentic.LaunchRequest
+@@ -194,6 +190,34 @@ func BuildLaunch(ctx context.Context, r *Registry, req SpawnRequest, mode agenti
+ 	// sourced from the SAME req.Runtime every resolution above already used.
+ 	launch.Runtime = string(req.Runtime)
+ 
++	// A system may own a pure request gate that must precede every observation
++	// and preflight. Pi uses it to validate and snapshot exact prompt bytes; the
++	// generic dispatch is by capability, never by system/runtime/model identity.
++	launch, err = agentic.PrepareLaunchRequest(binding.System, launch, mode)
++	if err != nil {
++		return agentic.Plan{}, fmt.Errorf("vendorplugin: runtime %s rejected the launch request before observation: %w", binding.ID, err)
++	}
++
++	if requestedEngine != (plugin.Ref{}) && mode != agentic.LaunchModeDryRun {
++		if err := ctx.Err(); err != nil {
++			return agentic.Plan{}, err
++		}
++		r.mu.RLock()
++		registered, ok := r.engineAdapters[resolvedEngine]
++		r.mu.RUnlock()
++		if !ok {
++			return agentic.Plan{}, fmt.Errorf("%w: %w: engine %#v", ErrEngineObservationAdapterMissing, inferenceengine.ErrEngineContractMissing, resolvedEngine)
++		}
++		observationCtx, cancel := context.WithTimeout(ctx, engineObservationTimeout)
++		_, observationErr := resolveEngineObservations(observationCtx, registered, EngineObservationQuery{
++			Engine: resolvedEngine, Runtime: binding.ID, Model: model.ID, Profile: launch.Profile,
++		})
++		cancel()
++		if observationErr != nil {
++			return agentic.Plan{}, fmt.Errorf("vendorplugin: inference-engine observations refused before launch: %w", observationErr)
++		}
++	}
++
+ 	if mode != agentic.LaunchModeDryRun {
+ 		if p, ok := binding.System.(agentic.Preflightable); ok {
+ 			preflightCtx, cancel := context.WithTimeout(ctx, preflightTimeout)
+@@ -349,6 +373,10 @@ func checkLaunchFidelity(runtime Runtime, model Model, effort string, req SpawnR
+ 		return fmt.Errorf("%w: vendor %s returned effort %q after %q was admitted for model %q",
+ 			ErrVendorContract, runtime.VendorID, launch.Effort, effort, model.ID)
+ 	}
++	if req.Profile != "" && launch.Profile != req.Profile {
++		return fmt.Errorf("%w: vendor %s changed the caller-selected profile; only an absent profile may be filled by the vendor",
++			ErrVendorContract, runtime.VendorID)
++	}
+ 	if !reflect.DeepEqual(launch.Run, req.Run) {
+ 		return fmt.Errorf("%w: vendor %s changed the tracked run context; run, task, board and writable-context identity are the caller's", ErrVendorContract, runtime.VendorID)
+ 	}
+diff --git a/pkg/vendorplugin/vendors/local-models/buildlaunch_test.go b/pkg/vendorplugin/vendors/local-models/buildlaunch_test.go
+index e505b0e..82ce26a 100644
+--- a/pkg/vendorplugin/vendors/local-models/buildlaunch_test.go
++++ b/pkg/vendorplugin/vendors/local-models/buildlaunch_test.go
+@@ -37,6 +37,26 @@ type countingStatusReader struct {
+ 	calls  int
+ }
+ 
++type countingObservationAdapter struct {
++	engine plugin.Ref
++	calls  int
++}
++
++func (a *countingObservationAdapter) EngineObservationAdapterDeclaration() vendorplugin.EngineObservationAdapterDeclaration {
++	return vendorplugin.EngineObservationAdapterDeclaration{
++		Contract:       vendorplugin.EngineObservationAdapterContract,
++		SchemaVersion:  vendorplugin.EngineObservationAdapterSchemaVersion,
++		Engine:         a.engine,
++		EngineKind:     inferenceengine.EngineKindNativeTransformer,
++		EngineContract: inferenceengine.ContractVersion,
++	}
++}
++
++func (a *countingObservationAdapter) ObserveEngine(context.Context, vendorplugin.EngineObservationQuery) (vendorplugin.EngineObservation, error) {
++	a.calls++
++	return vendorplugin.EngineObservation{}, errors.New("observation must not run for an invalid prompt")
++}
++
+ func (r *countingStatusReader) Status(ctx context.Context, _ localruntime.StatusQuery) (localruntime.Status, error) {
+ 	r.calls++
+ 	if r.hang {
+@@ -53,12 +73,19 @@ func (r *countingStatusReader) Status(ctx context.Context, _ localruntime.Status
+ // system (with the given fake StatusReader) and this vendor (with the given
+ // config), declaring local-qwen.
+ func isolatedLocalQwenRegistry(t *testing.T, reader localruntime.StatusReader, cfg Config, configuredPlugins ...plugin.Plugin) *vendorplugin.Registry {
++	return isolatedLocalQwenRegistryWithAdapters(t, reader, cfg, nil, configuredPlugins...)
++}
++
++func isolatedLocalQwenRegistryWithAdapters(t *testing.T, reader localruntime.StatusReader, cfg Config, adapters []vendorplugin.EngineObservationAdapter, configuredPlugins ...plugin.Plugin) *vendorplugin.Registry {
+ 	t.Helper()
+ 	systems := agentic.NewRegistry()
+ 	if err := systems.Register(pi.New(reader)); err != nil {
+ 		t.Fatalf("registering pi: %v", err)
+ 	}
+-	registry := vendorplugin.NewRegistry(systems)
++	registry, err := vendorplugin.NewRegistryWithEngineObservationAdapters(systems, adapters...)
++	if err != nil {
++		t.Fatalf("constructing vendor registry: %v", err)
++	}
+ 	if len(configuredPlugins) == 0 {
+ 		configuredPlugins = cfg.EnginePlugins()
+ 	}
+@@ -96,6 +123,7 @@ func localQwenSpawnRequest(t *testing.T) vendorplugin.SpawnRequest {
+ 	return vendorplugin.SpawnRequest{
+ 		Runtime: "local-qwen",
+ 		Model:   "qwen-3.8-27b-mlx-8bit",
++		Prompt:  []byte("inspect the repository"),
+ 		Env:     []string{"PATH=" + fakeAgentsInfraOnPath(t)},
+ 	}
+ }
+@@ -129,7 +157,7 @@ func TestBuildLaunchAdmitsLocalQwenThroughTheRealPiPreflight(t *testing.T) {
+ 	if filepath.Base(plan.Binary) != "agents-infra" {
+ 		t.Fatalf("plan.Binary = %q, want the agents-infra wrapper, not raw pi", plan.Binary)
+ 	}
+-	wantArgv := []string{"pi", "--profile", "local-qwen", "--"}
++	wantArgv := []string{"pi", "spawn", "--profile", "local-qwen", "--prompt", "inspect the repository", "--deadline", "30m", "--result-schema", "1"}
+ 	if len(plan.Argv) != len(wantArgv) {
+ 		t.Fatalf("plan.Argv = %v, want %v", plan.Argv, wantArgv)
+ 	}
+@@ -152,6 +180,57 @@ func TestBuildLaunchAdmitsLocalQwenThroughTheRealPiPreflight(t *testing.T) {
+ 	}
+ }
+ 
++// TestBuildLaunchRefusesInvalidPiPromptBeforeObservationOrPreflight drives the
++// real vendorplugin.BuildLaunch -> pi.System production path. A prompt gate
++// left only in agentic.BuildPlan is too late: the adapter and StatusReader are
++// observable effects even though neither starts a process.
++func TestBuildLaunchRefusesInvalidPiPromptBeforeObservationOrPreflight(t *testing.T) {
++	tests := []struct {
++		name   string
++		mutate func(*vendorplugin.SpawnRequest)
++	}{
++		{"missing", func(req *vendorplugin.SpawnRequest) { req.Prompt = nil }},
++		{"unreadable", func(req *vendorplugin.SpawnRequest) {
++			req.Prompt = nil
++			req.PromptPath = filepath.Join(t.TempDir(), "missing")
++		}},
++		{"invalid UTF-8", func(req *vendorplugin.SpawnRequest) { req.Prompt = []byte{0xff} }},
++		{"NUL", func(req *vendorplugin.SpawnRequest) { req.Prompt = []byte("a\x00b") }},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			for _, withEngine := range []bool{false, true} {
++				name := "without-engine"
++				cfg := configWithoutEngine()
++				var adapters []vendorplugin.EngineObservationAdapter
++				var adapter *countingObservationAdapter
++				if withEngine {
++					name = "with-engine"
++					cfg = validConfig()
++					adapter = &countingObservationAdapter{engine: cfg.Runtimes[0].Engine}
++					adapters = []vendorplugin.EngineObservationAdapter{adapter}
++				}
++				t.Run(name, func(t *testing.T) {
++					reader := &countingStatusReader{status: localruntime.Status{BrokerState: "absent", BrokerSource: localruntime.SourceDetermined}}
++					registry := isolatedLocalQwenRegistryWithAdapters(t, reader, cfg, adapters)
++					req := localQwenSpawnRequest(t)
++					test.mutate(&req)
++					plan, err := vendorplugin.BuildLaunch(context.Background(), registry, req, agentic.LaunchModeExec)
++					if !errors.Is(err, pi.ErrTurnPromptInvalid) {
++						t.Fatalf("BuildLaunch error=%v, want ErrTurnPromptInvalid", err)
++					}
++					if plan.Binary != "" || len(plan.Argv) != 0 || reader.calls != 0 {
++						t.Fatalf("plan=%+v preflight calls=%d, want no plan or preflight", plan, reader.calls)
++					}
++					if adapter != nil && adapter.calls != 0 {
++						t.Fatalf("adapter calls=%d, want zero", adapter.calls)
++					}
++				})
++			}
++		})
++	}
++}
++
+ // ConsumerProvenance and Registry.ValidateLaunchProvenance are the production
+ // publication/read gates. This probe starts with the real BuildLaunch
+ // projection, crosses JSON persistence, removes both refs, and requires the
+@@ -279,7 +358,7 @@ func TestBuildLaunchLegacyConfigWithoutEngineRequirementPreservesParity(t *testi
+ 	if plan.System != "pi" || filepath.Base(plan.Binary) != "agents-infra" {
+ 		t.Fatalf("legacy launch identity changed: system=%q binary=%q", plan.System, plan.Binary)
+ 	}
+-	wantArgv := []string{"pi", "--profile", "local-qwen", "--"}
++	wantArgv := []string{"pi", "spawn", "--profile", "local-qwen", "--prompt", "inspect the repository", "--deadline", "30m", "--result-schema", "1"}
+ 	if len(plan.Argv) != len(wantArgv) {
+ 		t.Fatalf("legacy argv = %v, want %v", plan.Argv, wantArgv)
+ 	}
+@@ -323,16 +402,16 @@ func TestBuildLaunchRefusesLocalQwenWhenPreflightRefuses(t *testing.T) {
+ }
+ 
+ // TestBuildLaunchConfiguredMLXRefusesBeforePiPreflight proves the independent
+-// production MLX observation seam. Until agents-infra supplies its observation
+-// adapter, configured local-qwen must refuse as unsupported before Pi reads
++// production MLX observation seam. Until agents-infra supplies its public
++// adapter at trusted registry construction, configured local-qwen must refuse before Pi reads
+ // broker status; this refusal is not evidence about Pi Preflight.
+ func TestBuildLaunchConfiguredMLXRefusesBeforePiPreflight(t *testing.T) {
+ 	reader := &countingStatusReader{status: localruntime.Status{BrokerState: "absent", BrokerSource: localruntime.SourceDetermined}}
+ 	registry := isolatedLocalQwenRegistry(t, reader, validConfig())
+ 
+ 	_, err := vendorplugin.BuildLaunch(context.Background(), registry, localQwenSpawnRequest(t), agentic.LaunchModeExec)
+-	if !errors.Is(err, inferenceengine.ErrObservationUnsupported) {
+-		t.Fatalf("BuildLaunch configured MLX = %v, want ErrObservationUnsupported", err)
++	if !errors.Is(err, vendorplugin.ErrEngineObservationAdapterMissing) || !errors.Is(err, inferenceengine.ErrEngineContractMissing) {
++		t.Fatalf("BuildLaunch configured MLX = %v, want missing adapter and engine contract", err)
+ 	}
+ 	if reader.calls != 0 {
+ 		t.Fatalf("StatusReader called %d times before MLX observation refusal, want 0", reader.calls)

@@ -1,5 +1,5 @@
 ## Status
-to-review
+done
 
 ## Review
 required
@@ -53,6 +53,15 @@ spawn run started: [reviewer] reviewer (claude) (run=RUN-260817-7f9739)
 Reviewer verdict: ACCEPTED (RUN-260817-7f9739, claude-opus-5). Read-only review; all mutants applied in a disposable rsync copy under .temp/BUG-260818-76hkcb/review-copy, since removed; main checkout byte-verified unchanged. Gate attacked four ways in that copy, each with a pristine baseline: (1) narrowing GGML_BACKEND_PATH -> GGML_BACKEND_PATH_ZZZ reddened production and both installed launcher surfaces, with production reaching runtime spawn; (2) broadening to a GGML_ prefix reddened the GGML_METAL_PATH clean control on all three surfaces, pinning the upper bound too, so this is not delete-only evidence; (3) moving the gate after CreatePiStateTree reddened the pre-state assertion for every environment-refusal member; (4) appending the denied value to the refusal message reddened the non-disclosure assertions on all surfaces. Production call site named: pi_launch_posix.go:94 inside RunPi, before identity verify, state resolve/create, lock, listener preflight, and both exec spawns; reached from main.go:423 via the bootstrap-global pi-infra alias and the setup-generated project-local pi-infra wrapper. Docs premise independently verified against the real artifact rather than taken from the task text: ~/.local/share/llama.cpp/llama-b10470 reports build 10470 commit 34af94cd9, its libggml imports _getenv/_dlopen/_dlsym, GGML_BACKEND_PATH is the only uppercase GGML_* env literal present, and GGML_METAL_PATH appears nowhere in the tree - so the exact-name policy and the refusal to widen it are factually grounded. Bypass search found no managed path around the gate: both spawn sites consume the validated slice, no profile-supplied env is merged, the compose/print-config plan carries DiagnosticArgv and no env and never execs, whitespace and lowercase lookalikes are unreachable by getenv, duplicates and malformed entries are refused, and the Windows stub is unreachable because managed profiles are refused first. Unmanaged passthrough at pi_launch_posix.go:78 is deliberately outside the managed boundary and pre-existing. Main-checkout validation: go test -count=1 ./... exit 0, go vet exit 0, go build exit 0, gofmt -l clean, agents-infra verify global and verify local . exit 0. Scope is the seven claimed files with one added policy member and 704 test additions / 2 deletions and no test function removed. Reviewer supplies no commit_ack: the commit-owning mover should commit this scope and then make the final done transition with commit_ack=scope_committed. Evidence: BUG-260818-76hkcb_review-verdict.md.
 agent completed: [reviewer] reviewer (claude) (exit=0)
 spawn run completed: claude (run=RUN-260817-7f9739, pid=7274, exit=0)
+spawn selection rationale tuple: {"role":"reviewer","pair":"gpt-5.6-sol/high","text":"Next parked to-review element in this story; it is the third of the ambient-environment family, where the same broadening blind spot is worth checking directly."}
+spawn selection rationale for gpt-5.6-sol/high: Next parked to-review element in this story; it is the third of the ambient-environment family, where the same broadening blind spot is worth checking directly.
+spawn agent resolution: Agent selection: codex via explicit_override (preferred_agentic_system: exclusive[codex], config: spawn.preferred_agentic_system)
+spawn launch composition: empty; contract=agents-infra.child-launch-composition; provider=codex; schema=1; producer=v1.6.1-92-g3295c7d; diagnostic=launch_composition_empty; no project MCP servers enabled
+spawn queued: [reviewer] reviewer (codex) (run=RUN-260830-0e0a3e, max_parallel=20)
+spawn run started: [reviewer] reviewer (codex) (run=RUN-260830-0e0a3e)
+Fresh reviewer verdict ACCEPTED by RUN-260830-0e0a3e. Narrowing, broadening, value-leakage, and pre-state-order mutants all reddened; pristine focused, installed-wrapper, full Go, vet, build, format, and diff gates passed. Direct runtime-launch was attacked for both denied GGML_BACKEND_PATH and admitted GGML_METAL_PATH. Implementation/docs are already committed ancestors of HEAD and main; filesystem equals HEAD. The dirty index is inverse sibling-task state and must not be committed as this BUG scope. Reviewer supplies no commit_ack; commit-owning mover should acknowledge already committed scope and make final done transition. Evidence: BUG-260818-76hkcb_review-verdict-RUN-260830-0e0a3e.md and BUG-260818-76hkcb_review-logs-RUN-260830-0e0a3e.tar.gz.
+agent completed: [reviewer] reviewer (codex) (exit=0)
+spawn run completed: codex (run=RUN-260830-0e0a3e, pid=90915, exit=0)
 
 ## Precondition Resources
 (none)
@@ -63,12 +72,15 @@ spawn run completed: claude (run=RUN-260817-7f9739, pid=7274, exit=0)
 - [BUG-260818-76hkcb_validation-logs.tar.gz](file://BUG-260818-76hkcb/BUG-260818-76hkcb_validation-logs.tar.gz) — Raw validation, bootstrap, and narrowing-mutant logs
 - [BUG-260818-76hkcb_spawn-log_-reviewer--reviewer--claude-_RUN-260817-7f9739.log](file://BUG-260818-76hkcb/BUG-260818-76hkcb_spawn-log_-reviewer--reviewer--claude-_RUN-260817-7f9739.log) — System spawn log captured by task-board
 - [BUG-260818-76hkcb_review-verdict.md](file://BUG-260818-76hkcb/BUG-260818-76hkcb_review-verdict.md) — Reviewer verdict: accepted, with four independent mutants, premise verification against llama.cpp b10470, and bypass-path search
+- [BUG-260818-76hkcb_spawn-log_-reviewer--reviewer--codex-_RUN-260830-0e0a3e.log](file://BUG-260818-76hkcb/BUG-260818-76hkcb_spawn-log_-reviewer--reviewer--codex-_RUN-260830-0e0a3e.log) — System spawn log captured by task-board
+- [BUG-260818-76hkcb_review-verdict-RUN-260830-0e0a3e.md](file://BUG-260818-76hkcb/BUG-260818-76hkcb_review-verdict-RUN-260830-0e0a3e.md) — Fresh accepted reviewer verdict with narrowing, broadening, leakage, ordering, direct shared-runtime, and committed-scope evidence
+- [BUG-260818-76hkcb_review-logs-RUN-260830-0e0a3e.tar.gz](file://BUG-260818-76hkcb/BUG-260818-76hkcb_review-logs-RUN-260830-0e0a3e.tar.gz) — Raw logs from fresh production, installed wrapper, mutant, full suite, vet, build, formatting, and diff gates
 
 ## Created
 2026-08-17T21:57:33Z
 
 ## Last Update
-2026-08-17T22:20:13Z
+2026-08-30T02:18:21Z
 
 ## Assigned To
-[reviewer] reviewer (claude)
+[reviewer] reviewer (codex)

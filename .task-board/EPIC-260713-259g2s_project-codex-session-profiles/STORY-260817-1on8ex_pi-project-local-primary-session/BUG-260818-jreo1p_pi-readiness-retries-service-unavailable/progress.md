@@ -1,5 +1,5 @@
 ## Status
-to-review
+done
 
 ## Review
 required
@@ -82,6 +82,14 @@ Full detail: BUG-260818-jreo1p_reviewer-verdict-cycle2.md. Reviewer supplied no 
 ACCEPTANCE HANDOFF: the done transition was attempted without commit_ack and the board correctly refused it (version-control commit acknowledgement required, desired commit time backdated to the previous day after 20:00 MSK per owner policy). Per the reviewer contract this run supplies no commit_ack, so the task is parked in to-review carrying the cycle-2 accepted verdict. The commit-owning mover commits this scope and re-runs set_status(BUG-260818-jreo1p, status=done, commit_ack=scope_committed). Review sandbox .temp/BUG-260818-jreo1p/review2 and .temp/BUG-260818-jreo1p/installed-check removed after evidence capture; shared checkout unchanged.
 agent completed: [reviewer] reviewer (claude) (exit=0)
 spawn run completed: claude (run=RUN-260818-a40b1d, pid=21346, exit=0)
+spawn selection rationale tuple: {"role":"reviewer","pair":"gpt-5.6-sol/high","text":"Next parked to-review element; it is the readiness-retry bug whose timing-sensitive test already produced a false CR-validation failure earlier today, so the review is worth doing carefully."}
+spawn selection rationale for gpt-5.6-sol/high: Next parked to-review element; it is the readiness-retry bug whose timing-sensitive test already produced a false CR-validation failure earlier today, so the review is worth doing carefully.
+spawn agent resolution: Agent selection: codex via explicit_override (preferred_agentic_system: exclusive[codex], config: spawn.preferred_agentic_system)
+spawn launch composition: empty; contract=agents-infra.child-launch-composition; provider=codex; schema=1; producer=v1.6.1-92-g3295c7d; diagnostic=launch_composition_empty; no project MCP servers enabled
+spawn queued: [reviewer] reviewer (codex) (run=RUN-260830-12b6af, max_parallel=20)
+spawn run started: [reviewer] reviewer (codex) (run=RUN-260830-12b6af)
+agent completed: [reviewer] reviewer (codex) (exit=0)
+spawn run completed: codex (run=RUN-260830-12b6af, pid=27741, exit=0)
 
 ## Precondition Resources
 (none)
@@ -95,12 +103,14 @@ spawn run completed: claude (run=RUN-260818-a40b1d, pid=21346, exit=0)
 - [BUG-260818-jreo1p_qwen-controlled-smokes.tar.gz](file://BUG-260818-jreo1p/BUG-260818-jreo1p_qwen-controlled-smokes.tar.gz) — Raw controlled-cache installed Qwen text/tool JSON and runtime stderr logs
 - [BUG-260818-jreo1p_spawn-log_-reviewer--reviewer--claude-_RUN-260818-a40b1d.log](file://BUG-260818-jreo1p/BUG-260818-jreo1p_spawn-log_-reviewer--reviewer--claude-_RUN-260818-a40b1d.log) — System spawn log captured by task-board
 - [BUG-260818-jreo1p_reviewer-verdict-cycle2.md](file://BUG-260818-jreo1p/BUG-260818-jreo1p_reviewer-verdict-cycle2.md) — Cycle-2 reviewer verdict: accepted, with mutant matrix, installed-runtime 503/502 proof, provenance, and live-smoke re-verification
+- [BUG-260818-jreo1p_spawn-log_-reviewer--reviewer--codex-_RUN-260830-12b6af.log](file://BUG-260818-jreo1p/BUG-260818-jreo1p_spawn-log_-reviewer--reviewer--codex-_RUN-260830-12b6af.log) — System spawn log captured by task-board
+- [BUG-260818-jreo1p_review-verdict-cycle3.md](file://BUG-260818-jreo1p/BUG-260818-jreo1p_review-verdict-cycle3.md) — Cycle-3 accepted reviewer verdict with independent production-entry mutants, full module gates, installed verification, smoke re-parse, and cleanup evidence
 
 ## Created
 2026-08-18T00:50:44Z
 
 ## Last Update
-2026-08-18T02:06:15Z
+2026-08-30T02:55:33Z
 
 ## Assigned To
-[reviewer] reviewer (claude)
+[reviewer] reviewer (codex)

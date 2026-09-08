@@ -1,5 +1,5 @@
 ## Status
-to-review
+done
 
 ## Review
 required
@@ -133,6 +133,18 @@ spawn run started: [reviewer] reviewer (codex) (run=RUN-260817-2ee4d3)
 Reviewer cycle 5 ACCEPTED. Independent production-entry attacks prove setup preflight and verify local refuse the contained transitive symlink cycle; contained DAG, literal-source-dir scrub, focused/full tests, vet/build/gofmt/diff, source/local-models verify, recursive find, and board validation all pass. Evidence: BUG-260817-3nk7yf_review-cycle-5-verdict.md. version_control.confirm refused done without commit_ack; reviewer supplied none. Routed to-review for the commit-owning mover to commit scope and make the final acknowledged done transition.
 agent completed: [reviewer] reviewer (codex) (exit=0)
 spawn run completed: codex (run=RUN-260817-2ee4d3, pid=45313, exit=0)
+spawn selection rationale tuple: {"role":"reviewer","pair":"gpt-5.6-sol/high","text":"Next parked to-review element in this story; setup-local source-dir expansion and skill-cycle avoidance is the last infrastructure bug in the queue."}
+spawn selection rationale for gpt-5.6-sol/high: Next parked to-review element in this story; setup-local source-dir expansion and skill-cycle avoidance is the last infrastructure bug in the queue.
+spawn agent resolution: Agent selection: codex via explicit_override (preferred_agentic_system: exclusive[codex], config: spawn.preferred_agentic_system)
+spawn launch composition: empty; contract=agents-infra.child-launch-composition; provider=codex; schema=1; producer=v1.6.1-92-g3295c7d; diagnostic=launch_composition_empty; no project MCP servers enabled
+spawn queued: [reviewer] reviewer (codex) (run=RUN-260830-c0575c, max_parallel=20)
+spawn run started: [reviewer] reviewer (codex) (run=RUN-260830-c0575c)
+agent completed: [reviewer] reviewer (codex) (exit=1)
+spawn run completed: codex (run=RUN-260830-c0575c, pid=94719, exit=1)
+spawn autonomous recovery: run RUN-260830-c0575c queued successor RUN-260830-36f1ed (attempt 1/3, model=gpt-5.6-sol): spawned agent exited with code 1
+spawn run started: [reviewer] reviewer (codex) (run=RUN-260830-36f1ed)
+agent completed: [reviewer] reviewer (codex) (exit=0)
+spawn run completed: codex (run=RUN-260830-36f1ed, pid=7956, exit=0)
 
 ## Precondition Resources
 - [local-models-review-upstream-setup-findings.md](file://BUG-260817-3nk7yf/local-models-review-upstream-setup-findings.md) — Opus review reproducing the literal source-dir artifact and self-referential skill symlink
@@ -159,12 +171,15 @@ spawn run completed: codex (run=RUN-260817-2ee4d3, pid=45313, exit=0)
 - [BUG-260817-3nk7yf_spawn-log_-implementer--developer--codex-_RUN-260817-4075b2.log](file://BUG-260817-3nk7yf/BUG-260817-3nk7yf_spawn-log_-implementer--developer--codex-_RUN-260817-4075b2.log) — System spawn log captured by task-board
 - [BUG-260817-3nk7yf_spawn-log_-reviewer--reviewer--codex-_RUN-260817-2ee4d3.log](file://BUG-260817-3nk7yf/BUG-260817-3nk7yf_spawn-log_-reviewer--reviewer--codex-_RUN-260817-2ee4d3.log) — System spawn log captured by task-board
 - [BUG-260817-3nk7yf_review-cycle-5-verdict.md](file://BUG-260817-3nk7yf/BUG-260817-3nk7yf_review-cycle-5-verdict.md) — Cycle-5 accepted reviewer verdict with production transitive-cycle attack and full validation evidence
+- [BUG-260817-3nk7yf_spawn-log_-reviewer--reviewer--codex-_RUN-260830-c0575c.log](file://BUG-260817-3nk7yf/BUG-260817-3nk7yf_spawn-log_-reviewer--reviewer--codex-_RUN-260830-c0575c.log) — System spawn log captured by task-board
+- [BUG-260817-3nk7yf_spawn-log_-reviewer--reviewer--codex-_RUN-260830-36f1ed.log](file://BUG-260817-3nk7yf/BUG-260817-3nk7yf_spawn-log_-reviewer--reviewer--codex-_RUN-260830-36f1ed.log) — System spawn log captured by task-board
+- [BUG-260817-3nk7yf_review-cycle-5-rerun-verdict.md](file://BUG-260817-3nk7yf/BUG-260817-3nk7yf_review-cycle-5-rerun-verdict.md) — Accepted rerun verdict at current head with production cycle attacks and full validation
 
 ## Created
 2026-08-17T15:50:44Z
 
 ## Last Update
-2026-08-17T17:59:43Z
+2026-08-30T03:16:01Z
 
 ## Assigned To
 [reviewer] reviewer (codex)

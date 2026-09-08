@@ -1,0 +1,1644 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index f86f761..da76f22 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,11 @@
+ 
+ ## 2026-08-29
+ 
++### 1914 — Lifecycle Retention Is Profile-Aggregate Across Run State
++- ROOT CAUSE: Revision 1 pruned only `PiStatePaths.LogsDir`; shared and standalone production paths select a fresh `runs/<run-key>/logs/`, so each run received the full policy allowance and `--print-config` observed none of them.
++- FIX: `tools/agents-infra/internal/infra/pi_lifecycle_log_posix.go` now serializes one profile aggregate over exclusive and every exact run-key log directory, detects all file-locked active logs, and revalidates ownership before unlink.
++- EVIDENCE: Production-shaped fresh-run tests constrain count, bytes, and age across eight simulated weeks; active overflow refuses without deleting active/foreign files; unreadable aggregate status is `unknown`, never `absent`.
++
+ ### 1756 — Backoff Status Publishes Only Persisted Facts
+ - DECISION: `SharedRuntimeStatus` publishes ledger-derived `restart_not_before` and `half_open`; `restart_count` never implies active backoff, and `half_open` never gates a runtime that may already be serving.
+ - DECISION: `last_failure` and `last_failure_at` remain absent until a reviewed ledger event persists reason/time; placeholders or counter-derived provenance are refused by contract.
+diff --git a/README.md b/README.md
+index 08d1144..80b5aa2 100644
+--- a/README.md
++++ b/README.md
+@@ -453,6 +453,12 @@ enabled = true
+ compact_at_tokens = 106496
+ keep_recent_tokens = 8192
+ 
++# Required. Every bound is explicit; there are no numeric defaults.
++[agents.pi.profiles."qwen-3.8-27b".lifecycle_log_retention]
++max_count = 336
++max_bytes = 16777216
++max_age_seconds = 1209600
++
+ [agents.pi.profiles."qwen-3.8-27b".compat]
+ supports_developer_role = false
+ supports_reasoning_effort = false
+@@ -495,6 +501,11 @@ max_tokens = 16384
+ thinking = "off"
+ requested_capabilities = ["dflash", "text", "tools"]
+ 
++[agents.pi.profiles."muse-glimmer-30b-dflash".lifecycle_log_retention]
++max_count = 336
++max_bytes = 16777216
++max_age_seconds = 1209600
++
+ [agents.pi.profiles."muse-glimmer-30b-dflash".compat]
+ supports_developer_role = false
+ supports_reasoning_effort = false
+@@ -653,6 +664,35 @@ alive across many days. agents-infra writes Pi's native `reserveTokens` and
+ preserving unrelated Pi preferences, and fails without overwriting when the
+ existing settings file is malformed or unsafe.
+ 
++`lifecycle_log_retention` is mandatory for every managed profile and has no
++numeric defaults. `max_count`, `max_bytes`, and `max_age_seconds` must each be
++positive. Before creating a new lifecycle file and before every complete JSONL
++record, one profile-level lock serializes an aggregate scan of the profile
++`logs/` directory and every `runs/<run-key>/logs/` directory. Agents-infra keeps
++the deterministic newest-file prefix that fits all three bounds and prunes
++older launcher-owned files across those directories. Every open lifecycle file
++holds its own lock and is an age exception until close; opening another active
++file is refused when the active aggregate already consumes the count or byte
++budget. One record that cannot fit atomically is dropped rather than partially
++written. Exact launcher-owned names with mode `0600`, one link, and regular-file
++type are the only prune candidates. Symlinks, unexpected names, wrong modes,
++hard links, directories, identity-swapped entries, and every active file are
++never deleted. After close, the former active file is ordinary retention input
++again.
++
++`pi-infra --print-config` and primary-session compose expose the configured
++policy plus the profile aggregate root, `participating_directory_count`,
++`directory_*`, `managed_*`, `foreign_*`, `active_count`, `expired_count`, oldest
++and newest timestamps, and `within_policy` without pruning. The same scanner is
++used by exclusive, shared, standalone, and status paths. An unreadable profile
++or run log subtree reports `observation = "unknown"` with an error; it is never
++laundered into `absent` or `within_policy = true`. Managed run reports add
++cumulative `pruned_count`, `pruned_bytes`, `dropped_records`, and any retention
++error. Soak acceptance should assert `managed_count <= max_count`,
++`managed_bytes <= max_bytes`, `expired_count == 0`, and `within_policy = true`;
++`directory_*` can be larger only when separately reported foreign entries are
++present.
++
+ The first broker fixes the effective sharing policy for its lifetime. Inspect
+ both configured and effective values, the attested broker/runtime identities,
+ and live leases without starting or connecting from `pi --print-config`:
+@@ -863,7 +903,8 @@ Let `profile_bytes` be the exact UTF-8 profile-name bytes. The profile key is
+   session.lock
+ ```
+ 
+-Each managed launch creates a distinct mode-`0600` lifecycle log. It records
++Each managed launch creates a distinct mode-`0600` lifecycle log under the
++profile's explicit `lifecycle_log_retention` policy. It records
+ session/runtime/Pi start, PID and process-group identity, runtime readiness,
+ foreground-terminal ownership, exit or received signal, and bounded cleanup.
+ It never records environment values, API keys, or prompt/argument contents.
+@@ -871,6 +912,10 @@ Pi's own conversation and tool transcript remains in `sessions/`; the launcher
+ log exists to diagnose orchestration failures such as a TUI child stopped by
+ terminal job control. The launcher prints the exact log path before starting
+ Pi, and `PiRunReport.session_log` carries it for managed callers.
++Exclusive launches write the profile `logs/` directory shown above. Shared and
++standalone launches retain their independent agent/session state under
++`runs/<64-hex-run-key>/` and write lifecycle files under that run's `logs/`
++directory; retention and diagnostics aggregate both shapes at profile scope.
+ 
+ Resume from the same canonical project directory so the project/profile state
+ keys resolve to the same isolated session directory:
+diff --git a/SKILL.md b/SKILL.md
+index 926eaf4..0bf3b90 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -411,12 +411,21 @@ configured bounded output, samples process RSS, emits one versioned JSON
+ report, and reaps the runtime. Treat it as host-capacity evidence, not a model
+ quality or production-throughput benchmark.
+ 
+-Every managed Pi launch creates a distinct mode-`0600` lifecycle JSONL under
+-the profile's hash-contained `logs/` directory and prints its path before Pi
+-starts. Record only orchestration evidence: lifecycle events, PID/PGID,
+-readiness, foreground-terminal ownership, exit/signal, and cleanup state. Never
+-record environment values, API keys, or prompt/argument contents. Pi's own
+-conversation and tool transcript remains separately under `sessions/`.
++Every managed Pi profile requires an explicit `lifecycle_log_retention` table
++with positive `max_count`, `max_bytes`, and `max_age_seconds`; there are no
++numeric defaults. Every launch creates a distinct mode-`0600` lifecycle JSONL
++under either profile `logs/` or isolated `runs/<run-key>/logs/` and prints its
++path before Pi starts. One profile-level lock serializes aggregate pruning
++across both shapes. Pruning keeps the deterministic newest owned-file prefix,
++preserves every file-locked active log, refuses identity changes, never deletes
++foreign entries, and drops an over-budget record instead of partially writing
++it. `--print-config` uses the same aggregate scanner and publishes configured
++bounds plus participating-directory, managed/foreign, active, byte, age, and
++`within_policy` evidence; unreadable state is `unknown`, never `absent`. Record
++only orchestration evidence: lifecycle events, PID/PGID, readiness,
++foreground-terminal ownership, exit/signal, and cleanup state. Never record
++environment values, API keys, or prompt/argument contents. Pi's own conversation
++and tool transcript remains separately under `sessions/`.
+ 
+ Restore only from the same canonical project directory and logical profile so
+ the hash-contained state keys match. Canonical `qwen-infra` provider arguments
+diff --git a/tools/agents-infra/internal/infra/pi_config.go b/tools/agents-infra/internal/infra/pi_config.go
+index 010c416..80a29df 100644
+--- a/tools/agents-infra/internal/infra/pi_config.go
++++ b/tools/agents-infra/internal/infra/pi_config.go
+@@ -75,11 +75,20 @@ type PiProfile struct {
+ 	Thinking              string
+ 	RequestedCapabilities []string
+ 	Compaction            *PiCompaction
++	LifecycleLogRetention PiLifecycleLogRetention
+ 	Compat                PiCompat
+ 	Runtime               PiRuntime
+ 	Source                string
+ }
+ 
++// PiLifecycleLogRetention is explicit per-profile policy for launcher-owned
++// lifecycle JSONL files. Every bound is required; zero never means a default.
++type PiLifecycleLogRetention struct {
++	MaxCount      int   `json:"max_count"`
++	MaxBytes      int64 `json:"max_bytes"`
++	MaxAgeSeconds int   `json:"max_age_seconds"`
++}
++
+ type PiCompaction struct {
+ 	Enabled          bool `json:"enabled"`
+ 	CompactAtTokens  int  `json:"compactAtTokens"`
+@@ -215,7 +224,7 @@ func parsePiConfig(agents map[string]any, path string) (PiPrimarySessionSource,
+ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) {
+ 	field := "agents.pi.profiles." + name
+ 	if err := rejectUnknownFields(table, field,
+-		"provider", "model", "base_url", "api", "reasoning", "input", "context_window", "max_tokens", "thinking", "requested_capabilities", "compaction", "compat", "runtime"); err != nil {
++		"provider", "model", "base_url", "api", "reasoning", "input", "context_window", "max_tokens", "thinking", "requested_capabilities", "compaction", "lifecycle_log_retention", "compat", "runtime"); err != nil {
+ 		return PiProfile{}, projectConfigFieldError(path, errField(err), err)
+ 	}
+ 	var p PiProfile
+@@ -282,6 +291,16 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error)
+ 		}
+ 		p.Compaction = &compaction
+ 	}
++	retentionTable, present, tableErr := projectConfigTable(table, "lifecycle_log_retention", field+".lifecycle_log_retention")
++	if tableErr != nil || !present {
++		if tableErr == nil {
++			tableErr = errors.New("required table is absent; lifecycle log retention has no numeric defaults")
++		}
++		return p, projectConfigFieldError(path, field+".lifecycle_log_retention", tableErr)
++	}
++	if p.LifecycleLogRetention, err = parsePiLifecycleLogRetention(retentionTable, field+".lifecycle_log_retention"); err != nil {
++		return p, projectConfigFieldError(path, errField(err), err)
++	}
+ 	compatTable, present, tableErr := projectConfigTable(table, "compat", field+".compat")
+ 	if tableErr != nil || !present {
+ 		if tableErr == nil {
+@@ -318,6 +337,24 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error)
+ 	return p, nil
+ }
+ 
++func parsePiLifecycleLogRetention(table map[string]any, field string) (PiLifecycleLogRetention, error) {
++	if err := rejectUnknownFields(table, field, "max_count", "max_bytes", "max_age_seconds"); err != nil {
++		return PiLifecycleLogRetention{}, err
++	}
++	var retention PiLifecycleLogRetention
++	var err error
++	if retention.MaxCount, err = requiredPositiveInt(table, "max_count"); err != nil {
++		return retention, fieldError(field+".max_count", err)
++	}
++	if retention.MaxBytes, err = requiredPositiveInt64(table, "max_bytes"); err != nil {
++		return retention, fieldError(field+".max_bytes", err)
++	}
++	if retention.MaxAgeSeconds, err = requiredPositiveDurationSeconds(table, "max_age_seconds", maxTimeDurationSeconds); err != nil {
++		return retention, fieldError(field+".max_age_seconds", err)
++	}
++	return retention, nil
++}
++
+ func parsePiCompaction(table map[string]any, field string, contextWindow, maxTokens int) (PiCompaction, error) {
+ 	if err := rejectUnknownFields(table, field, "enabled", "compact_at_tokens", "reserve_tokens", "keep_recent_tokens"); err != nil {
+ 		return PiCompaction{}, err
+@@ -719,6 +756,21 @@ func requiredPositiveInt(table map[string]any, key string) (int, error) {
+ 	return int(n), nil
+ }
+ 
++func requiredPositiveInt64(table map[string]any, key string) (int64, error) {
++	v, ok := table[key]
++	if !ok {
++		return 0, errors.New("required field is absent")
++	}
++	n, ok := v.(int64)
++	if !ok {
++		return 0, fmt.Errorf("expected integer, got %T", v)
++	}
++	if n <= 0 {
++		return 0, errors.New("must be a positive integer")
++	}
++	return n, nil
++}
++
+ func requiredPositiveDurationSeconds(table map[string]any, key string, maximum int64) (int, error) {
+ 	n, err := requiredPositiveInt(table, key)
+ 	if err != nil {
+diff --git a/tools/agents-infra/internal/infra/pi_launch_posix.go b/tools/agents-infra/internal/infra/pi_launch_posix.go
+index 5b7c6f4..f227594 100644
+--- a/tools/agents-infra/internal/infra/pi_launch_posix.go
++++ b/tools/agents-infra/internal/infra/pi_launch_posix.go
+@@ -176,13 +176,14 @@ func RunPi(opts RunPiOptions) error {
+ 		return err
+ 	}
+ 	defer lock.Close()
+-	sessionLog, err := openPiSessionLog(state)
++	sessionLog, err := openPiSessionLog(state, profile.LifecycleLogRetention)
+ 	if err != nil {
+ 		return err
+ 	}
+ 	defer sessionLog.close()
+ 	if opts.Report != nil {
+ 		opts.Report.SessionLog = sessionLog.path
++		opts.Report.LifecycleLogs = &sessionLog.status
+ 	}
+ 	sessionLog.event("session_start", map[string]any{
+ 		"project": project, "profile": selected, "provider": profile.Provider,
+diff --git a/tools/agents-infra/internal/infra/pi_lifecycle_log_posix.go b/tools/agents-infra/internal/infra/pi_lifecycle_log_posix.go
+new file mode 100644
+index 0000000..7968bf2
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_lifecycle_log_posix.go
+@@ -0,0 +1,524 @@
++//go:build !windows
++
++package infra
++
++import (
++	"errors"
++	"fmt"
++	"math"
++	"os"
++	"path/filepath"
++	"regexp"
++	"sort"
++	"syscall"
++	"time"
++
++	"golang.org/x/sys/unix"
++)
++
++const (
++	piLifecycleLogTimestampLayout = "20060102T150405.000000000Z"
++	piLifecycleRetentionLockName  = "lifecycle-logs.lock"
++)
++
++var piLifecycleLogNamePattern = regexp.MustCompile(`^([0-9]{8}T[0-9]{6}\.[0-9]{9}Z)-[0-9a-f]{16}\.jsonl$`)
++
++type piLifecycleLogIdentity struct {
++	device uint64
++	inode  uint64
++}
++
++type piLifecycleLogCandidate struct {
++	name        string
++	path        string
++	runStateKey string
++	startedAt   time.Time
++	size        int64
++	identity    piLifecycleLogIdentity
++	active      bool
++}
++
++type piLifecycleLogDirectory struct {
++	path        string
++	runStateKey string
++	fd          int
++}
++
++type piLifecycleLogScan struct {
++	candidates []piLifecycleLogCandidate
++	footprint  PiLifecycleLogFootprint
++}
++
++type piLifecycleLogPruneResult struct {
++	Before      PiLifecycleLogFootprint
++	After       PiLifecycleLogFootprint
++	PrunedCount int
++	PrunedBytes int64
++}
++
++type piLifecycleLogRemove func(paths PiStatePaths, candidate piLifecycleLogCandidate) error
++
++type piLifecycleRetentionLock struct {
++	file *os.File
++}
++
++func (lock *piLifecycleRetentionLock) close() {
++	if lock == nil || lock.file == nil {
++		return
++	}
++	_ = unix.Flock(int(lock.file.Fd()), unix.LOCK_UN)
++	_ = lock.file.Close()
++	lock.file = nil
++}
++
++func observePiLifecycleLogFootprint(paths PiStatePaths, policy PiLifecycleLogRetention, now time.Time, activePath string) PiLifecycleLogFootprint {
++	lock, present, err := acquirePiLifecycleRetentionLock(paths, false, unix.LOCK_SH)
++	if err != nil {
++		return PiLifecycleLogFootprint{Observation: "unknown", Error: err.Error()}
++	}
++	if present {
++		defer lock.close()
++	}
++	scan, err := scanPiLifecycleLogs(paths, activePath, policy, now)
++	if err != nil {
++		return PiLifecycleLogFootprint{Observation: "unknown", Error: err.Error()}
++	}
++	return scan.footprint
++}
++
++func piLifecycleProfileComponents(paths PiStatePaths) ([]string, error) {
++	if !piStateKeyPattern.MatchString(paths.ProjectStateKey) || !piStateKeyPattern.MatchString(paths.ProfileStateKey) {
++		return nil, errors.New("lifecycle log profile state keys are invalid")
++	}
++	return []string{"agents-infra", "pi", paths.ProjectStateKey, paths.ProfileStateKey}, nil
++}
++
++func piLifecycleProfileRootPath(paths PiStatePaths) string {
++	components, err := piLifecycleProfileComponents(paths)
++	if err != nil {
++		return ""
++	}
++	return filepath.Join(append([]string{paths.CanonicalCacheRoot}, components...)...)
++}
++
++func openPiLifecycleProfileRoot(paths PiStatePaths) (int, error) {
++	components, err := piLifecycleProfileComponents(paths)
++	if err != nil {
++		return -1, err
++	}
++	rootFD, err := unix.Open(paths.CanonicalCacheRoot, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++	if err != nil {
++		return -1, err
++	}
++	fd := rootFD
++	for _, name := range components {
++		next, openErr := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++		if fd != rootFD {
++			unix.Close(fd)
++		}
++		if openErr != nil {
++			unix.Close(rootFD)
++			return -1, openErr
++		}
++		fd = next
++	}
++	unix.Close(rootFD)
++	return fd, nil
++}
++
++func acquirePiLifecycleRetentionLock(paths PiStatePaths, create bool, operation int) (*piLifecycleRetentionLock, bool, error) {
++	profileFD, err := openPiLifecycleProfileRoot(paths)
++	if errors.Is(err, syscall.ENOENT) && !create {
++		return nil, false, nil
++	}
++	if err != nil {
++		return nil, false, err
++	}
++	defer unix.Close(profileFD)
++	flags := unix.O_RDWR | unix.O_CLOEXEC | unix.O_NOFOLLOW
++	if create {
++		flags |= unix.O_CREAT
++	}
++	fd, err := unix.Openat(profileFD, piLifecycleRetentionLockName, flags, 0o600)
++	if errors.Is(err, syscall.ENOENT) && !create {
++		return nil, false, nil
++	}
++	if err != nil {
++		return nil, false, err
++	}
++	file := os.NewFile(uintptr(fd), filepath.Join(piLifecycleProfileRootPath(paths), piLifecycleRetentionLockName))
++	var stat unix.Stat_t
++	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Nlink != 1 || stat.Mode&0o7777 != 0o600 {
++		if err == nil {
++			err = errors.New("lifecycle log retention lock must be a mode-0600 single-link regular file")
++		}
++		_ = file.Close()
++		return nil, false, err
++	}
++	if err := unix.Flock(fd, operation); err != nil {
++		_ = file.Close()
++		return nil, false, err
++	}
++	return &piLifecycleRetentionLock{file: file}, true, nil
++}
++
++func openPiLifecycleLogsDir(paths PiStatePaths, runStateKey string) (int, error) {
++	profileFD, err := openPiLifecycleProfileRoot(paths)
++	if err != nil {
++		return -1, err
++	}
++	defer unix.Close(profileFD)
++	parentFD := profileFD
++	if runStateKey != "" {
++		if !piStateKeyPattern.MatchString(runStateKey) {
++			return -1, errors.New("lifecycle log run state key is invalid")
++		}
++		runsFD, err := unix.Openat(profileFD, "runs", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++		if err != nil {
++			return -1, err
++		}
++		defer unix.Close(runsFD)
++		runFD, err := unix.Openat(runsFD, runStateKey, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++		if err != nil {
++			return -1, err
++		}
++		defer unix.Close(runFD)
++		parentFD = runFD
++	}
++	return unix.Openat(parentFD, "logs", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++}
++
++func readPiLifecycleDirectory(fd int, label string) ([]os.DirEntry, error) {
++	if _, err := unix.Seek(fd, 0, 0); err != nil {
++		return nil, err
++	}
++	dupFD, err := unix.Dup(fd)
++	if err != nil {
++		return nil, err
++	}
++	directory := os.NewFile(uintptr(dupFD), label)
++	entries, readErr := directory.ReadDir(-1)
++	closeErr := directory.Close()
++	if readErr != nil {
++		return nil, readErr
++	}
++	if closeErr != nil {
++		return nil, closeErr
++	}
++	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
++	return entries, nil
++}
++
++func openPiLifecycleLogDirectories(paths PiStatePaths) ([]piLifecycleLogDirectory, error) {
++	profileFD, err := openPiLifecycleProfileRoot(paths)
++	if errors.Is(err, syscall.ENOENT) {
++		return nil, nil
++	}
++	if err != nil {
++		return nil, err
++	}
++	defer unix.Close(profileFD)
++	directories := make([]piLifecycleLogDirectory, 0)
++	closeOnError := func() {
++		for _, directory := range directories {
++			unix.Close(directory.fd)
++		}
++	}
++	logsFD, err := unix.Openat(profileFD, "logs", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++	if err == nil {
++		directories = append(directories, piLifecycleLogDirectory{path: filepath.Join(piLifecycleProfileRootPath(paths), "logs"), fd: logsFD})
++	} else if !errors.Is(err, syscall.ENOENT) {
++		return nil, fmt.Errorf("open profile lifecycle log directory: %w", err)
++	}
++	runsFD, err := unix.Openat(profileFD, "runs", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++	if errors.Is(err, syscall.ENOENT) {
++		return directories, nil
++	}
++	if err != nil {
++		closeOnError()
++		return nil, fmt.Errorf("open lifecycle run-state directory: %w", err)
++	}
++	defer unix.Close(runsFD)
++	entries, err := readPiLifecycleDirectory(runsFD, "pi-lifecycle-runs")
++	if err != nil {
++		closeOnError()
++		return nil, err
++	}
++	for _, entry := range entries {
++		runStateKey := entry.Name()
++		if !piStateKeyPattern.MatchString(runStateKey) {
++			continue
++		}
++		runFD, err := unix.Openat(runsFD, runStateKey, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++		if err != nil {
++			closeOnError()
++			return nil, fmt.Errorf("open lifecycle run state %q: %w", runStateKey, err)
++		}
++		logsFD, err := unix.Openat(runFD, "logs", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++		unix.Close(runFD)
++		if errors.Is(err, syscall.ENOENT) {
++			continue
++		}
++		if err != nil {
++			closeOnError()
++			return nil, fmt.Errorf("open lifecycle logs for run state %q: %w", runStateKey, err)
++		}
++		directories = append(directories, piLifecycleLogDirectory{
++			path:        filepath.Join(piLifecycleProfileRootPath(paths), "runs", runStateKey, "logs"),
++			runStateKey: runStateKey,
++			fd:          logsFD,
++		})
++	}
++	return directories, nil
++}
++
++func scanPiLifecycleLogs(paths PiStatePaths, activePath string, policy PiLifecycleLogRetention, now time.Time) (piLifecycleLogScan, error) {
++	directories, err := openPiLifecycleLogDirectories(paths)
++	if err != nil {
++		return piLifecycleLogScan{}, err
++	}
++	defer func() {
++		for _, directory := range directories {
++			unix.Close(directory.fd)
++		}
++	}()
++	if len(directories) == 0 {
++		return piLifecycleLogScan{footprint: PiLifecycleLogFootprint{Observation: "absent", WithinPolicy: true}}, nil
++	}
++	scan := piLifecycleLogScan{footprint: PiLifecycleLogFootprint{Observation: "present", ParticipatingDirectoryCount: len(directories)}}
++	for _, directory := range directories {
++		entries, err := readPiLifecycleDirectory(directory.fd, directory.path)
++		if err != nil {
++			return piLifecycleLogScan{}, err
++		}
++		for _, entry := range entries {
++			var stat unix.Stat_t
++			if err := unix.Fstatat(directory.fd, entry.Name(), &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
++				return piLifecycleLogScan{}, fmt.Errorf("inspect lifecycle log entry %q: %w", filepath.Join(directory.path, entry.Name()), err)
++			}
++			size := stat.Size
++			if size < 0 {
++				return piLifecycleLogScan{}, fmt.Errorf("lifecycle log entry %q has negative size", filepath.Join(directory.path, entry.Name()))
++			}
++			if err := addPiLifecycleBytes(&scan.footprint.DirectoryBytes, size); err != nil {
++				return piLifecycleLogScan{}, err
++			}
++			scan.footprint.DirectoryCount++
++			startedAt, ownedName := parsePiLifecycleLogName(entry.Name())
++			ownedShape := stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Nlink == 1 && stat.Mode&0o7777 == 0o600
++			if !ownedName || !ownedShape {
++				scan.footprint.ForeignCount++
++				if err := addPiLifecycleBytes(&scan.footprint.ForeignBytes, size); err != nil {
++					return piLifecycleLogScan{}, err
++				}
++				continue
++			}
++			path := filepath.Join(directory.path, entry.Name())
++			active := path == activePath
++			if !active {
++				active, err = piLifecycleLogIsActive(directory.fd, entry.Name())
++				if err != nil {
++					return piLifecycleLogScan{}, fmt.Errorf("inspect lifecycle log activity %q: %w", path, err)
++				}
++			}
++			candidate := piLifecycleLogCandidate{
++				name:        entry.Name(),
++				path:        path,
++				runStateKey: directory.runStateKey,
++				startedAt:   startedAt,
++				size:        size,
++				identity:    piLifecycleLogIdentity{device: uint64(stat.Dev), inode: uint64(stat.Ino)},
++				active:      active,
++			}
++			scan.candidates = append(scan.candidates, candidate)
++			scan.footprint.ManagedCount++
++			if err := addPiLifecycleBytes(&scan.footprint.ManagedBytes, size); err != nil {
++				return piLifecycleLogScan{}, err
++			}
++			if candidate.active {
++				scan.footprint.ActiveCount++
++			} else if startedAt.Before(now.Add(-time.Duration(policy.MaxAgeSeconds) * time.Second)) {
++				scan.footprint.ExpiredCount++
++			}
++			if scan.footprint.OldestStarted == nil || startedAt.Before(*scan.footprint.OldestStarted) {
++				copy := startedAt
++				scan.footprint.OldestStarted = &copy
++			}
++			if scan.footprint.NewestStarted == nil || startedAt.After(*scan.footprint.NewestStarted) {
++				copy := startedAt
++				scan.footprint.NewestStarted = &copy
++			}
++		}
++	}
++	scan.footprint.WithinPolicy = scan.footprint.ManagedCount <= policy.MaxCount &&
++		scan.footprint.ManagedBytes <= policy.MaxBytes && scan.footprint.ExpiredCount == 0
++	return scan, nil
++}
++
++func piLifecycleLogIsActive(logsFD int, name string) (bool, error) {
++	fd, err := unix.Openat(logsFD, name, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++	if err != nil {
++		return false, err
++	}
++	defer unix.Close(fd)
++	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
++		if errors.Is(err, syscall.EWOULDBLOCK) {
++			return true, nil
++		}
++		return false, err
++	}
++	if err := unix.Flock(fd, unix.LOCK_UN); err != nil {
++		return false, err
++	}
++	return false, nil
++}
++
++func parsePiLifecycleLogName(name string) (time.Time, bool) {
++	match := piLifecycleLogNamePattern.FindStringSubmatch(name)
++	if match == nil {
++		return time.Time{}, false
++	}
++	startedAt, err := time.Parse(piLifecycleLogTimestampLayout, match[1])
++	if err != nil {
++		return time.Time{}, false
++	}
++	return startedAt, true
++}
++
++func addPiLifecycleBytes(total *int64, size int64) error {
++	if size < 0 || *total > math.MaxInt64-size {
++		return errors.New("lifecycle log aggregate byte count overflow")
++	}
++	*total += size
++	return nil
++}
++
++func prunePiLifecycleLogs(paths PiStatePaths, policy PiLifecycleLogRetention, now time.Time, activePath string, reserveCount int, reserveBytes int64) (piLifecycleLogPruneResult, error) {
++	lock, _, err := acquirePiLifecycleRetentionLock(paths, true, unix.LOCK_EX)
++	if err != nil {
++		return piLifecycleLogPruneResult{}, piError("lifecycle_log_retention_failed", err)
++	}
++	defer lock.close()
++	return prunePiLifecycleLogsLocked(paths, policy, now, activePath, reserveCount, reserveBytes, removePiLifecycleLog)
++}
++
++func prunePiLifecycleLogsWithRemove(paths PiStatePaths, policy PiLifecycleLogRetention, now time.Time, activePath string, reserveCount int, reserveBytes int64, remove piLifecycleLogRemove) (piLifecycleLogPruneResult, error) {
++	lock, _, err := acquirePiLifecycleRetentionLock(paths, true, unix.LOCK_EX)
++	if err != nil {
++		return piLifecycleLogPruneResult{}, piError("lifecycle_log_retention_failed", err)
++	}
++	defer lock.close()
++	return prunePiLifecycleLogsLocked(paths, policy, now, activePath, reserveCount, reserveBytes, remove)
++}
++
++func prunePiLifecycleLogsLocked(paths PiStatePaths, policy PiLifecycleLogRetention, now time.Time, activePath string, reserveCount int, reserveBytes int64, remove piLifecycleLogRemove) (piLifecycleLogPruneResult, error) {
++	if reserveCount < 0 || reserveCount > 1 {
++		return piLifecycleLogPruneResult{}, errors.New("lifecycle log count reservation must be zero or one")
++	}
++	if reserveBytes < 0 {
++		return piLifecycleLogPruneResult{}, errors.New("lifecycle log byte reservation must not be negative")
++	}
++	scan, err := scanPiLifecycleLogs(paths, activePath, policy, now)
++	if err != nil {
++		return piLifecycleLogPruneResult{}, piError("lifecycle_log_retention_failed", err)
++	}
++	result := piLifecycleLogPruneResult{Before: scan.footprint, After: scan.footprint}
++	retainedCount := scan.footprint.ActiveCount + reserveCount
++	retainedBytes := int64(0)
++	for _, candidate := range scan.candidates {
++		if candidate.active {
++			if err := addPiLifecycleBytes(&retainedBytes, candidate.size); err != nil {
++				return piLifecycleLogPruneResult{}, piError("lifecycle_log_retention_failed", err)
++			}
++		}
++	}
++	if retainedCount > policy.MaxCount || retainedBytes > policy.MaxBytes || reserveBytes > policy.MaxBytes-retainedBytes {
++		return piLifecycleLogPruneResult{}, piError("lifecycle_log_retention_exhausted", errors.New("active lifecycle logs and the requested reservation exceed profile retention bounds"))
++	}
++	retainedBytes += reserveBytes
++	inactive := make([]piLifecycleLogCandidate, 0, len(scan.candidates))
++	for _, candidate := range scan.candidates {
++		if !candidate.active {
++			inactive = append(inactive, candidate)
++		}
++	}
++	sort.Slice(inactive, func(i, j int) bool {
++		if inactive[i].startedAt.Equal(inactive[j].startedAt) {
++			return inactive[i].path > inactive[j].path
++		}
++		return inactive[i].startedAt.After(inactive[j].startedAt)
++	})
++	cutoff := now.Add(-time.Duration(policy.MaxAgeSeconds) * time.Second)
++	closedPrefix := false
++	toDelete := make([]piLifecycleLogCandidate, 0)
++	for _, candidate := range inactive {
++		fitsBytes := candidate.size <= policy.MaxBytes-retainedBytes
++		retain := !closedPrefix && !candidate.startedAt.Before(cutoff) && retainedCount < policy.MaxCount && fitsBytes
++		if retain {
++			retainedCount++
++			retainedBytes += candidate.size
++			continue
++		}
++		closedPrefix = true
++		toDelete = append(toDelete, candidate)
++	}
++	for _, candidate := range toDelete {
++		if candidate.active || candidate.path == activePath {
++			return piLifecycleLogPruneResult{}, piError("lifecycle_log_retention_failed", errors.New("prune plan included an active lifecycle log"))
++		}
++		if err := remove(paths, candidate); err != nil {
++			return piLifecycleLogPruneResult{}, piError("lifecycle_log_retention_failed", err)
++		}
++		result.PrunedCount++
++		result.PrunedBytes += candidate.size
++	}
++	after, err := scanPiLifecycleLogs(paths, activePath, policy, now)
++	if err != nil {
++		return piLifecycleLogPruneResult{}, piError("lifecycle_log_retention_failed", err)
++	}
++	result.After = after.footprint
++	return result, nil
++}
++
++func removePiLifecycleLog(paths PiStatePaths, candidate piLifecycleLogCandidate) error {
++	logsFD, err := openPiLifecycleLogsDir(paths, candidate.runStateKey)
++	if err != nil {
++		return fmt.Errorf("reopen lifecycle log directory for %q: %w", candidate.path, err)
++	}
++	defer unix.Close(logsFD)
++	fd, err := unix.Openat(logsFD, candidate.name, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
++	if err != nil {
++		return fmt.Errorf("reopen lifecycle log %q before prune: %w", candidate.path, err)
++	}
++	defer unix.Close(fd)
++	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
++		if errors.Is(err, syscall.EWOULDBLOCK) {
++			return fmt.Errorf("lifecycle log %q became active before prune", candidate.path)
++		}
++		return err
++	}
++	defer unix.Flock(fd, unix.LOCK_UN)
++	var stat unix.Stat_t
++	if err := unix.Fstat(fd, &stat); err != nil {
++		return err
++	}
++	identity := piLifecycleLogIdentity{device: uint64(stat.Dev), inode: uint64(stat.Ino)}
++	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Nlink != 1 || stat.Mode&0o7777 != 0o600 || identity != candidate.identity || stat.Size != candidate.size {
++		return fmt.Errorf("lifecycle log %q changed identity or ownership before prune", candidate.path)
++	}
++	var pathStat unix.Stat_t
++	if err := unix.Fstatat(logsFD, candidate.name, &pathStat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
++		return err
++	}
++	pathIdentity := piLifecycleLogIdentity{device: uint64(pathStat.Dev), inode: uint64(pathStat.Ino)}
++	if pathIdentity != candidate.identity || pathStat.Mode&unix.S_IFMT != unix.S_IFREG || pathStat.Nlink != 1 || pathStat.Mode&0o7777 != 0o600 || pathStat.Size != candidate.size {
++		return fmt.Errorf("lifecycle log %q path changed before prune", candidate.path)
++	}
++	if err := unix.Unlinkat(logsFD, candidate.name, 0); err != nil {
++		return err
++	}
++	if err := unix.Fsync(logsFD); err != nil {
++		return err
++	}
++	return nil
++}
+diff --git a/tools/agents-infra/internal/infra/pi_lifecycle_log_test.go b/tools/agents-infra/internal/infra/pi_lifecycle_log_test.go
+new file mode 100644
+index 0000000..063343c
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_lifecycle_log_test.go
+@@ -0,0 +1,379 @@
++//go:build !windows
++
++package infra
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
++	"reflect"
++	"testing"
++	"time"
++)
++
++func TestPiLifecycleLogPruningDeterministicallyPreservesActiveNewestAndForeignFiles(t *testing.T) {
++	state := newPiLifecycleLogTestState(t)
++	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
++	policy := PiLifecycleLogRetention{MaxCount: 3, MaxBytes: 1 << 20, MaxAgeSeconds: 30 * 24 * 60 * 60}
++	active := writePiLifecycleLogFixture(t, state, now.Add(-60*24*time.Hour), 1, 20, 0o600)
++	newest := writePiLifecycleLogFixture(t, state, now.Add(-time.Hour), 2, 20, 0o600)
++	secondNewest := writePiLifecycleLogFixture(t, state, now.Add(-2*time.Hour), 3, 20, 0o600)
++	thirdNewest := writePiLifecycleLogFixture(t, state, now.Add(-3*time.Hour), 4, 20, 0o600)
++	oldest := writePiLifecycleLogFixture(t, state, now.Add(-4*time.Hour), 5, 20, 0o600)
++	foreign := filepath.Join(state.LogsDir, "operator-notes.jsonl")
++	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	wrongMode := writePiLifecycleLogFixture(t, state, now.Add(-5*time.Hour), 6, 20, 0o644)
++	symlink := filepath.Join(state.LogsDir, piLifecycleLogFixtureName(now.Add(-6*time.Hour), 7))
++	if err := os.Symlink(foreign, symlink); err != nil {
++		t.Fatal(err)
++	}
++
++	result, err := prunePiLifecycleLogs(state, policy, now, active, 0, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result.PrunedCount != 2 || result.PrunedBytes != 40 {
++		t.Fatalf("pruned=%d/%d want=2/40", result.PrunedCount, result.PrunedBytes)
++	}
++	for _, path := range []string{active, newest, secondNewest, foreign, wrongMode, symlink} {
++		if _, err := os.Lstat(path); err != nil {
++			t.Fatalf("preserved path %s: %v", filepath.Base(path), err)
++		}
++	}
++	for _, path := range []string{thirdNewest, oldest} {
++		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
++			t.Fatalf("pruned path %s still present: %v", filepath.Base(path), err)
++		}
++	}
++	if got := result.After; !got.WithinPolicy || got.ManagedCount != 3 || got.ActiveCount != 1 || got.ExpiredCount != 0 || got.ForeignCount != 3 {
++		t.Fatalf("post-prune footprint=%#v", got)
++	}
++}
++
++func TestPiLifecycleLogPruningRefusesIdentityReplacementWithoutDeletingForeignOrActive(t *testing.T) {
++	state := newPiLifecycleLogTestState(t)
++	now := time.Date(2026, time.August, 29, 13, 0, 0, 0, time.UTC)
++	policy := PiLifecycleLogRetention{MaxCount: 1, MaxBytes: 1 << 20, MaxAgeSeconds: 24 * 60 * 60}
++	active := writePiLifecycleLogFixture(t, state, now, 1, 20, 0o600)
++	writePiLifecycleLogFixture(t, state, now.Add(-time.Hour), 2, 20, 0o600)
++	foreign := filepath.Join(state.LogsDir, "foreign.keep")
++	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++
++	replaced := ""
++	_, err := prunePiLifecycleLogsWithRemove(state, policy, now, active, 0, 0, func(paths PiStatePaths, candidate piLifecycleLogCandidate) error {
++		replaced = candidate.path
++		if err := os.Rename(replaced, replaced+".original"); err != nil {
++			return err
++		}
++		if err := os.WriteFile(replaced, []byte("foreign replacement"), 0o644); err != nil {
++			return err
++		}
++		return removePiLifecycleLog(paths, candidate)
++	})
++	if piErrorCode(err) != "lifecycle_log_retention_failed" {
++		t.Fatalf("identity replacement error=%v code=%q", err, piErrorCode(err))
++	}
++	for _, path := range []string{active, foreign, replaced, replaced + ".original"} {
++		if _, err := os.Lstat(path); err != nil {
++			t.Fatalf("refusal deleted %s: %v", filepath.Base(path), err)
++		}
++	}
++}
++
++func TestPiLifecycleLogPruningCrashAfterOneDeleteLeavesActiveAndForeignFiles(t *testing.T) {
++	state := newPiLifecycleLogTestState(t)
++	now := time.Date(2026, time.August, 29, 14, 0, 0, 0, time.UTC)
++	policy := PiLifecycleLogRetention{MaxCount: 1, MaxBytes: 1 << 20, MaxAgeSeconds: 24 * 60 * 60}
++	active := writePiLifecycleLogFixture(t, state, now, 1, 20, 0o600)
++	writePiLifecycleLogFixture(t, state, now.Add(-time.Hour), 2, 20, 0o600)
++	writePiLifecycleLogFixture(t, state, now.Add(-2*time.Hour), 3, 20, 0o600)
++	foreign := filepath.Join(state.LogsDir, "foreign.keep")
++	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	removals := 0
++	crash := errors.New("simulated crash")
++	_, err := prunePiLifecycleLogsWithRemove(state, policy, now, active, 0, 0, func(paths PiStatePaths, candidate piLifecycleLogCandidate) error {
++		removals++
++		if removals == 2 {
++			return crash
++		}
++		return removePiLifecycleLog(paths, candidate)
++	})
++	if !errors.Is(err, crash) {
++		t.Fatalf("prune error=%v want simulated crash", err)
++	}
++	for _, path := range []string{active, foreign} {
++		if _, err := os.Lstat(path); err != nil {
++			t.Fatalf("partial prune deleted protected path %s: %v", filepath.Base(path), err)
++		}
++	}
++	footprint := observePiLifecycleLogFootprint(state, policy, now, "")
++	if footprint.ManagedCount != 2 || footprint.ForeignCount != 1 {
++		t.Fatalf("partial prune footprint=%#v want two managed and one foreign", footprint)
++	}
++}
++
++// Production call site: piSessionLog.event, invoked by both RunPi launch
++// paths, reserves a whole encoded record before writing any bytes.
++func TestPiSessionLogEventDropsWholeRecordWhenByteGateCannotAdmitIt(t *testing.T) {
++	state := newPiLifecycleLogTestState(t)
++	now := time.Date(2026, time.August, 29, 15, 0, 0, 0, time.UTC)
++	policy := PiLifecycleLogRetention{MaxCount: 1, MaxBytes: 16, MaxAgeSeconds: 3600}
++	log, err := openPiSessionLogAt(state, policy, func() time.Time { return now })
++	if err != nil {
++		t.Fatal(err)
++	}
++	log.event("record-too-large", map[string]any{"payload": "must-not-be-partially-written"})
++	if log.status.DroppedRecords != 1 || log.status.LastError == "" {
++		t.Fatalf("byte-gate status=%#v want one dropped record and an error", log.status)
++	}
++	info, err := os.Stat(log.path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if info.Size() != 0 {
++		t.Fatalf("byte gate wrote partial JSONL record: size=%d", info.Size())
++	}
++	log.close()
++}
++
++// Production call sites: RunPi standalone and runSharedPiSession both resolve
++// a fresh client state with ResolvePiClientStatePaths and then call
++// openPiSessionLog. Narrowing retention to paths.LogsDir must fail this test.
++func TestPiLifecycleLogRetentionBoundsAggregateAcrossProductionClientStatePaths(t *testing.T) {
++	cache := t.TempDir()
++	project := filepath.Join(t.TempDir(), "project")
++	mustMkdir(t, project)
++	profileState := resolvePiLifecycleLogTestState(t, cache, project, "")
++	policy := PiLifecycleLogRetention{MaxCount: 1, MaxBytes: 256, MaxAgeSeconds: 60}
++	current := time.Date(2026, time.August, 29, 15, 30, 0, 0, time.UTC)
++	foreign := make([]string, 0, 3)
++	for turn := 0; turn < 3; turn++ {
++		current = current.Add(2 * time.Minute)
++		state := resolvePiLifecycleLogTestState(t, cache, project, fmt.Sprintf("RUN-aggregate-%d", turn))
++		foreignPath := filepath.Join(state.LogsDir, fmt.Sprintf("foreign-%d.keep", turn))
++		if err := os.WriteFile(foreignPath, []byte("foreign"), 0o600); err != nil {
++			t.Fatal(err)
++		}
++		foreign = append(foreign, foreignPath)
++		log, err := openPiSessionLogAt(state, policy, func() time.Time { return current })
++		if err != nil {
++			t.Fatalf("turn=%d open: %v", turn, err)
++		}
++		log.event("turn", map[string]any{"turn": turn})
++		log.close()
++	}
++	footprint := observePiLifecycleLogFootprint(profileState, policy, current, "")
++	if !footprint.WithinPolicy || footprint.ManagedCount != 1 || footprint.ManagedBytes > policy.MaxBytes || footprint.ExpiredCount != 0 {
++		t.Fatalf("profile aggregate escaped retention: %#v policy=%#v", footprint, policy)
++	}
++	if footprint.ParticipatingDirectoryCount != 4 || footprint.ForeignCount != 3 {
++		t.Fatalf("profile aggregate omitted run directories: %#v", footprint)
++	}
++	for _, path := range foreign {
++		if _, err := os.Lstat(path); err != nil {
++			t.Fatalf("aggregate prune deleted foreign file %s: %v", path, err)
++		}
++	}
++}
++
++func TestPiLifecycleLogRetentionPreservesEveryActiveRunAndRefusesCountOverflow(t *testing.T) {
++	cache := t.TempDir()
++	project := filepath.Join(t.TempDir(), "project")
++	mustMkdir(t, project)
++	policy := PiLifecycleLogRetention{MaxCount: 2, MaxBytes: 1 << 20, MaxAgeSeconds: 3600}
++	now := time.Date(2026, time.August, 29, 16, 0, 0, 0, time.UTC)
++	firstState := resolvePiLifecycleLogTestState(t, cache, project, "RUN-active-a")
++	secondState := resolvePiLifecycleLogTestState(t, cache, project, "RUN-active-b")
++	thirdState := resolvePiLifecycleLogTestState(t, cache, project, "RUN-active-c")
++	foreign := filepath.Join(firstState.LogsDir, "foreign.keep")
++	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	first, err := openPiSessionLogAt(firstState, policy, func() time.Time { return now })
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer first.close()
++	second, err := openPiSessionLogAt(secondState, policy, func() time.Time { return now.Add(time.Second) })
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer second.close()
++	if _, err := openPiSessionLogAt(thirdState, policy, func() time.Time { return now.Add(2 * time.Second) }); piErrorCode(err) != "lifecycle_log_retention_exhausted" {
++		t.Fatalf("third active log error=%v code=%q", err, piErrorCode(err))
++	}
++	for _, path := range []string{first.path, second.path, foreign} {
++		if _, err := os.Lstat(path); err != nil {
++			t.Fatalf("count refusal deleted protected path %s: %v", path, err)
++		}
++	}
++	footprint := observePiLifecycleLogFootprint(firstState, policy, now.Add(2*time.Second), "")
++	if !footprint.WithinPolicy || footprint.ManagedCount != 2 || footprint.ActiveCount != 2 || footprint.ForeignCount != 1 {
++		t.Fatalf("active aggregate footprint=%#v", footprint)
++	}
++}
++
++func TestPiLifecycleLogStatusReportsUnknownWhenAggregateDirectoryCannotBeRead(t *testing.T) {
++	state := newPiLifecycleLogTestState(t)
++	policy := PiLifecycleLogRetention{MaxCount: 2, MaxBytes: 1024, MaxAgeSeconds: 3600}
++	original := state.LogsDir + ".original"
++	if err := os.Rename(state.LogsDir, original); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink(original, state.LogsDir); err != nil {
++		t.Fatal(err)
++	}
++	footprint := observePiLifecycleLogFootprint(state, policy, time.Now().UTC(), "")
++	if footprint.Observation != "unknown" || footprint.WithinPolicy || footprint.Error == "" {
++		t.Fatalf("unreadable aggregate was laundered into absence: %#v", footprint)
++	}
++	if _, err := os.Lstat(original); err != nil {
++		t.Fatalf("status read failure deleted foreign directory: %v", err)
++	}
++}
++
++func TestPiLifecycleLogRetentionBoundsSimulatedEightWeekFootprint(t *testing.T) {
++	cache := t.TempDir()
++	project := filepath.Join(t.TempDir(), "project")
++	mustMkdir(t, project)
++	state := resolvePiLifecycleLogTestState(t, cache, project, "")
++	policy := PiLifecycleLogRetention{MaxCount: 5, MaxBytes: 420, MaxAgeSeconds: 7 * 24 * 60 * 60}
++	current := time.Date(2026, time.July, 5, 0, 0, 0, 0, time.UTC)
++	foreign := filepath.Join(state.LogsDir, "soak-owner-evidence.keep")
++	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	for day := 0; day < 8*7; day++ {
++		for turn := 0; turn < 3; turn++ {
++			current = current.Add(8 * time.Hour)
++			runID := fmt.Sprintf("RUN-week-%02d-turn-%d", day, turn)
++			runState := resolvePiLifecycleLogTestState(t, cache, project, runID)
++			log, err := openPiSessionLogAt(runState, policy, func() time.Time { return current })
++			if err != nil {
++				t.Fatalf("day=%d turn=%d open: %v", day, turn, err)
++			}
++			log.event("turn", map[string]any{"day": day, "turn": turn})
++			if log.status.DroppedRecords != 0 {
++				t.Fatalf("day=%d turn=%d dropped=%d error=%s", day, turn, log.status.DroppedRecords, log.status.LastError)
++			}
++			log.close()
++		}
++	}
++	if _, err := os.Lstat(foreign); err != nil {
++		t.Fatalf("week simulation deleted foreign evidence: %v", err)
++	}
++	footprint := observePiLifecycleLogFootprint(state, policy, current, "")
++	if !footprint.WithinPolicy || footprint.ManagedCount > policy.MaxCount || footprint.ManagedBytes > policy.MaxBytes || footprint.ExpiredCount != 0 {
++		t.Fatalf("eight-week footprint exceeds policy: %#v policy=%#v", footprint, policy)
++	}
++	if footprint.OldestStarted != nil && footprint.OldestStarted.Before(current.Add(-time.Duration(policy.MaxAgeSeconds)*time.Second)) {
++		t.Fatalf("oldest retained lifecycle log %s exceeds age policy at %s", footprint.OldestStarted, current)
++	}
++	t.Logf("simulated_weeks=8 managed_count=%d/%d managed_bytes=%d/%d expired_count=%d foreign_count=%d within_policy=%t",
++		footprint.ManagedCount, policy.MaxCount, footprint.ManagedBytes, policy.MaxBytes, footprint.ExpiredCount, footprint.ForeignCount, footprint.WithinPolicy)
++}
++
++// Production call site: BuildPrimarySessionLaunchPlan, used by
++// pi-infra --print-config, publishes configured bounds and observed footprint.
++func TestPiPrintConfigReportsLifecycleLogPolicyAndFootprintWithoutPruning(t *testing.T) {
++	piRoot := officialPiAsset(t)
++	project, home := t.TempDir(), t.TempDir()
++	cache := filepath.Join(home, "Library", "Caches")
++	mustMkdir(t, cache)
++	t.Setenv("HOME", home)
++	writePiProjectConfig(t, project, validPiProfileTOML("profile", "/bin/echo", 18011, false))
++	canonicalProject, err := CanonicalProjectDir(project)
++	if err != nil {
++		t.Fatal(err)
++	}
++	state, err := ResolvePiStatePaths("", canonicalProject, "profile")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := CreatePiStateTree(state); err != nil {
++		t.Fatal(err)
++	}
++	now := time.Now().UTC()
++	runState, err := ResolvePiClientStatePaths(cache, canonicalProject, "profile", "RUN-print-config")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := CreatePiStateTree(runState); err != nil {
++		t.Fatal(err)
++	}
++	owned := writePiLifecycleLogFixture(t, runState, now.Add(-time.Hour), 1, 33, 0o600)
++	foreign := filepath.Join(runState.LogsDir, "operator.keep")
++	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++
++	plan, err := BuildPrimarySessionLaunchPlan("pi", project, home, nil, ChildLaunchCompositionProducer{}, func(string) (string, error) {
++		return filepath.Join(piRoot, "pi"), nil
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	wantPolicy := PiLifecycleLogRetention{MaxCount: 64, MaxBytes: 1048576, MaxAgeSeconds: 604800}
++	if plan.Pi == nil || plan.Pi.LifecycleLogs == nil || !reflect.DeepEqual(plan.Pi.LifecycleLogs.Retention, wantPolicy) {
++		t.Fatalf("lifecycle log diagnostics absent or wrong: %#v", plan.Pi)
++	}
++	got := plan.Pi.LifecycleLogs.Footprint
++	if got.Observation != "present" || got.ParticipatingDirectoryCount != 2 || got.ManagedCount != 1 || got.ManagedBytes != 33 || got.ForeignCount != 1 || !got.WithinPolicy {
++		t.Fatalf("lifecycle log footprint=%#v", got)
++	}
++	for _, path := range []string{owned, foreign} {
++		if _, err := os.Lstat(path); err != nil {
++			t.Fatalf("print-config pruned %s: %v", filepath.Base(path), err)
++		}
++	}
++}
++
++func newPiLifecycleLogTestState(t *testing.T) PiStatePaths {
++	t.Helper()
++	cache := t.TempDir()
++	project := filepath.Join(t.TempDir(), "project")
++	mustMkdir(t, project)
++	return resolvePiLifecycleLogTestState(t, cache, project, "")
++}
++
++func resolvePiLifecycleLogTestState(t *testing.T, cache, project, runID string) PiStatePaths {
++	t.Helper()
++	var state PiStatePaths
++	var err error
++	if runID == "" {
++		state, err = ResolvePiStatePaths(cache, project, "profile")
++	} else {
++		state, err = ResolvePiClientStatePaths(cache, project, "profile", runID)
++	}
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := CreatePiStateTree(state); err != nil {
++		t.Fatal(err)
++	}
++	return state
++}
++
++func writePiLifecycleLogFixture(t *testing.T, state PiStatePaths, startedAt time.Time, nonce int, size int, mode os.FileMode) string {
++	t.Helper()
++	path := filepath.Join(state.LogsDir, piLifecycleLogFixtureName(startedAt, nonce))
++	if err := os.WriteFile(path, bytes.Repeat([]byte{'x'}, size), mode); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Chmod(path, mode); err != nil {
++		t.Fatal(err)
++	}
++	return path
++}
++
++func piLifecycleLogFixtureName(startedAt time.Time, nonce int) string {
++	return fmt.Sprintf("%s-%016x.jsonl", startedAt.UTC().Format(piLifecycleLogTimestampLayout), nonce)
++}
+diff --git a/tools/agents-infra/internal/infra/pi_lifecycle_log_types.go b/tools/agents-infra/internal/infra/pi_lifecycle_log_types.go
+new file mode 100644
+index 0000000..dc77c2d
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_lifecycle_log_types.go
+@@ -0,0 +1,45 @@
++package infra
++
++import "time"
++
++// PiLifecycleLogFootprint is a read-only observation of launcher-owned logs.
++// Foreign entries are reported separately and never count as policy-owned
++// bytes or files.
++type PiLifecycleLogFootprint struct {
++	Observation                 string     `json:"observation"`
++	ParticipatingDirectoryCount int        `json:"participating_directory_count"`
++	DirectoryCount              int        `json:"directory_count"`
++	DirectoryBytes              int64      `json:"directory_bytes"`
++	ManagedCount                int        `json:"managed_count"`
++	ManagedBytes                int64      `json:"managed_bytes"`
++	ExpiredCount                int        `json:"expired_count"`
++	ForeignCount                int        `json:"foreign_count"`
++	ForeignBytes                int64      `json:"foreign_bytes"`
++	ActiveCount                 int        `json:"active_count"`
++	OldestStarted               *time.Time `json:"oldest_started_at,omitempty"`
++	NewestStarted               *time.Time `json:"newest_started_at,omitempty"`
++	WithinPolicy                bool       `json:"within_policy"`
++	Error                       string     `json:"error,omitempty"`
++}
++
++// PiLifecycleLogStatus is emitted by non-launching plans and managed-run
++// reports so soak evidence can bind configured limits to observed footprint.
++type PiLifecycleLogStatus struct {
++	Directory      string                  `json:"directory"`
++	PolicySource   string                  `json:"policy_source,omitempty"`
++	Retention      PiLifecycleLogRetention `json:"retention"`
++	Footprint      PiLifecycleLogFootprint `json:"footprint"`
++	PrunedCount    int                     `json:"pruned_count"`
++	PrunedBytes    int64                   `json:"pruned_bytes"`
++	DroppedRecords int                     `json:"dropped_records"`
++	LastError      string                  `json:"last_error,omitempty"`
++}
++
++func newPiLifecycleLogStatus(paths PiStatePaths, policy PiLifecycleLogRetention, source string, now time.Time, activePath string) PiLifecycleLogStatus {
++	return PiLifecycleLogStatus{
++		Directory:    piLifecycleProfileRootPath(paths),
++		PolicySource: source,
++		Retention:    policy,
++		Footprint:    observePiLifecycleLogFootprint(paths, policy, now, activePath),
++	}
++}
+diff --git a/tools/agents-infra/internal/infra/pi_lifecycle_log_windows.go b/tools/agents-infra/internal/infra/pi_lifecycle_log_windows.go
+new file mode 100644
+index 0000000..6c2aeab
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_lifecycle_log_windows.go
+@@ -0,0 +1,11 @@
++//go:build windows
++
++package infra
++
++import "time"
++
++func observePiLifecycleLogFootprint(PiStatePaths, PiLifecycleLogRetention, time.Time, string) PiLifecycleLogFootprint {
++	return PiLifecycleLogFootprint{Observation: "unsupported", WithinPolicy: false}
++}
++
++func piLifecycleProfileRootPath(PiStatePaths) string { return "" }
+diff --git a/tools/agents-infra/internal/infra/pi_plan.go b/tools/agents-infra/internal/infra/pi_plan.go
+index c169a73..5ee4c8f 100644
+--- a/tools/agents-infra/internal/infra/pi_plan.go
++++ b/tools/agents-infra/internal/infra/pi_plan.go
+@@ -10,23 +10,25 @@ import (
+ 	"os/exec"
+ 	"path/filepath"
+ 	"strings"
++	"time"
+ )
+ 
+ const PrimarySessionManagedHostKindPiPTY = "pi-pty"
+ 
+ type PiLaunchPlanDetails struct {
+-	Managed               bool                 `json:"managed"`
+-	LogicalProfile        string               `json:"logical_profile,omitempty"`
+-	ProfileSource         string               `json:"profile_source,omitempty"`
+-	PiCompatibilitySource string               `json:"pi_compatibility_source,omitempty"`
+-	State                 *PiStatePaths        `json:"state,omitempty"`
+-	ModelsJSON            PiGeneratedCatalog   `json:"models_json,omitempty"`
+-	Settings              *PiSettingsPlan      `json:"settings,omitempty"`
+-	PiIdentity            *PiExecutionIdentity `json:"pi_identity,omitempty"`
+-	Runtime               *PiRuntimePlan       `json:"runtime,omitempty"`
+-	SharedRuntime         *PiSharedRuntimePlan `json:"shared_runtime,omitempty"`
+-	Capabilities          *PiCapabilityPlan    `json:"capabilities,omitempty"`
+-	DFlash                *PiDFlashPlan        `json:"dflash,omitempty"`
++	Managed               bool                  `json:"managed"`
++	LogicalProfile        string                `json:"logical_profile,omitempty"`
++	ProfileSource         string                `json:"profile_source,omitempty"`
++	PiCompatibilitySource string                `json:"pi_compatibility_source,omitempty"`
++	State                 *PiStatePaths         `json:"state,omitempty"`
++	ModelsJSON            PiGeneratedCatalog    `json:"models_json,omitempty"`
++	Settings              *PiSettingsPlan       `json:"settings,omitempty"`
++	PiIdentity            *PiExecutionIdentity  `json:"pi_identity,omitempty"`
++	Runtime               *PiRuntimePlan        `json:"runtime,omitempty"`
++	SharedRuntime         *PiSharedRuntimePlan  `json:"shared_runtime,omitempty"`
++	LifecycleLogs         *PiLifecycleLogStatus `json:"lifecycle_logs,omitempty"`
++	Capabilities          *PiCapabilityPlan     `json:"capabilities,omitempty"`
++	DFlash                *PiDFlashPlan         `json:"dflash,omitempty"`
+ }
+ type PiSettingsPlan struct {
+ 	Path       string        `json:"path"`
+@@ -212,6 +214,8 @@ func buildPiPrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, projectDi
+ 	details := &PiLaunchPlanDetails{Managed: true, LogicalProfile: selected, ProfileSource: selectedSource, PiCompatibilitySource: composite.PiPrimarySession.PiCompatibility.Source, State: &state, ModelsJSON: PiGeneratedCatalog{Path: state.ModelsJSON, SHA256: hex.EncodeToString(modelsSum[:])}, PiIdentity: &identity,
+ 		Runtime:      &PiRuntimePlan{Executable: profile.Runtime.Executable, Argv: append([]string(nil), profile.Runtime.Argv...), Source: profile.Source, Endpoint: profile.BaseURL, ReadinessURL: strings.TrimSuffix(profile.BaseURL, "/v1") + "/v1" + profile.Runtime.ReadinessPath, StartupTimeoutSeconds: profile.Runtime.StartupTimeoutSeconds, ShutdownTimeoutSeconds: profile.Runtime.ShutdownTimeoutSeconds, ExecutableState: execState, Ownership: "direct-child-process-group"},
+ 		Capabilities: &PiCapabilityPlan{Requested: append([]string(nil), profile.RequestedCapabilities...), Verified: []string{}, Verification: "not-claimed"}}
++	lifecycleLogs := newPiLifecycleLogStatus(state, profile.LifecycleLogRetention, profile.Source, time.Now().UTC(), "")
++	details.LifecycleLogs = &lifecycleLogs
+ 	if profile.Compaction != nil {
+ 		compaction := *profile.Compaction
+ 		details.Settings = &PiSettingsPlan{Path: state.SettingsJSON, Compaction: &compaction}
+diff --git a/tools/agents-infra/internal/infra/pi_run_report.go b/tools/agents-infra/internal/infra/pi_run_report.go
+index f26b9b5..200755c 100644
+--- a/tools/agents-infra/internal/infra/pi_run_report.go
++++ b/tools/agents-infra/internal/infra/pi_run_report.go
+@@ -4,12 +4,13 @@ package infra
+ // only lifecycle state; process identifiers and command arguments are omitted
+ // so callers can safely carry the report into sanitized summaries.
+ type PiRunReport struct {
+-	Managed                    bool   `json:"managed"`
+-	DeadlineExceeded           bool   `json:"deadline_exceeded"`
+-	PiProcessGroupCleanup      string `json:"pi_process_group_cleanup"`
+-	RuntimeProcessGroupCleanup string `json:"runtime_process_group_cleanup"`
+-	CleanupConfirmed           bool   `json:"cleanup_confirmed"`
+-	SessionLog                 string `json:"session_log,omitempty"`
++	Managed                    bool                  `json:"managed"`
++	DeadlineExceeded           bool                  `json:"deadline_exceeded"`
++	PiProcessGroupCleanup      string                `json:"pi_process_group_cleanup"`
++	RuntimeProcessGroupCleanup string                `json:"runtime_process_group_cleanup"`
++	CleanupConfirmed           bool                  `json:"cleanup_confirmed"`
++	SessionLog                 string                `json:"session_log,omitempty"`
++	LifecycleLogs              *PiLifecycleLogStatus `json:"lifecycle_logs,omitempty"`
+ }
+ 
+ func newPiRunReport() PiRunReport {
+diff --git a/tools/agents-infra/internal/infra/pi_session_log.go b/tools/agents-infra/internal/infra/pi_session_log.go
+index 830c734..a9fb382 100644
+--- a/tools/agents-infra/internal/infra/pi_session_log.go
++++ b/tools/agents-infra/internal/infra/pi_session_log.go
+@@ -17,9 +17,14 @@ import (
+ )
+ 
+ type piSessionLog struct {
+-	mu   sync.Mutex
+-	file *os.File
+-	path string
++	mu     sync.Mutex
++	file   *os.File
++	path   string
++	name   string
++	paths  PiStatePaths
++	policy PiLifecycleLogRetention
++	now    func() time.Time
++	status PiLifecycleLogStatus
+ }
+ 
+ type piSessionLogRecord struct {
+@@ -28,7 +33,11 @@ type piSessionLogRecord struct {
+ 	Fields    map[string]any `json:"fields,omitempty"`
+ }
+ 
+-func openPiSessionLog(paths PiStatePaths) (*piSessionLog, error) {
++func openPiSessionLog(paths PiStatePaths, policy PiLifecycleLogRetention) (*piSessionLog, error) {
++	return openPiSessionLogAt(paths, policy, time.Now)
++}
++
++func openPiSessionLogAt(paths PiStatePaths, policy PiLifecycleLogRetention, now func() time.Time) (*piSessionLog, error) {
+ 	rootFD, err := openPiProfileRoot(paths)
+ 	if err != nil {
+ 		return nil, piError("profile_state_path_invalid", err)
+@@ -43,7 +52,18 @@ func openPiSessionLog(paths PiStatePaths) (*piSessionLog, error) {
+ 	if _, err := rand.Read(nonce[:]); err != nil {
+ 		return nil, piError("profile_state_path_invalid", err)
+ 	}
+-	name := time.Now().UTC().Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(nonce[:]) + ".jsonl"
++	startedAt := now().UTC()
++	name := startedAt.Format(piLifecycleLogTimestampLayout) + "-" + hex.EncodeToString(nonce[:]) + ".jsonl"
++	path := filepath.Join(paths.LogsDir, name)
++	retentionLock, _, err := acquirePiLifecycleRetentionLock(paths, true, unix.LOCK_EX)
++	if err != nil {
++		return nil, piError("lifecycle_log_retention_failed", err)
++	}
++	defer retentionLock.close()
++	pruned, err := prunePiLifecycleLogsLocked(paths, policy, startedAt, "", 1, 0, removePiLifecycleLog)
++	if err != nil {
++		return nil, err
++	}
+ 	fd, err := unix.Openat(logsFD, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+ 	if err != nil {
+ 		return nil, piError("profile_state_path_invalid", err)
+@@ -56,15 +76,36 @@ func openPiSessionLog(paths PiStatePaths) (*piSessionLog, error) {
+ 		unix.Close(fd)
+ 		return nil, piError("profile_state_path_invalid", err)
+ 	}
+-	path := filepath.Join(paths.LogsDir, name)
+-	return &piSessionLog{file: os.NewFile(uintptr(fd), path), path: path}, nil
++	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
++		unix.Close(fd)
++		return nil, piError("lifecycle_log_retention_failed", err)
++	}
++	scan, err := scanPiLifecycleLogs(paths, path, policy, startedAt)
++	if err != nil {
++		_ = unix.Flock(fd, unix.LOCK_UN)
++		unix.Close(fd)
++		return nil, piError("lifecycle_log_retention_failed", err)
++	}
++	status := PiLifecycleLogStatus{
++		Directory:   piLifecycleProfileRootPath(paths),
++		Retention:   policy,
++		Footprint:   scan.footprint,
++		PrunedCount: pruned.PrunedCount,
++		PrunedBytes: pruned.PrunedBytes,
++	}
++	if status.Footprint.Observation != "present" {
++		_ = unix.Flock(fd, unix.LOCK_UN)
++		unix.Close(fd)
++		return nil, piError("lifecycle_log_retention_failed", errors.New("new lifecycle log footprint could not be observed"))
++	}
++	return &piSessionLog{file: os.NewFile(uintptr(fd), path), path: path, name: name, paths: paths, policy: policy, now: now, status: status}, nil
+ }
+ 
+ func (log *piSessionLog) event(name string, fields map[string]any) {
+ 	if log == nil || log.file == nil {
+ 		return
+ 	}
+-	record := piSessionLogRecord{Timestamp: time.Now().UTC().Format(time.RFC3339Nano), Event: name, Fields: fields}
++	record := piSessionLogRecord{Timestamp: log.now().UTC().Format(time.RFC3339Nano), Event: name, Fields: fields}
+ 	data, err := json.Marshal(record)
+ 	if err != nil {
+ 		return
+@@ -72,7 +113,34 @@ func (log *piSessionLog) event(name string, fields map[string]any) {
+ 	data = append(data, '\n')
+ 	log.mu.Lock()
+ 	defer log.mu.Unlock()
+-	_, _ = log.file.Write(data)
++	retentionLock, _, err := acquirePiLifecycleRetentionLock(log.paths, true, unix.LOCK_EX)
++	if err != nil {
++		log.status.DroppedRecords++
++		log.status.LastError = err.Error()
++		return
++	}
++	defer retentionLock.close()
++	pruned, err := prunePiLifecycleLogsLocked(log.paths, log.policy, log.now().UTC(), log.path, 0, int64(len(data)), removePiLifecycleLog)
++	if err != nil {
++		log.status.DroppedRecords++
++		log.status.LastError = err.Error()
++		return
++	}
++	log.status.PrunedCount += pruned.PrunedCount
++	log.status.PrunedBytes += pruned.PrunedBytes
++	if n, err := log.file.Write(data); err != nil || n != len(data) {
++		if err == nil {
++			err = errors.New("partial lifecycle log write")
++		}
++		log.status.LastError = err.Error()
++	}
++	scan, err := scanPiLifecycleLogs(log.paths, log.path, log.policy, log.now().UTC())
++	if err != nil {
++		log.status.LastError = err.Error()
++		log.status.Footprint = PiLifecycleLogFootprint{Observation: "unknown", Error: err.Error()}
++		return
++	}
++	log.status.Footprint = scan.footprint
+ }
+ 
+ func (log *piSessionLog) close() {
+@@ -81,9 +149,23 @@ func (log *piSessionLog) close() {
+ 	}
+ 	log.mu.Lock()
+ 	defer log.mu.Unlock()
+-	_ = log.file.Sync()
+-	_ = log.file.Close()
++	if err := log.file.Sync(); err != nil {
++		log.status.LastError = err.Error()
++	}
++	_ = unix.Flock(int(log.file.Fd()), unix.LOCK_UN)
++	if err := log.file.Close(); err != nil {
++		log.status.LastError = err.Error()
++	}
+ 	log.file = nil
++	pruned, err := prunePiLifecycleLogs(log.paths, log.policy, log.now().UTC(), "", 0, 0)
++	if err != nil {
++		log.status.LastError = err.Error()
++		log.status.Footprint = observePiLifecycleLogFootprint(log.paths, log.policy, log.now().UTC(), "")
++		return
++	}
++	log.status.PrunedCount += pruned.PrunedCount
++	log.status.PrunedBytes += pruned.PrunedBytes
++	log.status.Footprint = pruned.After
+ }
+ 
+ func piProcessIdentityFields(pid int) map[string]any {
+diff --git a/tools/agents-infra/internal/infra/pi_shared_client_darwin.go b/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
+index 53a8926..87c693b 100644
+--- a/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
++++ b/tools/agents-infra/internal/infra/pi_shared_client_darwin.go
+@@ -614,13 +614,14 @@ func runSharedPiSession(opts RunPiOptions, project, profileName string, profile
+ 		return err
+ 	}
+ 	defer lock.Close()
+-	sessionLog, err := openPiSessionLog(state)
++	sessionLog, err := openPiSessionLog(state, profile.LifecycleLogRetention)
+ 	if err != nil {
+ 		return err
+ 	}
+ 	defer sessionLog.close()
+ 	if opts.Report != nil {
+ 		opts.Report.SessionLog = sessionLog.path
++		opts.Report.LifecycleLogs = &sessionLog.status
+ 	}
+ 	sessionLog.event("session_start", map[string]any{
+ 		"mode": "shared", "project": project, "profile": profileName,
+diff --git a/tools/agents-infra/internal/infra/pi_test.go b/tools/agents-infra/internal/infra/pi_test.go
+index 8087ff6..2a1e7df 100644
+--- a/tools/agents-infra/internal/infra/pi_test.go
++++ b/tools/agents-infra/internal/infra/pi_test.go
+@@ -58,6 +58,11 @@ max_tokens = 1024
+ thinking = "off"
+ %s
+ 
++[agents.pi.profiles.%q.lifecycle_log_retention]
++max_count = 64
++max_bytes = 1048576
++max_age_seconds = 604800
++
+ [agents.pi.profiles.%q.compat]
+ supports_developer_role = false
+ supports_reasoning_effort = false
+@@ -71,7 +76,7 @@ argv = %s
+ readiness_path = "/models"
+ startup_timeout_seconds = 5
+ shutdown_timeout_seconds = 2
+-%s`, name, PiCompatibilityV0842DarwinARM64, name, port, extraCaps, name, name, runtime, argv, dflashBlock)
++%s`, name, PiCompatibilityV0842DarwinARM64, name, port, extraCaps, name, name, name, runtime, argv, dflashBlock)
+ }
+ 
+ func reasoningPiProfileTOML(name, runtime string, port int) string {
+@@ -157,6 +162,58 @@ func TestParsePiCompactionIsStrictAndProfileScoped(t *testing.T) {
+ 	}
+ }
+ 
++// Production call site: RunPi -> loadCompositeProjectConfig -> parsePiProfile.
++// Missing or non-positive retention evidence must be refused before provider
++// lookup or creation of any managed state.
++func TestRunPiRequiresExplicitPositiveLifecycleLogRetention(t *testing.T) {
++	valid := validPiProfileTOML("profile", "/bin/echo", 18011, false)
++	table := `[agents.pi.profiles."profile".lifecycle_log_retention]
++max_count = 64
++max_bytes = 1048576
++max_age_seconds = 604800
++`
++	tests := map[string]string{
++		"absent table":    strings.Replace(valid, table, "", 1),
++		"missing count":   strings.Replace(valid, "max_count = 64\n", "", 1),
++		"zero count":      strings.Replace(valid, "max_count = 64", "max_count = 0", 1),
++		"missing bytes":   strings.Replace(valid, "max_bytes = 1048576\n", "", 1),
++		"zero bytes":      strings.Replace(valid, "max_bytes = 1048576", "max_bytes = 0", 1),
++		"missing age":     strings.Replace(valid, "max_age_seconds = 604800\n", "", 1),
++		"zero age":        strings.Replace(valid, "max_age_seconds = 604800", "max_age_seconds = 0", 1),
++		"unknown default": strings.Replace(valid, "max_count = 64", "max_count = 64\ndefault_days = 7", 1),
++	}
++	for name, body := range tests {
++		t.Run(name, func(t *testing.T) {
++			project, home := t.TempDir(), t.TempDir()
++			cache := filepath.Join(t.TempDir(), "cache")
++			writePiProjectConfig(t, project, body)
++			providerLookup := false
++			err := RunPi(RunPiOptions{
++				ProjectDir: project,
++				HomeDir:    home,
++				CacheRoot:  cache,
++				Environ:    []string{},
++				LookPath: func(string) (string, error) {
++					providerLookup = true
++					return "/bin/false", nil
++				},
++			})
++			if piErrorCode(err) != "invalid_project_configuration" {
++				t.Fatalf("RunPi error=%v code=%q", err, piErrorCode(err))
++			}
++			if !strings.Contains(err.Error(), "lifecycle_log_retention") {
++				t.Fatalf("RunPi error does not name production gate: %v", err)
++			}
++			if providerLookup {
++				t.Fatal("invalid retention reached provider lookup")
++			}
++			if _, statErr := os.Stat(cache); !errors.Is(statErr, os.ErrNotExist) {
++				t.Fatalf("invalid retention mutated managed state: %v", statErr)
++			}
++		})
++	}
++}
++
+ func sharedPiProfileTOML(name, runtime string, port int) string {
+ 	return validPiProfileTOML(name, runtime, port, false) + fmt.Sprintf(`
+ [agents.pi.profiles.%q.runtime.sharing]
+@@ -492,14 +549,15 @@ func TestPiSessionLogsAreDistinctContainedAndPrivate(t *testing.T) {
+ 	if err := CreatePiStateTree(state); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	first, err := openPiSessionLog(state)
++	policy := PiLifecycleLogRetention{MaxCount: 8, MaxBytes: 1 << 20, MaxAgeSeconds: 3600}
++	first, err := openPiSessionLog(state, policy)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	first.event("pi_started", map[string]any{"pid": 42, "foreground": true})
+ 	firstPath := first.path
+ 	first.close()
+-	second, err := openPiSessionLog(state)
++	second, err := openPiSessionLog(state, policy)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+diff --git a/tools/agents-infra/main_test.go b/tools/agents-infra/main_test.go
+index 6dea3bb..ccff951 100644
+--- a/tools/agents-infra/main_test.go
++++ b/tools/agents-infra/main_test.go
+@@ -1001,6 +1001,10 @@ context_window = 8192
+ max_tokens = 1024
+ thinking = "off"
+ requested_capabilities = ["text", "tools"]
++[agents.pi.profiles.profile.lifecycle_log_retention]
++max_count = 64
++max_bytes = 1048576
++max_age_seconds = 604800
+ [agents.pi.profiles.profile.compat]
+ supports_developer_role = false
+ [agents.pi.profiles.profile.runtime]
+diff --git a/tools/agents-infra/model_check_main_test.go b/tools/agents-infra/model_check_main_test.go
+index 7f935fa..9173a68 100644
+--- a/tools/agents-infra/model_check_main_test.go
++++ b/tools/agents-infra/model_check_main_test.go
+@@ -399,6 +399,11 @@ max_tokens = 1024
+ thinking = "off"
+ requested_capabilities = ["text", "tools"]
+ 
++[agents.pi.profiles.profile.lifecycle_log_retention]
++max_count = 64
++max_bytes = 1048576
++max_age_seconds = 604800
++
+ [agents.pi.profiles.profile.compat]
+ supports_developer_role = false
+ 
+diff --git a/tools/agents-infra/pi_operator_docs_test.go b/tools/agents-infra/pi_operator_docs_test.go
+index 683d52a..a01ddcb 100644
+--- a/tools/agents-infra/pi_operator_docs_test.go
++++ b/tools/agents-infra/pi_operator_docs_test.go
+@@ -42,6 +42,9 @@ func TestPiOperatorContractDocumentsCycle10Boundary(t *testing.T) {
+ 		"`yolo_mode = true` injects",
+ 		"Explicit `--no-approve`/`-na` conflicts with effective yolo",
+ 		"logs/<UTC-start>-<random>.jsonl",
++		"one profile-level lock serializes an aggregate scan",
++		"participating_directory_count",
++		`observation = "unknown"`,
+ 		"foreground-terminal ownership",
+ 		"`restart_not_before` is the ledger's exact RFC3339 deadline or JSON `null`",
+ 		"agents-infra runtime status --json.restart_not_before",
+@@ -73,6 +76,9 @@ func TestReluxAgentsInfraSkillRoutesSafePiWorkflowToSource(t *testing.T) {
+ 		"Effective `yolo_mode = true` injects exactly one `--approve`",
+ 		"`--approve`/`-a` controls one-run trust for project-local files",
+ 		"mode-`0600` lifecycle JSONL",
++		"One profile-level lock serializes aggregate pruning",
++		"preserves every file-locked active log",
++		"unreadable state is `unknown`, never `absent`",
+ 		"foreground-terminal ownership",
+ 		"`restart_not_before` is always present as the ledger's RFC3339 deadline or JSON `null`",
+ 		"vendorplugin.LimitedUntil",
