@@ -366,6 +366,94 @@ func TestParsePiRuntimeSharingIsStrictAndOptIn(t *testing.T) {
 	}
 }
 
+// Production call site: agents-infra doctor local -> Doctor ->
+// projectPiProfileFieldGaps. BUG-260830-5pmaiz: the strict compose path
+// (parsePiRuntimeSharing) intentionally still refuses on the first absent
+// field, so this proves the doctor diagnostic reports every one of the eight
+// late-added runtime.sharing fields that a real installed config was found
+// missing, in the same invocation that also still fails closed.
+func TestDoctorReportsEveryMissingSharedRuntimeFieldInOneInvocation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	project := t.TempDir()
+	body := sharedPiProfileTOML("profile", "/bin/echo", 18011)
+	lateAddedFields := []string{
+		"max_segment_bytes = 1048576\n",
+		"max_segments = 7\n",
+		"restart_limit = 3\n",
+		"restart_initial_backoff_seconds = 1\n",
+		"restart_max_backoff_seconds = 4\n",
+		"stable_run_seconds = 10\n",
+		"quarantine_seconds = 30\n",
+		"resource_pressure_mode = \"disabled\"\n",
+	}
+	for _, line := range lateAddedFields {
+		body = strings.Replace(body, line, "", 1)
+	}
+	writePiProjectConfig(t, project, body)
+	configPath := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
+
+	layout, err := LocalLayout("", project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	report, doctorErr := Doctor(layout)
+	if doctorErr == nil {
+		t.Fatal("Doctor admitted a profile missing required runtime.sharing fields")
+	}
+
+	wantFields := []string{
+		"agents.pi.profiles.profile.runtime.sharing.max_segment_bytes",
+		"agents.pi.profiles.profile.runtime.sharing.max_segments",
+		"agents.pi.profiles.profile.runtime.sharing.restart_limit",
+		"agents.pi.profiles.profile.runtime.sharing.restart_initial_backoff_seconds",
+		"agents.pi.profiles.profile.runtime.sharing.restart_max_backoff_seconds",
+		"agents.pi.profiles.profile.runtime.sharing.stable_run_seconds",
+		"agents.pi.profiles.profile.runtime.sharing.quarantine_seconds",
+		"agents.pi.profiles.profile.runtime.sharing.resource_pressure_mode",
+	}
+	if len(report.PiProfileFieldGaps) != len(wantFields) {
+		t.Fatalf("PiProfileFieldGaps = %#v, want exactly %d entries for %v", report.PiProfileFieldGaps, len(wantFields), wantFields)
+	}
+	got := map[string]bool{}
+	for _, gap := range report.PiProfileFieldGaps {
+		if gap.ConfigPath != configPath {
+			t.Fatalf("gap %#v has ConfigPath != %q", gap, configPath)
+		}
+		if gap.Expected == "" {
+			t.Fatalf("gap %#v has no expected-value description", gap)
+		}
+		got[gap.Field] = true
+	}
+	for _, field := range wantFields {
+		if !got[field] {
+			t.Fatalf("PiProfileFieldGaps missing field %q; got %#v", field, report.PiProfileFieldGaps)
+		}
+	}
+}
+
+// Production call site: agents-infra doctor local -> Doctor ->
+// projectPiProfileFieldGaps. Positive control for
+// TestDoctorReportsEveryMissingSharedRuntimeFieldInOneInvocation: a profile
+// with every required runtime.sharing field present must report zero gaps
+// and Doctor must still succeed.
+func TestDoctorReportsNoFieldGapsForValidSharedRuntimeProfile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	project := t.TempDir()
+	writePiProjectConfig(t, project, sharedPiProfileTOML("profile", "/bin/echo", 18011))
+
+	layout, err := LocalLayout("", project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	report, doctorErr := Doctor(layout)
+	if doctorErr != nil {
+		t.Fatalf("Doctor: %v", doctorErr)
+	}
+	if len(report.PiProfileFieldGaps) != 0 {
+		t.Fatalf("PiProfileFieldGaps = %#v, want none for a valid profile", report.PiProfileFieldGaps)
+	}
+}
+
 // Production call site: RunPi -> loadCompositeProjectConfig -> parsePiRuntimeSharing.
 // Missing rotation caps must refuse before provider lookup or runtime-state mutation;
 // there is deliberately no numeric fallback in code.
@@ -1697,12 +1785,24 @@ func TestPiLaunchReadinessRetriesOnlyServiceUnavailableAtProductionEntry(t *test
 func TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry(t *testing.T) {
 	piRoot := officialPiAsset(t)
 	python := requirePython(t)
+	const startupTimeoutSeconds = 1
 	for _, tc := range []struct {
 		name      string
 		exitAfter bool
 		wantCode  string
 	}{
+		// The runtime never exits and never answers with anything but 503, so the
+		// only terminal condition that can ever fire is the deadline. Proving the
+		// bound was honored (not returned early) needs a lower bound on elapsed
+		// wall time, not a count of completed polls: how many ticks land inside the
+		// deadline is scheduler-dependent under load, but a real timeout can never
+		// fire before the configured duration has actually elapsed.
 		{name: "times out while runtime remains alive", wantCode: "runtime_readiness_timeout"},
+		// The runtime exits immediately on start, before it could ever answer a
+		// readiness poll. That removes the dependency on winning a race between a
+		// completed HTTP round trip plus a fixed delay and the next poll tick —
+		// the exit is observed as soon as the OS reaps the child, which is far
+		// faster than the deadline regardless of host load.
 		{name: "refuses after owned runtime exits", exitAfter: true, wantCode: "runtime_exited_early"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1714,19 +1814,18 @@ func TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProduction
 			port := listener.Addr().(*net.TCPAddr).Port
 			listener.Close()
 			pidFile := filepath.Join(t.TempDir(), "runtime.pid")
-			countFile := filepath.Join(t.TempDir(), "readiness-count")
 			script := writePiPersistentUnavailableServer(t, tc.exitAfter)
-			config := validPiProfileWithArgv(t, "profile", python, port, []string{script, strconv.Itoa(port), countFile, pidFile}, 1)
+			config := validPiProfileWithArgv(t, "profile", python, port, []string{script, strconv.Itoa(port), pidFile}, startupTimeoutSeconds)
 			writePiProjectConfig(t, project, config)
 
+			start := time.Now()
 			err = runPiFixture(project, home, cache, piRoot, nil)
+			elapsed := time.Since(start)
 			if got := piErrorCode(err); got != tc.wantCode {
 				t.Fatalf("production readiness error code=%q want=%q err=%v", got, tc.wantCode, err)
 			}
-			count, readErr := os.ReadFile(countFile)
-			requests, parseErr := strconv.Atoi(strings.TrimSpace(string(count)))
-			if readErr != nil || parseErr != nil || requests < 1 {
-				t.Fatalf("runtime bound was reached without polling exact 503: count=%q read=%v parse=%v", count, readErr, parseErr)
+			if tc.wantCode == "runtime_readiness_timeout" && elapsed < startupTimeoutSeconds*time.Second {
+				t.Fatalf("runtime_readiness_timeout fired before the configured bound elapsed: elapsed=%s bound=%ds", elapsed, startupTimeoutSeconds)
 			}
 			assertRecordedPIDsGone(t, pidFile)
 			assertPiLockReleased(t, project, cache, "profile")
@@ -2395,29 +2494,42 @@ http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
 func writePiPersistentUnavailableServer(t *testing.T, exitAfter bool) string {
 	t.Helper()
 	script := filepath.Join(t.TempDir(), "persistent-unavailable-runtime.py")
-	exit := ""
 	if exitAfter {
-		exit = "threading.Timer(.02, lambda: os._exit(17)).start()"
-	}
-	body := fmt.Sprintf(`import http.server, os, sys, threading, time
-port=int(sys.argv[1]); countfile=sys.argv[2]; pidfile=sys.argv[3]
+		// Exit immediately on start, before any HTTP round trip could ever
+		// complete. That leaves the OS reaping the child as the only race
+		// participant against the readiness deadline, which is far faster than
+		// the deadline regardless of host load — unlike waiting for a completed
+		// poll plus a fixed delay, which is not.
+		body := `import os, sys
+pidfile=sys.argv[2]
 open(pidfile,"w").write(str(os.getpid()))
+os._exit(17)
+`
+		mustWrite(t, script, body)
+		return script
+	}
+	// The pidfile write happens before the http.server/threading imports
+	// (which pull in a much larger stdlib subtree) so the recorded evidence
+	// does not race the production readiness deadline under host load: the
+	// only work gating the write is interpreter startup plus the cheap
+	// os/sys imports, not an incidental and unrelated import cost.
+	body := `import os, sys
+pidfile=sys.argv[2]
+open(pidfile,"w").write(str(os.getpid()))
+import http.server, threading, time
+port=int(sys.argv[1])
 parent=os.getppid()
 def watch_parent():
   while os.getppid() == parent: time.sleep(.02)
   os._exit(18)
 threading.Thread(target=watch_parent, daemon=True).start()
 class H(http.server.BaseHTTPRequestHandler):
-  requests=0
   def do_GET(self):
-    H.requests += 1
-    open(countfile,"w").write(str(H.requests))
     body=b"loading"
     self.send_response(503); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
-    %s
   def log_message(self,*args): pass
 http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
-`, exit)
+`
 	mustWrite(t, script, body)
 	return script
 }

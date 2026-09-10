@@ -67,6 +67,7 @@ type Report struct {
 	HelpersLinked            bool
 	InfraSkillLink           bool
 	CanonicalTargets         []DoctorCanonicalTarget
+	PiProfileFieldGaps       []ProjectProfileFieldGap
 }
 
 type DoctorCanonicalTarget struct {
@@ -342,9 +343,18 @@ func Doctor(layout Layout) (Report, error) {
 			report.ClaudePrimaryConfigValid = false
 			return report, fmt.Errorf("resolve home dir for project config discovery: %w", err)
 		}
+		globalProjectConfigPath := filepath.Join(homeDir, ".agents", ".configs", projectConfigFileName)
+		gaps, gapsErr := projectPiProfileFieldGaps(ancestorDirsRootFirst(layout.RootDir), globalProjectConfigPath)
+		if gapsErr != nil {
+			report.CodexPrimaryConfigValid = false
+			report.ClaudePrimaryConfigValid = false
+			return report, gapsErr
+		}
+		report.PiProfileFieldGaps = gaps
+
 		composite, err := loadCompositeProjectConfig(
 			ancestorDirsRootFirst(layout.RootDir),
-			filepath.Join(homeDir, ".agents", ".configs", projectConfigFileName),
+			globalProjectConfigPath,
 		)
 		if err != nil {
 			report.CodexPrimaryConfigValid = false

@@ -392,6 +392,10 @@ func runDoctor(args []string) error {
 	}
 	fmt.Fprintf(os.Stdout, "helpers_linked: %t\n", report.HelpersLinked)
 	fmt.Fprintf(os.Stdout, "infra_skill_link: %t\n", report.InfraSkillLink)
+	fmt.Fprintf(os.Stdout, "pi_profile_field_gaps: %d\n", len(report.PiProfileFieldGaps))
+	for _, gap := range report.PiProfileFieldGaps {
+		fmt.Fprintf(os.Stdout, "  missing %s (expected: %s) in %s\n", gap.Field, gap.Expected, gap.ConfigPath)
+	}
 	return doctorErr
 }
 
