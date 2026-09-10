@@ -1,0 +1,885 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 1dab51c..14afeb2 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,12 @@
+ 
+ ## 2026-09-11
+ 
++### 1743 — model-harness "Environment" Axis Reuses `executable`, No New Field
++- DECISION: TASK-260830-2cgim0's three-axis profile (model, environment, engine) maps `environment` onto the *existing* `executable`/`argv` fields rather than a new TOML key — `executable` was already independent of `mode`/`argv` before this task, and the deployed `qwen-local` profile already demonstrates the axis (python interpreter path vs the `mlx_lm-qwenfix` pipx-pinned build, same engine, different environment). Only `engine` (new, defaults to `mlx-lm`) and `model` (new, optional, becomes a trailing `--model` argv token) are new fields.
++- FINDING: All three engines this contract covers (`mlx-lm`, `llama-cpp`, `mlx-swift`) accept every Knob 1-4 argv flag at launch time — `mlx-swift-runtime-prototype`'s `RuntimeOptions.swift` confirms `--max-kv-size`, `--prefill-step-size`, and `--reasoning-effort` all parse there too, contrary to a first read of the canonical-knob-set spec's live-*reportability* table (which only measures what a *running* process reports about itself, not what its argv parser accepts at launch). The only genuine launch-time inexpressibility found: `llama-server`'s `--ctx-size` has no unbounded form (`kv_context_tokens="unbounded"` refuses there), and `speculative_decoding` (`--spec-type`) has no argv surface at all on `mlx-lm`/`mlx-swift`.
++- SCOPE: `tools/agents-infra/internal/modelharness/{config.go,engine_knobs.go}`; `.research/260831_engine-adapter-contract-and-canonical-knob-set.spec.md` Knobs 1-4 only (5-10 are wire-protocol/telemetry concerns with no argv spelling, out of scope for profile resolution — remain `TASK-260830-1e9gse`'s concern).
++- STATUS: Golden README `qwen-local` profile resolves byte-identical after the change; 7 narrowing mutants (including one source-text-preserving mutant on the `--model` duplicate-argv guard) each caught by a named test; full `tools/agents-infra/internal/modelharness` and root-package suites green.
++
+ ### 1345 — Environment Admission Has a Coincidental Second Gate
+ - FINDING: `validateProjectTarget` (tools/agents-infra/internal/infra/project_config.go) now refuses an unadmitted `environment` value through `ValidateLaunchableEnvironment` (agents_management_registry.go, TASK-260911-39bag5), but a downstream vendor/environment pairing `switch`'s `default` arm ALSO refuses any pair it does not explicitly admit — with a different message (`"vendor/environment pair %s/%s is not admitted"` vs `"must be one of codex, claude-code, pi"`). A mutant that let an unadmitted environment (e.g. a registered-but-unlaunchable agentic system such as `gemini-cli`) past the first gate was still coincidentally caught by the second when driven with a made-up vendor/environment pair, so a test asserting only `err != nil` at that call site passed against the mutant for the wrong reason.
+ - FIX: `TestValidateProjectTargetRefusesRegisteredButUnlaunchableEnvironmentAtTheRealCallSite` asserts the specific gate's own wording, not mere error presence, to prove which gate actually refused.
+diff --git a/README.md b/README.md
+index 76e9553..bd46c2c 100644
+--- a/README.md
++++ b/README.md
+@@ -729,6 +729,73 @@ Point the local profile's `executable` at the resulting absolute
+ `mlx-lm` version containing upstream PR #1632 has passed the same capacity and
+ long-session checks.
+ 
++#### Engine, model and knob axes
++
++A local profile names three independent axes rather than baking them into one
++executable/argv string: **model** (the `model` field — the artifact this
++runtime serves), **environment** (the existing `executable`/`argv` fields —
++the interpreter or binary that hosts the engine, e.g. a system Python versus
++the `mlx_lm-qwenfix` pipx-pinned build above), and **engine** (the new
++`engine` field — which knob-translation table applies). `engine` is never
++inferred from `executable`: two profiles that launch the identical executable
++with a different `engine` value translate their knobs differently, and a
++profile that omits `engine` defaults to `mlx-lm`, so every profile documented
++above with no `engine` field resolves exactly as it did before this field
++existed.
++
++`engine` must be one of `mlx-lm`, `llama-cpp`, or `mlx-swift`; any other value
++refuses at profile resolution, before any launch. `model`, when set, is
++translated to a trailing `--model <value>` token and must not also appear
++literally in `argv`.
++
++`[profiles.NAME.knobs]` carries the canonical launch-time knob set from
++[`.research/260831_engine-adapter-contract-and-canonical-knob-set.spec.md`](.research/260831_engine-adapter-contract-and-canonical-knob-set.spec.md)
++(that document's Knobs 1-4 — the only ones with a launch argv spelling; Knobs
++5-10 describe wire-protocol field naming, cache/memory telemetry, health
++semantics, and argv-parsing precedence, none of which a launch plan
++translates). Each set knob is translated per `engine` through one table; a
++knob or a knob value the selected engine cannot express refuses naming both
++the knob and the engine, instead of being silently dropped:
++
++| Knob | `mlx-lm` | `mlx-swift` | `llama-cpp` |
++| --- | --- | --- | --- |
++| `kv_context_tokens` (a positive integer, or `"unbounded"`) | `--max-kv-size N`, or omitted when `unbounded` | `--max-kv-size N`, or omitted when `unbounded` | `--ctx-size N`; `unbounded` refuses — llama.cpp has no unbounded form |
++| `prefill_chunk_tokens` (a positive integer) | `--prefill-step-size N` | `--prefill-step-size N` | `--ubatch-size N` |
++| `reasoning_effort` (`low`, `medium`, or `xhigh`) | `--chat-template-args '{"reasoning_effort": "..."}'` | `--reasoning-effort ...` | `--reasoning-effort ...` |
++| `speculative_decoding` (`off`, `ngram`, or `mtp`) | refuses — not valid for this engine | refuses — not valid for this engine | `--spec-type ngram-mod` / `--spec-type draft-mtp`, or omitted when `off` |
++
++```toml
++[profiles.qwen-local-mlx-lm]
++mode = "local"
++engine = "mlx-lm"
++executable = "/absolute/path/to/python"
++model = "/models/Qwen"
++argv = ["-c", "from mlx_lm.server import main; main()", "--host", "{host}", "--port", "{port}"]
++
++[profiles.qwen-local-mlx-lm.knobs]
++kv_context_tokens = "76800"
++prefill_chunk_tokens = "2048"
++reasoning_effort = "medium"
++
++[profiles.qwen-local-llama-cpp]
++mode = "local"
++engine = "llama-cpp"
++executable = "/opt/homebrew/bin/llama-server"
++model = "/absolute/path/to/model.gguf"
++argv = ["--host", "{host}", "--port", "{port}", "--no-webui"]
++
++[profiles.qwen-local-llama-cpp.knobs]
++kv_context_tokens = "8192"
++prefill_chunk_tokens = "2048"
++reasoning_effort = "medium"
++speculative_decoding = "ngram"
++```
++
++`draft-model` speculation is deliberately absent from the enum: it needs a
++second, paired draft-model artifact this profile schema has no axis for yet,
++so it is left unmodelled rather than forced through `--spec-type` and silently
++dropping that requirement.
++
+ All stress bounds are explicit profile policy. `model-harness stress` refuses
+ profiles without this table and currently supports local mode only. It starts
+ the reviewed backend on an unoccupied loopback endpoint, discovers the exact
+diff --git a/tools/agents-infra/engine_knob_profile_docs_test.go b/tools/agents-infra/engine_knob_profile_docs_test.go
+new file mode 100644
+index 0000000..745a3f8
+--- /dev/null
++++ b/tools/agents-infra/engine_knob_profile_docs_test.go
+@@ -0,0 +1,128 @@
++package main
++
++import (
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++
++	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/modelharness"
++)
++
++// TestREADMEQwenLocalProfileResolvesWithDefaultEngine is the golden
++// compatibility test: the deployed `qwen-local` profile documented in
++// README.md carries no `engine` field. Adding the engine axis must not change
++// its resolved plan — engine defaults to `mlx-lm` and the raw executable/argv
++// path is untouched.
++func TestREADMEQwenLocalProfileResolvesWithDefaultEngine(t *testing.T) {
++	readme, err := os.ReadFile(filepath.Join(sourceRepoRoot(t), "README.md"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	profile := documentedTOMLBlock(t, string(readme), "[profiles.qwen-local]")
++	if strings.Contains(profile, "engine") {
++		t.Fatalf("the deployed qwen-local profile must stay engine-field-free to prove the default path: %s", profile)
++	}
++
++	path := filepath.Join(t.TempDir(), "config.toml")
++	if err := os.WriteFile(path, []byte(profile), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	plan, err := modelharness.Resolve(path, "qwen-local", "127.0.0.1", 18011)
++	if err != nil {
++		t.Fatalf("the documented qwen-local profile does not resolve: %v", err)
++	}
++	if plan.Engine != "mlx-lm" {
++		t.Fatalf("engine = %q, want default mlx-lm", plan.Engine)
++	}
++	want := []string{
++		"-c", "from mlx_lm.server import main; main()",
++		"--model", "/models/Qwen",
++		"--host", "127.0.0.1",
++		"--port", "18011",
++	}
++	if !reflect.DeepEqual(plan.Argv, want) {
++		t.Fatalf("argv = %#v, want %#v (adding the engine axis must not change this plan)", plan.Argv, want)
++	}
++}
++
++// TestREADMEEngineKnobProfilesResolveAsDocumented takes the mlx-lm and
++// llama-cpp declarative knob examples out of README.md and hands those exact
++// bytes to the production resolver, so the documented per-engine knob
++// translation table is an artifact the build checks rather than prose next to
++// the code.
++func TestREADMEEngineKnobProfilesResolveAsDocumented(t *testing.T) {
++	readme, err := os.ReadFile(filepath.Join(sourceRepoRoot(t), "README.md"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	document := string(readme)
++
++	tests := []struct {
++		marker  string
++		profile string
++		want    []string
++	}{
++		{
++			marker:  "[profiles.qwen-local-mlx-lm]",
++			profile: "qwen-local-mlx-lm",
++			want: []string{
++				"-c", "from mlx_lm.server import main; main()",
++				"--host", "127.0.0.1",
++				"--port", "18011",
++				"--model", "/models/Qwen",
++				"--max-kv-size", "76800",
++				"--prefill-step-size", "2048",
++				"--chat-template-args", `{"reasoning_effort": "medium"}`,
++			},
++		},
++		{
++			marker:  "[profiles.qwen-local-llama-cpp]",
++			profile: "qwen-local-llama-cpp",
++			want: []string{
++				"--host", "127.0.0.1",
++				"--port", "18011",
++				"--no-webui",
++				"--model", "/absolute/path/to/model.gguf",
++				"--ctx-size", "8192",
++				"--ubatch-size", "2048",
++				"--reasoning-effort", "medium",
++				"--spec-type", "ngram-mod",
++			},
++		},
++	}
++
++	for _, test := range tests {
++		t.Run(test.profile, func(t *testing.T) {
++			block := documentedTOMLBlock(t, document, test.marker)
++			path := filepath.Join(t.TempDir(), "config.toml")
++			if err := os.WriteFile(path, []byte(block), 0o600); err != nil {
++				t.Fatal(err)
++			}
++			plan, err := modelharness.Resolve(path, test.profile, "127.0.0.1", 18011)
++			if err != nil {
++				t.Fatalf("the documented %s profile does not resolve: %v", test.profile, err)
++			}
++			if !reflect.DeepEqual(plan.Argv, test.want) {
++				t.Fatalf("argv = %#v, want %#v", plan.Argv, test.want)
++			}
++		})
++	}
++}
++
++// TestREADMECrossReferencesTheEngineAdapterSpec pins the doc obligation from
++// TASK-260830-2cgim0's acceptance criteria: the profile documentation must
++// name the canonical-knob-set spec it translates, not just describe knobs
++// that happen to match it.
++func TestREADMECrossReferencesTheEngineAdapterSpec(t *testing.T) {
++	readme := normalizedOperatorDoc(t, filepath.Join(sourceRepoRoot(t), "README.md"))
++	const spec = ".research/260831_engine-adapter-contract-and-canonical-knob-set.spec.md"
++	if !strings.Contains(readme, spec) {
++		t.Fatalf("README.md no longer cross-references %s", spec)
++	}
++	specPath := filepath.Join(sourceRepoRoot(t), spec)
++	if _, err := os.Stat(specPath); err != nil {
++		t.Fatalf("cross-referenced spec is missing: %v", err)
++	}
++}
+diff --git a/tools/agents-infra/internal/modelharness/config.go b/tools/agents-infra/internal/modelharness/config.go
+index dacbf03..5d609f9 100644
+--- a/tools/agents-infra/internal/modelharness/config.go
++++ b/tools/agents-infra/internal/modelharness/config.go
+@@ -29,8 +29,11 @@ type Document struct {
+ 
+ type Profile struct {
+ 	Mode             string             `toml:"mode"`
++	Engine           string             `toml:"engine,omitempty"`
++	Model            string             `toml:"model,omitempty"`
+ 	Executable       string             `toml:"executable,omitempty"`
+ 	Argv             []string           `toml:"argv,omitempty"`
++	Knobs            *Knobs             `toml:"knobs,omitempty"`
+ 	SSHExecutable    string             `toml:"ssh_executable,omitempty"`
+ 	SSHTarget        string             `toml:"ssh_target,omitempty"`
+ 	RemoteExecutable string             `toml:"remote_executable,omitempty"`
+@@ -64,6 +67,8 @@ type Plan struct {
+ 	Config        string             `json:"config"`
+ 	Profile       string             `json:"profile"`
+ 	Mode          string             `json:"mode"`
++	Engine        string             `json:"engine,omitempty"`
++	Model         string             `json:"model,omitempty"`
+ 	Executable    string             `json:"executable"`
+ 	Argv          []string           `json:"argv"`
+ 	Endpoint      string             `json:"endpoint"`
+@@ -141,7 +146,17 @@ func Resolve(configPath, profileName, host string, port int) (Plan, error) {
+ 	switch profile.Mode {
+ 	case "local":
+ 		plan.Executable = profile.Executable
+-		plan.Argv = substituteEndpoint(profile.Argv, host, port)
++		plan.Engine = profile.Engine
++		plan.Model = profile.Model
++		argv := substituteEndpoint(profile.Argv, host, port)
++		if profile.Model != "" {
++			argv = append(argv, "--model", profile.Model)
++		}
++		knobArgv, err := translateKnobs(Engine(profile.Engine), profile.Knobs)
++		if err != nil {
++			return Plan{}, fmt.Errorf("profile %q: %w", profileName, err)
++		}
++		plan.Argv = append(argv, knobArgv...)
+ 	case "ssh":
+ 		plan.Executable = profile.SSHExecutable
+ 		plan.Remote = &RemotePlan{
+@@ -234,6 +249,16 @@ func validateProfile(name string, profile Profile) error {
+ 		if profile.SSHExecutable != "" || profile.SSHTarget != "" || profile.RemoteExecutable != "" || profile.RemoteConfig != "" || profile.RemoteProfile != "" || profile.RemoteHost != "" || profile.RemotePort != 0 {
+ 			return fmt.Errorf("profile %q: local mode cannot declare remote fields", name)
+ 		}
++		if !knownEngines[Engine(profile.Engine)] {
++			return fmt.Errorf("profile %q: unknown engine %q", name, profile.Engine)
++		}
++		if profile.Model != "" {
++			for _, token := range profile.Argv {
++				if token == "--model" {
++					return fmt.Errorf("profile %q: argv must not declare --model when model is set", name)
++				}
++			}
++		}
+ 		if err := validateStressPolicy(name, profile.Stress); err != nil {
+ 			return err
+ 		}
+@@ -244,6 +269,9 @@ func validateProfile(name string, profile Profile) error {
+ 		if profile.Executable != "" || len(profile.Argv) != 0 {
+ 			return fmt.Errorf("profile %q: ssh mode cannot declare executable or argv", name)
+ 		}
++		if profile.Engine != "" || profile.Model != "" || profile.Knobs != nil {
++			return fmt.Errorf("profile %q: ssh mode cannot declare engine, model, or knobs", name)
++		}
+ 		if profile.SSHExecutable == "" {
+ 			profile.SSHExecutable = "/usr/bin/ssh"
+ 		}
+@@ -330,6 +358,9 @@ func normalizeProfile(profile Profile) Profile {
+ 	if profile.Mode == "ssh" && profile.SSHExecutable == "" {
+ 		profile.SSHExecutable = "/usr/bin/ssh"
+ 	}
++	if profile.Mode == "local" && profile.Engine == "" {
++		profile.Engine = string(defaultEngine)
++	}
+ 	return profile
+ }
+ 
+diff --git a/tools/agents-infra/internal/modelharness/engine_knobs.go b/tools/agents-infra/internal/modelharness/engine_knobs.go
+new file mode 100644
+index 0000000..661ba79
+--- /dev/null
++++ b/tools/agents-infra/internal/modelharness/engine_knobs.go
+@@ -0,0 +1,209 @@
++package modelharness
++
++import (
++	"errors"
++	"fmt"
++	"strconv"
++)
++
++// Engine names the inference-engine axis of a local-model profile,
++// independently of the executable that hosts it (the environment axis) and of
++// the model artifact it serves. It is never inferred from the executable
++// path: two profiles that launch the identical executable with different
++// engine values translate their knobs differently, and a profile that omits
++// engine defaults to EngineMLXLM regardless of what executable it names.
++type Engine string
++
++const (
++	EngineMLXLM    Engine = "mlx-lm"
++	EngineLlamaCPP Engine = "llama-cpp"
++	EngineMLXSwift Engine = "mlx-swift"
++
++	defaultEngine = EngineMLXLM
++
++	unboundedKVContextTokens = "unbounded"
++)
++
++var knownEngines = map[Engine]bool{
++	EngineMLXLM:    true,
++	EngineLlamaCPP: true,
++	EngineMLXSwift: true,
++}
++
++// Knobs carries the canonical, engine-independent knob set from
++// .research/260831_engine-adapter-contract-and-canonical-knob-set.spec.md
++// that is expressible as launch argv (Knobs 1-4 of that document). Knobs 5-10
++// describe wire-protocol field naming, cache/memory telemetry, health
++// semantics, and argv-parsing precedence: none of those has a launch-time
++// argv spelling to translate, so none is represented here. They remain the
++// concern of the engine adapter itself (TASK-260830-1e9gse), not of profile
++// resolution.
++type Knobs struct {
++	KVContextTokens     string `toml:"kv_context_tokens,omitempty" json:"kv_context_tokens,omitempty"`
++	PrefillChunkTokens  string `toml:"prefill_chunk_tokens,omitempty" json:"prefill_chunk_tokens,omitempty"`
++	ReasoningEffort     string `toml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
++	SpeculativeDecoding string `toml:"speculative_decoding,omitempty" json:"speculative_decoding,omitempty"`
++}
++
++// knobFormatter renders one already-named knob's value into argv tokens for
++// one engine, or refuses with an error describing why that engine cannot
++// express the value.
++type knobFormatter func(value string) ([]string, error)
++
++// knobEngineTable is the one table every canonical knob is translated
++// through. A knob absent from an engine's row is not valid for that engine;
++// resolving a profile that sets it refuses naming both the knob and the
++// engine rather than silently dropping it. Adding a new engine means adding
++// its column to the rows it can express here — no caller of translateKnobs
++// changes.
++var knobEngineTable = map[string]map[Engine]knobFormatter{
++	"kv_context_tokens": {
++		EngineMLXLM:    formatKVContextTokensAsMaxKVSize,
++		EngineMLXSwift: formatKVContextTokensAsMaxKVSize,
++		EngineLlamaCPP: formatKVContextTokensAsCtxSize,
++	},
++	"prefill_chunk_tokens": {
++		EngineMLXLM:    positiveIntFlagFormatter("--prefill-step-size"),
++		EngineMLXSwift: positiveIntFlagFormatter("--prefill-step-size"),
++		EngineLlamaCPP: positiveIntFlagFormatter("--ubatch-size"),
++	},
++	"reasoning_effort": {
++		EngineMLXLM:    formatReasoningEffortAsChatTemplateArgs,
++		EngineMLXSwift: reasoningEffortFlagFormatter,
++		EngineLlamaCPP: reasoningEffortFlagFormatter,
++	},
++	// mlx-lm and mlx-swift expose no speculative-decoding launch flag at all
++	// (spec Knob 4: "no speculation flag exercised", "not characterised by
++	// this study; declared single-generation-at-a-time"). A profile that
++	// sets speculative_decoding under either engine refuses: the knob is
++	// valid only for llama-cpp.
++	"speculative_decoding": {
++		EngineLlamaCPP: formatSpeculativeDecoding,
++	},
++}
++
++var validReasoningEfforts = map[string]bool{"low": true, "medium": true, "xhigh": true}
++
++// speculativeDecodingKinds maps the profile-facing enum to llama-server's
++// --spec-type spelling. "draft-model" speculation is deliberately absent: it
++// needs a second, paired draft-model artifact this profile schema has no axis
++// for yet, and forcing it through --spec-type would silently drop that
++// requirement rather than refuse it.
++var speculativeDecodingKinds = map[string]string{
++	"ngram": "ngram-mod",
++	"mtp":   "draft-mtp",
++}
++
++// translateKnobs renders every set field on knobs into argv tokens for
++// engine, in a fixed order, or refuses on the first knob the engine cannot
++// express. knobs may be nil, in which case it returns no tokens and no error.
++func translateKnobs(engine Engine, knobs *Knobs) ([]string, error) {
++	if knobs == nil {
++		return nil, nil
++	}
++	ordered := []struct {
++		name  string
++		value string
++	}{
++		{"kv_context_tokens", knobs.KVContextTokens},
++		{"prefill_chunk_tokens", knobs.PrefillChunkTokens},
++		{"reasoning_effort", knobs.ReasoningEffort},
++		{"speculative_decoding", knobs.SpeculativeDecoding},
++	}
++	var argv []string
++	for _, knob := range ordered {
++		if knob.value == "" {
++			continue
++		}
++		tokens, err := translateKnob(engine, knob.name, knob.value)
++		if err != nil {
++			return nil, err
++		}
++		argv = append(argv, tokens...)
++	}
++	return argv, nil
++}
++
++func translateKnob(engine Engine, name, value string) ([]string, error) {
++	perEngine, known := knobEngineTable[name]
++	if !known {
++		return nil, fmt.Errorf("unknown knob %q", name)
++	}
++	formatter, ok := perEngine[engine]
++	if !ok {
++		return nil, fmt.Errorf("knob %q is not valid for engine %q", name, engine)
++	}
++	tokens, err := formatter(value)
++	if err != nil {
++		return nil, fmt.Errorf("knob %q for engine %q: %w", name, engine, err)
++	}
++	return tokens, nil
++}
++
++func formatKVContextTokensAsMaxKVSize(value string) ([]string, error) {
++	if value == unboundedKVContextTokens {
++		return nil, nil
++	}
++	tokens, err := positiveInt(value)
++	if err != nil {
++		return nil, fmt.Errorf("must be a positive integer or %q: %w", unboundedKVContextTokens, err)
++	}
++	return []string{"--max-kv-size", strconv.Itoa(tokens)}, nil
++}
++
++func formatKVContextTokensAsCtxSize(value string) ([]string, error) {
++	if value == unboundedKVContextTokens {
++		return nil, errors.New(`"unbounded" has no finite --ctx-size equivalent`)
++	}
++	tokens, err := positiveInt(value)
++	if err != nil {
++		return nil, fmt.Errorf("must be a positive integer or %q: %w", unboundedKVContextTokens, err)
++	}
++	return []string{"--ctx-size", strconv.Itoa(tokens)}, nil
++}
++
++func positiveIntFlagFormatter(flag string) knobFormatter {
++	return func(value string) ([]string, error) {
++		tokens, err := positiveInt(value)
++		if err != nil {
++			return nil, fmt.Errorf("must be a positive integer: %w", err)
++		}
++		return []string{flag, strconv.Itoa(tokens)}, nil
++	}
++}
++
++func formatReasoningEffortAsChatTemplateArgs(value string) ([]string, error) {
++	if !validReasoningEfforts[value] {
++		return nil, fmt.Errorf("must be one of low, medium, xhigh, got %q", value)
++	}
++	return []string{"--chat-template-args", fmt.Sprintf(`{"reasoning_effort": %q}`, value)}, nil
++}
++
++func reasoningEffortFlagFormatter(value string) ([]string, error) {
++	if !validReasoningEfforts[value] {
++		return nil, fmt.Errorf("must be one of low, medium, xhigh, got %q", value)
++	}
++	return []string{"--reasoning-effort", value}, nil
++}
++
++func formatSpeculativeDecoding(value string) ([]string, error) {
++	if value == "off" {
++		return nil, nil
++	}
++	kind, ok := speculativeDecodingKinds[value]
++	if !ok {
++		return nil, fmt.Errorf("must be one of off, ngram, mtp, got %q", value)
++	}
++	return []string{"--spec-type", kind}, nil
++}
++
++func positiveInt(value string) (int, error) {
++	parsed, err := strconv.Atoi(value)
++	if err != nil {
++		return 0, err
++	}
++	if parsed < 1 {
++		return 0, fmt.Errorf("must be positive, got %d", parsed)
++	}
++	return parsed, nil
++}
+diff --git a/tools/agents-infra/internal/modelharness/engine_knobs_test.go b/tools/agents-infra/internal/modelharness/engine_knobs_test.go
+new file mode 100644
+index 0000000..547ed45
+--- /dev/null
++++ b/tools/agents-infra/internal/modelharness/engine_knobs_test.go
+@@ -0,0 +1,354 @@
++package modelharness
++
++import (
++	"reflect"
++	"strings"
++	"testing"
++)
++
++func containsToken(argv []string, token string) bool {
++	for _, candidate := range argv {
++		if candidate == token {
++			return true
++		}
++	}
++	return false
++}
++
++// TestResolveDefaultsEngineToMLXLM proves the backward-compat golden path:
++// a profile that never mentions engine resolves as mlx-lm, matching every
++// profile deployed before this axis existed.
++func TestResolveDefaultsEngineToMLXLM(t *testing.T) {
++	config := writeConfig(t, `
++[profiles.qwen-local]
++mode = "local"
++executable = "/bin/echo"
++argv = ["serve", "--host", "{host}", "--port", "{port}"]
++`)
++	plan, err := Resolve(config, "qwen-local", "127.0.0.1", 18011)
++	if err != nil {
++		t.Fatalf("Resolve: %v", err)
++	}
++	if plan.Engine != "mlx-lm" {
++		t.Fatalf("engine = %q, want default mlx-lm", plan.Engine)
++	}
++}
++
++// TestResolveEngineIsNeverInferredFromExecutable pins the design invariant
++// named in the task's acceptance criteria directly: two profiles that launch
++// the identical executable path resolve different knob translations purely
++// because their declared engine field differs, and a profile pointing at an
++// executable named after a different engine's binary still resolves under
++// its declared engine.
++func TestResolveEngineIsNeverInferredFromExecutable(t *testing.T) {
++	config := writeConfig(t, `
++[profiles.declared-mlx-lm]
++mode = "local"
++engine = "mlx-lm"
++executable = "/opt/homebrew/bin/llama-server"
++argv = ["--host", "{host}", "--port", "{port}"]
++
++[profiles.declared-mlx-lm.knobs]
++prefill_chunk_tokens = "2048"
++
++[profiles.declared-llama-cpp]
++mode = "local"
++engine = "llama-cpp"
++executable = "/opt/homebrew/bin/llama-server"
++argv = ["--host", "{host}", "--port", "{port}"]
++
++[profiles.declared-llama-cpp.knobs]
++prefill_chunk_tokens = "2048"
++`)
++	mlxPlan, err := Resolve(config, "declared-mlx-lm", "127.0.0.1", 18011)
++	if err != nil {
++		t.Fatalf("Resolve(declared-mlx-lm): %v", err)
++	}
++	if !containsToken(mlxPlan.Argv, "--prefill-step-size") {
++		t.Fatalf("executable named llama-server must not force llama-cpp translation: argv=%#v", mlxPlan.Argv)
++	}
++
++	llamaPlan, err := Resolve(config, "declared-llama-cpp", "127.0.0.1", 18011)
++	if err != nil {
++		t.Fatalf("Resolve(declared-llama-cpp): %v", err)
++	}
++	if !containsToken(llamaPlan.Argv, "--ubatch-size") {
++		t.Fatalf("declared engine must drive translation regardless of executable: argv=%#v", llamaPlan.Argv)
++	}
++}
++
++func TestResolveTranslatesKnobsPerEngine(t *testing.T) {
++	tests := []struct {
++		name   string
++		engine string
++		knobs  string
++		want   []string
++	}{
++		{
++			name:   "mlx-lm bounded kv, prefill, reasoning",
++			engine: "mlx-lm",
++			knobs: `
++kv_context_tokens = "76800"
++prefill_chunk_tokens = "2048"
++reasoning_effort = "medium"
++`,
++			want: []string{"--max-kv-size", "76800", "--prefill-step-size", "2048", "--chat-template-args", `{"reasoning_effort": "medium"}`},
++		},
++		{
++			name:   "mlx-lm unbounded kv omits the flag",
++			engine: "mlx-lm",
++			knobs:  `kv_context_tokens = "unbounded"`,
++			want:   nil,
++		},
++		{
++			name:   "mlx-swift bounded kv and reasoning",
++			engine: "mlx-swift",
++			knobs: `
++kv_context_tokens = "32768"
++reasoning_effort = "xhigh"
++`,
++			want: []string{"--max-kv-size", "32768", "--reasoning-effort", "xhigh"},
++		},
++		{
++			name:   "llama-cpp ctx-size, ubatch-size, reasoning, speculative off",
++			engine: "llama-cpp",
++			knobs: `
++kv_context_tokens = "8192"
++prefill_chunk_tokens = "2048"
++reasoning_effort = "low"
++speculative_decoding = "off"
++`,
++			want: []string{"--ctx-size", "8192", "--ubatch-size", "2048", "--reasoning-effort", "low"},
++		},
++		{
++			name:   "llama-cpp mtp speculative decoding",
++			engine: "llama-cpp",
++			knobs:  `speculative_decoding = "mtp"`,
++			want:   []string{"--spec-type", "draft-mtp"},
++		},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			config := writeConfig(t, `
++[profiles.p]
++mode = "local"
++engine = "`+test.engine+`"
++executable = "/bin/echo"
++argv = ["--host", "{host}", "--port", "{port}"]
++
++[profiles.p.knobs]
++`+test.knobs+`
++`)
++			plan, err := Resolve(config, "p", "127.0.0.1", 18011)
++			if err != nil {
++				t.Fatalf("Resolve: %v", err)
++			}
++			base := []string{"--host", "127.0.0.1", "--port", "18011"}
++			want := append(append([]string(nil), base...), test.want...)
++			if !reflect.DeepEqual(plan.Argv, want) {
++				t.Fatalf("argv = %#v, want %#v", plan.Argv, want)
++			}
++		})
++	}
++}
++
++func TestResolveTranslatesModelToTrailingFlag(t *testing.T) {
++	config := writeConfig(t, `
++[profiles.p]
++mode = "local"
++engine = "mlx-lm"
++executable = "/bin/echo"
++model = "/models/Qwen"
++argv = ["--host", "{host}", "--port", "{port}"]
++`)
++	plan, err := Resolve(config, "p", "127.0.0.1", 18011)
++	if err != nil {
++		t.Fatalf("Resolve: %v", err)
++	}
++	want := []string{"--host", "127.0.0.1", "--port", "18011", "--model", "/models/Qwen"}
++	if !reflect.DeepEqual(plan.Argv, want) {
++		t.Fatalf("argv = %#v, want %#v", plan.Argv, want)
++	}
++	if plan.Model != "/models/Qwen" {
++		t.Fatalf("plan.Model = %q", plan.Model)
++	}
++}
++
++// TestResolveRejectsUnknownEngine is the first of the three negative tests
++// the task's acceptance criteria names explicitly.
++func TestResolveRejectsUnknownEngine(t *testing.T) {
++	config := writeConfig(t, `
++[profiles.p]
++mode = "local"
++engine = "vllm"
++executable = "/bin/echo"
++argv = ["--host", "{host}", "--port", "{port}"]
++`)
++	_, err := Resolve(config, "p", "127.0.0.1", 18011)
++	if err == nil || !strings.Contains(err.Error(), `unknown engine "vllm"`) {
++		t.Fatalf("error = %v, want unknown engine refusal naming the engine", err)
++	}
++}
++
++// TestResolveRejectsUnexpressibleKnobValue is the second named negative test:
++// llama-cpp's --ctx-size has no unbounded form, so kv_context_tokens =
++// "unbounded" must refuse naming the knob and the engine, not silently fall
++// back to a finite default or to the mlx-lm behaviour of omitting the flag.
++func TestResolveRejectsUnexpressibleKnobValue(t *testing.T) {
++	config := writeConfig(t, `
++[profiles.p]
++mode = "local"
++engine = "llama-cpp"
++executable = "/bin/echo"
++argv = ["--host", "{host}", "--port", "{port}"]
++
++[profiles.p.knobs]
++kv_context_tokens = "unbounded"
++`)
++	_, err := Resolve(config, "p", "127.0.0.1", 18011)
++	if err == nil {
++		t.Fatal("expected refusal, got nil error")
++	}
++	for _, want := range []string{`"kv_context_tokens"`, `"llama-cpp"`} {
++		if !strings.Contains(err.Error(), want) {
++			t.Fatalf("error = %v, want it to name %s", err, want)
++		}
++	}
++}
++
++// TestResolveRejectsKnobOnlyValidForAnotherEngine is the third named negative
++// test: speculative_decoding has no launch flag on mlx-lm or mlx-swift, so
++// setting it there must refuse naming the knob and the engine rather than
++// dropping it.
++func TestResolveRejectsKnobOnlyValidForAnotherEngine(t *testing.T) {
++	for _, engine := range []string{"mlx-lm", "mlx-swift"} {
++		t.Run(engine, func(t *testing.T) {
++			config := writeConfig(t, `
++[profiles.p]
++mode = "local"
++engine = "`+engine+`"
++executable = "/bin/echo"
++argv = ["--host", "{host}", "--port", "{port}"]
++
++[profiles.p.knobs]
++speculative_decoding = "ngram"
++`)
++			_, err := Resolve(config, "p", "127.0.0.1", 18011)
++			if err == nil {
++				t.Fatal("expected refusal, got nil error")
++			}
++			for _, want := range []string{`"speculative_decoding"`, `"` + engine + `"`, "is not valid for engine"} {
++				if !strings.Contains(err.Error(), want) {
++					t.Fatalf("error = %v, want it to contain %q", err, want)
++				}
++			}
++		})
++	}
++}
++
++func TestResolveRejectsInvalidReasoningEffort(t *testing.T) {
++	config := writeConfig(t, `
++[profiles.p]
++mode = "local"
++engine = "llama-cpp"
++executable = "/bin/echo"
++argv = ["--host", "{host}", "--port", "{port}"]
++
++[profiles.p.knobs]
++reasoning_effort = "extreme"
++`)
++	_, err := Resolve(config, "p", "127.0.0.1", 18011)
++	if err == nil || !strings.Contains(err.Error(), "must be one of low, medium, xhigh") {
++		t.Fatalf("error = %v", err)
++	}
++}
++
++func TestResolveRejectsNonPositivePrefillChunkTokens(t *testing.T) {
++	config := writeConfig(t, `
++[profiles.p]
++mode = "local"
++engine = "mlx-lm"
++executable = "/bin/echo"
++argv = ["--host", "{host}", "--port", "{port}"]
++
++[profiles.p.knobs]
++prefill_chunk_tokens = "0"
++`)
++	_, err := Resolve(config, "p", "127.0.0.1", 18011)
++	if err == nil || !strings.Contains(err.Error(), "must be a positive integer") {
++		t.Fatalf("error = %v", err)
++	}
++}
++
++func TestResolveRejectsDuplicateModelDeclaration(t *testing.T) {
++	config := writeConfig(t, `
++[profiles.p]
++mode = "local"
++engine = "mlx-lm"
++executable = "/bin/echo"
++model = "/models/Qwen"
++argv = ["--model", "/models/Qwen", "--host", "{host}", "--port", "{port}"]
++`)
++	_, err := Resolve(config, "p", "127.0.0.1", 18011)
++	if err == nil || !strings.Contains(err.Error(), "argv must not declare --model when model is set") {
++		t.Fatalf("error = %v", err)
++	}
++}
++
++func TestResolveRejectsSSHProfileDeclaringEngineModelOrKnobs(t *testing.T) {
++	tests := []struct {
++		name string
++		body string
++	}{
++		{
++			name: "engine",
++			body: `
++[profiles.remote]
++mode = "ssh"
++ssh_target = "host"
++engine = "llama-cpp"
++remote_executable = "/bin/model-harness"
++remote_profile = "tiny"
++remote_host = "127.0.0.1"
++remote_port = 18011
++`,
++		},
++		{
++			name: "model",
++			body: `
++[profiles.remote]
++mode = "ssh"
++ssh_target = "host"
++model = "/models/Qwen"
++remote_executable = "/bin/model-harness"
++remote_profile = "tiny"
++remote_host = "127.0.0.1"
++remote_port = 18011
++`,
++		},
++		{
++			name: "knobs",
++			body: `
++[profiles.remote]
++mode = "ssh"
++ssh_target = "host"
++remote_executable = "/bin/model-harness"
++remote_profile = "tiny"
++remote_host = "127.0.0.1"
++remote_port = 18011
++
++[profiles.remote.knobs]
++reasoning_effort = "medium"
++`,
++		},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			config := writeConfig(t, test.body)
++			_, err := Resolve(config, "remote", "127.0.0.1", 18011)
++			if err == nil || !strings.Contains(err.Error(), "ssh mode cannot declare engine, model, or knobs") {
++				t.Fatalf("error = %v", err)
++			}
++		})
++	}
++}
