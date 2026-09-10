@@ -1,0 +1,343 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index 1dab51c..307cec1 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -5,6 +5,13 @@
+ 
+ ## 2026-09-11
+ 
++### 1620 — Pi context_window And model-harness --max-kv-size Are Now Bound Together
++- ROOT CAUSE: The deployed `qwen-3.8-27b-mlx-8bit` Pi profile (`context_window = 75000`) and the `qwen-local` model-harness profile it launches through `runtime.argv = ["run", "qwen-local", "--config", ...]` live in two separately edited files with no cross-check; `qwen-local` ran with no `--max-kv-size` at all until an operator hand-patched it on 2026-08-30. A `--max-kv-size` below `context_window` does not refuse — the runtime's active-generation KV cache is a fixed-size ring that silently overwrites the oldest tokens, so the failure mode is degraded output, not a loud error.
++- FIX: `validatePiModelHarnessKVBound` (`tools/agents-infra/internal/infra/pi_kv_bound.go`) runs inside `parsePiProfile`, the production project-config entry point. For a Pi runtime invoking `model-harness run PROFILE [--config PATH] ...`, it resolves the referenced model-harness profile via `modelharness.Resolve` (no process/socket side effects, matching `--print-config`'s static-resolution contract) and refuses when `--max-kv-size` is absent or below `context_window`, naming both values.
++- SCOPE excluded: profiles whose runtime is not `model-harness`, and `mode = "ssh"` model-harness profiles (the KV bound lives on the remote host argv, which a local config parse cannot observe).
++- GATE: `TestPiProfileRefusesContextWindowAboveModelHarnessKVBoundAtProductionEntry` covers absent bound and below-bound (including an exact off-by-one case that catches a `bound+1 < contextWindow` mutant a wider gap would miss); `TestPiProfileAdmitsContextWindowAtOrBelowModelHarnessKVBoundAtProductionEntry` proves the exact-equal and the deployed 75000/76800 pair are admitted; `TestPiProfileModelHarnessKVBoundIgnoresNonModelHarnessRuntimes` is the negative control for the executable-name gate. Deleting the guard call turns both refusal subtests red.
++- SCOPE: TASK-260830-heguyf (STORY-260830-i540ax); documented in `SKILL.md` and `README.md` next to the existing `model-harness stress`/context-window operator guidance. `context_window` values and other profile settings are unchanged; the deployed `/Users/alexis/src/.agents/.configs/model-harness.toml` and `project-config.toml` were read only, not modified, in this task.
++
+ ### 1345 — Environment Admission Has a Coincidental Second Gate
+ - FINDING: `validateProjectTarget` (tools/agents-infra/internal/infra/project_config.go) now refuses an unadmitted `environment` value through `ValidateLaunchableEnvironment` (agents_management_registry.go, TASK-260911-39bag5), but a downstream vendor/environment pairing `switch`'s `default` arm ALSO refuses any pair it does not explicitly admit — with a different message (`"vendor/environment pair %s/%s is not admitted"` vs `"must be one of codex, claude-code, pi"`). A mutant that let an unadmitted environment (e.g. a registered-but-unlaunchable agentic system such as `gemini-cli`) past the first gate was still coincidentally caught by the second when driven with a made-up vendor/environment pair, so a test asserting only `err != nil` at that call site passed against the mutant for the wrong reason.
+ - FIX: `TestValidateProjectTargetRefusesRegisteredButUnlaunchableEnvironmentAtTheRealCallSite` asserts the specific gate's own wording, not mere error presence, to prove which gate actually refused.
+diff --git a/README.md b/README.md
+index 76e9553..908a892 100644
+--- a/README.md
++++ b/README.md
+@@ -779,6 +779,20 @@ startup_timeout_seconds = 120
+ shutdown_timeout_seconds = 10
+ ```
+ 
++When `runtime.argv` invokes `model-harness run PROFILE [--config PATH] ...`
++like this, the Pi profile's own `context_window` and the referenced
++model-harness profile's `--max-kv-size` are two numbers in two separately
++edited files that must move together. `context_window` bounds what
++agents-infra manages the conversation to; `--max-kv-size` is the runtime's
++hard ceiling on its active-generation KV cache, a *different* mechanism from
++`--prompt-cache-bytes` (the pool of stored prefix caches reused across
++requests). A `--max-kv-size` below `context_window` does not refuse an
++oversized request — it silently overwrites the oldest tokens in a fixed-size
++ring, so raising `context_window` without also raising `--max-kv-size`
++degrades the model instead of failing loudly. `parsePiProfile` resolves the
++referenced model-harness profile at project-config load time and refuses when
++`--max-kv-size` is absent or below `context_window`, naming both values.
++
+ `runtime.sharing` is an explicit, strict opt-in. Its table has no field
+ defaults: unknown or missing members fail closed, `mode` is `exclusive` or
+ `shared`, the heartbeat interval must be below the stale-reporting threshold,
+diff --git a/SKILL.md b/SKILL.md
+index e5c9868..6eb64a5 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -497,6 +497,25 @@ configured bounded output, samples process RSS, emits one versioned JSON
+ report, and reaps the runtime. Treat it as host-capacity evidence, not a model
+ quality or production-throughput benchmark.
+ 
++A Pi profile's `context_window` and its referenced model-harness profile's
++`--max-kv-size` are two independent numbers in two separately edited files,
++and they must move together. `context_window` is what agents-infra manages the
++conversation to; `--max-kv-size` is the hard ceiling on the runtime's active-
++generation KV cache. `--max-kv-size` below `context_window` does not refuse a
++request that no longer fits — it silently overwrites the oldest tokens in a
++fixed-size ring, so the model degrades instead of failing loudly. Raising
++`context_window` without also raising the referenced profile's
++`--max-kv-size` reproduces exactly that silent-truncation failure; the
++deployed `qwen-3.8-27b-mlx-8bit` profile ran this way against `qwen-local`'s
++unbounded KV cache until an operator hand-patched `--max-kv-size` on
++2026-08-30. `--prompt-cache-bytes` is a different mechanism (the pool of
++stored prefix caches reused across requests) and does not bound this. For a
++Pi profile whose `runtime.argv` invokes `model-harness run PROFILE --config
++PATH ...`, `parsePiProfile` resolves that referenced model-harness profile and
++refuses the project config at load time when `--max-kv-size` is absent or
++below `context_window`, naming both values; raise `--max-kv-size` to at least
++`context_window` (or lower `context_window`) before deploying.
++
+ Every Pi profile must explicitly configure positive lifecycle retention count,
+ committed-byte, logical-envelope-byte, age, create/append/close/status/
+ maintenance timeout, scan-entry, scan-control-byte, and mutation caps. There
+diff --git a/tools/agents-infra/internal/infra/pi_config.go b/tools/agents-infra/internal/infra/pi_config.go
+index e05248a..0528925 100644
+--- a/tools/agents-infra/internal/infra/pi_config.go
++++ b/tools/agents-infra/internal/infra/pi_config.go
+@@ -361,6 +361,9 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error)
+ 	if err := validatePiRuntimeEndpointArgv(p.Runtime.Argv, p.BaseURL); err != nil {
+ 		return p, projectConfigFieldError(path, field+".runtime.argv", err)
+ 	}
++	if err := validatePiModelHarnessKVBound(p.ContextWindow, p.BaseURL, p.Runtime); err != nil {
++		return p, projectConfigFieldError(path, field+".runtime.argv", err)
++	}
+ 	if err := validatePiRuntimeCacheBudgetArgv(p.Runtime.Argv, p.CacheBudgetBytes); err != nil {
+ 		return p, projectConfigFieldError(path, field+".runtime.argv", err)
+ 	}
+diff --git a/tools/agents-infra/internal/infra/pi_kv_bound.go b/tools/agents-infra/internal/infra/pi_kv_bound.go
+new file mode 100644
+index 0000000..e73a609
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_kv_bound.go
+@@ -0,0 +1,114 @@
++package infra
++
++import (
++	"errors"
++	"fmt"
++	"path/filepath"
++	"strconv"
++
++	"github.com/relux-works/relux-agents-infra/tools/agents-infra/internal/modelharness"
++)
++
++// validatePiModelHarnessKVBound enforces that a Pi profile's context_window
++// never exceeds the active-generation KV cache bound of the model-harness
++// profile it launches.
++//
++// The active generation's KV cache is a fixed-size ring once --max-kv-size is
++// set: it does not refuse a request that no longer fits, it silently
++// overwrites the oldest tokens, and the resulting truncated response is
++// indistinguishable from one that fit cleanly. A context_window above the
++// bound therefore fails silently rather than loudly, which is worse than
++// refusing to start.
++//
++// This is checked against the real referenced model-harness config rather
++// than a value copied by hand into project-config.toml, because the two
++// files are edited by different tools (agents-infra vs. model-harness) and
++// have already drifted once in production: the deployed qwen-3.8-27b-mlx-8bit
++// profile ran with context_window=75000 while the referenced qwen-local
++// model-harness profile carried no --max-kv-size at all, until an operator
++// hand-patched it on 2026-08-30.
++//
++// --prompt-cache-bytes is not this bound and must not be read as one. It
++// caps a *different* mechanism: the pool of stored prefix caches
++// mlx_lm-relux.server reuses across requests, not the active generation's KV
++// cache. A profile can carry a generous --prompt-cache-bytes and still run
++// every single generation against an unbounded (or too-small) active KV
++// cache; only --max-kv-size bounds that.
++func validatePiModelHarnessKVBound(contextWindow int, baseURL string, runtime PiRuntime) error {
++	harnessProfile, configPath, ok := modelHarnessRunInvocation(runtime.Executable, runtime.Argv)
++	if !ok {
++		return nil
++	}
++	host, port, err := piBaseURLEndpoint(baseURL)
++	if err != nil {
++		// Already reported by the base_url validator that runs before this one.
++		return nil
++	}
++	portNumber, err := strconv.Atoi(port)
++	if err != nil {
++		return nil
++	}
++	plan, err := modelharness.Resolve(configPath, harnessProfile, host, portNumber)
++	if err != nil {
++		return fmt.Errorf("resolve referenced model-harness profile %q: %w", harnessProfile, err)
++	}
++	if plan.Mode != "local" {
++		// The KV bound lives on whatever host actually runs the model (for
++		// example over ssh); a local config parse cannot observe it.
++		return nil
++	}
++	bound, present, err := maxKVSizeFromArgv(plan.Argv)
++	if err != nil {
++		return fmt.Errorf("model-harness profile %q (%s) argv: %w", harnessProfile, plan.Config, err)
++	}
++	if !present {
++		return fmt.Errorf("model-harness profile %q (%s) has no --max-kv-size bound but context_window is %d: an unbounded active-generation KV cache silently truncates instead of refusing", harnessProfile, plan.Config, contextWindow)
++	}
++	if bound < contextWindow {
++		return fmt.Errorf("model-harness profile %q (%s) --max-kv-size %d is less than context_window %d: raise --max-kv-size to at least context_window, or lower context_window to at most --max-kv-size", harnessProfile, plan.Config, bound, contextWindow)
++	}
++	return nil
++}
++
++// modelHarnessRunInvocation recognizes a Pi runtime that launches a model
++// through `model-harness run PROFILE [--config PATH] ...` and reports the
++// referenced model-harness profile name and config path. configPath is
++// empty when the invocation relies on model-harness's own default config
++// resolution, matching modelharness.Resolve's own contract.
++func modelHarnessRunInvocation(executable string, argv []string) (profile, configPath string, ok bool) {
++	if filepath.Base(executable) != "model-harness" {
++		return "", "", false
++	}
++	if len(argv) < 2 || argv[0] != "run" {
++		return "", "", false
++	}
++	profile = argv[1]
++	for i := 2; i+1 < len(argv); i++ {
++		if argv[i] == "--config" {
++			configPath = argv[i+1]
++		}
++	}
++	return profile, configPath, true
++}
++
++// maxKVSizeFromArgv reads the exact --max-kv-size value model-harness would
++// pass to the local runtime, without executing anything.
++func maxKVSizeFromArgv(argv []string) (value int, present bool, err error) {
++	for i, token := range argv {
++		if token != "--max-kv-size" {
++			continue
++		}
++		if present {
++			return 0, false, errors.New("--max-kv-size must appear at most once")
++		}
++		if i+1 >= len(argv) {
++			return 0, false, errors.New("--max-kv-size must be followed by a value")
++		}
++		n, convErr := strconv.Atoi(argv[i+1])
++		if convErr != nil || n <= 0 {
++			return 0, false, fmt.Errorf("--max-kv-size value %q must be a positive integer", argv[i+1])
++		}
++		value, present = n, true
++	}
++	return value, present, nil
++}
+diff --git a/tools/agents-infra/internal/infra/pi_kv_bound_test.go b/tools/agents-infra/internal/infra/pi_kv_bound_test.go
+new file mode 100644
+index 0000000..7faba15
+--- /dev/null
++++ b/tools/agents-infra/internal/infra/pi_kv_bound_test.go
+@@ -0,0 +1,130 @@
++//go:build !windows
++
++package infra
++
++import (
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++// modelHarnessBackedPiProfileTOML builds a project-config.toml body whose Pi
++// profile launches through `model-harness run qwen-local --config ...`, the
++// same shape the deployed qwen-3.8-27b-mlx-8bit profile uses.
++func modelHarnessBackedPiProfileTOML(name string, port, contextWindow int, harnessConfigPath string) string {
++	body := validPiProfileTOML(name, "/usr/local/bin/model-harness", port, false)
++	body = strings.Replace(body, "context_window = 8192", fmt.Sprintf("context_window = %d", contextWindow), 1)
++	oldArgv := fmt.Sprintf(`["serve", "--model", "Model", "--host", "127.0.0.1", "--port", "%d"]`, port)
++	newArgv := fmt.Sprintf(`["run", "qwen-local", "--config", %q, "--host", "127.0.0.1", "--port", "%d"]`, harnessConfigPath, port)
++	body = strings.Replace(body, oldArgv, newArgv, 1)
++	if !strings.Contains(body, newArgv) {
++		panic("modelHarnessBackedPiProfileTOML: fixture argv substitution did not match")
++	}
++	return body
++}
++
++func writeModelHarnessConfig(t *testing.T, dir, name string, kvArgvSuffix string) string {
++	t.Helper()
++	path := filepath.Join(dir, name)
++	body := fmt.Sprintf(`
++[profiles.qwen-local]
++mode = "local"
++executable = "/bin/echo"
++argv = ["--host", "{host}", "--port", "{port}"%s]
++`, kvArgvSuffix)
++	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
++		t.Fatalf("write model-harness config: %v", err)
++	}
++	return path
++}
++
++// Production call site: parseProjectConfig -> parsePiProfile ->
++// validatePiModelHarnessKVBound, resolving the real referenced
++// model-harness config through modelharness.Resolve. Both negative shapes
++// name context_window and (where present) --max-kv-size in the refusal.
++func TestPiProfileRefusesContextWindowAboveModelHarnessKVBoundAtProductionEntry(t *testing.T) {
++	dir := t.TempDir()
++
++	t.Run("missing --max-kv-size entirely", func(t *testing.T) {
++		harnessConfig := writeModelHarnessConfig(t, dir, "missing-kv.toml", "")
++		body := modelHarnessBackedPiProfileTOML("profile", 18011, 75000, harnessConfig)
++		_, err := parseProjectConfig([]byte(body), "/project/config.toml")
++		if err == nil {
++			t.Fatal("parseProjectConfig admitted a profile whose model-harness runtime has no --max-kv-size bound at all")
++		}
++		if !strings.Contains(err.Error(), "75000") || !strings.Contains(err.Error(), "--max-kv-size") {
++			t.Fatalf("error does not name context_window and --max-kv-size: %v", err)
++		}
++	})
++
++	t.Run("bound below context_window", func(t *testing.T) {
++		harnessConfig := writeModelHarnessConfig(t, dir, "low-kv.toml", `, "--max-kv-size", "70000"`)
++		body := modelHarnessBackedPiProfileTOML("profile", 18012, 75000, harnessConfig)
++		_, err := parseProjectConfig([]byte(body), "/project/config.toml")
++		if err == nil {
++			t.Fatal("parseProjectConfig admitted context_window=75000 above --max-kv-size=70000")
++		}
++		if !strings.Contains(err.Error(), "75000") || !strings.Contains(err.Error(), "70000") {
++			t.Fatalf("error does not name both context_window and --max-kv-size: %v", err)
++		}
++	})
++
++	// Exact off-by-one at the boundary: narrows a mutated comparison such as
++	// `bound+1 < contextWindow` (which would wrongly admit this exact gap)
++	// down to the true bound < contextWindow rule.
++	t.Run("bound exactly one below context_window", func(t *testing.T) {
++		harnessConfig := writeModelHarnessConfig(t, dir, "off-by-one-kv.toml", `, "--max-kv-size", "74999"`)
++		body := modelHarnessBackedPiProfileTOML("profile", 18016, 75000, harnessConfig)
++		_, err := parseProjectConfig([]byte(body), "/project/config.toml")
++		if err == nil {
++			t.Fatal("parseProjectConfig admitted context_window=75000 above --max-kv-size=74999")
++		}
++		if !strings.Contains(err.Error(), "75000") || !strings.Contains(err.Error(), "74999") {
++			t.Fatalf("error does not name both context_window and --max-kv-size: %v", err)
++		}
++	})
++}
++
++// Same production call site as the refusal test above, driven with pairs
++// that must be admitted: an exact match and the deployed qwen-local pair
++// (context_window 75000, --max-kv-size 76800) from
++// /Users/alexis/src/.agents/.configs/model-harness.toml.
++func TestPiProfileAdmitsContextWindowAtOrBelowModelHarnessKVBoundAtProductionEntry(t *testing.T) {
++	dir := t.TempDir()
++
++	t.Run("bound exactly equals context_window", func(t *testing.T) {
++		harnessConfig := writeModelHarnessConfig(t, dir, "equal-kv.toml", `, "--max-kv-size", "75000"`)
++		body := modelHarnessBackedPiProfileTOML("profile", 18013, 75000, harnessConfig)
++		cfg, err := parseProjectConfig([]byte(body), "/project/config.toml")
++		if err != nil {
++			t.Fatalf("parseProjectConfig refused a consistent context_window/--max-kv-size pair: %v", err)
++		}
++		if cfg.PiProfiles["profile"].ContextWindow != 75000 {
++			t.Fatalf("context_window=%d want 75000", cfg.PiProfiles["profile"].ContextWindow)
++		}
++	})
++
++	t.Run("deployed pair: bound above context_window", func(t *testing.T) {
++		harnessConfig := writeModelHarnessConfig(t, dir, "deployed-kv.toml", `, "--max-kv-size", "76800"`)
++		body := modelHarnessBackedPiProfileTOML("profile", 18014, 75000, harnessConfig)
++		if _, err := parseProjectConfig([]byte(body), "/project/config.toml"); err != nil {
++			t.Fatalf("parseProjectConfig refused the deployed context_window=75000/--max-kv-size=76800 pair: %v", err)
++		}
++	})
++}
++
++// Locks in that the guard fires only for a runtime that is actually
++// model-harness; every other existing Pi runtime shape (used pervasively by
++// other tests in this package with executables like /bin/echo) must remain
++// unaffected. This is the negative control for modelHarnessRunInvocation's
++// executable-name gate: removing it would make every non-model-harness
++// profile above pass through unchecked, which this test cannot detect by
++// itself, but a false-positive match here would fail immediately.
++func TestPiProfileModelHarnessKVBoundIgnoresNonModelHarnessRuntimes(t *testing.T) {
++	body := validPiProfileTOML("profile", "/bin/echo", 18015, false)
++	if _, err := parseProjectConfig([]byte(body), "/project/config.toml"); err != nil {
++		t.Fatalf("non-model-harness runtime was rejected by the KV-bound guard: %v", err)
++	}
++}
