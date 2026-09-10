@@ -1,0 +1,126 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index c960efd..94f0139 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,14 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-09-11
++
++### 1631 — Readiness Test Flake Had A Third, Undocumented Race
++- ROOT CAUSE: BUG-260830-1rths2 named two races in `TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry` (a readiness-count side-effect file read, and two racing terminal conditions). Fixing both and stress-testing at 3x concurrency x15 iterations (45 runs) surfaced a third: `writePiPersistentUnavailableServer`'s fake runtime wrote its pidfile only after `import http.server, os, sys, threading, time` — under heavy host load that stdlib import occasionally took long enough that the production 1s readiness deadline fired and reaped the child before the pidfile write executed, failing `assertRecordedPIDsGone` with "no such file". Same shape as the documented races: a test reading a side-effect file the production path may not have written yet.
++- FIX: pi_test.go — reordered the fixture script to write the pidfile immediately after cheap `import os, sys`, deferring `http.server`/`threading` imports until after. Scoped to this one fixture; did not touch the shared `assertRecordedPIDsGone` helper (9 other call sites) or production code.
++- EVIDENCE: 145 total concurrent top-level runs post-fix (45 + 100, up to 5 concurrent processes), zero flakes. Production-side mutant (halved the `waitPiRuntimeReady` deadline in pi_launch_posix.go) is caught by the named subtest `times_out_while_runtime_remains_alive`; reverted after.
++- ANOMALY: same "side-effect file races production path" shape also hit `TestPinnedPiNoModelDirectRPCBashBypassesToolCallHookWhileStandaloneExcludesRPC` in a single *serial* full-suite run (no concurrency needed) — pre-existing, unrelated to this ticket's scope, likely worth its own bug ticket since the shape recurs.
++
+ ## 2026-09-10
+ 
+ ### 2110 — Board Audit: Forty Records Claimed Work That Trunk Already Carried
+diff --git a/tools/agents-infra/internal/infra/pi_test.go b/tools/agents-infra/internal/infra/pi_test.go
+index 8a4c1d1..b6104b6 100644
+--- a/tools/agents-infra/internal/infra/pi_test.go
++++ b/tools/agents-infra/internal/infra/pi_test.go
+@@ -1697,12 +1697,24 @@ func TestPiLaunchReadinessRetriesOnlyServiceUnavailableAtProductionEntry(t *test
+ func TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProductionEntry(t *testing.T) {
+ 	piRoot := officialPiAsset(t)
+ 	python := requirePython(t)
++	const startupTimeoutSeconds = 1
+ 	for _, tc := range []struct {
+ 		name      string
+ 		exitAfter bool
+ 		wantCode  string
+ 	}{
++		// The runtime never exits and never answers with anything but 503, so the
++		// only terminal condition that can ever fire is the deadline. Proving the
++		// bound was honored (not returned early) needs a lower bound on elapsed
++		// wall time, not a count of completed polls: how many ticks land inside the
++		// deadline is scheduler-dependent under load, but a real timeout can never
++		// fire before the configured duration has actually elapsed.
+ 		{name: "times out while runtime remains alive", wantCode: "runtime_readiness_timeout"},
++		// The runtime exits immediately on start, before it could ever answer a
++		// readiness poll. That removes the dependency on winning a race between a
++		// completed HTTP round trip plus a fixed delay and the next poll tick —
++		// the exit is observed as soon as the OS reaps the child, which is far
++		// faster than the deadline regardless of host load.
+ 		{name: "refuses after owned runtime exits", exitAfter: true, wantCode: "runtime_exited_early"},
+ 	} {
+ 		t.Run(tc.name, func(t *testing.T) {
+@@ -1714,19 +1726,18 @@ func TestPiLaunchReadinessServiceUnavailableStillHonorsRuntimeBoundsAtProduction
+ 			port := listener.Addr().(*net.TCPAddr).Port
+ 			listener.Close()
+ 			pidFile := filepath.Join(t.TempDir(), "runtime.pid")
+-			countFile := filepath.Join(t.TempDir(), "readiness-count")
+ 			script := writePiPersistentUnavailableServer(t, tc.exitAfter)
+-			config := validPiProfileWithArgv(t, "profile", python, port, []string{script, strconv.Itoa(port), countFile, pidFile}, 1)
++			config := validPiProfileWithArgv(t, "profile", python, port, []string{script, strconv.Itoa(port), pidFile}, startupTimeoutSeconds)
+ 			writePiProjectConfig(t, project, config)
+ 
++			start := time.Now()
+ 			err = runPiFixture(project, home, cache, piRoot, nil)
++			elapsed := time.Since(start)
+ 			if got := piErrorCode(err); got != tc.wantCode {
+ 				t.Fatalf("production readiness error code=%q want=%q err=%v", got, tc.wantCode, err)
+ 			}
+-			count, readErr := os.ReadFile(countFile)
+-			requests, parseErr := strconv.Atoi(strings.TrimSpace(string(count)))
+-			if readErr != nil || parseErr != nil || requests < 1 {
+-				t.Fatalf("runtime bound was reached without polling exact 503: count=%q read=%v parse=%v", count, readErr, parseErr)
++			if tc.wantCode == "runtime_readiness_timeout" && elapsed < startupTimeoutSeconds*time.Second {
++				t.Fatalf("runtime_readiness_timeout fired before the configured bound elapsed: elapsed=%s bound=%ds", elapsed, startupTimeoutSeconds)
+ 			}
+ 			assertRecordedPIDsGone(t, pidFile)
+ 			assertPiLockReleased(t, project, cache, "profile")
+@@ -2395,29 +2406,42 @@ http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
+ func writePiPersistentUnavailableServer(t *testing.T, exitAfter bool) string {
+ 	t.Helper()
+ 	script := filepath.Join(t.TempDir(), "persistent-unavailable-runtime.py")
+-	exit := ""
+ 	if exitAfter {
+-		exit = "threading.Timer(.02, lambda: os._exit(17)).start()"
+-	}
+-	body := fmt.Sprintf(`import http.server, os, sys, threading, time
+-port=int(sys.argv[1]); countfile=sys.argv[2]; pidfile=sys.argv[3]
++		// Exit immediately on start, before any HTTP round trip could ever
++		// complete. That leaves the OS reaping the child as the only race
++		// participant against the readiness deadline, which is far faster than
++		// the deadline regardless of host load — unlike waiting for a completed
++		// poll plus a fixed delay, which is not.
++		body := `import os, sys
++pidfile=sys.argv[2]
++open(pidfile,"w").write(str(os.getpid()))
++os._exit(17)
++`
++		mustWrite(t, script, body)
++		return script
++	}
++	// The pidfile write happens before the http.server/threading imports
++	// (which pull in a much larger stdlib subtree) so the recorded evidence
++	// does not race the production readiness deadline under host load: the
++	// only work gating the write is interpreter startup plus the cheap
++	// os/sys imports, not an incidental and unrelated import cost.
++	body := `import os, sys
++pidfile=sys.argv[2]
+ open(pidfile,"w").write(str(os.getpid()))
++import http.server, threading, time
++port=int(sys.argv[1])
+ parent=os.getppid()
+ def watch_parent():
+   while os.getppid() == parent: time.sleep(.02)
+   os._exit(18)
+ threading.Thread(target=watch_parent, daemon=True).start()
+ class H(http.server.BaseHTTPRequestHandler):
+-  requests=0
+   def do_GET(self):
+-    H.requests += 1
+-    open(countfile,"w").write(str(H.requests))
+     body=b"loading"
+     self.send_response(503); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
+-    %s
+   def log_message(self,*args): pass
+ http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
+-`, exit)
++`
+ 	mustWrite(t, script, body)
+ 	return script
+ }
