@@ -729,6 +729,73 @@ Point the local profile's `executable` at the resulting absolute
 `mlx-lm` version containing upstream PR #1632 has passed the same capacity and
 long-session checks.
 
+#### Engine, model and knob axes
+
+A local profile names three independent axes rather than baking them into one
+executable/argv string: **model** (the `model` field — the artifact this
+runtime serves), **environment** (the existing `executable`/`argv` fields —
+the interpreter or binary that hosts the engine, e.g. a system Python versus
+the `mlx_lm-qwenfix` pipx-pinned build above), and **engine** (the new
+`engine` field — which knob-translation table applies). `engine` is never
+inferred from `executable`: two profiles that launch the identical executable
+with a different `engine` value translate their knobs differently, and a
+profile that omits `engine` defaults to `mlx-lm`, so every profile documented
+above with no `engine` field resolves exactly as it did before this field
+existed.
+
+`engine` must be one of `mlx-lm`, `llama-cpp`, or `mlx-swift`; any other value
+refuses at profile resolution, before any launch. `model`, when set, is
+translated to a trailing `--model <value>` token and must not also appear
+literally in `argv`.
+
+`[profiles.NAME.knobs]` carries the canonical launch-time knob set from
+[`.research/260831_engine-adapter-contract-and-canonical-knob-set.spec.md`](.research/260831_engine-adapter-contract-and-canonical-knob-set.spec.md)
+(that document's Knobs 1-4 — the only ones with a launch argv spelling; Knobs
+5-10 describe wire-protocol field naming, cache/memory telemetry, health
+semantics, and argv-parsing precedence, none of which a launch plan
+translates). Each set knob is translated per `engine` through one table; a
+knob or a knob value the selected engine cannot express refuses naming both
+the knob and the engine, instead of being silently dropped:
+
+| Knob | `mlx-lm` | `mlx-swift` | `llama-cpp` |
+| --- | --- | --- | --- |
+| `kv_context_tokens` (a positive integer, or `"unbounded"`) | `--max-kv-size N`, or omitted when `unbounded` | `--max-kv-size N`, or omitted when `unbounded` | `--ctx-size N`; `unbounded` refuses — llama.cpp has no unbounded form |
+| `prefill_chunk_tokens` (a positive integer) | `--prefill-step-size N` | `--prefill-step-size N` | `--ubatch-size N` |
+| `reasoning_effort` (`low`, `medium`, or `xhigh`) | `--chat-template-args '{"reasoning_effort": "..."}'` | `--reasoning-effort ...` | `--reasoning-effort ...` |
+| `speculative_decoding` (`off`, `ngram`, or `mtp`) | refuses — not valid for this engine | refuses — not valid for this engine | `--spec-type ngram-mod` / `--spec-type draft-mtp`, or omitted when `off` |
+
+```toml
+[profiles.qwen-local-mlx-lm]
+mode = "local"
+engine = "mlx-lm"
+executable = "/absolute/path/to/python"
+model = "/models/Qwen"
+argv = ["-c", "from mlx_lm.server import main; main()", "--host", "{host}", "--port", "{port}"]
+
+[profiles.qwen-local-mlx-lm.knobs]
+kv_context_tokens = "76800"
+prefill_chunk_tokens = "2048"
+reasoning_effort = "medium"
+
+[profiles.qwen-local-llama-cpp]
+mode = "local"
+engine = "llama-cpp"
+executable = "/opt/homebrew/bin/llama-server"
+model = "/absolute/path/to/model.gguf"
+argv = ["--host", "{host}", "--port", "{port}", "--no-webui"]
+
+[profiles.qwen-local-llama-cpp.knobs]
+kv_context_tokens = "8192"
+prefill_chunk_tokens = "2048"
+reasoning_effort = "medium"
+speculative_decoding = "ngram"
+```
+
+`draft-model` speculation is deliberately absent from the enum: it needs a
+second, paired draft-model artifact this profile schema has no axis for yet,
+so it is left unmodelled rather than forced through `--spec-type` and silently
+dropping that requirement.
+
 All stress bounds are explicit profile policy. `model-harness stress` refuses
 profiles without this table and currently supports local mode only. It starts
 the reviewed backend on an unoccupied loopback endpoint, discovers the exact

@@ -29,8 +29,11 @@ type Document struct {
 
 type Profile struct {
 	Mode             string             `toml:"mode"`
+	Engine           string             `toml:"engine,omitempty"`
+	Model            string             `toml:"model,omitempty"`
 	Executable       string             `toml:"executable,omitempty"`
 	Argv             []string           `toml:"argv,omitempty"`
+	Knobs            *Knobs             `toml:"knobs,omitempty"`
 	SSHExecutable    string             `toml:"ssh_executable,omitempty"`
 	SSHTarget        string             `toml:"ssh_target,omitempty"`
 	RemoteExecutable string             `toml:"remote_executable,omitempty"`
@@ -64,6 +67,8 @@ type Plan struct {
 	Config        string             `json:"config"`
 	Profile       string             `json:"profile"`
 	Mode          string             `json:"mode"`
+	Engine        string             `json:"engine,omitempty"`
+	Model         string             `json:"model,omitempty"`
 	Executable    string             `json:"executable"`
 	Argv          []string           `json:"argv"`
 	Endpoint      string             `json:"endpoint"`
@@ -141,7 +146,17 @@ func Resolve(configPath, profileName, host string, port int) (Plan, error) {
 	switch profile.Mode {
 	case "local":
 		plan.Executable = profile.Executable
-		plan.Argv = substituteEndpoint(profile.Argv, host, port)
+		plan.Engine = profile.Engine
+		plan.Model = profile.Model
+		argv := substituteEndpoint(profile.Argv, host, port)
+		if profile.Model != "" {
+			argv = append(argv, "--model", profile.Model)
+		}
+		knobArgv, err := translateKnobs(Engine(profile.Engine), profile.Knobs)
+		if err != nil {
+			return Plan{}, fmt.Errorf("profile %q: %w", profileName, err)
+		}
+		plan.Argv = append(argv, knobArgv...)
 	case "ssh":
 		plan.Executable = profile.SSHExecutable
 		plan.Remote = &RemotePlan{
@@ -234,6 +249,16 @@ func validateProfile(name string, profile Profile) error {
 		if profile.SSHExecutable != "" || profile.SSHTarget != "" || profile.RemoteExecutable != "" || profile.RemoteConfig != "" || profile.RemoteProfile != "" || profile.RemoteHost != "" || profile.RemotePort != 0 {
 			return fmt.Errorf("profile %q: local mode cannot declare remote fields", name)
 		}
+		if !knownEngines[Engine(profile.Engine)] {
+			return fmt.Errorf("profile %q: unknown engine %q", name, profile.Engine)
+		}
+		if profile.Model != "" {
+			for _, token := range profile.Argv {
+				if token == "--model" {
+					return fmt.Errorf("profile %q: argv must not declare --model when model is set", name)
+				}
+			}
+		}
 		if err := validateStressPolicy(name, profile.Stress); err != nil {
 			return err
 		}
@@ -243,6 +268,9 @@ func validateProfile(name string, profile Profile) error {
 	case "ssh":
 		if profile.Executable != "" || len(profile.Argv) != 0 {
 			return fmt.Errorf("profile %q: ssh mode cannot declare executable or argv", name)
+		}
+		if profile.Engine != "" || profile.Model != "" || profile.Knobs != nil {
+			return fmt.Errorf("profile %q: ssh mode cannot declare engine, model, or knobs", name)
 		}
 		if profile.SSHExecutable == "" {
 			profile.SSHExecutable = "/usr/bin/ssh"
@@ -329,6 +357,9 @@ func validateStressPolicy(name string, policy *StressPolicy) error {
 func normalizeProfile(profile Profile) Profile {
 	if profile.Mode == "ssh" && profile.SSHExecutable == "" {
 		profile.SSHExecutable = "/usr/bin/ssh"
+	}
+	if profile.Mode == "local" && profile.Engine == "" {
+		profile.Engine = string(defaultEngine)
 	}
 	return profile
 }

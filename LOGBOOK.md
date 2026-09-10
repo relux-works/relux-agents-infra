@@ -5,6 +5,12 @@
 
 ## 2026-09-11
 
+### 1743 — model-harness "Environment" Axis Reuses `executable`, No New Field
+- DECISION: TASK-260830-2cgim0's three-axis profile (model, environment, engine) maps `environment` onto the *existing* `executable`/`argv` fields rather than a new TOML key — `executable` was already independent of `mode`/`argv` before this task, and the deployed `qwen-local` profile already demonstrates the axis (python interpreter path vs the `mlx_lm-qwenfix` pipx-pinned build, same engine, different environment). Only `engine` (new, defaults to `mlx-lm`) and `model` (new, optional, becomes a trailing `--model` argv token) are new fields.
+- FINDING: All three engines this contract covers (`mlx-lm`, `llama-cpp`, `mlx-swift`) accept every Knob 1-4 argv flag at launch time — `mlx-swift-runtime-prototype`'s `RuntimeOptions.swift` confirms `--max-kv-size`, `--prefill-step-size`, and `--reasoning-effort` all parse there too, contrary to a first read of the canonical-knob-set spec's live-*reportability* table (which only measures what a *running* process reports about itself, not what its argv parser accepts at launch). The only genuine launch-time inexpressibility found: `llama-server`'s `--ctx-size` has no unbounded form (`kv_context_tokens="unbounded"` refuses there), and `speculative_decoding` (`--spec-type`) has no argv surface at all on `mlx-lm`/`mlx-swift`.
+- SCOPE: `tools/agents-infra/internal/modelharness/{config.go,engine_knobs.go}`; `.research/260831_engine-adapter-contract-and-canonical-knob-set.spec.md` Knobs 1-4 only (5-10 are wire-protocol/telemetry concerns with no argv spelling, out of scope for profile resolution — remain `TASK-260830-1e9gse`'s concern).
+- STATUS: Golden README `qwen-local` profile resolves byte-identical after the change; 7 narrowing mutants (including one source-text-preserving mutant on the `--model` duplicate-argv guard) each caught by a named test; full `tools/agents-infra/internal/modelharness` and root-package suites green.
+
 ### 1730 — Doctor Now Names Every Missing Profile Field In One Run
 
 - ROOT CAUSE: BUG-260830-5pmaiz. `parsePiRuntimeSharing` and its sibling parsers (`parsePiProfile`, `parsePiRuntime`, `parsePiLifecycleLogRetention`) return on the first absent required field by design — correct for the fail-closed production launch path, but it meant `agents-infra doctor local` also stopped at field one, so diagnosing the 2026-08-30 incident (8 missing `runtime.sharing` fields) cost one invocation per field.
