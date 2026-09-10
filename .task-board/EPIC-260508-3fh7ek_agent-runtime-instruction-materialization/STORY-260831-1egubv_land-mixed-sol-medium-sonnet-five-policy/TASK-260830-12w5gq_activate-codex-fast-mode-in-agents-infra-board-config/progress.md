@@ -1,5 +1,5 @@
 ## Status
-backlog
+closed
 
 ## Review
 light
@@ -37,6 +37,7 @@ task-board.config.json spawn.ceilings/preferred_agentic_system/workload_classes 
 agent completed: [implementer] developer (claude) (exit=0)
 spawn run completed: claude (run=RUN-260831-759af5, pid=24865, exit=0)
 The Sonnet validation run correctly detected the effective root config but had no managed Story workspace because this already-active Task was reparented after activation. It is validation-only and is superseded for canonical delivery by the fresh backlog Story/task created on 2026-08-31; do not publish a CR from this root-bound run.
+2026-09-11 goal audit: closed as junk. Activating codex fast_mode contradicts the current spawn policy (PR #22 removed fast_mode from ceilings; goal requires fast_mode absent or false). Superseded by STORY-260831-18m161 / PR #26.
 
 ## Precondition Resources
 (none)
@@ -52,7 +53,7 @@ The Sonnet validation run correctly detected the effective root config but had n
 2026-08-29T22:59:16Z
 
 ## Last Update
-2026-08-31T07:59:32Z
+2026-09-11T12:39:14Z
 
 ## Assigned To
 [implementer] developer (claude)

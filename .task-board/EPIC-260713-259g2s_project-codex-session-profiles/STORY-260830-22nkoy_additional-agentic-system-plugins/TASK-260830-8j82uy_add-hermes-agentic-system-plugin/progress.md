@@ -1,5 +1,5 @@
 ## Status
-backlog
+closed
 
 ## Review
 required
@@ -22,6 +22,7 @@ notEstimated
 - [ ] Same composition path, instruction materialization and MCP rules as the other environments once identified
 
 ## Notes
+2026-09-11 goal audit: closed — outside the primary goal and outside this repo (belongs to skill-agents-management pkg/agentic). Zero OpenCode/Hermes references on main. Reopen upstream after STORY-260830-37bq03 removes the hardcoded environment list. Which Hermes was never identified.
 
 ## Precondition Resources
 (none)
@@ -33,4 +34,4 @@ notEstimated
 2026-08-29T22:25:43Z
 
 ## Last Update
-2026-08-29T22:28:28Z
+2026-09-11T12:41:11Z

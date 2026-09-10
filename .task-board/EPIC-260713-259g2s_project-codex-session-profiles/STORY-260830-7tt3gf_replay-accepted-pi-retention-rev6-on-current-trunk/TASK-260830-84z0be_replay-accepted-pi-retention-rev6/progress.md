@@ -1,5 +1,5 @@
 ## Status
-backlog
+closed
 
 ## Review
 required
@@ -100,6 +100,7 @@ Reviewer RUN-260831-103ca9 requests changes on CR revision 2: alternate-index ro
 agent completed: [reviewer] reviewer (codex) (exit=0)
 spawn run completed: codex (run=RUN-260831-103ca9, pid=28067, exit=0)
 Superseded after independent rejection of CR revision 2. Replacement owner is STORY-260831-gn8w76 / TASK-260831-1bt8f4, hard-blocked behind fresh adapter TASK-260831-26b034 and provisioned from a new exact-current-main workspace. Do not spawn or integrate this old Story again.
+2026-09-11 goal audit: closed as superseded duplicate. Pi lifecycle log retention + legacy retirement landed via STORY-260831-gn8w76 / PR #30 (5e0aa90); resource-pressure status via PR #13 (5c9b4e4). Explicitly superseded by STORY-260831-gn8w76 per own note.
 
 ## Precondition Resources
 - [accepted-retention-rev6.patch](file://TASK-260830-84z0be/accepted-retention-rev6.patch) — Exact independently accepted CR-TASK-260830-tvy8q5-6 patch
@@ -128,7 +129,7 @@ Superseded after independent rejection of CR revision 2. Replacement owner is ST
 2026-08-30T12:25:04Z
 
 ## Last Update
-2026-08-31T15:28:40Z
+2026-09-11T12:40:07Z
 
 ## Assigned To
 (none)

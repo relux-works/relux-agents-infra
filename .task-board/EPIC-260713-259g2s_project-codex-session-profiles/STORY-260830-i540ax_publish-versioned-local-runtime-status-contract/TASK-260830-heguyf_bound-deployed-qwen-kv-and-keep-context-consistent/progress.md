@@ -42,6 +42,7 @@ spawn queued: [implementer] developer (claude) (run=RUN-260831-28242d, max_paral
 spawn run started: [implementer] developer (claude) (run=RUN-260831-28242d)
 agent completed: [implementer] developer (claude) (exit=1)
 spawn run RUN-260831-28242d failed without autonomous retry; operator action required; provider failure: provider_capability_unavailable: Claude authentication is unavailable; remediation: run `claude login` and retry the goal-bound spawn
+2026-09-11 goal audit: WIP exists uncommitted in .temp/STORY-260830-i540ax/worktree (pi_kv_bound.go, pi_kv_bound_test.go, pi_config.go, 2026-08-31 14:57). Deployed --max-kv-size 76800 vs context_window 75000 still unenforced on main. Still valid.
 
 ## Precondition Resources
 (none)
@@ -53,7 +54,7 @@ spawn run RUN-260831-28242d failed without autonomous retry; operator action req
 2026-08-30T13:19:53Z
 
 ## Last Update
-2026-08-31T12:04:11Z
+2026-09-11T12:53:29Z
 
 ## Assigned To
 [implementer] developer (claude)

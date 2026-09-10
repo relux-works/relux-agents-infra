@@ -1,5 +1,5 @@
 ## Status
-backlog
+closed
 
 ## Review
 required
@@ -14,7 +14,7 @@ estimated(fibonacci(8))
 - (none)
 
 ## Blocks
-- TASK-260830-3tmvy9
+- (none)
 
 ## Checklist
 - [ ] Verify fetched origin/main, GitHub main, selected Story base, and workspace HEAD all equal protected post-pressure commit 5c9b4e4 before implementation.
@@ -81,6 +81,7 @@ BLOCKED: Fresh git fetch and direct GitHub ls-remote both resolve main to 3295c7
 agent completed: [implementer] developer (codex) (exit=0)
 spawn run completed: codex (run=RUN-260830-8c0ecb, pid=90420, exit=0)
 No Change Request revision was published for TASK-260830-1ugbb1 (handoff_unsatisfied): the board is not at to-review
+2026-09-11 goal audit: closed as superseded duplicate. Pi lifecycle log retention + legacy retirement landed via STORY-260831-gn8w76 / PR #30 (5e0aa90); resource-pressure status via PR #13 (5c9b4e4).
 
 ## Precondition Resources
 - [retention-architecture-rev3.md](file://TASK-260830-1ugbb1/retention-architecture-rev3.md) — Accepted revision-3 retention authority, recovery, bounded scan, and retirement architecture
@@ -106,7 +107,7 @@ No Change Request revision was published for TASK-260830-1ugbb1 (handoff_unsatis
 2026-08-29T22:13:42Z
 
 ## Last Update
-2026-08-30T01:37:31Z
+2026-09-11T12:40:06Z
 
 ## Assigned To
 (none)

@@ -1,5 +1,5 @@
 ## Status
-backlog
+closed
 
 ## Review
 required
@@ -11,7 +11,7 @@ code
 notEstimated
 
 ## Blocked By
-- TASK-260830-r1uh4v
+- (none)
 
 ## Blocks
 - (none)
@@ -24,6 +24,7 @@ notEstimated
 - [ ] Attach validation evidence and publish an empty or corrective final Change Request for independent review
 
 ## Notes
+2026-09-11 goal audit: closed as superseded duplicate. Global external-CI local-mirror fallback policy landed via STORY-260830-11fnea / PR #23 (4270549); candidate text byte-identical to main INSTRUCTIONS_WORKFLOW.md. Verification tests exist on main (infra_test.go broadened/additive mutants).
 
 ## Precondition Resources
 (none)
@@ -35,4 +36,4 @@ notEstimated
 2026-08-30T08:43:24Z
 
 ## Last Update
-2026-08-30T08:44:15Z
+2026-09-11T12:39:35Z

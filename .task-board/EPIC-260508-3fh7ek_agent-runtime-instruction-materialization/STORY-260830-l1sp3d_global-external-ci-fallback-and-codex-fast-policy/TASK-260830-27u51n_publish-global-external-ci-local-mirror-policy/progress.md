@@ -1,5 +1,5 @@
 ## Status
-backlog
+closed
 
 ## Review
 required
@@ -77,6 +77,7 @@ spawn queued: [reviewer] reviewer (codex) (run=RUN-260830-977f67, max_parallel=2
 spawn run started: [reviewer] reviewer (codex) (run=RUN-260830-977f67)
 agent completed: [reviewer] reviewer (codex) (exit=0)
 spawn run completed: codex (run=RUN-260830-977f67, pid=244, exit=0)
+2026-09-11 goal audit: closed as superseded duplicate. Global external-CI local-mirror fallback policy landed via STORY-260830-11fnea / PR #23 (4270549); candidate text byte-identical to main INSTRUCTIONS_WORKFLOW.md. Supersession chain recorded in TASK-260830-27u51n_supersession.md.
 
 ## Precondition Resources
 (none)
@@ -149,7 +150,7 @@ spawn run completed: codex (run=RUN-260830-977f67, pid=244, exit=0)
 2026-08-29T22:59:15Z
 
 ## Last Update
-2026-08-30T01:26:46Z
+2026-09-11T12:39:38Z
 
 ## Assigned To
 [reviewer] reviewer (codex)

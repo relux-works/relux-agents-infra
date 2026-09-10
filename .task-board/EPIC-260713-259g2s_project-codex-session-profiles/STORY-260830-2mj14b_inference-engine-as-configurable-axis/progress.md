@@ -17,6 +17,7 @@ code
 (empty)
 
 ## Notes
+2026-09-11 goal audit: TASK-260830-3euwsu accepted spec landed on main via PR #41 (merge 7361a39). Remaining tasks re-scoped: 2cgim0 (engine kind in profiles, this repo), 18n40a (mtplx eval), 1e9gse (adapters, mostly upstream skill-agents-management pkg/inferenceengine).
 
 ## Precondition Resources
 (none)
@@ -28,4 +29,4 @@ code
 2026-08-29T22:23:46Z
 
 ## Last Update
-2026-08-31T11:07:34Z
+2026-09-11T12:44:01Z

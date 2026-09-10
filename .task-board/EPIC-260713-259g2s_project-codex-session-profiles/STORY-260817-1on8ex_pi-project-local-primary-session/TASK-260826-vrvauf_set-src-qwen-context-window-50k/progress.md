@@ -1,5 +1,5 @@
 ## Status
-blocked
+closed
 
 ## Review
 none
@@ -41,6 +41,7 @@ Reviewer changes requested: production inherited profile is 75000, not 50000. A 
 agent completed: [reviewer] reviewer (codex) (exit=0)
 spawn run completed: codex (run=RUN-260830-530745, pid=94151, exit=0)
 ORCHESTRATOR: blocked on an owner product decision, not on implementation. Review established two facts: the claimed 50000 window was never written (config and the 02:59 backup both hold 75000), and a context-only change to 50000 is invalid because compact_at_tokens is 50000 and must be strictly less than the window. A valid shape exists — window 50000 with compact_at_tokens 33000, reserve 17000 above max_tokens 16384 — but that lowers the daily Pi runtime context and moves the compaction threshold. The current 75000/50000 pair matches the policy the primary goal describes as the one being stabilised and appears to be a deliberate later change than this task. Needs the owner to say whether 50000 is still wanted; if yes, the compaction threshold moves with it and that is part of the decision.
+2026-09-11 goal audit: closed as obsolete. Target config /Users/alexis/src/.agents/.configs/project-config.toml lives outside this repo and now carries 75000/50000; a 50k window is invalid against compact_at 50000 and contradicts current policy.
 
 ## Precondition Resources
 (none)
@@ -54,7 +55,7 @@ ORCHESTRATOR: blocked on an owner product decision, not on implementation. Revie
 2026-08-25T22:25:42Z
 
 ## Last Update
-2026-08-30T03:28:46Z
+2026-09-11T12:40:11Z
 
 ## Assigned To
 [reviewer] reviewer (codex)

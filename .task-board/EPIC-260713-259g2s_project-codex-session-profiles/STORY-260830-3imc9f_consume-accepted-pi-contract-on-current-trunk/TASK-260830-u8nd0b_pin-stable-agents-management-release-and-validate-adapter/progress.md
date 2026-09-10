@@ -1,5 +1,5 @@
 ## Status
-backlog
+done
 
 ## Review
 required
@@ -24,6 +24,7 @@ estimated(fibonacci(5))
 - [ ] Publish the final Story Change Request and obtain independent review before integration
 
 ## Notes
+2026-09-11 goal audit: PR #31 (211bb86) pinned signed v0.5.2 by tag; main now pins v0.5.9 (PR #35). AC #1 (exact commit 046baef in a tag) is void: upstream rewrote to a clean root. Set done.
 
 ## Precondition Resources
 (none)
@@ -35,4 +36,4 @@ estimated(fibonacci(5))
 2026-08-30T12:00:04Z
 
 ## Last Update
-2026-08-30T12:00:22Z
+2026-09-11T12:40:42Z

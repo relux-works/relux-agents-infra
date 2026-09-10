@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 29,
+  "expected_previous_revision": 28,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 28
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Finish the remaining relux-agents-infra runtime work through tracked implementation, independent review, green local checks, signed PR delivery, and merge, without model-specific control-plane special cases. Open scope (2026-09-11 audit, rev 29): (1) plugin plane, STORY-260830-37bq03: derive configured-target environment admission and primary-session dispatch from the skill-agents-management registry, removing the hardcoded codex/claude-code/pi literals in project_config.go, canonical_target.go and primary_session_launch_plan.go with fail-closed refusals and unchanged CLI wording, keep the landed lockstep release/rollback plan current with the pinned version, and carry the pi-plugin inversion (TASK-260831-1pfnxx) as an upstream skill-agents-management release; (2) inference engine as a configurable axis, STORY-260830-2mj14b: consume engine kind in model-harness profiles per the landed engine-adapter contract spec, evaluate mtplx, and port llama.cpp, mlx-lm and MLX Swift adapters upstream; (3) runtime status contract, STORY-260830-i540ax: enforce KV-bound consistency between the deployed --max-kv-size and the configured context_window and alert on KV saturation; (4) degraded child-launch composition visibility and the readiness-test flake, STORY-260830-112ewt; (5) pin the mlx-lm fork to an explicit non-editable commit with a written retirement condition, STORY-260911-2lwfr0; (6) keep the skill-project-management board as the owner of task-board tool defects mirrored under its STORY-260830-2wsyq0. Preserve as landed: mixed spawn policy (gpt-5.6-sol up to medium, claude-sonnet-5 up to high, gpt-6-astra admitted, less_or_equal ceilings, class-aware recommendations, Codex fast_mode absent or false); the generic Pi adapter, restart/quarantine, retention, resource-pressure status, eight-week soak evidence and versioned SharedRuntimeStatus contract v1; the signed skill-agents-management v0.5.9 dependency; fail-closed setup; canonical vendor targets; project-local instruction ownership; task-board version-control authority; external-CI local-mirror fallback; Claude trust-warning diagnostics without mutating user trust configuration; openai-dange/anthropic-dange direct YOLO aliases with production-call regression coverage; provider-local primary-session composition; the negative-testing and test-proof instruction baseline; and the accepted NO-GO runtime migration decision (reopen STORY-260831-3vdoag only with new evidence).",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 29
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "2026-09-11 board audit: rev 28 clauses for YOLO aliases, provider-local composition, retention/pressure/soak, runtime comparison decision, v0.5.3 pin and stranded candidates are landed on main (PRs #23-#43); 40 stale/duplicate/junk board items closed; remaining scope restated as six concrete stories.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "alexis"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-09-11T13:01:40.512385Z",
+  "created_by": "alexis",
+  "reason": "2026-09-11 board audit: rev 28 clauses for YOLO aliases, provider-local composition, retention/pressure/soak, runtime comparison decision, v0.5.3 pin and stranded candidates are landed on main (PRs #23-#43); 40 stale/duplicate/junk board items closed; remaining scope restated as six concrete stories."
+}

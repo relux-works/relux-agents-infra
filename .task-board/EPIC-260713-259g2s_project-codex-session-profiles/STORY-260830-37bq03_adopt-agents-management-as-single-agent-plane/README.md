@@ -7,4 +7,4 @@ Make agents-infra a consumer of skill-agents-management, so task-board and agent
 agents-infra composition, primary-session launch, targets and model-harness profiles. skill-agents-management is the source repo for the plugin contracts; fix contract gaps there rather than working around them here.
 
 ## Acceptance Criteria
-agents-infra resolves agentic systems and model vendors through skill-agents-management rather than its own hardcoded codex/claude/pi handling, task-board keeps consuming the same module, and a new environment or engine is added in one repository only.
+Configured target environment admission and primary-session dispatch derive the admitted agentic-system set from the skill-agents-management registry (no hardcoded codex/claude-code/pi lists in project_config.go, canonical_target.go, primary_session_launch_plan.go); refusals for unregistered or unlaunchable identifiers stay fail-closed with unchanged CLI wording; the lockstep release/rollback plan names the currently pinned agents-management version; negative tests cover an unregistered identifier, a registered-but-unlaunchable system, and the downgrade direction.

@@ -1,5 +1,5 @@
 ## Status
-backlog
+closed
 
 ## Review
 required
@@ -11,7 +11,7 @@ code
 estimated(fibonacci(5))
 
 ## Blocked By
-- TASK-260830-1ugbb1
+- (none)
 
 ## Blocks
 - (none)
@@ -25,6 +25,7 @@ estimated(fibonacci(5))
 - [ ] Repeat bounded dry-run/apply pages until a fresh complete scan reaches within_policy and soak_ready; run Task-A/pressure regressions, race, full suites, vet, format/diff, and cross-platform builds without live service contact.
 
 ## Notes
+2026-09-11 goal audit: closed as superseded duplicate. Pi lifecycle log retention + legacy retirement landed via STORY-260831-gn8w76 / PR #30 (5e0aa90); resource-pressure status via PR #13 (5c9b4e4).
 
 ## Precondition Resources
 - [retention-architecture-rev3.md](file://TASK-260830-3tmvy9/retention-architecture-rev3.md) — Accepted revision-3 Task-B retirement architecture
@@ -36,4 +37,4 @@ estimated(fibonacci(5))
 2026-08-29T22:13:52Z
 
 ## Last Update
-2026-08-29T22:16:23Z
+2026-09-11T12:40:06Z

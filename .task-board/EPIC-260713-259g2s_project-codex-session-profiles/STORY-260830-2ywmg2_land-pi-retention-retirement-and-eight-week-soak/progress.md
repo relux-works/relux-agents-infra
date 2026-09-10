@@ -1,5 +1,5 @@
 ## Status
-to-review
+done
 
 ## Review
 required
@@ -17,6 +17,7 @@ code
 (empty)
 
 ## Notes
+2026-09-11 goal audit: candidate landed via STORY-260831-gn8w76 / PR #30 (5e0aa90). CR-bound child closed as superseded; story auto-promoted to done.
 
 ## Precondition Resources
 (none)
@@ -28,4 +29,4 @@ code
 2026-08-30T07:47:53Z
 
 ## Last Update
-2026-08-30T12:22:48Z
+2026-09-11T12:41:09Z

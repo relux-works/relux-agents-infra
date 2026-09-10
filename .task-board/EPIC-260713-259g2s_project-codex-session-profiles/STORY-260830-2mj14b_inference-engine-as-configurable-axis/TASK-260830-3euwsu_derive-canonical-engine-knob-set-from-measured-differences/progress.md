@@ -15,8 +15,7 @@ estimated(fibonacci(5))
 - TASK-260830-ter72z
 
 ## Blocks
-- TASK-260830-2cgim0
-- TASK-260830-18n40a
+- (none)
 
 ## Checklist
 - [x] Knob set derived from measured differences, each cited to the task that found it, not invented
@@ -149,7 +148,7 @@ spawn run completed: claude (run=RUN-260831-3dd83c, pid=74302, exit=0)
 2026-08-29T22:23:47Z
 
 ## Last Update
-2026-08-31T11:07:34Z
+2026-09-11T12:44:03Z
 
 ## Assigned To
 [reviewer] reviewer (claude)

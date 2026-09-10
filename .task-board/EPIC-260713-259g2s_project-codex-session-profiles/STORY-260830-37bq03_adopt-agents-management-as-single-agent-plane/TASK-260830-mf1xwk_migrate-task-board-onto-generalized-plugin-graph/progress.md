@@ -1,5 +1,5 @@
 ## Status
-backlog
+done
 
 ## Review
 required
@@ -14,7 +14,6 @@ notEstimated
 - TASK-260830-1jpse1
 - TASK-260830-s5ro4e
 - TASK-260830-11ajl2
-- TASK-260831-1pfnxx
 
 ## Blocks
 - (none)
@@ -27,6 +26,7 @@ notEstimated
 - [ ] Rollback path written down before the breaking change lands, not after
 
 ## Notes
+2026-09-11 goal audit: delivered in skill-project-management (board-cli v0.5.2..v0.5.10, b815801e..de938adf); this board already spawns on it. Not agents-infra work. Set done.
 
 ## Precondition Resources
 (none)
@@ -38,4 +38,4 @@ notEstimated
 2026-08-29T22:47:16Z
 
 ## Last Update
-2026-08-31T02:58:23Z
+2026-09-11T12:40:44Z

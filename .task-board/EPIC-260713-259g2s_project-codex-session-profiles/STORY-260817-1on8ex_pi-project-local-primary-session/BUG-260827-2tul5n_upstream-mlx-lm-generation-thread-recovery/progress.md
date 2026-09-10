@@ -1,5 +1,5 @@
 ## Status
-blocked
+done
 
 ## Review
 light
@@ -26,6 +26,7 @@ estimated(fibonacci(5))
 
 ## Notes
 Blocked only on the upstream repository human-authorship policy: AGENTS.md forbids agents from writing commit or PR prose, pushing, or creating PRs. Fork, local runtime branch, health patch, tests, isolated pipx install, and next-start config are complete. Human must run the publication commands recorded in the outcome resource.
+2026-09-11 goal audit: external blocker discharged — ml-explore/mlx-lm#1791 merged 2026-09-05; fork branches pushed and pipx mlx-lm-relux launches from the fork. Set done.
 
 ## Precondition Resources
 (none)
@@ -38,7 +39,7 @@ Blocked only on the upstream repository human-authorship policy: AGENTS.md forbi
 2026-08-27T07:51:24Z
 
 ## Last Update
-2026-08-27T08:07:45Z
+2026-09-11T12:40:40Z
 
 ## Assigned To
 codex

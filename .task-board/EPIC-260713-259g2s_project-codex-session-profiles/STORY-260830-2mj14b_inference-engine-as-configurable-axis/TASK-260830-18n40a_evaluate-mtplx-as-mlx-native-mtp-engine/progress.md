@@ -11,7 +11,7 @@ code
 notEstimated
 
 ## Blocked By
-- TASK-260830-3euwsu
+- (none)
 
 ## Blocks
 - (none)
@@ -25,6 +25,7 @@ notEstimated
 - [ ] If MTPLX cannot serve the configured Qwen with an MTP head, say so with evidence; that is a valid result
 
 ## Notes
+2026-09-11 goal audit: still valid; only mtplx-first-look.md exists, nothing measured. Related to STORY-260831-3vdoag reopen path.
 
 ## Precondition Resources
 (none)
@@ -36,4 +37,4 @@ notEstimated
 2026-08-29T22:25:07Z
 
 ## Last Update
-2026-08-30T09:15:47Z
+2026-09-11T12:44:04Z

@@ -3,6 +3,17 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-09-10
+
+### 2110 — Board Audit: Forty Records Claimed Work That Trunk Already Carried
+- FINDING: Of 67 open board items, 40 were stale: 12 replay-on-fresh-trunk shells whose candidate deltas were byte-identical to what PRs #13, #23, #26 and #30 had already landed, 10 "done" or "to-review" records whose commits only existed on unpushed local Story branches, 7 task-board tool defects filed against the wrong repository, and 4 items contradicting current policy (codex fast_mode, a 50k Qwen window, OpenCode/Hermes plugins outside the goal).
+- ROOT CAUSE: Base moves during concurrent Stories forced re-review of unchanged deltas (BUG-260830-2uo1vq); each replay left the superseded record open, and reviewer-done leaves under a Story were never integrated once the Story lost its lease.
+- FIX: Stranded candidates landed by cherry-pick with original signed authorship: PR #40 (Pi launcher env guards), #41 (engine-adapter contract spec), #42 (SharedRuntimeStatus contract v1 + bounded failure_history), #43 (lockstep release/rollback plan). Duplicates and foreign defects closed with pointers; defects mirrored to skill-project-management STORY-260830-2wsyq0. Primary goal realigned to revision 29 naming six concrete open stories.
+- DECISION: TASK-260830-11ajl2 "consume agents-management for identity only" is superseded, not stranded. Its guard `TestProductionCodeImportsAgentsManagementForIdentityOnly` fails on trunk by design: the generic Pi adapter, engine observation reader and pkg/localruntime (PRs #29, #31, #35) deliberately consume more than identity. The environment-literal removal it hinted at is the live STORY-260830-37bq03 scope.
+- FINDING: `task-board worktree abort --discard` cannot remove a worktree whose scratch holds read-only files (Go module cache copies under `.temp/review-*/overflow-home`, fs-authority probe fixtures); the board record still flips to discarded while the directory stays. `chmod -R u+w` before removal is the operator workaround.
+- FINDING: The pipx `mlx-lm-relux` install is editable and follows the fork checkout HEAD (45a472f) while its metadata claims 9150698, so the "pinned fork" goal clause was not actually pinned. Tracked as STORY-260911-2lwfr0.
+- EVIDENCE: `.temp/goal-audit/` (cluster reports, VERDICTS.md, worktrees.txt, test logs for each landed head).
+
 ## 2026-09-07
 
 ### 2200 — Shipped Codex Ceiling Now Has Behavioral Coverage

@@ -1,5 +1,5 @@
 ## Status
-blocked
+closed
 
 ## Review
 required
@@ -60,6 +60,7 @@ BLOCKED: final fresh fetch advanced main/origin/main/FETCH_HEAD to fe3818209c986
 agent completed: [implementer] developer (codex) (exit=0)
 spawn run completed: codex (run=RUN-260830-ff0acc, pid=69208, exit=0)
 No Change Request revision was published for TASK-260830-rddvxd (handoff_unsatisfied): the board is not at to-review
+2026-09-11 goal audit: closed as superseded duplicate. Global external-CI local-mirror fallback policy landed via STORY-260830-11fnea / PR #23 (4270549); candidate text byte-identical to main INSTRUCTIONS_WORKFLOW.md.
 
 ## Precondition Resources
 - [external-ci-rev4.patch](file://TASK-260830-rddvxd/external-ci-rev4.patch) — Audited revision-4 policy patch; non-authorizing replay input
@@ -84,7 +85,7 @@ No Change Request revision was published for TASK-260830-rddvxd (handoff_unsatis
 2026-08-30T02:17:37Z
 
 ## Last Update
-2026-08-30T08:38:06Z
+2026-09-11T12:39:33Z
 
 ## Assigned To
 [implementer] developer (codex)

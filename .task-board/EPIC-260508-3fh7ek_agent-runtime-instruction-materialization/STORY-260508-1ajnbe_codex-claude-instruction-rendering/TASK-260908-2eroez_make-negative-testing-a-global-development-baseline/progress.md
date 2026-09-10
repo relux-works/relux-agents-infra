@@ -1,5 +1,5 @@
 ## Status
-to-review
+done
 
 ## Review
 required
@@ -22,6 +22,7 @@ estimated(fibonacci(1))
 ## Notes
 User follow-up: every test or cohesive group testing one claim must have a short comment stating what it proves. State material limits or differing per-case claims separately; no mandatory questionnaire or repeated group text. Applies to all tests, not only negative cases. Preserve existing negative-testing baseline; source instruction amendment and instruction-only synchronization.
 Follow-up delivered: source .instructions/INSTRUCTIONS_TESTING.md now requires a concise what-each-test-proves comment, allowing one shared comment for a cohesive group and separate material limits/different claims. PR https://github.com/relux-works/relux-agents-infra/pull/37; signed head 0936a4113d8453a8dd23bac923816bf9a4af9b8f. Complete remote diff and generated global instruction diff reviewed; source and installed Claude module match; Codex rendered rule present. Instruction-only synchronization used the supported refresh-links renderer with task-temporary helper/provider targets, then installed only the reviewed instructions; no live runtime restart or code changes. Evidence under .temp/TASK-260908-2eroez/proof-comments. No broader test-suite claim for this prose-only addition.
+2026-09-11 goal audit: verified on main (PR #36 eeb503d, PR #37 0936a41; .instructions/INSTRUCTIONS_TESTING.md). Set done.
 
 ## Precondition Resources
 (none)
@@ -33,7 +34,7 @@ Follow-up delivered: source .instructions/INSTRUCTIONS_TESTING.md now requires a
 2026-09-08T14:41:02Z
 
 ## Last Update
-2026-09-08T14:56:12Z
+2026-09-11T12:40:36Z
 
 ## Assigned To
 codex-negative-testing

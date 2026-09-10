@@ -1,5 +1,5 @@
 ## Status
-backlog
+closed
 
 ## Review
 required
@@ -24,6 +24,7 @@ notEstimated
 - [ ] Anything it cannot do on this path is a named blocker, not a silent gap
 
 ## Notes
+2026-09-11 goal audit: closed — outside the primary goal and outside this repo (belongs to skill-agents-management pkg/agentic). Zero OpenCode/Hermes references on main. Reopen upstream after STORY-260830-37bq03 removes the hardcoded environment list.
 
 ## Precondition Resources
 (none)
@@ -35,4 +36,4 @@ notEstimated
 2026-08-29T22:25:42Z
 
 ## Last Update
-2026-08-29T22:28:27Z
+2026-09-11T12:41:12Z

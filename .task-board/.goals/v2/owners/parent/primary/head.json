@@ -6,11 +6,11 @@
   },
   "active_ref": {
     "id": "PRIMARY-GOAL-260810-e18kwi",
-    "revision": 28
+    "revision": 29
   },
   "latest_ref": {
     "id": "PRIMARY-GOAL-260810-e18kwi",
-    "revision": 28
+    "revision": 29
   },
-  "native_status": "pending-unbound"
+  "native_status": "applied"
 }

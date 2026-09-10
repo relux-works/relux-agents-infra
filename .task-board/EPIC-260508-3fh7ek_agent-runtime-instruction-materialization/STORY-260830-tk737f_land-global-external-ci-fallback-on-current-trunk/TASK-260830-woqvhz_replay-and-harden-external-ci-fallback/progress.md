@@ -1,5 +1,5 @@
 ## Status
-to-dev
+closed
 
 ## Review
 required
@@ -74,6 +74,7 @@ spawn queued: [reviewer] reviewer (codex) (run=RUN-260830-f8cbd8, max_parallel=2
 spawn run started: [reviewer] reviewer (codex) (run=RUN-260830-f8cbd8)
 agent completed: [reviewer] reviewer (codex) (exit=0)
 spawn run completed: codex (run=RUN-260830-f8cbd8, pid=50719, exit=0)
+2026-09-11 goal audit: closed as superseded duplicate. Global external-CI local-mirror fallback policy landed via STORY-260830-11fnea / PR #23 (4270549); candidate text byte-identical to main INSTRUCTIONS_WORKFLOW.md.
 
 ## Precondition Resources
 - [external-ci-rev4.patch](file://TASK-260830-woqvhz/external-ci-rev4.patch) — Exact historical revision 4 patch sha256 d901bc4a81bf509a70751ccd1e2735dee245119184cb3c2af07454adf50e3621
@@ -128,7 +129,7 @@ spawn run completed: codex (run=RUN-260830-f8cbd8, pid=50719, exit=0)
 2026-08-30T01:25:57Z
 
 ## Last Update
-2026-08-30T08:15:26Z
+2026-09-11T12:39:39Z
 
 ## Assigned To
 [reviewer] reviewer (codex)

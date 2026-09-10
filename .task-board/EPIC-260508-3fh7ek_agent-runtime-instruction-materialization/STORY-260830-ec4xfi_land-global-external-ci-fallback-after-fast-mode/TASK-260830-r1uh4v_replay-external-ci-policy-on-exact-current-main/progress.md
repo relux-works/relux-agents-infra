@@ -1,5 +1,5 @@
 ## Status
-blocked
+closed
 
 ## Review
 required
@@ -14,7 +14,7 @@ estimated(fibonacci(8))
 - (none)
 
 ## Blocks
-- TASK-260830-3ijgkr
+- (none)
 
 ## Checklist
 - [x] Prove fetched origin/main, selected base, Story branch HEAD, and workspace HEAD are identical before editing
@@ -60,6 +60,7 @@ Revision-2 rework kills the additive trigger and Claude entrypoint bypasses plus
 agent completed: [implementer] developer (codex) (exit=0)
 spawn run completed: codex (run=RUN-260830-8ba697, pid=76880, exit=0)
 No Change Request revision was published for TASK-260830-r1uh4v (handoff_unsatisfied): the board is not at to-review
+2026-09-11 goal audit: closed as superseded duplicate. Global external-CI local-mirror fallback policy landed via STORY-260830-11fnea / PR #23 (4270549); candidate text byte-identical to main INSTRUCTIONS_WORKFLOW.md.
 
 ## Precondition Resources
 - [validated-four-path-replay.patch](file://TASK-260830-r1uh4v/validated-four-path-replay.patch) — Validated non-authorizing four-path replay input from the stale predecessor
@@ -82,7 +83,7 @@ No Change Request revision was published for TASK-260830-r1uh4v (handoff_unsatis
 2026-08-30T08:43:23Z
 
 ## Last Update
-2026-08-30T09:23:20Z
+2026-09-11T12:39:36Z
 
 ## Assigned To
 [implementer] developer (codex)
