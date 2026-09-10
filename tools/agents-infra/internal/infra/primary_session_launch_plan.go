@@ -205,10 +205,10 @@ func (e *PrimarySessionComposeError) Unwrap() error { return e.Err }
 // provider without launching anything. lookPath resolves the provider
 // executable and defaults to exec.LookPath; tests inject a fake.
 func BuildPrimarySessionLaunchPlan(provider, projectDir, homeDir string, userArgs []string, producer ChildLaunchCompositionProducer, lookPath func(string) (string, error)) (PrimarySessionLaunchPlan, error) {
-	if provider != "codex" && provider != "claude" && provider != "pi" {
+	if err := ValidateLaunchableProvider(provider); err != nil {
 		return PrimarySessionLaunchPlan{}, &PrimarySessionComposeError{
 			Code: PrimarySessionErrorInvalidProjectConfiguration,
-			Err:  fmt.Errorf("unsupported provider %q", provider),
+			Err:  err,
 		}
 	}
 	canonicalProjectDir, err := CanonicalProjectDir(projectDir)
@@ -222,7 +222,7 @@ func BuildPrimarySessionLaunchPlan(provider, projectDir, homeDir string, userArg
 		lookPath = exec.LookPath
 	}
 	executable := ""
-	if provider != "pi" {
+	if system, ok := launchableSystemForProvider(provider); ok && system.ResolvesExecutable {
 		executable, err = lookPath(provider)
 		if err != nil {
 			return PrimarySessionLaunchPlan{}, &PrimarySessionComposeError{
@@ -247,11 +247,11 @@ func BuildPrimarySessionLaunchPlan(provider, projectDir, homeDir string, userArg
 	result.Resolved.MCP.Sources = []string{}
 
 	switch provider {
-	case "codex":
+	case launchableProviderCodex:
 		err = buildCodexPrimarySessionLaunchPlan(&result, canonicalProjectDir, homeDir, userArgs)
-	case "claude":
+	case launchableProviderClaude:
 		err = buildClaudePrimarySessionLaunchPlan(&result, canonicalProjectDir, homeDir, userArgs)
-	case "pi":
+	case launchableProviderPi:
 		err = buildPiPrimarySessionLaunchPlan(&result, canonicalProjectDir, homeDir, userArgs, lookPath)
 	}
 	if err != nil {

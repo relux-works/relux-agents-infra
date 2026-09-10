@@ -12,9 +12,184 @@ import (
 	"github.com/relux-works/skill-agents-management/pkg/plugin"
 	"github.com/relux-works/skill-agents-management/pkg/vendorplugin"
 	localmodels "github.com/relux-works/skill-agents-management/pkg/vendorplugin/vendors/local-models"
+
+	// Blank-imported so their init() registers "codex" and "claude-code" into
+	// agentic.Default. Pi registers the same way through the managementpi
+	// import above, which this file already uses for its constructor. Without
+	// these two, ValidateLaunchableEnvironment's registry cross-check would
+	// have nothing to find codex or claude-code under, and would fail closed
+	// on every launch — the opposite of the "registered but unlaunchable"
+	// refusal the cross-check exists to produce for a system such as
+	// gemini-cli, which this program deliberately never imports.
+	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/claude"
+	_ "github.com/relux-works/skill-agents-management/pkg/agentic/systems/codex"
 )
 
 const defaultPiInferenceEngineID plugin.ID = "mlx"
+
+const (
+	launchableEnvironmentCodex      = "codex"
+	launchableEnvironmentClaudeCode = "claude-code"
+	launchableEnvironmentPi         = "pi"
+
+	launchableProviderCodex  = "codex"
+	launchableProviderClaude = "claude"
+	launchableProviderPi     = "pi"
+)
+
+// LaunchableSystem pairs the environment identifier agents-infra's own
+// project configuration and canonical-target resolution use
+// (agents.targets.*.environment) with the provider label agents-infra's
+// primary-session dispatch and preparation surfaces use for the very same
+// agentic system.
+//
+// This table is the ONLY place the admitted agentic-system identifiers may be
+// enumerated as a set. Every admission and dispatch site in
+// project_config.go, canonical_target.go and primary_session_launch_plan.go
+// reads it through the accessors below instead of restating "codex",
+// "claude-code", "claude" or "pi" as a literal list or a switch keyed
+// directly on those strings.
+//
+// agentic.Default — the compatibility registry skill-agents-management's
+// system plugins self-register into via their own init() — is WIDER than
+// this table: it also carries gemini-cli, muse, qwen-code and antigravity,
+// none of which this program has a launcher for. Registry membership is
+// therefore necessary but never sufficient for admission: both
+// ValidateLaunchableEnvironment and ValidateLaunchableProvider require the
+// identifier to be declared here AND registered, under that exact spelling,
+// before admitting it.
+type LaunchableSystem struct {
+	// Environment is the agents-infra project-config spelling and must equal
+	// a registered agentic.SystemID exactly, byte for byte — not merely its
+	// normalized form, so that a case or alias variant of an admitted id
+	// (for example "Codex" or "claude") is refused rather than silently
+	// folded onto its canonical spelling.
+	Environment string
+	// Provider is agents-infra's own primary-session dispatch label: the
+	// spelling BuildPrimarySessionLaunchPlan selects a builder with and, for
+	// a hosted system, the executable name exec.LookPath resolves. It
+	// predates and differs from the agentic system id for Claude
+	// (claude-code / claude); the two are declared together here rather than
+	// derived from one another because nothing after registration recovers
+	// one spelling from the other.
+	Provider string
+	// ResolvesExecutable reports whether this provider's launch plan resolves
+	// its executable through exec.LookPath. Pi is the one declared system for
+	// which this is false: it has no primary-session executable of its own.
+	ResolvesExecutable bool
+}
+
+// launchableSystems is the single declaration named above.
+var launchableSystems = []LaunchableSystem{
+	{Environment: launchableEnvironmentCodex, Provider: launchableProviderCodex, ResolvesExecutable: true},
+	{Environment: launchableEnvironmentClaudeCode, Provider: launchableProviderClaude, ResolvesExecutable: true},
+	{Environment: launchableEnvironmentPi, Provider: launchableProviderPi, ResolvesExecutable: false},
+}
+
+// LaunchableEnvironments returns the admitted agents.targets.*.environment
+// identifiers, in declaration order. The slice is freshly built on every
+// call so a caller cannot reorder or grow the declaration through it.
+func LaunchableEnvironments() []string {
+	out := make([]string, len(launchableSystems))
+	for i, system := range launchableSystems {
+		out[i] = system.Environment
+	}
+	return out
+}
+
+// LaunchableProviders returns the admitted primary-session provider labels,
+// in declaration order.
+func LaunchableProviders() []string {
+	out := make([]string, len(launchableSystems))
+	for i, system := range launchableSystems {
+		out[i] = system.Provider
+	}
+	return out
+}
+
+// launchableSystemForEnvironment returns the declared row for environment,
+// and false when environment is not one of launchableSystems.
+func launchableSystemForEnvironment(environment string) (LaunchableSystem, bool) {
+	for _, system := range launchableSystems {
+		if system.Environment == environment {
+			return system, true
+		}
+	}
+	return LaunchableSystem{}, false
+}
+
+// launchableSystemForProvider returns the declared row for provider, and
+// false when provider is not one of launchableSystems.
+func launchableSystemForProvider(provider string) (LaunchableSystem, bool) {
+	for _, system := range launchableSystems {
+		if system.Provider == provider {
+			return system, true
+		}
+	}
+	return LaunchableSystem{}, false
+}
+
+// ProviderForLaunchableEnvironment returns the provider label declared for
+// environment, and false when environment is not admitted. It is the single
+// source canonicalProviderForEnvironment reads from, replacing what used to
+// be a second, independently maintained switch over the same three strings.
+func ProviderForLaunchableEnvironment(environment string) (string, bool) {
+	system, ok := launchableSystemForEnvironment(environment)
+	return system.Provider, ok
+}
+
+// agenticLookup is the shape of the registry cross-check every admission
+// entry runs through: agentic.Default.Lookup in production, and an isolated
+// agentic.NewRegistry()'s Lookup in a test that needs to prove the check is
+// load-bearing without being able to mutate the real global registry.
+type agenticLookup func(agentic.SystemID) (agentic.System, bool)
+
+// ValidateLaunchableEnvironment is the production entry every admission path
+// that accepts an agents.targets.*.environment value calls. It refuses any
+// identifier that is not BOTH declared in launchableSystems AND registered,
+// under that exact spelling, in the real agentic compatibility registry.
+//
+// The agentic registry is wider than what this program can launch, so
+// registry membership alone never admits a system: a registered-but-
+// unlaunchable id such as gemini-cli is refused here precisely because it is
+// absent from launchableSystems. The declaration is not trusted on its own
+// either — a typo naming a system nothing actually registered, or a change
+// that dropped the registry cross-check, is caught here instead of silently
+// admitting a launch nothing downstream can dispatch.
+func ValidateLaunchableEnvironment(environment string) error {
+	return validateLaunchableEnvironment(environment, agentic.Default.Lookup)
+}
+
+func validateLaunchableEnvironment(environment string, lookup agenticLookup) error {
+	admitted := LaunchableEnvironments()
+	if !containsString(admitted, environment) {
+		return fmt.Errorf("must be one of %s", strings.Join(admitted, ", "))
+	}
+	if _, ok := lookup(agentic.SystemID(environment)); !ok {
+		return fmt.Errorf("must be one of %s", strings.Join(admitted, ", "))
+	}
+	return nil
+}
+
+// ValidateLaunchableProvider is the production entry every admission path
+// that accepts a primary-session provider label calls. The same declared-
+// AND-registered rule as ValidateLaunchableEnvironment applies, cross-checked
+// through the provider's declared environment spelling — the spelling the
+// agentic registry actually keys on.
+func ValidateLaunchableProvider(provider string) error {
+	return validateLaunchableProvider(provider, agentic.Default.Lookup)
+}
+
+func validateLaunchableProvider(provider string, lookup agenticLookup) error {
+	system, ok := launchableSystemForProvider(provider)
+	if !ok {
+		return fmt.Errorf("unsupported provider %q", provider)
+	}
+	if _, ok := lookup(agentic.SystemID(system.Environment)); !ok {
+		return fmt.Errorf("unsupported provider %q", provider)
+	}
+	return nil
+}
 
 // PiPluginGraph is the trusted assembly result consumed by BuildLaunch. The
 // registry owns the adapter; launch callers receive no observation setter or

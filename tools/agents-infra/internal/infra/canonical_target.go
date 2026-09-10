@@ -76,26 +76,18 @@ type ResolvedCanonicalTarget struct {
 }
 
 func canonicalProviderForEnvironment(environment string) string {
-	switch environment {
-	case "codex":
-		return "codex"
-	case "claude-code":
-		return "claude"
-	case "pi":
-		return "pi"
-	default:
-		return ""
-	}
+	provider, _ := ProviderForLaunchableEnvironment(environment)
+	return provider
 }
 
 func CanonicalProviderForEntrypoint(entrypoint string) string {
 	switch entrypoint {
 	case "openai-infra":
-		return "codex"
+		return launchableProviderCodex
 	case "anthropic-infra":
-		return "claude"
+		return launchableProviderClaude
 	case "qwen-infra":
-		return "pi"
+		return launchableProviderPi
 	default:
 		return ""
 	}
@@ -414,11 +406,11 @@ func redactCanonicalDiagnosticArgs(args []string) []string {
 
 func lockCanonicalTargetArguments(resolved ResolvedCanonicalTarget, args []string) ([]string, error) {
 	switch resolved.Target.Environment {
-	case "codex":
+	case launchableEnvironmentCodex:
 		return lockCodexTargetArguments(resolved, args)
-	case "claude-code":
+	case launchableEnvironmentClaudeCode:
 		return lockClaudeTargetArguments(resolved, args)
-	case "pi":
+	case launchableEnvironmentPi:
 		return lockPiTargetArguments(resolved, args)
 	default:
 		return nil, targetIdentityConflict(resolved, targetsField+"."+resolved.Target.Name+".environment", "select an admitted target environment")

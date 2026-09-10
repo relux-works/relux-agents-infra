@@ -3,6 +3,14 @@
 > Institutional memory. Concise, factual, high-signal.
 > Newest entries first. One block per insight.
 
+## 2026-09-11
+
+### 1345 — Environment Admission Has a Coincidental Second Gate
+- FINDING: `validateProjectTarget` (tools/agents-infra/internal/infra/project_config.go) now refuses an unadmitted `environment` value through `ValidateLaunchableEnvironment` (agents_management_registry.go, TASK-260911-39bag5), but a downstream vendor/environment pairing `switch`'s `default` arm ALSO refuses any pair it does not explicitly admit — with a different message (`"vendor/environment pair %s/%s is not admitted"` vs `"must be one of codex, claude-code, pi"`). A mutant that let an unadmitted environment (e.g. a registered-but-unlaunchable agentic system such as `gemini-cli`) past the first gate was still coincidentally caught by the second when driven with a made-up vendor/environment pair, so a test asserting only `err != nil` at that call site passed against the mutant for the wrong reason.
+- FIX: `TestValidateProjectTargetRefusesRegisteredButUnlaunchableEnvironmentAtTheRealCallSite` asserts the specific gate's own wording, not mere error presence, to prove which gate actually refused.
+- DECISION: agentic-system admission must always cross-check TWO things together — a program-local launchable-set declaration AND membership in `skill-agents-management`'s `pkg/agentic.Default` — never registry membership alone: `agentic.Default` is a wider global registry (also carries `gemini-cli`, `muse`, `qwen-code`, `antigravity` when those plugin packages are imported anywhere in the binary).
+- SCOPE: TASK-260911-39bag5 (STORY-260830-37bq03); `project_config.go`, `canonical_target.go`, `primary_session_launch_plan.go`, `agents_management_registry.go`.
+
 ## 2026-09-10
 
 ### 2110 — Board Audit: Forty Records Claimed Work That Trunk Already Carried

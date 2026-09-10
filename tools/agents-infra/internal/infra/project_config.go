@@ -408,8 +408,8 @@ func validateProjectTarget(target ProjectTarget) error {
 	if !containsString([]string{"openai", "anthropic", "qwen"}, target.Vendor) {
 		return fieldError("vendor", errors.New("must be one of openai, anthropic, qwen"))
 	}
-	if !containsString([]string{"codex", "claude-code", "pi"}, target.Environment) {
-		return fieldError("environment", errors.New("must be one of codex, claude-code, pi"))
+	if err := ValidateLaunchableEnvironment(target.Environment); err != nil {
+		return fieldError("environment", err)
 	}
 	profileForbidden := func() error {
 		switch {
