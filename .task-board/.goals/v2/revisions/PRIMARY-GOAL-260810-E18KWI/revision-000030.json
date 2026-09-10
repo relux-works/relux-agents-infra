@@ -1,0 +1,46 @@
+{
+  "contract_version": "board-goal-v2",
+  "goal_id": "PRIMARY-GOAL-260810-e18kwi",
+  "revision": 30,
+  "expected_previous_revision": 29,
+  "previous_ref": {
+    "id": "PRIMARY-GOAL-260810-e18kwi",
+    "revision": 29
+  },
+  "owner": {
+    "kind": "parent",
+    "id": "primary"
+  },
+  "kind": "alignment",
+  "objective": "Keep relux-agents-infra trunk green and preserve what is landed; no active runtime work remains on the board as of 2026-09-11 (rev 30). Preserve as landed: registry-derived environment admission and dispatch through skill-agents-management v0.5.9 (no hardcoded codex/claude-code/pi lists; TASK-260830-11ajl2 identity-only guard is superseded and must not be revived); the inference engine as an explicit profile axis with per-engine canonical-knob translation and the landed engine-adapter contract spec; the versioned SharedRuntimeStatus contract v1, KV-bound vs context_window enforcement and the KV-saturation alert surfaced through the runtime log; the all-missing-fields profile diagnostic and the deterministic readiness test; the explicit non-editable mlx-lm fork pin (6d2df63, containing bounded KV, generation-loop recovery #1513 and the effective-config report) verified by model-harness doctor, with the written retirement condition (an upstream PyPI release carrying #1513 and the KV bound); the agents-management lockstep release/rollback plan; mixed spawn policy (gpt-5.6-sol up to medium, claude-sonnet-5 up to high, gpt-6-astra admitted, less_or_equal ceilings, class-aware recommendations, Codex fast_mode absent or false); the generic Pi adapter, restart/quarantine, retention, resource-pressure status and eight-week soak evidence; fail-closed setup; canonical vendor targets; project-local instruction ownership; task-board version-control authority; external-CI local-mirror fallback; Claude trust-warning diagnostics without mutating user trust configuration; openai-dange/anthropic-dange aliases with production-call regression coverage; provider-local primary-session composition; the negative-testing and test-proof instruction baseline; and the accepted NO-GO runtime migration decision. Cross-repo follow-ups are owned elsewhere: skill-agents-management TASK-260911-11qss1 (pi-plugin inversion) and TASK-260911-1073tu (llama.cpp/mlx-lm/MLX Swift engine adapters); skill-project-management STORY-260830-2wsyq0 (task-board defects incl. BUG-260911-2wdvv7, BUG-260911-b9a1y8, BUG-260911-2tvq62). Reopen STORY-260831-3vdoag (runtime migration) only with new evidence; when an upstream skill-agents-management release delivers the pi-plugin inversion or the engine adapters, consume it through a new tracked Story rather than by widening this goal.",
+  "scope": {
+    "requested_ids": null,
+    "resolved_leaf_items": null
+  },
+  "mutation_authority": "agent_discretion",
+  "success_predicate": "alignment_handled",
+  "provider_condition": "The bound parent session has handled this exact alignment revision.",
+  "native_reflection": "required",
+  "state": "active",
+  "legacy_refs": [
+    {
+      "contract": "primary-goal-v1",
+      "id": "PRIMARY-GOAL-260810-e18kwi",
+      "revision": 30
+    }
+  ],
+  "role_policy": {},
+  "mutation": {
+    "kind": "alignment_realigned",
+    "reason": "2026-09-11: all six rev-29 stories landed on main (PRs #44-#48); board open set is only the deferred STORY-260831-3vdoag reopen path; cross-repo follow-ups mirrored to their owning boards.",
+    "actor_context": {
+      "kind": "agent",
+      "actor_id": "alexis"
+    },
+    "authority": "agent_discretion"
+  },
+  "created_at": "2026-08-10T20:09:43.346801Z",
+  "updated_at": "2026-09-11T17:11:09.932694Z",
+  "created_by": "alexis",
+  "reason": "2026-09-11: all six rev-29 stories landed on main (PRs #44-#48); board open set is only the deferred STORY-260831-3vdoag reopen path; cross-repo follow-ups mirrored to their owning boards."
+}

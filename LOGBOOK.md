@@ -84,6 +84,14 @@
 
 ## 2026-09-10
 
+### 2320 — Six Goal Stories Landed In One Serialized Wave; Every Cross-Story Restale Was LOGBOOK.md
+- MILESTONE: PRs #44–#48 landed STORY-260830-37bq03 (registry-derived admission), STORY-260830-112ewt (all-missing-fields diagnostic + readiness flake), STORY-260830-2mj14b (engine axis), STORY-260911-2lwfr0 (explicit mlx-lm fork pin + composed generation-recovery), STORY-260830-i540ax (KV bound vs context_window + KV saturation alert). Each through producer → independent reviewer → `worktree integrate` → PR with a review record → fail-closed fast-forward push.
+- FINDING: Every `integration_base_moved` in the wave intersected only on `LOGBOOK.md`; product paths never overlapped. Two Stories cost an extra refresh cycle each purely because the logbook is one append-only file. A per-entry directory (one file per entry, rendered on demand) would remove the intersection entirely.
+- FINDING: A Change Request published as `task_delta` cannot integrate once it becomes the final leaf; close or reparent cross-repo siblings BEFORE the last producer publishes. `refresh-candidate` admits only stale/rework revisions or an initial leaf with no CR; an `accepted` or `ready` revision on a stale base is a dead end that only `withdraw_cr` (ready) or a fresh-base republish from the patch resource (accepted) escapes.
+- FINDING: `refresh-candidate`'s LOGBOOK recombination dropped a trunk entry once (BUG-260830-5pmaiz rev2); the reviewer caught it because the brief demanded every trunk entry survive. Additions-only proof (`diff <(git show TRUNK:LOGBOOK.md) LOGBOOK.md` with zero deletions) is now a standing producer obligation.
+- FINDING: The goal's "upstream #1791 carries the recovery fix" premise was wrong — #1791 is unrelated; the generation-loop recovery is fork-only (#1513). The pinned tree now contains it (6d2df63) and the retirement condition names the right PR.
+- STATUS: Board open set is exactly the deferred STORY-260831-3vdoag reopen path. Primary goal realigned to revision 30.
+
 ### 2110 — Board Audit: Forty Records Claimed Work That Trunk Already Carried
 - FINDING: Of 67 open board items, 40 were stale: 12 replay-on-fresh-trunk shells whose candidate deltas were byte-identical to what PRs #13, #23, #26 and #30 had already landed, 10 "done" or "to-review" records whose commits only existed on unpushed local Story branches, 7 task-board tool defects filed against the wrong repository, and 4 items contradicting current policy (codex fast_mode, a 50k Qwen window, OpenCode/Hermes plugins outside the goal).
 - ROOT CAUSE: Base moves during concurrent Stories forced re-review of unchanged deltas (BUG-260830-2uo1vq); each replay left the superseded record open, and reviewer-done leaves under a Story were never integrated once the Story lost its lease.
