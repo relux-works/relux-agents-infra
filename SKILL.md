@@ -497,6 +497,25 @@ configured bounded output, samples process RSS, emits one versioned JSON
 report, and reaps the runtime. Treat it as host-capacity evidence, not a model
 quality or production-throughput benchmark.
 
+A Pi profile's `context_window` and its referenced model-harness profile's
+`--max-kv-size` are two independent numbers in two separately edited files,
+and they must move together. `context_window` is what agents-infra manages the
+conversation to; `--max-kv-size` is the hard ceiling on the runtime's active-
+generation KV cache. `--max-kv-size` below `context_window` does not refuse a
+request that no longer fits — it silently overwrites the oldest tokens in a
+fixed-size ring, so the model degrades instead of failing loudly. Raising
+`context_window` without also raising the referenced profile's
+`--max-kv-size` reproduces exactly that silent-truncation failure; the
+deployed `qwen-3.8-27b-mlx-8bit` profile ran this way against `qwen-local`'s
+unbounded KV cache until an operator hand-patched `--max-kv-size` on
+2026-08-30. `--prompt-cache-bytes` is a different mechanism (the pool of
+stored prefix caches reused across requests) and does not bound this. For a
+Pi profile whose `runtime.argv` invokes `model-harness run PROFILE --config
+PATH ...`, `parsePiProfile` resolves that referenced model-harness profile and
+refuses the project config at load time when `--max-kv-size` is absent or
+below `context_window`, naming both values; raise `--max-kv-size` to at least
+`context_window` (or lower `context_window`) before deploying.
+
 Every Pi profile must explicitly configure positive lifecycle retention count,
 committed-byte, logical-envelope-byte, age, create/append/close/status/
 maintenance timeout, scan-entry, scan-control-byte, and mutation caps. There

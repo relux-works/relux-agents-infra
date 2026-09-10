@@ -238,8 +238,15 @@ func RunPi(opts RunPiOptions) error {
 	runtimeCmd.Env = opts.Environ
 	outputMu := new(sync.Mutex)
 	runtimeOutput := newPiSynchronizedWriter(outputMu, opts.Stderr)
-	runtimeCmd.Stdout = runtimeOutput
-	runtimeCmd.Stderr = runtimeOutput
+	kvBoundAlertOutput := newPiKVBoundAlertWriter(runtimeOutput, func(requestID string, maxKVSize, observedTokens int) {
+		_ = sessionLog.event(opts.Context, "runtime_kv_cache_bound_exceeded", map[string]any{
+			"request_id":      requestID,
+			"max_kv_size":     maxKVSize,
+			"observed_tokens": observedTokens,
+		})
+	})
+	runtimeCmd.Stdout = kvBoundAlertOutput
+	runtimeCmd.Stderr = kvBoundAlertOutput
 	runtimeCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := runtimeCmd.Start(); err != nil {
 		_ = sessionLog.event(opts.Context, "runtime_start_failed", map[string]any{"error": err.Error()})

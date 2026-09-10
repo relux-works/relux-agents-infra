@@ -361,6 +361,9 @@ func parsePiProfile(table map[string]any, path, name string) (PiProfile, error) 
 	if err := validatePiRuntimeEndpointArgv(p.Runtime.Argv, p.BaseURL); err != nil {
 		return p, projectConfigFieldError(path, field+".runtime.argv", err)
 	}
+	if err := validatePiModelHarnessKVBound(p.ContextWindow, p.BaseURL, p.Runtime); err != nil {
+		return p, projectConfigFieldError(path, field+".runtime.argv", err)
+	}
 	if err := validatePiRuntimeCacheBudgetArgv(p.Runtime.Argv, p.CacheBudgetBytes); err != nil {
 		return p, projectConfigFieldError(path, field+".runtime.argv", err)
 	}

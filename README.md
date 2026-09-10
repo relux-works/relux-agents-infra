@@ -915,6 +915,20 @@ startup_timeout_seconds = 120
 shutdown_timeout_seconds = 10
 ```
 
+When `runtime.argv` invokes `model-harness run PROFILE [--config PATH] ...`
+like this, the Pi profile's own `context_window` and the referenced
+model-harness profile's `--max-kv-size` are two numbers in two separately
+edited files that must move together. `context_window` bounds what
+agents-infra manages the conversation to; `--max-kv-size` is the runtime's
+hard ceiling on its active-generation KV cache, a *different* mechanism from
+`--prompt-cache-bytes` (the pool of stored prefix caches reused across
+requests). A `--max-kv-size` below `context_window` does not refuse an
+oversized request — it silently overwrites the oldest tokens in a fixed-size
+ring, so raising `context_window` without also raising `--max-kv-size`
+degrades the model instead of failing loudly. `parsePiProfile` resolves the
+referenced model-harness profile at project-config load time and refuses when
+`--max-kv-size` is absent or below `context_window`, naming both values.
+
 `runtime.sharing` is an explicit, strict opt-in. Its table has no field
 defaults: unknown or missing members fail closed, `mode` is `exclusive` or
 `shared`, the heartbeat interval must be below the stale-reporting threshold,
