@@ -22,27 +22,43 @@ const (
 )
 
 var profileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var pinnedDistributionPackagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+var pinnedDistributionCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type Document struct {
 	Profiles map[string]Profile `toml:"profiles"`
 }
 
 type Profile struct {
-	Mode             string             `toml:"mode"`
-	Engine           string             `toml:"engine,omitempty"`
-	Model            string             `toml:"model,omitempty"`
-	Executable       string             `toml:"executable,omitempty"`
-	Argv             []string           `toml:"argv,omitempty"`
-	Knobs            *Knobs             `toml:"knobs,omitempty"`
-	SSHExecutable    string             `toml:"ssh_executable,omitempty"`
-	SSHTarget        string             `toml:"ssh_target,omitempty"`
-	RemoteExecutable string             `toml:"remote_executable,omitempty"`
-	RemoteConfig     string             `toml:"remote_config,omitempty"`
-	RemoteProfile    string             `toml:"remote_profile,omitempty"`
-	RemoteHost       string             `toml:"remote_host,omitempty"`
-	RemotePort       int                `toml:"remote_port,omitempty"`
-	Stress           *StressPolicy      `toml:"stress,omitempty"`
-	Supervision      *SupervisionPolicy `toml:"supervision,omitempty"`
+	Mode               string              `toml:"mode"`
+	Engine             string              `toml:"engine,omitempty"`
+	Model              string              `toml:"model,omitempty"`
+	Executable         string              `toml:"executable,omitempty"`
+	Argv               []string            `toml:"argv,omitempty"`
+	Knobs              *Knobs              `toml:"knobs,omitempty"`
+	SSHExecutable      string              `toml:"ssh_executable,omitempty"`
+	SSHTarget          string              `toml:"ssh_target,omitempty"`
+	RemoteExecutable   string              `toml:"remote_executable,omitempty"`
+	RemoteConfig       string              `toml:"remote_config,omitempty"`
+	RemoteProfile      string              `toml:"remote_profile,omitempty"`
+	RemoteHost         string              `toml:"remote_host,omitempty"`
+	RemotePort         int                 `toml:"remote_port,omitempty"`
+	Stress             *StressPolicy       `toml:"stress,omitempty"`
+	Supervision        *SupervisionPolicy  `toml:"supervision,omitempty"`
+	PinnedDistribution *PinnedDistribution `toml:"pinned_distribution,omitempty"`
+}
+
+// PinnedDistribution refuses an editable or commit-drifted install of a
+// backend Python package that is required to be built from a reviewed,
+// explicit fork commit until an upstream release replaces it. Package is the
+// PyPI/importlib distribution name (the dist-info directory prefix before the
+// first "-<version>"), SitePackages is the absolute site-packages directory
+// of the venv that must hold it, and Commit is the full 40-character git
+// commit the installed PEP 610 direct_url.json vcs_info must match exactly.
+type PinnedDistribution struct {
+	Package      string `toml:"package"`
+	SitePackages string `toml:"site_packages"`
+	Commit       string `toml:"commit"`
 }
 
 type StressPolicy struct {
@@ -62,19 +78,20 @@ type SupervisionPolicy struct {
 }
 
 type Plan struct {
-	Contract      string             `json:"contract"`
-	SchemaVersion int                `json:"schema_version"`
-	Config        string             `json:"config"`
-	Profile       string             `json:"profile"`
-	Mode          string             `json:"mode"`
-	Engine        string             `json:"engine,omitempty"`
-	Model         string             `json:"model,omitempty"`
-	Executable    string             `json:"executable"`
-	Argv          []string           `json:"argv"`
-	Endpoint      string             `json:"endpoint"`
-	Remote        *RemotePlan        `json:"remote,omitempty"`
-	Stress        *StressPolicy      `json:"stress,omitempty"`
-	Supervision   *SupervisionPolicy `json:"supervision,omitempty"`
+	Contract           string              `json:"contract"`
+	SchemaVersion      int                 `json:"schema_version"`
+	Config             string              `json:"config"`
+	Profile            string              `json:"profile"`
+	Mode               string              `json:"mode"`
+	Engine             string              `json:"engine,omitempty"`
+	Model              string              `json:"model,omitempty"`
+	Executable         string              `json:"executable"`
+	Argv               []string            `json:"argv"`
+	Endpoint           string              `json:"endpoint"`
+	Remote             *RemotePlan         `json:"remote,omitempty"`
+	Stress             *StressPolicy       `json:"stress,omitempty"`
+	Supervision        *SupervisionPolicy  `json:"supervision,omitempty"`
+	PinnedDistribution *PinnedDistribution `json:"pinned_distribution,omitempty"`
 }
 
 type RemotePlan struct {
@@ -157,6 +174,7 @@ func Resolve(configPath, profileName, host string, port int) (Plan, error) {
 			return Plan{}, fmt.Errorf("profile %q: %w", profileName, err)
 		}
 		plan.Argv = append(argv, knobArgv...)
+		plan.PinnedDistribution = profile.PinnedDistribution
 	case "ssh":
 		plan.Executable = profile.SSHExecutable
 		plan.Remote = &RemotePlan{
@@ -265,6 +283,9 @@ func validateProfile(name string, profile Profile) error {
 		if err := validateSupervisionPolicy(name, profile.Supervision); err != nil {
 			return err
 		}
+		if err := validatePinnedDistribution(name, profile.PinnedDistribution); err != nil {
+			return err
+		}
 	case "ssh":
 		if profile.Executable != "" || len(profile.Argv) != 0 {
 			return fmt.Errorf("profile %q: ssh mode cannot declare executable or argv", name)
@@ -301,6 +322,9 @@ func validateProfile(name string, profile Profile) error {
 		}
 		if profile.Supervision != nil {
 			return fmt.Errorf("profile %q: supervision is currently supported only for local mode", name)
+		}
+		if profile.PinnedDistribution != nil {
+			return fmt.Errorf("profile %q: pinned_distribution is currently supported only for local mode", name)
 		}
 	default:
 		return fmt.Errorf("profile %q: mode must equal local or ssh", name)
@@ -350,6 +374,29 @@ func validateStressPolicy(name string, policy *StressPolicy) error {
 	}
 	if policy.SampleIntervalMilliseconds < 50 || policy.SampleIntervalMilliseconds > 10000 {
 		return fmt.Errorf("profile %q: stress.sample_interval_milliseconds must be between 50 and 10000", name)
+	}
+	return nil
+}
+
+func validatePinnedDistribution(name string, pin *PinnedDistribution) error {
+	if pin == nil {
+		return nil
+	}
+	if !pinnedDistributionPackagePattern.MatchString(pin.Package) {
+		return fmt.Errorf("profile %q: pinned_distribution.package must be a simple distribution name", name)
+	}
+	if err := validateAbsoluteDir("pinned_distribution.site_packages", pin.SitePackages); err != nil {
+		return fmt.Errorf("profile %q: %w", name, err)
+	}
+	if !pinnedDistributionCommitPattern.MatchString(pin.Commit) {
+		return fmt.Errorf("profile %q: pinned_distribution.commit must be a full 40-character lowercase git commit hash", name)
+	}
+	return nil
+}
+
+func validateAbsoluteDir(field, value string) error {
+	if value == "" || !filepath.IsAbs(value) || strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("%s must be an absolute NUL-free path", field)
 	}
 	return nil
 }

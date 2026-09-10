@@ -659,6 +659,75 @@ holding its port; an interactive Ctrl-C happened to work only because the
 terminal signals the whole foreground group. On Windows there is no process
 group here and only the direct child is stopped.
 
+#### Pinned fork distribution
+
+A profile can require its backend to be installed non-editable from an exact
+git commit and refuse to start (via `model-harness doctor`) if the installed
+distribution is editable or has drifted to a different commit:
+
+```toml
+[profiles.qwen-local.pinned_distribution]
+package = "mlx_lm"
+site_packages = "/Users/alexis/.local/pipx/venvs/mlx-lm-relux/lib/python3.14/site-packages"
+commit = "06e2f0f355037a8b7a3e1562c24c0b95a5c03c4d"
+```
+
+`package` is the dist-info name prefix (the importlib/PyPI distribution name,
+not the pipx venv name), `site_packages` is the absolute `site-packages`
+directory of the venv that must hold it, and `commit` is the full 40-character
+git commit the installed [PEP 610](https://peps.python.org/pep-0610/)
+`direct_url.json` `vcs_info.commit_id` must equal exactly. `model-harness
+doctor PROFILE` reads that one `<package>-*.dist-info/direct_url.json` and
+refuses to report `status=ok` when `dir_info.editable` is true (an editable
+install tracks the local checkout's moving `HEAD` instead of a reviewed
+commit), when there is no `vcs_info` (a plain PyPI or unpinned local-directory
+install carries no commit provenance), or when `vcs_info.commit_id` does not
+equal the configured `commit`. It reports zero, one, or ambiguous multiple
+matching dist-info directories as distinct failures.
+
+This is what keeps `mlx-lm-relux` pinned. As of 2026-09-11 the fork
+[relux-works/mlx-lm](https://github.com/relux-works/mlx-lm) branch
+`task/TASK-260830-2hc5r2-bounded-kv` carries fixes not yet on a PyPI `mlx-lm`
+release: the Qwen3.5 `ArraysCache` Metal buffer-object leak fix (upstream PR
+#1632), the bounded-KV `--max-kv-size` behavior, and the generation-loop
+recovery fix (upstream [PR
+#1513](https://github.com/ml-explore/mlx-lm/pull/1513), **still open,
+unmerged** as of 2026-09-11 — catches per-request failures in the batched
+admission path, fails only the in-flight requests instead of silently killing
+the generation thread, and fixes a `None`-vs-`[]` placeholder bug in
+`PromptProcessingBatch.extend` that could crash a mixed batch). Do not confuse
+this with upstream PR #1791 ("Tie the health endpoint status to generation
+thread liveness", merged 2026-09-05): that is a *different*, already-merged
+fix this fork picked up earlier (commit `b0a45b8`) — it reports thread death
+via `/health`, it does not recover from it. `06e2f0f` is the merge commit
+that composes both: `git merge-base --is-ancestor 45a472f 06e2f0f` and
+`git merge-base --is-ancestor 91506981056172f937e7bdca4ab0d3b7459c7fab
+06e2f0f` both exit `0`.
+
+An editable pipx install (`pipx install --editable /path/to/checkout`)
+silently tracks whatever commit the local checkout's `HEAD` happens to be at,
+which is not a reviewed pin. Reinstall non-editable from the exact commit
+instead:
+
+```bash
+pipx uninstall mlx-lm-relux
+pipx install \
+  --suffix=-relux \
+  --python python3.14 \
+  'git+https://github.com/relux-works/mlx-lm.git@06e2f0f355037a8b7a3e1562c24c0b95a5c03c4d'
+```
+
+A git-URL pipx install is non-editable by construction and pip records the
+resolved commit in `direct_url.json`, which is exactly what
+`pinned_distribution` verifies. Point the consuming profile's `executable` at
+the resulting `~/.local/bin/mlx_lm-relux.server`.
+
+**Retirement condition:** drop `mlx-lm-relux` and `pinned_distribution` for
+this profile once a released `mlx-lm` version on PyPI contains both upstream
+PR #1513 (generation-loop recovery) and the bounded-KV `--max-kv-size`
+behavior this fork also carries; until then the fork stays required and the
+pin above is the source of truth for which commit is reviewed and running.
+
 #### llama.cpp profile
 
 `llama-server` runs as a managed child under the same local profile shape. The
@@ -1995,7 +2064,7 @@ established. The benchmark-only profiles pin both runtimes to a live-reported
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
 | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or explicitly retire legacy lifecycle evidence; inspect, stop, quarantine, or unquarantine shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra pi spawn --profile NAME --prompt "Complete the bounded task" --deadline 30m --result-schema 1`, `agents-infra pi turn --target qwen-infra --prompt "Complete the bounded task" --deadline 30m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra pi lifecycle status --project /path/to/project --profile NAME --json`, `agents-infra pi lifecycle retire-legacy --project /path/to/project --profile NAME --dry-run --json`, `agents-infra pi lifecycle retire-legacy --project /path/to/project --profile NAME --confirm PLAN_HASH --json`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30`, `agents-infra runtime quarantine --profile NAME`, `agents-infra runtime unquarantine --profile NAME` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose, lifecycle status/retirement, or standalone launch-plan JSON, one bounded schema-1 Pi turn result for machine consumers (or legacy raw JSONL for the operator surface), hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
-| `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+| `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details; `doctor` additionally refuses an editable or commit-drifted backend install when a profile declares `pinned_distribution` | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
 | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
 | `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, clocks first-to-last generated deltas across `content`, `reasoning`, and `reasoning_content`, seals per-scenario cached-token telemetry so one-sided reuse or unknown reuse is refused, and samples both runtimes over warm-up, scenario, soak and process windows with the same `peak_resident_memory_upper_bound_bytes`: exact Mach physical footprint plus a conservative upper edge for resident `vmmap` mapped-file bytes, sampling the cheap Mach component at 20 Hz, refreshing mapped-file residency at a bounded 0.2 Hz, and sampling synchronously at window boundaries; raw samples seal independent Mach and mapped-file timestamps, reused mapped values retain their original timestamp, and a scored scenario/process window must prove each component has no timestamp gap above 125 ms, while sparse, stale, untimestamped, absent, failed, partial or malformed series are refused; it seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
 | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |

@@ -320,6 +320,11 @@ func Doctor(plan Plan, stdout, stderr io.Writer) error {
 	if err := inspectExecutable(plan.Executable); err != nil {
 		return err
 	}
+	if plan.PinnedDistribution != nil {
+		if err := VerifyPinnedDistribution(*plan.PinnedDistribution); err != nil {
+			return err
+		}
+	}
 	if plan.Mode != "ssh" {
 		_, err := fmt.Fprintf(stdout, "profile=%s mode=%s executable=%s status=ok\n", plan.Profile, plan.Mode, plan.Executable)
 		return err

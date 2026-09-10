@@ -82,6 +82,32 @@ restart_delay_milliseconds = 1000
 	}
 }
 
+func TestResolveLocalPinnedDistribution(t *testing.T) {
+	config := writeConfig(t, `
+[profiles.qwen-local]
+mode = "local"
+executable = "/bin/echo"
+argv = ["serve", "--host", "{host}", "--port", "{port}"]
+
+[profiles.qwen-local.pinned_distribution]
+package = "mlx_lm"
+site_packages = "/Users/alexis/.local/pipx/venvs/mlx-lm-relux/lib/python3.14/site-packages"
+commit = "45a472f2d0cda166b7ffe1a80fe50dd9621f4303"
+`)
+	plan, err := Resolve(config, "qwen-local", "127.0.0.1", 18011)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &PinnedDistribution{
+		Package:      "mlx_lm",
+		SitePackages: "/Users/alexis/.local/pipx/venvs/mlx-lm-relux/lib/python3.14/site-packages",
+		Commit:       "45a472f2d0cda166b7ffe1a80fe50dd9621f4303",
+	}
+	if !reflect.DeepEqual(plan.PinnedDistribution, want) {
+		t.Fatalf("pinned_distribution=%#v want=%#v", plan.PinnedDistribution, want)
+	}
+}
+
 func TestResolveSSHProfile(t *testing.T) {
 	config := writeConfig(t, `
 [profiles.qwen-remote]
@@ -224,6 +250,69 @@ restart_window_seconds = 3600
 restart_delay_milliseconds = 1000
 `,
 			want: "supervision is currently supported only for local mode",
+		},
+		{
+			name: "pinned distribution short commit",
+			body: `
+[profiles.local]
+mode = "local"
+executable = "/bin/echo"
+argv = ["--host", "{host}", "--port", "{port}"]
+
+[profiles.local.pinned_distribution]
+package = "mlx_lm"
+site_packages = "/abs/site-packages"
+commit = "45a472f"
+`,
+			want: "pinned_distribution.commit must be a full 40-character lowercase git commit hash",
+		},
+		{
+			name: "pinned distribution relative site_packages",
+			body: `
+[profiles.local]
+mode = "local"
+executable = "/bin/echo"
+argv = ["--host", "{host}", "--port", "{port}"]
+
+[profiles.local.pinned_distribution]
+package = "mlx_lm"
+site_packages = "relative/site-packages"
+commit = "45a472f2d0cda166b7ffe1a80fe50dd9621f4303"
+`,
+			want: "pinned_distribution.site_packages must be an absolute NUL-free path",
+		},
+		{
+			name: "pinned distribution invalid package name",
+			body: `
+[profiles.local]
+mode = "local"
+executable = "/bin/echo"
+argv = ["--host", "{host}", "--port", "{port}"]
+
+[profiles.local.pinned_distribution]
+package = "../escape"
+site_packages = "/abs/site-packages"
+commit = "45a472f2d0cda166b7ffe1a80fe50dd9621f4303"
+`,
+			want: "pinned_distribution.package must be a simple distribution name",
+		},
+		{
+			name: "ssh pinned distribution",
+			body: `
+[profiles.remote]
+mode = "ssh"
+ssh_target = "host"
+remote_executable = "/bin/model-harness"
+remote_profile = "tiny"
+remote_host = "127.0.0.1"
+remote_port = 18011
+
+[profiles.remote.pinned_distribution]
+package = "mlx_lm"
+site_packages = "/abs/site-packages"
+commit = "45a472f2d0cda166b7ffe1a80fe50dd9621f4303"
+`,
+			want: "pinned_distribution is currently supported only for local mode",
 		},
 	}
 	for _, test := range tests {

@@ -70,6 +70,63 @@ kill -STOP $$
 	}
 }
 
+// TestDoctorPassesPinnedNonEditableInstall drives the production model-harness
+// doctor entry point: a profile declaring pinned_distribution must pass when
+// the installed backend is a non-editable git checkout at the pinned commit.
+func TestDoctorPassesPinnedNonEditableInstall(t *testing.T) {
+	sitePackages := t.TempDir()
+	writeDistInfo(t, sitePackages, "mlx_lm-0.32.0.dist-info", `{
+		"url": "https://github.com/relux-works/mlx-lm.git",
+		"vcs_info": {"vcs": "git", "commit_id": "`+testPinnedCommit+`", "requested_revision": "`+testPinnedCommit+`"}
+	}`)
+	plan := Plan{
+		Profile:    "qwen-local",
+		Mode:       "local",
+		Executable: "/bin/echo",
+		PinnedDistribution: &PinnedDistribution{
+			Package:      "mlx_lm",
+			SitePackages: sitePackages,
+			Commit:       testPinnedCommit,
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Doctor(plan, &stdout, &stderr); err != nil {
+		t.Fatalf("Doctor: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "status=ok") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
+// TestDoctorRefusesEditablePinnedInstall is the negative control named by the
+// task: model-harness doctor must fail, through the same production Doctor
+// entry point, when the pinned distribution is installed editable.
+func TestDoctorRefusesEditablePinnedInstall(t *testing.T) {
+	sitePackages := t.TempDir()
+	writeDistInfo(t, sitePackages, "mlx_lm-0.32.0.dist-info", `{
+		"url": "file:///Users/alexis/src/relux-works/mlx-lm",
+		"dir_info": {"editable": true}
+	}`)
+	plan := Plan{
+		Profile:    "qwen-local",
+		Mode:       "local",
+		Executable: "/bin/echo",
+		PinnedDistribution: &PinnedDistribution{
+			Package:      "mlx_lm",
+			SitePackages: sitePackages,
+			Commit:       testPinnedCommit,
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	err := Doctor(plan, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "editable") {
+		t.Fatalf("error = %v, want editable-install refusal", err)
+	}
+	if strings.Contains(stdout.String(), "status=ok") {
+		t.Fatalf("stdout must not report status=ok on refusal: %q", stdout.String())
+	}
+}
+
 func supervisedShellPlan(counter, script string) Plan {
 	return Plan{
 		Profile:    "test",
