@@ -1,0 +1,630 @@
+diff --git a/LOGBOOK.md b/LOGBOOK.md
+index c960efd..df8e835 100644
+--- a/LOGBOOK.md
++++ b/LOGBOOK.md
+@@ -3,6 +3,15 @@
+ > Institutional memory. Concise, factual, high-signal.
+ > Newest entries first. One block per insight.
+ 
++## 2026-09-11
++
++### 1640 — mlx-lm-relux Pin Target (45a472f) Is Missing The Generation-Recovery Fix It's Supposed To Carry
++- FINDING: TASK-260911-1diuhg pins mlx-lm-relux to `45a472f2d0cda166b7ffe1a80fe50dd9621f4303` on `task/TASK-260830-2hc5r2-bounded-kv`, which the story claims "contains" `91506981056172f937e7bdca4ab0d3b7459c7fab` (the generation-loop-recovery fix from BUG-260827-2tul5n, branch `runtime/generation-recovery`). Verified against the actual fork checkout at `/Users/alexis/src/relux-works/mlx-lm`: `git merge-base 9150698 45a472f` returns `74e7cf9` (an older common ancestor), not 9150698 — `git merge-base --is-ancestor 9150698 45a472f` exits 1.
++- ROOT CAUSE: `task/TASK-260830-2hc5r2-bounded-kv` branched from the shared ancestor `74e7cf9` and only picked up `b0a45b8` (health-endpoint-liveness) from the recovery-fix line of work, not the actual recovery fix. Confirmed at the code level: `mlx_lm/generate.py:1124` still has the buggy `[None] * len(self.uids)` placeholder at 45a472f (the fix changes it to `[[]]`); `mlx_lm/server.py` has no "The generation thread is not running" string introduced by the recovery fix. No branch on the fork (local or `origin`) currently contains both the bounded-KV/effective-config work and the generation-loop-recovery fix together.
++- IMPACT: Pinning to 45a472f as instructed silently drops the resilience fix that motivated the fork, versus the previously-running editable install (which tracked 9150698 on a different branch).
++- DECISION: Did not block TASK-260911-1diuhg on this — the pin-and-verify mechanism (pipx spec pattern, `model-harness doctor` + `pinned_distribution` config gate) is commit-value-agnostic and fully functional regardless of which exact commit is correct. Shipped the mechanism against 45a472f as instructed, flagged this finding with full evidence in `TASK-260911-1diuhg_results.md`, and recommended a human-authored rebase/cherry-pick of 9150698 onto the bounded-kv branch (out of this task's scope; that repo's own AGENTS.md reserves commit/push authorship to the human).
++- EVIDENCE: `TASK-260911-1diuhg_results.md` outcome resource.
++
+ ## 2026-09-10
+ 
+ ### 2110 — Board Audit: Forty Records Claimed Work That Trunk Already Carried
+diff --git a/README.md b/README.md
+index 76e9553..1d8de07 100644
+--- a/README.md
++++ b/README.md
+@@ -659,6 +659,60 @@ holding its port; an interactive Ctrl-C happened to work only because the
+ terminal signals the whole foreground group. On Windows there is no process
+ group here and only the direct child is stopped.
+ 
++#### Pinned fork distribution
++
++A profile can require its backend to be installed non-editable from an exact
++git commit and refuse to start (via `model-harness doctor`) if the installed
++distribution is editable or has drifted to a different commit:
++
++```toml
++[profiles.qwen-local.pinned_distribution]
++package = "mlx_lm"
++site_packages = "/Users/alexis/.local/pipx/venvs/mlx-lm-relux/lib/python3.14/site-packages"
++commit = "45a472f2d0cda166b7ffe1a80fe50dd9621f4303"
++```
++
++`package` is the dist-info name prefix (the importlib/PyPI distribution name,
++not the pipx venv name), `site_packages` is the absolute `site-packages`
++directory of the venv that must hold it, and `commit` is the full 40-character
++git commit the installed [PEP 610](https://peps.python.org/pep-0610/)
++`direct_url.json` `vcs_info.commit_id` must equal exactly. `model-harness
++doctor PROFILE` reads that one `<package>-*.dist-info/direct_url.json` and
++refuses to report `status=ok` when `dir_info.editable` is true (an editable
++install tracks the local checkout's moving `HEAD` instead of a reviewed
++commit), when there is no `vcs_info` (a plain PyPI or unpinned local-directory
++install carries no commit provenance), or when `vcs_info.commit_id` does not
++equal the configured `commit`. It reports zero, one, or ambiguous multiple
++matching dist-info directories as distinct failures.
++
++This is what keeps `mlx-lm-relux` pinned. As of 2026-09-11 the fork
++[relux-works/mlx-lm](https://github.com/relux-works/mlx-lm) carries fixes not
++yet on a PyPI `mlx-lm` release: the Qwen3.5 `ArraysCache` Metal buffer-object
++leak fix (upstream PR #1632) and the generation-thread recovery fix (upstream
++PR #1791, merged 2026-09-05). An editable pipx install
++(`pipx install --editable /path/to/checkout`) silently tracks whatever commit
++the local checkout's `HEAD` happens to be at, which is not a reviewed pin.
++Reinstall non-editable from the exact commit instead:
++
++```bash
++pipx uninstall mlx-lm-relux
++pipx install \
++  --suffix=-relux \
++  --python python3.14 \
++  'git+https://github.com/relux-works/mlx-lm.git@45a472f2d0cda166b7ffe1a80fe50dd9621f4303'
++```
++
++A git-URL pipx install is non-editable by construction and pip records the
++resolved commit in `direct_url.json`, which is exactly what
++`pinned_distribution` verifies. Point the consuming profile's `executable` at
++the resulting `~/.local/bin/mlx_lm-relux.server`.
++
++**Retirement condition:** drop `mlx-lm-relux` and `pinned_distribution` for
++this profile once a released `mlx-lm` version on PyPI contains both upstream
++PR #1791 and the bounded-KV `--max-kv-size` behavior this fork also carries;
++until then the fork stays required and the pin above is the source of truth
++for which commit is reviewed and running.
++
+ #### llama.cpp profile
+ 
+ `llama-server` runs as a managed child under the same local profile shape. The
+@@ -1928,7 +1982,7 @@ established. The benchmark-only profiles pin both runtimes to a live-reported
+ |------|---------|---------|---------|
+ | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
+ | `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or explicitly retire legacy lifecycle evidence; inspect, stop, quarantine, or unquarantine shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra pi spawn --profile NAME --prompt "Complete the bounded task" --deadline 30m --result-schema 1`, `agents-infra pi turn --target qwen-infra --prompt "Complete the bounded task" --deadline 30m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra pi lifecycle status --project /path/to/project --profile NAME --json`, `agents-infra pi lifecycle retire-legacy --project /path/to/project --profile NAME --dry-run --json`, `agents-infra pi lifecycle retire-legacy --project /path/to/project --profile NAME --confirm PLAN_HASH --json`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30`, `agents-infra runtime quarantine --profile NAME`, `agents-infra runtime unquarantine --profile NAME` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose, lifecycle status/retirement, or standalone launch-plan JSON, one bounded schema-1 Pi turn result for machine consumers (or legacy raw JSONL for the operator surface), hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+-| `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
++| `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details; `doctor` additionally refuses an editable or commit-drifted backend install when a profile declares `pinned_distribution` | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
+ | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
+ | `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, clocks first-to-last generated deltas across `content`, `reasoning`, and `reasoning_content`, seals per-scenario cached-token telemetry so one-sided reuse or unknown reuse is refused, and samples both runtimes over warm-up, scenario, soak and process windows with the same `peak_resident_memory_upper_bound_bytes`: exact Mach physical footprint plus a conservative upper edge for resident `vmmap` mapped-file bytes, sampling the cheap Mach component at 20 Hz, refreshing mapped-file residency at a bounded 0.2 Hz, and sampling synchronously at window boundaries; raw samples seal independent Mach and mapped-file timestamps, reused mapped values retain their original timestamp, and a scored scenario/process window must prove each component has no timestamp gap above 125 ms, while sparse, stale, untimestamped, absent, failed, partial or malformed series are refused; it seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
+ | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
+diff --git a/tools/agents-infra/internal/modelharness/config.go b/tools/agents-infra/internal/modelharness/config.go
+index dacbf03..e63689f 100644
+--- a/tools/agents-infra/internal/modelharness/config.go
++++ b/tools/agents-infra/internal/modelharness/config.go
+@@ -22,24 +22,40 @@ const (
+ )
+ 
+ var profileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
++var pinnedDistributionPackagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
++var pinnedDistributionCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+ 
+ type Document struct {
+ 	Profiles map[string]Profile `toml:"profiles"`
+ }
+ 
+ type Profile struct {
+-	Mode             string             `toml:"mode"`
+-	Executable       string             `toml:"executable,omitempty"`
+-	Argv             []string           `toml:"argv,omitempty"`
+-	SSHExecutable    string             `toml:"ssh_executable,omitempty"`
+-	SSHTarget        string             `toml:"ssh_target,omitempty"`
+-	RemoteExecutable string             `toml:"remote_executable,omitempty"`
+-	RemoteConfig     string             `toml:"remote_config,omitempty"`
+-	RemoteProfile    string             `toml:"remote_profile,omitempty"`
+-	RemoteHost       string             `toml:"remote_host,omitempty"`
+-	RemotePort       int                `toml:"remote_port,omitempty"`
+-	Stress           *StressPolicy      `toml:"stress,omitempty"`
+-	Supervision      *SupervisionPolicy `toml:"supervision,omitempty"`
++	Mode               string              `toml:"mode"`
++	Executable         string              `toml:"executable,omitempty"`
++	Argv               []string            `toml:"argv,omitempty"`
++	SSHExecutable      string              `toml:"ssh_executable,omitempty"`
++	SSHTarget          string              `toml:"ssh_target,omitempty"`
++	RemoteExecutable   string              `toml:"remote_executable,omitempty"`
++	RemoteConfig       string              `toml:"remote_config,omitempty"`
++	RemoteProfile      string              `toml:"remote_profile,omitempty"`
++	RemoteHost         string              `toml:"remote_host,omitempty"`
++	RemotePort         int                 `toml:"remote_port,omitempty"`
++	Stress             *StressPolicy       `toml:"stress,omitempty"`
++	Supervision        *SupervisionPolicy  `toml:"supervision,omitempty"`
++	PinnedDistribution *PinnedDistribution `toml:"pinned_distribution,omitempty"`
++}
++
++// PinnedDistribution refuses an editable or commit-drifted install of a
++// backend Python package that is required to be built from a reviewed,
++// explicit fork commit until an upstream release replaces it. Package is the
++// PyPI/importlib distribution name (the dist-info directory prefix before the
++// first "-<version>"), SitePackages is the absolute site-packages directory
++// of the venv that must hold it, and Commit is the full 40-character git
++// commit the installed PEP 610 direct_url.json vcs_info must match exactly.
++type PinnedDistribution struct {
++	Package      string `toml:"package"`
++	SitePackages string `toml:"site_packages"`
++	Commit       string `toml:"commit"`
+ }
+ 
+ type StressPolicy struct {
+@@ -59,17 +75,18 @@ type SupervisionPolicy struct {
+ }
+ 
+ type Plan struct {
+-	Contract      string             `json:"contract"`
+-	SchemaVersion int                `json:"schema_version"`
+-	Config        string             `json:"config"`
+-	Profile       string             `json:"profile"`
+-	Mode          string             `json:"mode"`
+-	Executable    string             `json:"executable"`
+-	Argv          []string           `json:"argv"`
+-	Endpoint      string             `json:"endpoint"`
+-	Remote        *RemotePlan        `json:"remote,omitempty"`
+-	Stress        *StressPolicy      `json:"stress,omitempty"`
+-	Supervision   *SupervisionPolicy `json:"supervision,omitempty"`
++	Contract           string              `json:"contract"`
++	SchemaVersion      int                 `json:"schema_version"`
++	Config             string              `json:"config"`
++	Profile            string              `json:"profile"`
++	Mode               string              `json:"mode"`
++	Executable         string              `json:"executable"`
++	Argv               []string            `json:"argv"`
++	Endpoint           string              `json:"endpoint"`
++	Remote             *RemotePlan         `json:"remote,omitempty"`
++	Stress             *StressPolicy       `json:"stress,omitempty"`
++	Supervision        *SupervisionPolicy  `json:"supervision,omitempty"`
++	PinnedDistribution *PinnedDistribution `json:"pinned_distribution,omitempty"`
+ }
+ 
+ type RemotePlan struct {
+@@ -142,6 +159,7 @@ func Resolve(configPath, profileName, host string, port int) (Plan, error) {
+ 	case "local":
+ 		plan.Executable = profile.Executable
+ 		plan.Argv = substituteEndpoint(profile.Argv, host, port)
++		plan.PinnedDistribution = profile.PinnedDistribution
+ 	case "ssh":
+ 		plan.Executable = profile.SSHExecutable
+ 		plan.Remote = &RemotePlan{
+@@ -240,6 +258,9 @@ func validateProfile(name string, profile Profile) error {
+ 		if err := validateSupervisionPolicy(name, profile.Supervision); err != nil {
+ 			return err
+ 		}
++		if err := validatePinnedDistribution(name, profile.PinnedDistribution); err != nil {
++			return err
++		}
+ 	case "ssh":
+ 		if profile.Executable != "" || len(profile.Argv) != 0 {
+ 			return fmt.Errorf("profile %q: ssh mode cannot declare executable or argv", name)
+@@ -274,6 +295,9 @@ func validateProfile(name string, profile Profile) error {
+ 		if profile.Supervision != nil {
+ 			return fmt.Errorf("profile %q: supervision is currently supported only for local mode", name)
+ 		}
++		if profile.PinnedDistribution != nil {
++			return fmt.Errorf("profile %q: pinned_distribution is currently supported only for local mode", name)
++		}
+ 	default:
+ 		return fmt.Errorf("profile %q: mode must equal local or ssh", name)
+ 	}
+@@ -326,6 +350,29 @@ func validateStressPolicy(name string, policy *StressPolicy) error {
+ 	return nil
+ }
+ 
++func validatePinnedDistribution(name string, pin *PinnedDistribution) error {
++	if pin == nil {
++		return nil
++	}
++	if !pinnedDistributionPackagePattern.MatchString(pin.Package) {
++		return fmt.Errorf("profile %q: pinned_distribution.package must be a simple distribution name", name)
++	}
++	if err := validateAbsoluteDir("pinned_distribution.site_packages", pin.SitePackages); err != nil {
++		return fmt.Errorf("profile %q: %w", name, err)
++	}
++	if !pinnedDistributionCommitPattern.MatchString(pin.Commit) {
++		return fmt.Errorf("profile %q: pinned_distribution.commit must be a full 40-character lowercase git commit hash", name)
++	}
++	return nil
++}
++
++func validateAbsoluteDir(field, value string) error {
++	if value == "" || !filepath.IsAbs(value) || strings.IndexByte(value, 0) >= 0 {
++		return fmt.Errorf("%s must be an absolute NUL-free path", field)
++	}
++	return nil
++}
++
+ func normalizeProfile(profile Profile) Profile {
+ 	if profile.Mode == "ssh" && profile.SSHExecutable == "" {
+ 		profile.SSHExecutable = "/usr/bin/ssh"
+diff --git a/tools/agents-infra/internal/modelharness/config_test.go b/tools/agents-infra/internal/modelharness/config_test.go
+index daf6075..4e2a6b4 100644
+--- a/tools/agents-infra/internal/modelharness/config_test.go
++++ b/tools/agents-infra/internal/modelharness/config_test.go
+@@ -82,6 +82,32 @@ restart_delay_milliseconds = 1000
+ 	}
+ }
+ 
++func TestResolveLocalPinnedDistribution(t *testing.T) {
++	config := writeConfig(t, `
++[profiles.qwen-local]
++mode = "local"
++executable = "/bin/echo"
++argv = ["serve", "--host", "{host}", "--port", "{port}"]
++
++[profiles.qwen-local.pinned_distribution]
++package = "mlx_lm"
++site_packages = "/Users/alexis/.local/pipx/venvs/mlx-lm-relux/lib/python3.14/site-packages"
++commit = "45a472f2d0cda166b7ffe1a80fe50dd9621f4303"
++`)
++	plan, err := Resolve(config, "qwen-local", "127.0.0.1", 18011)
++	if err != nil {
++		t.Fatal(err)
++	}
++	want := &PinnedDistribution{
++		Package:      "mlx_lm",
++		SitePackages: "/Users/alexis/.local/pipx/venvs/mlx-lm-relux/lib/python3.14/site-packages",
++		Commit:       "45a472f2d0cda166b7ffe1a80fe50dd9621f4303",
++	}
++	if !reflect.DeepEqual(plan.PinnedDistribution, want) {
++		t.Fatalf("pinned_distribution=%#v want=%#v", plan.PinnedDistribution, want)
++	}
++}
++
+ func TestResolveSSHProfile(t *testing.T) {
+ 	config := writeConfig(t, `
+ [profiles.qwen-remote]
+@@ -225,6 +251,69 @@ restart_delay_milliseconds = 1000
+ `,
+ 			want: "supervision is currently supported only for local mode",
+ 		},
++		{
++			name: "pinned distribution short commit",
++			body: `
++[profiles.local]
++mode = "local"
++executable = "/bin/echo"
++argv = ["--host", "{host}", "--port", "{port}"]
++
++[profiles.local.pinned_distribution]
++package = "mlx_lm"
++site_packages = "/abs/site-packages"
++commit = "45a472f"
++`,
++			want: "pinned_distribution.commit must be a full 40-character lowercase git commit hash",
++		},
++		{
++			name: "pinned distribution relative site_packages",
++			body: `
++[profiles.local]
++mode = "local"
++executable = "/bin/echo"
++argv = ["--host", "{host}", "--port", "{port}"]
++
++[profiles.local.pinned_distribution]
++package = "mlx_lm"
++site_packages = "relative/site-packages"
++commit = "45a472f2d0cda166b7ffe1a80fe50dd9621f4303"
++`,
++			want: "pinned_distribution.site_packages must be an absolute NUL-free path",
++		},
++		{
++			name: "pinned distribution invalid package name",
++			body: `
++[profiles.local]
++mode = "local"
++executable = "/bin/echo"
++argv = ["--host", "{host}", "--port", "{port}"]
++
++[profiles.local.pinned_distribution]
++package = "../escape"
++site_packages = "/abs/site-packages"
++commit = "45a472f2d0cda166b7ffe1a80fe50dd9621f4303"
++`,
++			want: "pinned_distribution.package must be a simple distribution name",
++		},
++		{
++			name: "ssh pinned distribution",
++			body: `
++[profiles.remote]
++mode = "ssh"
++ssh_target = "host"
++remote_executable = "/bin/model-harness"
++remote_profile = "tiny"
++remote_host = "127.0.0.1"
++remote_port = 18011
++
++[profiles.remote.pinned_distribution]
++package = "mlx_lm"
++site_packages = "/abs/site-packages"
++commit = "45a472f2d0cda166b7ffe1a80fe50dd9621f4303"
++`,
++			want: "pinned_distribution is currently supported only for local mode",
++		},
+ 	}
+ 	for _, test := range tests {
+ 		t.Run(test.name, func(t *testing.T) {
+diff --git a/tools/agents-infra/internal/modelharness/pinned_distribution.go b/tools/agents-infra/internal/modelharness/pinned_distribution.go
+new file mode 100644
+index 0000000..2c2401f
+--- /dev/null
++++ b/tools/agents-infra/internal/modelharness/pinned_distribution.go
+@@ -0,0 +1,61 @@
++package modelharness
++
++import (
++	"encoding/json"
++	"fmt"
++	"os"
++	"path/filepath"
++)
++
++// directURLMetadata is the subset of PEP 610 direct_url.json this package
++// reads. pip and pipx write this file into the installed distribution's
++// dist-info directory for any non-PyPI-index install (VCS URL or local
++// directory), recording exactly what was requested and resolved.
++type directURLMetadata struct {
++	URL     string `json:"url"`
++	VCSInfo *struct {
++		VCS               string `json:"vcs"`
++		CommitID          string `json:"commit_id"`
++		RequestedRevision string `json:"requested_revision"`
++	} `json:"vcs_info"`
++	DirInfo *struct {
++		Editable bool `json:"editable"`
++	} `json:"dir_info"`
++}
++
++// VerifyPinnedDistribution refuses an editable install, a non-VCS install, and
++// a commit that does not exactly match pin.Commit. It is the negative gate
++// behind `model-harness doctor`: a profile that declares pinned_distribution
++// only passes doctor when the installed backend is a non-editable git checkout
++// pinned to the configured commit.
++func VerifyPinnedDistribution(pin PinnedDistribution) error {
++	matches, err := filepath.Glob(filepath.Join(pin.SitePackages, pin.Package+"-*.dist-info"))
++	if err != nil {
++		return fmt.Errorf("scan %s for pinned distribution %s: %w", pin.SitePackages, pin.Package, err)
++	}
++	if len(matches) == 0 {
++		return fmt.Errorf("pinned distribution %s not found under %s", pin.Package, pin.SitePackages)
++	}
++	if len(matches) > 1 {
++		return fmt.Errorf("pinned distribution %s is ambiguous under %s (%d dist-info directories)", pin.Package, pin.SitePackages, len(matches))
++	}
++	directURLPath := filepath.Join(matches[0], "direct_url.json")
++	raw, err := os.ReadFile(directURLPath)
++	if err != nil {
++		return fmt.Errorf("pinned distribution %s has no direct_url.json (not an explicit VCS install): %w", pin.Package, err)
++	}
++	var meta directURLMetadata
++	if err := json.Unmarshal(raw, &meta); err != nil {
++		return fmt.Errorf("decode %s: %w", directURLPath, err)
++	}
++	if meta.DirInfo != nil && meta.DirInfo.Editable {
++		return fmt.Errorf("pinned distribution %s is an editable install; refuse editable installs for a pinned fork", pin.Package)
++	}
++	if meta.VCSInfo == nil || meta.VCSInfo.VCS != "git" {
++		return fmt.Errorf("pinned distribution %s is not a git VCS install; cannot verify its commit pin", pin.Package)
++	}
++	if meta.VCSInfo.CommitID != pin.Commit {
++		return fmt.Errorf("pinned distribution %s is drifted: installed commit %s does not match configured pin %s", pin.Package, meta.VCSInfo.CommitID, pin.Commit)
++	}
++	return nil
++}
+diff --git a/tools/agents-infra/internal/modelharness/pinned_distribution_test.go b/tools/agents-infra/internal/modelharness/pinned_distribution_test.go
+new file mode 100644
+index 0000000..6a5a71b
+--- /dev/null
++++ b/tools/agents-infra/internal/modelharness/pinned_distribution_test.go
+@@ -0,0 +1,127 @@
++package modelharness
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++const testPinnedCommit = "45a472f2d0cda166b7ffe1a80fe50dd9621f4303"
++
++// writeDistInfo materializes a fake dist-info directory with a direct_url.json
++// so VerifyPinnedDistribution can be exercised without a real pip/pipx install.
++func writeDistInfo(t *testing.T, sitePackages, distDirName, directURLBody string) {
++	t.Helper()
++	dir := filepath.Join(sitePackages, distDirName)
++	if err := os.MkdirAll(dir, 0o700); err != nil {
++		t.Fatalf("MkdirAll: %v", err)
++	}
++	if err := os.WriteFile(filepath.Join(dir, "direct_url.json"), []byte(directURLBody), 0o600); err != nil {
++		t.Fatalf("WriteFile: %v", err)
++	}
++}
++
++// TestVerifyPinnedDistributionAcceptsNonEditablePinnedCommit proves the
++// positive control: a non-editable git install whose direct_url.json commit
++// matches the configured pin passes.
++func TestVerifyPinnedDistributionAcceptsNonEditablePinnedCommit(t *testing.T) {
++	sitePackages := t.TempDir()
++	writeDistInfo(t, sitePackages, "mlx_lm-0.32.0.dist-info", `{
++		"url": "https://github.com/relux-works/mlx-lm.git",
++		"vcs_info": {"vcs": "git", "commit_id": "`+testPinnedCommit+`", "requested_revision": "`+testPinnedCommit+`"}
++	}`)
++	pin := PinnedDistribution{Package: "mlx_lm", SitePackages: sitePackages, Commit: testPinnedCommit}
++	if err := VerifyPinnedDistribution(pin); err != nil {
++		t.Fatalf("VerifyPinnedDistribution: %v", err)
++	}
++}
++
++// TestVerifyPinnedDistributionRefusesEditableInstall is the negative control
++// named by the task: an editable install (dir_info.editable=true) must fail
++// verification even when installed from the same source tree.
++func TestVerifyPinnedDistributionRefusesEditableInstall(t *testing.T) {
++	sitePackages := t.TempDir()
++	writeDistInfo(t, sitePackages, "mlx_lm-0.32.0.dist-info", `{
++		"url": "file:///Users/alexis/src/relux-works/mlx-lm",
++		"dir_info": {"editable": true}
++	}`)
++	pin := PinnedDistribution{Package: "mlx_lm", SitePackages: sitePackages, Commit: testPinnedCommit}
++	err := VerifyPinnedDistribution(pin)
++	if err == nil || !strings.Contains(err.Error(), "editable") {
++		t.Fatalf("error = %v, want editable-install refusal", err)
++	}
++}
++
++func TestVerifyPinnedDistributionRefusesDriftedCommit(t *testing.T) {
++	sitePackages := t.TempDir()
++	writeDistInfo(t, sitePackages, "mlx_lm-0.32.0.dist-info", `{
++		"url": "https://github.com/relux-works/mlx-lm.git",
++		"vcs_info": {"vcs": "git", "commit_id": "91506981056172f937e7bdca4ab0d3b7459c7fab", "requested_revision": "91506981056172f937e7bdca4ab0d3b7459c7fab"}
++	}`)
++	pin := PinnedDistribution{Package: "mlx_lm", SitePackages: sitePackages, Commit: testPinnedCommit}
++	err := VerifyPinnedDistribution(pin)
++	if err == nil || !strings.Contains(err.Error(), "drifted") {
++		t.Fatalf("error = %v, want drifted-commit refusal", err)
++	}
++}
++
++// TestVerifyPinnedDistributionRefusesCommitSharingOnlyAPrefix proves the
++// comparison is against the full 40-character commit, not merely the
++// abbreviated 7-character form operators typically write in prose (the task
++// itself names the pin as both "45a472f" and its full SHA). A narrowing
++// mutant that compared only a short prefix would admit this installed commit.
++func TestVerifyPinnedDistributionRefusesCommitSharingOnlyAPrefix(t *testing.T) {
++	sitePackages := t.TempDir()
++	installedCommit := "45a472f2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
++	writeDistInfo(t, sitePackages, "mlx_lm-0.32.0.dist-info", `{
++		"url": "https://github.com/relux-works/mlx-lm.git",
++		"vcs_info": {"vcs": "git", "commit_id": "`+installedCommit+`", "requested_revision": "`+installedCommit+`"}
++	}`)
++	pin := PinnedDistribution{Package: "mlx_lm", SitePackages: sitePackages, Commit: testPinnedCommit}
++	err := VerifyPinnedDistribution(pin)
++	if err == nil || !strings.Contains(err.Error(), "drifted") {
++		t.Fatalf("error = %v, want drifted refusal for a commit sharing only a 7-char prefix", err)
++	}
++}
++
++func TestVerifyPinnedDistributionRefusesMissingDistribution(t *testing.T) {
++	pin := PinnedDistribution{Package: "mlx_lm", SitePackages: t.TempDir(), Commit: testPinnedCommit}
++	err := VerifyPinnedDistribution(pin)
++	if err == nil || !strings.Contains(err.Error(), "not found") {
++		t.Fatalf("error = %v, want not-found refusal", err)
++	}
++}
++
++func TestVerifyPinnedDistributionRefusesAmbiguousDistribution(t *testing.T) {
++	sitePackages := t.TempDir()
++	writeDistInfo(t, sitePackages, "mlx_lm-0.32.0.dist-info", `{"url": "https://github.com/relux-works/mlx-lm.git", "vcs_info": {"vcs": "git", "commit_id": "`+testPinnedCommit+`"}}`)
++	writeDistInfo(t, sitePackages, "mlx_lm-0.31.3.dist-info", `{"url": "https://github.com/relux-works/mlx-lm.git", "vcs_info": {"vcs": "git", "commit_id": "`+testPinnedCommit+`"}}`)
++	pin := PinnedDistribution{Package: "mlx_lm", SitePackages: sitePackages, Commit: testPinnedCommit}
++	err := VerifyPinnedDistribution(pin)
++	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
++		t.Fatalf("error = %v, want ambiguous refusal", err)
++	}
++}
++
++func TestVerifyPinnedDistributionRefusesNonVCSInstall(t *testing.T) {
++	sitePackages := t.TempDir()
++	writeDistInfo(t, sitePackages, "mlx_lm-0.32.0.dist-info", `{"url": "https://pypi.org/simple/mlx-lm/"}`)
++	pin := PinnedDistribution{Package: "mlx_lm", SitePackages: sitePackages, Commit: testPinnedCommit}
++	err := VerifyPinnedDistribution(pin)
++	if err == nil || !strings.Contains(err.Error(), "not a git VCS install") {
++		t.Fatalf("error = %v, want non-VCS refusal", err)
++	}
++}
++
++func TestVerifyPinnedDistributionRefusesMissingDirectURLMetadata(t *testing.T) {
++	sitePackages := t.TempDir()
++	if err := os.MkdirAll(filepath.Join(sitePackages, "mlx_lm-0.32.0.dist-info"), 0o700); err != nil {
++		t.Fatalf("MkdirAll: %v", err)
++	}
++	pin := PinnedDistribution{Package: "mlx_lm", SitePackages: sitePackages, Commit: testPinnedCommit}
++	err := VerifyPinnedDistribution(pin)
++	if err == nil || !strings.Contains(err.Error(), "no direct_url.json") {
++		t.Fatalf("error = %v, want missing-metadata refusal", err)
++	}
++}
+diff --git a/tools/agents-infra/internal/modelharness/run.go b/tools/agents-infra/internal/modelharness/run.go
+index eb3dc18..c72dd7c 100644
+--- a/tools/agents-infra/internal/modelharness/run.go
++++ b/tools/agents-infra/internal/modelharness/run.go
+@@ -320,6 +320,11 @@ func Doctor(plan Plan, stdout, stderr io.Writer) error {
+ 	if err := inspectExecutable(plan.Executable); err != nil {
+ 		return err
+ 	}
++	if plan.PinnedDistribution != nil {
++		if err := VerifyPinnedDistribution(*plan.PinnedDistribution); err != nil {
++			return err
++		}
++	}
+ 	if plan.Mode != "ssh" {
+ 		_, err := fmt.Fprintf(stdout, "profile=%s mode=%s executable=%s status=ok\n", plan.Profile, plan.Mode, plan.Executable)
+ 		return err
+diff --git a/tools/agents-infra/internal/modelharness/run_test.go b/tools/agents-infra/internal/modelharness/run_test.go
+index 2adb581..95b79c7 100644
+--- a/tools/agents-infra/internal/modelharness/run_test.go
++++ b/tools/agents-infra/internal/modelharness/run_test.go
+@@ -70,6 +70,63 @@ kill -STOP $$
+ 	}
+ }
+ 
++// TestDoctorPassesPinnedNonEditableInstall drives the production model-harness
++// doctor entry point: a profile declaring pinned_distribution must pass when
++// the installed backend is a non-editable git checkout at the pinned commit.
++func TestDoctorPassesPinnedNonEditableInstall(t *testing.T) {
++	sitePackages := t.TempDir()
++	writeDistInfo(t, sitePackages, "mlx_lm-0.32.0.dist-info", `{
++		"url": "https://github.com/relux-works/mlx-lm.git",
++		"vcs_info": {"vcs": "git", "commit_id": "`+testPinnedCommit+`", "requested_revision": "`+testPinnedCommit+`"}
++	}`)
++	plan := Plan{
++		Profile:    "qwen-local",
++		Mode:       "local",
++		Executable: "/bin/echo",
++		PinnedDistribution: &PinnedDistribution{
++			Package:      "mlx_lm",
++			SitePackages: sitePackages,
++			Commit:       testPinnedCommit,
++		},
++	}
++	var stdout, stderr bytes.Buffer
++	if err := Doctor(plan, &stdout, &stderr); err != nil {
++		t.Fatalf("Doctor: %v", err)
++	}
++	if !strings.Contains(stdout.String(), "status=ok") {
++		t.Fatalf("stdout=%q", stdout.String())
++	}
++}
++
++// TestDoctorRefusesEditablePinnedInstall is the negative control named by the
++// task: model-harness doctor must fail, through the same production Doctor
++// entry point, when the pinned distribution is installed editable.
++func TestDoctorRefusesEditablePinnedInstall(t *testing.T) {
++	sitePackages := t.TempDir()
++	writeDistInfo(t, sitePackages, "mlx_lm-0.32.0.dist-info", `{
++		"url": "file:///Users/alexis/src/relux-works/mlx-lm",
++		"dir_info": {"editable": true}
++	}`)
++	plan := Plan{
++		Profile:    "qwen-local",
++		Mode:       "local",
++		Executable: "/bin/echo",
++		PinnedDistribution: &PinnedDistribution{
++			Package:      "mlx_lm",
++			SitePackages: sitePackages,
++			Commit:       testPinnedCommit,
++		},
++	}
++	var stdout, stderr bytes.Buffer
++	err := Doctor(plan, &stdout, &stderr)
++	if err == nil || !strings.Contains(err.Error(), "editable") {
++		t.Fatalf("error = %v, want editable-install refusal", err)
++	}
++	if strings.Contains(stdout.String(), "status=ok") {
++		t.Fatalf("stdout must not report status=ok on refusal: %q", stdout.String())
++	}
++}
++
+ func supervisedShellPlan(counter, script string) Plan {
+ 	return Plan{
+ 		Profile:    "test",
