@@ -205,6 +205,7 @@ agents-infra setup local /path/to/project \
   --codex-primary-reasoning-effort xhigh \
   --codex-yolo-mode=false \
   --claude-primary-model claude-opus-4-6 \
+  --claude-primary-reasoning-effort high \
   --claude-yolo-mode=false
 
 agents-infra setup local /path/to/project --clear-codex-primary-session

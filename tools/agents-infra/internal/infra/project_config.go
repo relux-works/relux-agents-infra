@@ -13,18 +13,19 @@ import (
 )
 
 const (
-	projectConfigParseField          = "project_config"
-	codexPrimarySessionField         = "agents.codex.primary_session"
-	codexPrimaryModelField           = codexPrimarySessionField + ".model"
-	codexPrimaryReasoningEffortField = codexPrimarySessionField + ".reasoning_effort"
-	codexPrimaryYoloModeField        = codexPrimarySessionField + ".yolo_mode"
-	claudePrimarySessionField        = "agents.claude.primary_session"
-	claudePrimaryModelField          = claudePrimarySessionField + ".model"
-	claudePrimaryYoloModeField       = claudePrimarySessionField + ".yolo_mode"
-	piPrimarySessionField            = "agents.pi.primary_session"
-	piStandaloneSessionField         = "agents.pi.standalone_session"
-	targetsField                     = "agents.targets"
-	entrypointsField                 = "agents.entrypoints"
+	projectConfigParseField           = "project_config"
+	codexPrimarySessionField          = "agents.codex.primary_session"
+	codexPrimaryModelField            = codexPrimarySessionField + ".model"
+	codexPrimaryReasoningEffortField  = codexPrimarySessionField + ".reasoning_effort"
+	codexPrimaryYoloModeField         = codexPrimarySessionField + ".yolo_mode"
+	claudePrimarySessionField         = "agents.claude.primary_session"
+	claudePrimaryModelField           = claudePrimarySessionField + ".model"
+	claudePrimaryYoloModeField        = claudePrimarySessionField + ".yolo_mode"
+	claudePrimaryReasoningEffortField = claudePrimarySessionField + ".reasoning_effort"
+	piPrimarySessionField             = "agents.pi.primary_session"
+	piStandaloneSessionField          = "agents.pi.standalone_session"
+	targetsField                      = "agents.targets"
+	entrypointsField                  = "agents.entrypoints"
 )
 
 var canonicalEntrypointVendors = map[string]string{
@@ -88,8 +89,9 @@ type CodexPrimarySessionSource struct {
 // [agents.claude.primary_session] tables. Present distinguishes an omitted
 // field from an explicitly configured zero value, notably yolo_mode=false.
 type ClaudePrimarySessionPolicy struct {
-	Model    ClaudePrimarySessionStringValue
-	YoloMode ClaudePrimarySessionBoolValue
+	Model           ClaudePrimarySessionStringValue
+	ReasoningEffort ClaudePrimarySessionStringValue
+	YoloMode        ClaudePrimarySessionBoolValue
 }
 
 type ClaudePrimarySessionStringValue struct {
@@ -108,8 +110,9 @@ type ClaudePrimarySessionBoolValue struct {
 // config. Pointer presence distinguishes an omitted field from an explicitly
 // configured value, notably yolo_mode=false.
 type ClaudePrimarySessionSource struct {
-	Model    *string
-	YoloMode *bool
+	Model           *string
+	ReasoningEffort *string
+	YoloMode        *bool
 }
 
 type parsedProjectConfig struct {
@@ -525,6 +528,20 @@ func parseClaudePrimarySession(agents map[string]any, path string) (ClaudePrimar
 	if err != nil {
 		return ClaudePrimarySessionSource{}, projectConfigFieldError(path, claudePrimaryModelField, err)
 	}
+	reasoningEffort, err := projectConfigNonEmptyString(primary, "reasoning_effort")
+	if err != nil {
+		return ClaudePrimarySessionSource{}, projectConfigFieldError(path, claudePrimaryReasoningEffortField, err)
+	}
+	if reasoningEffort != nil {
+		// Claude matches --effort values case-insensitively, so the durable
+		// policy is normalised once here and rejected early when it names a
+		// token the provider would ignore with a warning at runtime.
+		normalised := strings.ToLower(strings.TrimSpace(*reasoningEffort))
+		if !containsString(claudeEffortValues, normalised) {
+			return ClaudePrimarySessionSource{}, projectConfigFieldError(path, claudePrimaryReasoningEffortField, errors.New("must be one of low, medium, high, xhigh, max"))
+		}
+		reasoningEffort = &normalised
+	}
 	yoloMode, err := projectConfigBool(primary, "yolo_mode")
 	if err != nil {
 		return ClaudePrimarySessionSource{}, projectConfigFieldError(path, claudePrimaryYoloModeField, err)
@@ -532,7 +549,7 @@ func parseClaudePrimarySession(agents map[string]any, path string) (ClaudePrimar
 	var unsupported []string
 	for key := range primary {
 		switch key {
-		case "model", "yolo_mode":
+		case "model", "reasoning_effort", "yolo_mode":
 		default:
 			unsupported = append(unsupported, key)
 		}
@@ -545,7 +562,7 @@ func parseClaudePrimarySession(agents map[string]any, path string) (ClaudePrimar
 			errors.New("unsupported field"),
 		)
 	}
-	source := ClaudePrimarySessionSource{Model: model, YoloMode: yoloMode}
+	source := ClaudePrimarySessionSource{Model: model, ReasoningEffort: reasoningEffort, YoloMode: yoloMode}
 	if !claudePrimarySessionSourcePresent(source) {
 		return ClaudePrimarySessionSource{}, projectConfigFieldError(
 			path,
@@ -665,6 +682,13 @@ func composeClaudePrimarySession(policy *ClaudePrimarySessionPolicy, source Clau
 			Present: true,
 		}
 	}
+	if source.ReasoningEffort != nil {
+		policy.ReasoningEffort = ClaudePrimarySessionStringValue{
+			Value:   *source.ReasoningEffort,
+			Source:  path,
+			Present: true,
+		}
+	}
 	if source.YoloMode != nil {
 		policy.YoloMode = ClaudePrimarySessionBoolValue{
 			Value:   *source.YoloMode,
@@ -684,8 +708,9 @@ func cloneCodexPrimarySessionSource(source CodexPrimarySessionSource) CodexPrima
 
 func cloneClaudePrimarySessionSource(source ClaudePrimarySessionSource) ClaudePrimarySessionSource {
 	return ClaudePrimarySessionSource{
-		Model:    cloneStringPointer(source.Model),
-		YoloMode: cloneBoolPointer(source.YoloMode),
+		Model:           cloneStringPointer(source.Model),
+		ReasoningEffort: cloneStringPointer(source.ReasoningEffort),
+		YoloMode:        cloneBoolPointer(source.YoloMode),
 	}
 }
 

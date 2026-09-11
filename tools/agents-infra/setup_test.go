@@ -60,6 +60,7 @@ func TestRunSetupLocalAcceptsPrimaryFlagsAfterProjectDirectory(t *testing.T) {
 			"--codex-primary-reasoning-effort", "xhigh",
 			"--codex-yolo-mode=false",
 			"--claude-primary-model", "claude-opus-4-6",
+			"--claude-primary-reasoning-effort", "High",
 		}); err != nil {
 			t.Fatalf("runSetup: %v", err)
 		}
@@ -77,6 +78,7 @@ func TestRunSetupLocalAcceptsPrimaryFlagsAfterProjectDirectory(t *testing.T) {
 		"yolo_mode = false",
 		"[agents.claude.primary_session]",
 		"model = 'claude-opus-4-6'",
+		"reasoning_effort = 'high'",
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("project config missing %q:\n%s", want, data)

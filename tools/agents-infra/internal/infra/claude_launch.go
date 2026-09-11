@@ -62,8 +62,9 @@ const (
 // primary-session decision. ProjectValue and ProjectSource preserve the
 // composed project policy even when explicit CLI input suppresses it.
 type ClaudePrimarySessionResolution struct {
-	Model    ClaudePrimarySessionStringResolution
-	YoloMode ClaudePrimarySessionBoolResolution
+	Model           ClaudePrimarySessionStringResolution
+	ReasoningEffort ClaudePrimarySessionStringResolution
+	YoloMode        ClaudePrimarySessionBoolResolution
 }
 
 type ClaudePrimarySessionStringResolution struct {
@@ -493,6 +494,13 @@ func resolveClaudePrimarySession(policy ClaudePrimarySessionPolicy, parsed parse
 			ProjectSource:      policy.Model.Source,
 			ProjectApplication: ClaudePrimarySessionNotConfigured,
 		},
+		ReasoningEffort: ClaudePrimarySessionStringResolution{
+			EffectiveSource:    "native",
+			ProjectConfigured:  policy.ReasoningEffort.Present,
+			ProjectValue:       policy.ReasoningEffort.Value,
+			ProjectSource:      policy.ReasoningEffort.Source,
+			ProjectApplication: ClaudePrimarySessionNotConfigured,
+		},
 		YoloMode: resolveClaudePrimarySessionYolo(policy.YoloMode, parsed),
 	}
 	var args []string
@@ -514,6 +522,28 @@ func resolveClaudePrimarySession(policy ClaudePrimarySessionPolicy, parsed parse
 		resolution.Model.EffectiveSource = policy.Model.Source
 		resolution.Model.ProjectApplication = ClaudePrimarySessionApplied
 		args = append(args, "--model", policy.Model.Value)
+	}
+	// An explicit --effort suppresses the project value exactly as --model
+	// does: composing a second --effort next to it would leave last-wins
+	// argv semantics to decide which policy the user actually asked for.
+	if parsed.explicitEffort {
+		resolution.ReasoningEffort.EffectiveSource = parsed.explicitEffortSource
+		if resolution.ReasoningEffort.EffectiveSource == "" {
+			resolution.ReasoningEffort.EffectiveSource = "explicit_cli"
+		}
+		if parsed.explicitEffortRecognized {
+			resolution.ReasoningEffort.EffectiveValue = parsed.explicitEffortValue
+			resolution.ReasoningEffort.EffectiveValueKnown = true
+		}
+		if policy.ReasoningEffort.Present {
+			resolution.ReasoningEffort.ProjectApplication = ClaudePrimarySessionSuppressedByCLI
+		}
+	} else if policy.ReasoningEffort.Present {
+		resolution.ReasoningEffort.EffectiveValue = policy.ReasoningEffort.Value
+		resolution.ReasoningEffort.EffectiveValueKnown = true
+		resolution.ReasoningEffort.EffectiveSource = policy.ReasoningEffort.Source
+		resolution.ReasoningEffort.ProjectApplication = ClaudePrimarySessionApplied
+		args = append(args, "--effort", policy.ReasoningEffort.Value)
 	}
 	if resolution.YoloMode.EffectiveValue {
 		args = append(args, claudeDangerouslySkipPermissions)

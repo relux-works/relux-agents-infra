@@ -83,8 +83,18 @@ func TestParseProjectConfigRejectsInvalidClaudePrimarySession(t *testing.T) {
 		},
 		{
 			name:      "unsupported field",
-			body:      "[agents.claude.primary_session]\nmodel = \"claude-opus-4-6\"\nreasoning_effort = \"high\"",
-			wantField: claudePrimarySessionField + ".reasoning_effort",
+			body:      "[agents.claude.primary_session]\nmodel = \"claude-opus-4-6\"\nsandbox = \"none\"",
+			wantField: claudePrimarySessionField + ".sandbox",
+		},
+		{
+			name:      "reasoning effort outside the provider vocabulary",
+			body:      "[agents.claude.primary_session]\nmodel = \"claude-opus-4-6\"\nreasoning_effort = \"ultra\"",
+			wantField: claudePrimaryReasoningEffortField,
+		},
+		{
+			name:      "empty reasoning effort",
+			body:      "[agents.claude.primary_session]\nreasoning_effort = \" \"",
+			wantField: claudePrimaryReasoningEffortField,
 		},
 	}
 

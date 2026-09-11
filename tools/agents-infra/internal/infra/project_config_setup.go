@@ -32,13 +32,14 @@ func (setup CodexPrimarySessionSetup) requested() bool {
 // ClaudePrimarySessionSetup describes an explicit setup-local mutation for the
 // Claude primary-session policy.
 type ClaudePrimarySessionSetup struct {
-	Model    *string
-	YoloMode *bool
-	Clear    bool
+	Model           *string
+	ReasoningEffort *string
+	YoloMode        *bool
+	Clear           bool
 }
 
 func (setup ClaudePrimarySessionSetup) requested() bool {
-	return setup.Clear || setup.Model != nil || setup.YoloMode != nil
+	return setup.Clear || setup.Model != nil || setup.ReasoningEffort != nil || setup.YoloMode != nil
 }
 
 type projectConfigAtomicWriter func(path string, data []byte, mode fs.FileMode) error
@@ -119,7 +120,7 @@ func preparePrimarySessionSetup(
 	if codexSetup.ReasoningEffort != nil && strings.TrimSpace(*codexSetup.ReasoningEffort) == "" {
 		return nil, projectConfigFieldError(path, codexPrimaryReasoningEffortField, fmt.Errorf("supplied value must be a non-empty string"))
 	}
-	if claudeSetup.Clear && (claudeSetup.Model != nil || claudeSetup.YoloMode != nil) {
+	if claudeSetup.Clear && (claudeSetup.Model != nil || claudeSetup.ReasoningEffort != nil || claudeSetup.YoloMode != nil) {
 		return nil, projectConfigFieldError(
 			path,
 			claudePrimarySessionField,
@@ -128,6 +129,13 @@ func preparePrimarySessionSetup(
 	}
 	if claudeSetup.Model != nil && strings.TrimSpace(*claudeSetup.Model) == "" {
 		return nil, projectConfigFieldError(path, claudePrimaryModelField, fmt.Errorf("supplied value must be a non-empty string"))
+	}
+	if claudeSetup.ReasoningEffort != nil {
+		normalised := strings.ToLower(strings.TrimSpace(*claudeSetup.ReasoningEffort))
+		if !containsString(claudeEffortValues, normalised) {
+			return nil, projectConfigFieldError(path, claudePrimaryReasoningEffortField, fmt.Errorf("must be one of low, medium, high, xhigh, max"))
+		}
+		claudeSetup.ReasoningEffort = &normalised
 	}
 
 	original, mode, existed, err := readProjectConfigForSetup(path)
@@ -328,7 +336,7 @@ func codexPrimarySessionSourcePresent(source CodexPrimarySessionSource) bool {
 }
 
 func claudePrimarySessionSourcePresent(source ClaudePrimarySessionSource) bool {
-	return source.Model != nil || source.YoloMode != nil
+	return source.Model != nil || source.ReasoningEffort != nil || source.YoloMode != nil
 }
 
 type textSpan struct {
@@ -359,7 +367,7 @@ func locateClaudePrimarySessionTable(data []byte) (primarySessionTableLocation, 
 	return locatePrimarySessionTable(
 		data,
 		[]string{"agents", "claude", "primary_session"},
-		map[string]bool{"model": true, "yolo_mode": true},
+		map[string]bool{"model": true, "reasoning_effort": true, "yolo_mode": true},
 	)
 }
 
@@ -554,6 +562,19 @@ func updateClaudePrimarySessionTable(
 			missing.Model = setup.Model
 		}
 	}
+	if setup.ReasoningEffort != nil && (current.ReasoningEffort == nil || *current.ReasoningEffort != *setup.ReasoningEffort) {
+		if field, ok := location.fields["reasoning_effort"]; ok {
+			value, err := encodeProjectConfigString(*setup.ReasoningEffort)
+			if err != nil {
+				return nil, projectConfigFieldError(path, claudePrimaryReasoningEffortField, err)
+			}
+			edits = append(edits, textEdit{span: field.value, replacement: value})
+		} else if current.ReasoningEffort != nil {
+			return nil, projectConfigFieldError(path, claudePrimaryReasoningEffortField, fmt.Errorf("field is not directly editable in the explicit table"))
+		} else {
+			missing.ReasoningEffort = setup.ReasoningEffort
+		}
+	}
 	if setup.YoloMode != nil && (current.YoloMode == nil || *current.YoloMode != *setup.YoloMode) {
 		if field, ok := location.fields["yolo_mode"]; ok {
 			edits = append(edits, textEdit{span: field.value, replacement: []byte(strconv.FormatBool(*setup.YoloMode))})
@@ -653,6 +674,13 @@ func renderClaudePrimarySessionFields(setup ClaudePrimarySessionSetup, newline s
 			return nil, err
 		}
 		fmt.Fprintf(&body, "model = %s%s", value, newline)
+	}
+	if setup.ReasoningEffort != nil {
+		value, err := encodeProjectConfigString(*setup.ReasoningEffort)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Fprintf(&body, "reasoning_effort = %s%s", value, newline)
 	}
 	if setup.YoloMode != nil {
 		fmt.Fprintf(&body, "yolo_mode = %s%s", strconv.FormatBool(*setup.YoloMode), newline)

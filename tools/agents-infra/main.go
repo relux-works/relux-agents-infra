@@ -202,6 +202,10 @@ func runSetup(args []string) error {
 		claudePrimarySessionSetup.Model = &value
 		return nil
 	})
+	fs.Func("claude-primary-reasoning-effort", "primary Claude reasoning effort for this project: low, medium, high, xhigh, or max", func(value string) error {
+		claudePrimarySessionSetup.ReasoningEffort = &value
+		return nil
+	})
 	fs.Func("claude-yolo-mode", "persistent Claude yolo mode for this project: true or false", func(value string) error {
 		var parsed bool
 		switch value {
@@ -361,6 +365,8 @@ func runDoctor(args []string) error {
 		if report.ClaudePrimaryConfigValid {
 			fmt.Fprintf(os.Stdout, "claude_primary_model: %s\n", report.ClaudePrimarySession.Model.Value)
 			fmt.Fprintf(os.Stdout, "claude_primary_model_source: %s\n", claudePrimaryStringSource(report.ClaudePrimarySession.Model))
+			fmt.Fprintf(os.Stdout, "claude_primary_reasoning_effort: %s\n", report.ClaudePrimarySession.ReasoningEffort.Value)
+			fmt.Fprintf(os.Stdout, "claude_primary_reasoning_effort_source: %s\n", claudePrimaryStringSource(report.ClaudePrimarySession.ReasoningEffort))
 			fmt.Fprintf(os.Stdout, "claude_primary_yolo_mode: %t\n", report.ClaudePrimarySession.YoloMode.Value)
 			fmt.Fprintf(os.Stdout, "claude_primary_yolo_mode_source: %s\n", claudePrimaryBoolSource(report.ClaudePrimarySession.YoloMode))
 		}
@@ -1272,7 +1278,7 @@ func usageText() string {
 	return `Usage:
   agents-infra version
   agents-infra setup global [--source-dir DIR] [--home-dir DIR] [--no-sync]
-  agents-infra setup local [PROJECT_DIR] [--source-dir DIR] [--project-dir DIR] [--no-sync] [--codex-config preserve|global|local] [--codex-primary-model MODEL] [--codex-primary-reasoning-effort EFFORT] [--codex-yolo-mode=true|false] [--clear-codex-primary-session] [--claude-primary-model MODEL] [--claude-yolo-mode=true|false] [--clear-claude-primary-session]
+  agents-infra setup local [PROJECT_DIR] [--source-dir DIR] [--project-dir DIR] [--no-sync] [--codex-config preserve|global|local] [--codex-primary-model MODEL] [--codex-primary-reasoning-effort EFFORT] [--codex-yolo-mode=true|false] [--clear-codex-primary-session] [--claude-primary-model MODEL] [--claude-primary-reasoning-effort EFFORT] [--claude-yolo-mode=true|false] [--clear-claude-primary-session]
   agents-infra refresh-links --agents-dir DIR --claude-dir DIR --codex-dir DIR --bin-dir DIR [--mode global|local] [--codex-config preserve|global|local]
   agents-infra doctor global [--home-dir DIR]
   agents-infra doctor local [PROJECT_DIR] [--project-dir DIR]

@@ -477,7 +477,10 @@ func buildClaudePrimarySessionLaunchPlan(result *PrimarySessionLaunchPlan, proje
 	} else {
 		result.Resolved.Model = PrimarySessionResolvedString{Source: model.EffectiveSource}
 	}
-	if plan.ExplicitEffort && plan.ExplicitEffortRecognized {
+	reasoning := plan.PrimarySessionResolution.ReasoningEffort
+	if reasoning.ProjectApplication == ClaudePrimarySessionApplied {
+		result.Resolved.Reasoning = resolvedStringValue(reasoning.EffectiveValue, reasoning.EffectiveSource)
+	} else if plan.ExplicitEffort && plan.ExplicitEffortRecognized {
 		result.Resolved.Reasoning = resolvedStringValue(plan.ExplicitEffortValue, plan.ExplicitEffortSource)
 	} else {
 		// Either no --effort was passed, or its token is one Claude ignores

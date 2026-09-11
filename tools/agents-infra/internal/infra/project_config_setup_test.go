@@ -847,6 +847,8 @@ func TestSetupLocalRejectsInvalidClaudePrimarySessionFlagsBeforeWrite(t *testing
 		{name: "empty model", setup: ClaudePrimarySessionSetup{Model: stringPointer("  ")}, wantField: claudePrimaryModelField},
 		{name: "clear conflicts with model", setup: ClaudePrimarySessionSetup{Clear: true, Model: stringPointer("claude-opus-4-6")}, wantField: claudePrimarySessionField},
 		{name: "clear conflicts with yolo", setup: ClaudePrimarySessionSetup{Clear: true, YoloMode: boolPointer(false)}, wantField: claudePrimarySessionField},
+		{name: "clear conflicts with reasoning effort", setup: ClaudePrimarySessionSetup{Clear: true, ReasoningEffort: stringPointer("high")}, wantField: claudePrimarySessionField},
+		{name: "reasoning effort outside the provider vocabulary", setup: ClaudePrimarySessionSetup{ReasoningEffort: stringPointer("ultra")}, wantField: claudePrimaryReasoningEffortField},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -923,4 +925,42 @@ func readFileString(t *testing.T, path string) string {
 		t.Fatalf("ReadFile(%s): %v", path, err)
 	}
 	return string(data)
+}
+
+// The Claude reasoning effort is added to an existing explicit table in
+// place, normalised, and later updated without disturbing its neighbours.
+func TestSetupLocalClaudeReasoningEffortRoundTripsThroughTheExplicitTable(t *testing.T) {
+	source := seedSourceRepo(t)
+	project := t.TempDir()
+	path := filepath.Join(project, ".agents", ".configs", projectConfigFileName)
+	mustMkdir(t, filepath.Dir(path))
+	mustWrite(t, path, "[agents.claude.primary_session] # keep\nmodel = \"claude-opus-5\" # keep model\nyolo_mode = true\n")
+	layout, err := LocalLayout(source, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	effort := "High"
+	if err := Setup(Options{Layout: layout, ClaudePrimarySessionSetup: ClaudePrimarySessionSetup{ReasoningEffort: &effort}}); err != nil {
+		t.Fatalf("Setup add: %v", err)
+	}
+	updated := readFileString(t, path)
+	if !strings.Contains(updated, "model = \"claude-opus-5\" # keep model") || !strings.Contains(updated, "reasoning_effort = 'high'") {
+		t.Fatalf("reasoning effort was not added beside the kept fields:\n%s", updated)
+	}
+	parsed, err := parseProjectConfig([]byte(updated), path)
+	if err != nil {
+		t.Fatalf("parseProjectConfig(updated): %v", err)
+	}
+	if parsed.ClaudePrimarySession.ReasoningEffort == nil || *parsed.ClaudePrimarySession.ReasoningEffort != "high" {
+		t.Fatalf("Claude reasoning effort = %#v, want high", parsed.ClaudePrimarySession.ReasoningEffort)
+	}
+
+	effort = "xhigh"
+	if err := Setup(Options{Layout: layout, ClaudePrimarySessionSetup: ClaudePrimarySessionSetup{ReasoningEffort: &effort}}); err != nil {
+		t.Fatalf("Setup update: %v", err)
+	}
+	updated = readFileString(t, path)
+	if strings.Count(updated, "reasoning_effort") != 1 || !strings.Contains(updated, "reasoning_effort = 'xhigh'") {
+		t.Fatalf("reasoning effort was not updated in place:\n%s", updated)
+	}
 }
