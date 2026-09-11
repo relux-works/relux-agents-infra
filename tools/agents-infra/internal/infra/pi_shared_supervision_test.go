@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"testing"
@@ -356,5 +357,176 @@ func TestSharedBrokerServePersistsStableResetAndFailedHalfOpen(t *testing.T) {
 				t.Fatalf("persisted serve ledger=%#v", ledger)
 			}
 		})
+	}
+}
+
+// Production call site: sharedRuntimeRecordFailure, invoked by the broker on
+// every failed restart attempt. Without appendSharedRuntimeFailureEvent's
+// trim, this test goes red: FailureHistory grows to exactly `total` entries
+// instead of staying at the bound.
+func TestSharedRuntimeFailureHistoryIsBoundedAndEvictsOldestFirst(t *testing.T) {
+	policy := testSharedRuntimeSupervisionPolicy()
+	policy.RestartLimit = 1000 // stay in the backoff branch; quarantine is covered separately
+	ledger := newSharedRuntimeRestartLedger("runtime", "profile")
+	now := time.Unix(1000, 0).UTC()
+	const total = sharedRuntimeFailureHistoryLimit + 5
+	for i := 0; i < total; i++ {
+		sharedRuntimeRecordFailure(&ledger, policy, now.Add(time.Duration(i)*time.Second))
+	}
+	if got := len(ledger.FailureHistory); got != sharedRuntimeFailureHistoryLimit {
+		t.Fatalf("failure history len=%d want=%d (bound not enforced): %#v", got, sharedRuntimeFailureHistoryLimit, ledger.FailureHistory)
+	}
+	wantFirstRetained := total - sharedRuntimeFailureHistoryLimit + 1
+	for index, event := range ledger.FailureHistory {
+		if want := wantFirstRetained + index; event.RestartCount != want {
+			t.Fatalf("failure history[%d].restart_count=%d want=%d, eviction order broken (oldest must be evicted first): %#v", index, event.RestartCount, want, ledger.FailureHistory)
+		}
+	}
+	if last := ledger.FailureHistory[len(ledger.FailureHistory)-1].RestartCount; last != total {
+		t.Fatalf("newest failure history entry restart_count=%d want=%d", last, total)
+	}
+}
+
+// Production call site: SharedRuntimeStatusReport. The published status must
+// carry the same bounded evidence as the ledger, not a wider or narrower view.
+func TestSharedRuntimeStatusReportSurfacesBoundedFailureHistory(t *testing.T) {
+	project, home, cache, resolved := newSharedIntegrationProfile(t)
+	policy := testSharedRuntimeSupervisionPolicy()
+	policy.RestartLimit = 1000
+	ledger := newSharedRuntimeRestartLedger(resolved.RuntimeKey, resolved.ProfileDigest)
+	now := time.Unix(1000, 0).UTC()
+	const total = sharedRuntimeFailureHistoryLimit + 7
+	for i := 0; i < total; i++ {
+		sharedRuntimeRecordFailure(&ledger, policy, now.Add(time.Duration(i)*time.Second))
+	}
+	if err := writeSharedRuntimeRestartLedger(resolved.Paths.RestartLedger, ledger); err != nil {
+		t.Fatal(err)
+	}
+	report, err := SharedRuntimeStatusReport(SharedRuntimeOperatorOptions{
+		ProjectDir: project, HomeDir: home, CacheRoot: cache, Profile: "profile",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(report.FailureHistory); got != sharedRuntimeFailureHistoryLimit {
+		t.Fatalf("status failure_history len=%d want=%d", got, sharedRuntimeFailureHistoryLimit)
+	}
+	if got := report.FailureHistory[len(report.FailureHistory)-1].RestartCount; got != total {
+		t.Fatalf("status failure_history newest restart_count=%d want=%d", got, total)
+	}
+}
+
+func TestSharedRuntimeStatusJSONCarriesContractVersion(t *testing.T) {
+	report := SharedRuntimeStatus{ContractVersion: SharedRuntimeStatusContractVersion}
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf(`"contract_version":%d`, SharedRuntimeStatusContractVersion)
+	if !bytes.Contains(data, []byte(want)) {
+		t.Fatalf("status JSON missing %s: %s", want, data)
+	}
+}
+
+// Production call site: DecodeSharedRuntimeStatus, the sanctioned entry point
+// wired into "runtime status --json" and any future out-of-repo consumer.
+// Without the version gate, this test goes red: the payload with
+// contract_version 2 decodes cleanly instead of being refused.
+func TestDecodeSharedRuntimeStatusRefusesUnsupportedContractVersion(t *testing.T) {
+	base := SharedRuntimeStatus{
+		ContractVersion: SharedRuntimeStatusContractVersion,
+		RuntimeKey:      "runtime", ProfileDigest: "digest",
+		Leases: []SharedLeaseStatus{}, Attestation: []SharedRuntimeGateOutcome{},
+		FailureHistory: []SharedRuntimeFailureEvent{},
+	}
+	validData, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeSharedRuntimeStatus(validData)
+	if err != nil {
+		t.Fatalf("supported contract version refused: %v", err)
+	}
+	if decoded.RuntimeKey != "runtime" {
+		t.Fatalf("supported contract version decode lost fields: %#v", decoded)
+	}
+
+	for _, future := range []int{SharedRuntimeStatusContractVersion + 1, SharedRuntimeStatusContractVersion + 50} {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(validData, &fields); err != nil {
+			t.Fatal(err)
+		}
+		versionData, err := json.Marshal(future)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields["contract_version"] = versionData
+		fields["runtime_key"], err = json.Marshal(fmt.Sprintf("future-runtime-%d", future))
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, err := DecodeSharedRuntimeStatus(data)
+		var shared *SharedRuntimeError
+		if !errors.As(err, &shared) || shared.Code != "shared_runtime_status_unsupported_contract_version" {
+			t.Fatalf("future contract version %d admitted: status=%#v err=%v", future, status, err)
+		}
+		if status.RuntimeKey != "" || status.ContractVersion != 0 {
+			t.Fatalf("refused contract version %d still parsed recognised fields: %#v", future, status)
+		}
+		if got := shared.Details["observed_contract_version"]; got != future {
+			t.Fatalf("refusal for version %d did not name the observed version: %#v", future, shared.Details)
+		}
+		if got := shared.Details["supported_contract_version_min"]; got != SharedRuntimeStatusMinSupportedContractVersion {
+			t.Fatalf("refusal did not name supported min: %#v", shared.Details)
+		}
+		if got := shared.Details["supported_contract_version_max"]; got != SharedRuntimeStatusContractVersion {
+			t.Fatalf("refusal did not name supported max: %#v", shared.Details)
+		}
+	}
+
+	for _, malformed := range []int{0, -1} {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(validData, &fields); err != nil {
+			t.Fatal(err)
+		}
+		versionData, err := json.Marshal(malformed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields["contract_version"] = versionData
+		data, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DecodeSharedRuntimeStatus(data); sharedRuntimeErrorCode(err) != "shared_runtime_status_unsupported_contract_version" {
+			t.Fatalf("out-of-range contract version %d admitted: %v", malformed, err)
+		}
+	}
+}
+
+func TestSharedRuntimeStatusWireFixturesCarryFailureHistoryAdditively(t *testing.T) {
+	const preExtension = `{"contract_version":1,"restart_count":2,"quarantined_until":null,"last_readiness_match":"2026-08-29T12:00:00Z","manual_quarantine":false}`
+	var legacy SharedRuntimeStatus
+	if err := json.Unmarshal([]byte(preExtension), &legacy); err != nil {
+		t.Fatalf("decode pre-extension fixture: %v", err)
+	}
+	if legacy.FailureHistory != nil {
+		t.Fatalf("pre-extension fixture fabricated failure history: %#v", legacy.FailureHistory)
+	}
+
+	const postExtension = `{"contract_version":1,"restart_count":2,"quarantined_until":null,"last_readiness_match":"2026-08-29T12:00:00Z","manual_quarantine":false,"failure_history":[{"occurred_at":"2026-08-29T11:59:00Z","restart_count":1,"backoff_seconds":2,"quarantined":false},{"occurred_at":"2026-08-29T12:00:00Z","restart_count":2,"quarantined":true,"quarantined_until":"2026-08-29T12:05:00Z"}]}`
+	var widened SharedRuntimeStatus
+	if err := json.Unmarshal([]byte(postExtension), &widened); err != nil {
+		t.Fatalf("decode post-extension fixture: %v", err)
+	}
+	if len(widened.FailureHistory) != 2 || widened.FailureHistory[0].BackoffSeconds != 2 || !widened.FailureHistory[1].Quarantined {
+		t.Fatalf("post-extension failure history not decoded: %#v", widened.FailureHistory)
+	}
+	if widened.FailureHistory[1].QuarantinedUntil == nil {
+		t.Fatalf("post-extension quarantine deadline dropped: %#v", widened.FailureHistory[1])
 	}
 }

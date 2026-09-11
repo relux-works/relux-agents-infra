@@ -53,7 +53,12 @@ func TestPiOperatorContractDocumentsCycle10Boundary(t *testing.T) {
 		"`restart_not_before` is the ledger's exact RFC3339 deadline or JSON `null`",
 		"agents-infra runtime status --json.restart_not_before",
 		"vendorplugin.LimitedUntil",
-		"`last_failure` and `last_failure_at` are explicitly deferred",
+		"`last_failure` and `last_failure_at` as separate scalar fields remain absent",
+		"SharedRuntimeStatusMinSupportedContractVersion..SharedRuntimeStatusContractVersion",
+		"shared_runtime_status_unsupported_contract_version",
+		"`failure_history` is a list",
+		"sharedRuntimeFailureHistoryLimit` (20)",
+		"evicts the oldest retained entry",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("README.md missing Pi operator contract fragment %q", want)
@@ -88,7 +93,9 @@ func TestReluxAgentsInfraSkillRoutesSafePiWorkflowToSource(t *testing.T) {
 		"foreground-terminal ownership",
 		"`restart_not_before` is always present as the ledger's RFC3339 deadline or JSON `null`",
 		"vendorplugin.LimitedUntil",
-		"`last_failure` and `last_failure_at` remain explicitly absent",
+		"`last_failure` and `last_failure_at` remain explicitly absent as separate scalar fields",
+		"SharedRuntimeStatusMinSupportedContractVersion..SharedRuntimeStatusContractVersion",
+		"sharedRuntimeFailureHistoryLimit` (20)",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Fatalf("SKILL.md missing managed Pi guidance %q", want)

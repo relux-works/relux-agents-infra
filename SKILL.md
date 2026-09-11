@@ -435,8 +435,20 @@ Consumers must distinguish a pre-extension missing key from post-extension
 `null`, refuse malformed timestamps, and create
 `vendorplugin.LimitedUntil` only for a non-null future deadline observed at
 `agents-infra runtime status --json.restart_not_before`. `last_failure` and
-`last_failure_at` remain explicitly absent until a separately reviewed ledger
-event persists their reason and time; do not synthesize them from counters.
+`last_failure_at` remain explicitly absent as separate scalar fields;
+`failure_history` supersedes them instead — do not synthesize them from
+counters.
+
+Status JSON carries an explicit `contract_version`; decode it only through
+`DecodeSharedRuntimeStatus`, which refuses a version outside
+`SharedRuntimeStatusMinSupportedContractVersion..SharedRuntimeStatusContractVersion`
+before trusting any other field, naming the observed version and the
+supported range, rather than parsing recognised fields from an unsupported
+version and dropping the rest. `failure_history` is a bounded, additive list
+of restart-ledger events (`occurred_at`, restart count, and either
+`backoff_seconds` or `quarantined`/`quarantined_until`); the ledger evicts the
+oldest entry first once it holds more than `sharedRuntimeFailureHistoryLimit`
+(20), so this evidence never grows without limit across an unattended run.
 
 Shared profiles must explicitly select `resource_pressure_mode = "disabled"`
 or `"provider"`; there is no implicit mode. Provider mode requires the complete

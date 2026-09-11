@@ -68,6 +68,7 @@ type SharedRuntimeSharingStatus struct {
 }
 
 type SharedRuntimeStatus struct {
+	ContractVersion    int                         `json:"contract_version"`
 	RuntimeKey         string                      `json:"runtime_key"`
 	ProfileDigest      string                      `json:"profile_digest"`
 	Endpoint           string                      `json:"endpoint"`
@@ -77,6 +78,7 @@ type SharedRuntimeStatus struct {
 	LastReadinessMatch *time.Time                  `json:"last_readiness_match"`
 	ManualQuarantine   bool                        `json:"manual_quarantine"`
 	HalfOpen           bool                        `json:"half_open"`
+	FailureHistory     []SharedRuntimeFailureEvent `json:"failure_history"`
 	Resources          SharedRuntimeResourceStatus `json:"resources"`
 	Sharing            SharedRuntimeSharingStatus  `json:"sharing"`
 	Broker             SharedRuntimeBrokerStatus   `json:"broker"`
@@ -149,6 +151,7 @@ func applySharedRuntimeLedgerStatus(report *SharedRuntimeStatus, ledger SharedRu
 	report.LastReadinessMatch = ledger.LastReadinessMatch
 	report.ManualQuarantine = ledger.ManualQuarantine
 	report.HalfOpen = ledger.HalfOpen
+	report.FailureHistory = append([]SharedRuntimeFailureEvent(nil), ledger.FailureHistory...)
 }
 
 func SetSharedRuntimeManualQuarantine(options SharedRuntimeOperatorOptions, enabled bool) (SharedRuntimeRestartLedger, error) {
@@ -239,12 +242,14 @@ func resolveSharedRuntimeOperator(options SharedRuntimeOperatorOptions) (sharedR
 
 func newSharedRuntimeStatus(resolved sharedResolvedProfile) SharedRuntimeStatus {
 	return SharedRuntimeStatus{
-		RuntimeKey: resolved.RuntimeKey, ProfileDigest: resolved.ProfileDigest,
+		ContractVersion: SharedRuntimeStatusContractVersion,
+		RuntimeKey:      resolved.RuntimeKey, ProfileDigest: resolved.ProfileDigest,
 		Endpoint: resolved.Profile.BaseURL, Paths: resolved.Paths,
 		Sharing:   SharedRuntimeSharingStatus{Mode: resolved.Sharing.Mode, Configured: resolved.Sharing},
 		Broker:    SharedRuntimeBrokerStatus{State: "absent", Source: "determined"},
 		Resources: unavailableSharedRuntimeResourceStatus(resolved.Sharing, "absent", "broker-absent"),
 		Leases:    []SharedLeaseStatus{}, Attestation: []SharedRuntimeGateOutcome{},
+		FailureHistory: []SharedRuntimeFailureEvent{},
 	}
 }
 

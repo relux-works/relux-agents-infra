@@ -808,7 +808,18 @@ func runRuntime(args []string) error {
 			return err
 		}
 		if *jsonOutput {
-			return json.NewEncoder(os.Stdout).Encode(report)
+			data, err := json.Marshal(report)
+			if err != nil {
+				return err
+			}
+			// Every consumer, in or out of process, must be able to read this
+			// exact payload back through the sanctioned contract entry point
+			// before it is published.
+			if _, err := infra.DecodeSharedRuntimeStatus(data); err != nil {
+				return fmt.Errorf("shared runtime status failed its own published contract: %w", err)
+			}
+			_, err = os.Stdout.Write(append(data, '\n'))
+			return err
 		}
 		printSharedRuntimeStatus(report)
 		return nil
@@ -879,6 +890,7 @@ func callerProjectDir() string {
 }
 
 func printSharedRuntimeStatus(report infra.SharedRuntimeStatus) {
+	fmt.Fprintf(os.Stdout, "contract_version: %d\n", report.ContractVersion)
 	fmt.Fprintf(os.Stdout, "runtime_key: %s\n", report.RuntimeKey)
 	fmt.Fprintf(os.Stdout, "profile_digest: %s\n", report.ProfileDigest)
 	fmt.Fprintf(os.Stdout, "restart_count: %d\n", report.RestartCount)
@@ -887,6 +899,7 @@ func printSharedRuntimeStatus(report infra.SharedRuntimeStatus) {
 	fmt.Fprintf(os.Stdout, "last_readiness_match: %v\n", report.LastReadinessMatch)
 	fmt.Fprintf(os.Stdout, "manual_quarantine: %t\n", report.ManualQuarantine)
 	fmt.Fprintf(os.Stdout, "half_open: %t\n", report.HalfOpen)
+	fmt.Fprintf(os.Stdout, "failure_history: %d\n", len(report.FailureHistory))
 	fmt.Fprintf(os.Stdout, "broker.state: %s\n", report.Broker.State)
 	if report.Broker.PID != 0 {
 		fmt.Fprintf(os.Stdout, "broker.pid: %d\n", report.Broker.PID)

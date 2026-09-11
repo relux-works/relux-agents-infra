@@ -198,12 +198,18 @@ resource_pressure_mode = "disabled"
 		t.Fatal(err)
 	}
 	for _, name := range []string{
-		"restart_count", "restart_not_before", "quarantined_until",
-		"last_readiness_match", "half_open",
+		"contract_version", "restart_count", "restart_not_before", "quarantined_until",
+		"last_readiness_match", "half_open", "failure_history",
 	} {
 		if _, present := fields[name]; !present {
 			t.Fatalf("runtime status JSON omitted %q: %s", name, output)
 		}
+	}
+	if status.ContractVersion != infra.SharedRuntimeStatusContractVersion {
+		t.Fatalf("runtime status contract_version=%d want=%d", status.ContractVersion, infra.SharedRuntimeStatusContractVersion)
+	}
+	if _, err := infra.DecodeSharedRuntimeStatus([]byte(output)); err != nil {
+		t.Fatalf("runtime status --json emitted a payload it cannot decode through its own contract: %v", err)
 	}
 	if _, err := os.Stat(status.Paths.Root); !os.IsNotExist(err) {
 		t.Fatalf("runtime status created shared state: %v", err)
