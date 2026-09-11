@@ -143,7 +143,13 @@ func startSharedLauncherRunWithFiles(t *testing.T, fixture sharedLauncherFixture
 	args := []string{"runtime", "runtime-launch", "--runtime-key", runtimeKey, "--profile-project", fixture.project, "--profile", "profile"}
 	command := exec.Command(os.Args[0], args...)
 	command.Dir = fixture.resolved.Paths.RuntimeCWD
-	command.Env = append(os.Environ(), "HOME="+fixture.home, sharedAuthEvidenceEnv+"="+fixture.evidencePath)
+	command.Env = []string{"HOME=" + fixture.home, sharedAuthEvidenceEnv + "=" + fixture.evidencePath}
+	if path := os.Getenv("PATH"); path != "" {
+		command.Env = append(command.Env, "PATH="+path)
+	}
+	if tempDir := os.Getenv("TMPDIR"); tempDir != "" {
+		command.Env = append(command.Env, "TMPDIR="+tempDir)
+	}
 	command.Env = append(command.Env, extraEnv...)
 	stderr := new(bytes.Buffer)
 	command.Stderr = stderr
@@ -423,6 +429,46 @@ func TestSharedRuntimeLauncherComparesEveryAuthorizationValueAtProductionEntry(t
 			}
 			if _, err := os.Stat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("refused launcher executed target: %v", err)
+			}
+		})
+	}
+}
+
+// Production call site: RunSharedRuntimeLauncher immediately before
+// sharedRuntimeExecve, driven through the runtime runtime-launch process entry.
+func TestSharedRuntimeLauncherRefusesModelOriginEnvironmentAtProductionEntry(t *testing.T) {
+	fixture := newSharedLauncherFixture(t)
+	requireSharedLauncherValidControl(t, fixture)
+
+	for _, testCase := range []struct {
+		name  string
+		value string
+	}{
+		{name: "HF_ENDPOINT", value: "https://direct-hf-origin.invalid/secret"},
+		{name: "MODEL_ENDPOINT", value: "https://direct-model-origin.invalid/secret"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_ = os.Remove(fixture.marker)
+			run := startSharedLauncherRunWithEnv(t, fixture, true, testCase.name+"="+testCase.value)
+			run.authorize(t, rawSharedLauncherFrame(t, validSharedLauncherFrame(fixture, run.command.Process.Pid)))
+
+			waitErr := run.wait(t, 3*time.Second)
+			if waitErr == nil {
+				t.Fatalf("runtime runtime-launch admitted %s", testCase.name)
+			}
+			want := fmt.Sprintf("runtime-affecting environment name %q is denied", testCase.name)
+			got := strings.TrimSpace(run.stderr.String())
+			if got != want {
+				t.Fatalf("runtime runtime-launch refusal=%q want=%q", got, want)
+			}
+			if strings.Contains(got, testCase.value) {
+				t.Fatalf("runtime runtime-launch refusal exposed %s value: %q", testCase.name, got)
+			}
+			if run.carriedTarget() {
+				t.Fatalf("runtime runtime-launch carried %s through sharedRuntimeExecve", testCase.name)
+			}
+			if _, err := os.Stat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("runtime runtime-launch executed target with %s: %v", testCase.name, err)
 			}
 		})
 	}

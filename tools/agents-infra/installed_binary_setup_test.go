@@ -991,6 +991,7 @@ func TestInstalledPiLaunchersRejectExactEnvironmentNamesBeforeRuntimeSpawn(t *te
 				"HUGGINGFACE_HUB_CACHE=/tmp/huggingface-hub-cache",
 				"TRANSFORMERS_CACHE=/tmp/transformers-cache",
 				"LLAMA_API_KEY_SUFFIX=not-the-exact-auth-control",
+				"llama_api_key=case-sensitive-lookalike",
 				"UNRELATED_SERVICE_API_KEY=unrelated-control",
 				"GGML_METAL_PATH=unestablished-control",
 			}

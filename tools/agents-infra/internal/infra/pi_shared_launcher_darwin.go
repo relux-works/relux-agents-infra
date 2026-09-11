@@ -91,6 +91,9 @@ func RunSharedRuntimeLauncher(options SharedRuntimeLauncherOptions) error {
 	if environ == nil {
 		environ = os.Environ()
 	}
+	if err := ValidatePiExecutionEnvironment(environ); err != nil {
+		return err
+	}
 	argv := append([]string{resolved.Profile.Runtime.Executable}, resolved.Profile.Runtime.Argv...)
 	if err := sharedRuntimeExecve(resolved.Profile.Runtime.Executable, argv, environ); err != nil {
 		return sharedRuntimeError("runtime_start_failed", err)

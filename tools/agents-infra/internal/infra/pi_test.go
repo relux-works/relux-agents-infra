@@ -1306,6 +1306,7 @@ func TestPiExecutionEnvironmentAcceptsExactCleanEnvironment(t *testing.T) {
 		"HF_TOKEN=credential-treated-separately",
 		"HUGGING_FACE_HUB_TOKEN=credential-treated-separately",
 		"LLAMA_API_KEY_SUFFIX=not-the-exact-auth-control",
+		"llama_api_key=case-sensitive-lookalike",
 		"UNRELATED_SERVICE_API_KEY=unrelated-control",
 		"hf_endpoint=case-sensitive-lookalike",
 		"model_endpoint=case-sensitive-lookalike",
@@ -1405,7 +1406,7 @@ http.server.HTTPServer(("127.0.0.1",port),H).serve_forever()
 	mustMkdir(t, filepath.Dir(configPath))
 	mustWrite(t, configPath, config)
 	var stdout, stderr bytes.Buffer
-	err = RunPi(RunPiOptions{ProjectDir: project, HomeDir: home, CacheRoot: cache, Args: []string{"--version"}, Environ: []string{"HOME=" + home, "PATH=/usr/bin:/bin", "HF_TOKEN=credential-treated-separately", "HF_HOME=/tmp/hf-cache", "HUGGINGFACE_HUB_CACHE=/tmp/huggingface-hub-cache", "TRANSFORMERS_CACHE=/tmp/transformers-cache", "LLAMA_API_KEY_SUFFIX=not-the-exact-auth-control", "UNRELATED_SERVICE_API_KEY=unrelated-control", "GGML_METAL_PATH=unestablished-control"}, Stdout: &stdout, Stderr: &stderr, LookPath: func(name string) (string, error) { return filepath.Join(piRoot, "pi"), nil }})
+	err = RunPi(RunPiOptions{ProjectDir: project, HomeDir: home, CacheRoot: cache, Args: []string{"--version"}, Environ: []string{"HOME=" + home, "PATH=/usr/bin:/bin", "HF_TOKEN=credential-treated-separately", "HF_HOME=/tmp/hf-cache", "HUGGINGFACE_HUB_CACHE=/tmp/huggingface-hub-cache", "TRANSFORMERS_CACHE=/tmp/transformers-cache", "LLAMA_API_KEY_SUFFIX=not-the-exact-auth-control", "llama_api_key=case-sensitive-lookalike", "UNRELATED_SERVICE_API_KEY=unrelated-control", "GGML_METAL_PATH=unestablished-control"}, Stdout: &stdout, Stderr: &stderr, LookPath: func(name string) (string, error) { return filepath.Join(piRoot, "pi"), nil }})
 	if err != nil {
 		t.Fatalf("production RunPi lifecycle: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
 	}
