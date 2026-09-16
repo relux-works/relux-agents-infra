@@ -166,7 +166,7 @@ func TestResolveSourceDirRefusesWrongExplicitSourceInsteadOfFallingBack(t *testi
 			if !errors.As(err, &sourceErr) {
 				t.Fatalf("error type = %T, want *SourceDirError", err)
 			}
-			for _, want := range []string{test.origin, wrong, ".instructions/INSTRUCTIONS.md", ".configs"} {
+			for _, want := range []string{test.origin, wrong, ".configs", ".rules", "tools/agents-infra/go.mod"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("error %q missing %q", err, want)
 				}
@@ -271,7 +271,7 @@ func TestSetupRefusesUnusableSourceDirWithoutTouchingDestination(t *testing.T) {
 		{
 			name:      "wrong tree",
 			sourceDir: unrelated,
-			want:      []string{"not a usable agents-infra source tree", ".instructions/INSTRUCTIONS.md", ".configs"},
+			want:      []string{"not a usable agents-infra source tree", ".configs", ".rules", "tools/agents-infra/go.mod"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -320,6 +320,38 @@ func TestSetupRefusesPiCatalogManifestDriftBeforeDestinationMutation(t *testing.
 	if _, statErr := os.Lstat(filepath.Join(project, ".agents")); !os.IsNotExist(statErr) {
 		t.Fatalf("Setup mutated destination before catalog drift refusal: %v", statErr)
 	}
+}
+
+// A source tree without instruction entrypoints, skill packaging markers, or
+// skill/registry trees is still usable: setup no longer distributes them, so
+// requiring them would refuse a complete residual source.
+func TestSetupAcceptsSourceWithoutInstructionOrSkillMarkers(t *testing.T) {
+	minimal := t.TempDir()
+	mustMkdir(t, filepath.Join(minimal, ".configs"))
+	mustMkdir(t, filepath.Join(minimal, ".rules"))
+	mustWrite(t, filepath.Join(minimal, ".configs", "claude-settings.json"), "{}\n")
+	mustWrite(t, filepath.Join(minimal, ".rules", "default.rules"), "allow\n")
+	seedLauncherBackend(t, minimal)
+	for _, retired := range []string{".instructions", ".skills", "skills", "SKILL.md", "README.md"} {
+		if _, err := os.Lstat(filepath.Join(minimal, retired)); !os.IsNotExist(err) {
+			t.Fatalf("minimal source fixture unexpectedly carries %s", retired)
+		}
+	}
+
+	project := t.TempDir()
+	layout, err := LocalLayout(minimal, project)
+	if err != nil {
+		t.Fatalf("LocalLayout: %v", err)
+	}
+	if err := Setup(Options{Layout: layout, Stdout: io.Discard}); err != nil {
+		t.Fatalf("Setup refused a complete residual source: %v", err)
+	}
+	if err := VerifyInstalledRuntime(layout); err != nil {
+		t.Fatalf("VerifyInstalledRuntime: %v", err)
+	}
+	assertNoPath(t, filepath.Join(project, ".agents", ".instructions"))
+	assertNoPath(t, filepath.Join(project, ".agents", ".skills"))
+	assertNoPath(t, filepath.Join(project, ".codex", "AGENTS.md"))
 }
 
 func TestSetupRefusesSourceDirContainingItsOwnDestination(t *testing.T) {

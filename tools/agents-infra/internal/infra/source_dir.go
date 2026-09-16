@@ -39,15 +39,12 @@ func (a sourceAsset) label() string {
 // sourceAssets are the paths every usable agents-infra source tree carries.
 // Both a repo checkout and an installed .agents runtime provide them, so setup
 // can be bootstrapped from either without a host-specific path.
+//
+// Instruction entrypoints and skill packaging markers left this contract with
+// the Curator migration: setup no longer distributes instructions, skills, or
+// the bundled MCP registry. The v1 prepare compatibility renderer validates
+// its own instruction inputs at point of use instead.
 var sourceAssets = []sourceAsset{
-	{
-		path:     filepath.Join(".instructions", "INSTRUCTIONS.md"),
-		consumer: "Claude instructions entrypoint",
-	},
-	{
-		path:     filepath.Join(".instructions", "AGENTS.md"),
-		consumer: "rendered Codex instructions entrypoint",
-	},
 	{
 		path:     ".configs",
 		consumer: "linked agent config tree",
@@ -55,14 +52,6 @@ var sourceAssets = []sourceAsset{
 	{
 		path:     ".rules",
 		consumer: "linked agent rules tree",
-	},
-	{
-		path:     "SKILL.md",
-		consumer: "materialized relux-agents-infra skill package",
-	},
-	{
-		path:     "README.md",
-		consumer: "relux-agents-infra skill reference",
 	},
 	// installCLIWrapper generates a launcher that builds this module; a source
 	// without it mints a runtime whose agents-infra command cannot start.
@@ -155,7 +144,7 @@ func (e *SourceDirError) Error() string {
 			b.WriteString("\n  " + attempt.describe())
 		}
 	}
-	b.WriteString("\nA usable source tree contains " + strings.Join(assetLabels(), ", ") + ",\nplus every instruction module its entrypoints include, and its tools/agents-infra\nmodule must be one `go build .` completes.")
+	b.WriteString("\nA usable source tree contains " + strings.Join(assetLabels(), ", ") + ",\nand its tools/agents-infra\nmodule must be one `go build .` completes.")
 	b.WriteString("\nPass --source-dir DIR or set " + SourceDirEnv + " to a relux-agents-infra checkout or an installed .agents runtime.")
 	return b.String()
 }
@@ -175,13 +164,8 @@ func assetLabels() []string {
 	return labels
 }
 
-// MissingSourceDirAssets reports what a candidate source tree lacks: any
-// required asset, plus any instruction module its entrypoints include but do
-// not ship. An empty or non-directory path is missing everything.
-//
-// The include walk exists because the marker files themselves are trivially
-// forgeable — an entrypoint that pulls in modules the tree does not carry
-// installs a runtime that fails the first time it is rendered.
+// MissingSourceDirAssets reports what a candidate source tree lacks. An empty
+// or non-directory path is missing everything.
 func MissingSourceDirAssets(dir string) []string {
 	if dir == "" {
 		return assetLabels()
@@ -196,78 +180,7 @@ func MissingSourceDirAssets(dir string) []string {
 			missing = append(missing, asset.label())
 		}
 	}
-	return append(missing, missingInstructionIncludes(dir)...)
-}
-
-// instructionEntrypoints are the instruction files setup renders; every module
-// they include has to exist in the source tree for the render to succeed.
-var instructionEntrypoints = []string{
-	filepath.Join(".instructions", "INSTRUCTIONS.md"),
-	filepath.Join(".instructions", "AGENTS.md"),
-}
-
-// missingInstructionIncludes resolves the @include closure of the instruction
-// entrypoints against the source tree and reports every referenced module the
-// tree does not carry. It mirrors resolveInstructionInclude, with ~/.agents/
-// pointing at the source tree, because that is what the destination becomes.
-// References outside the tree (absolute paths, other ~/ paths) name host state
-// setup does not install and are left to the render step.
-func missingInstructionIncludes(sourceDir string) []string {
-	var missing []string
-	seen := map[string]bool{}
-	var walk func(path string)
-	walk = func(path string) {
-		if seen[path] {
-			return
-		}
-		seen[path] = true
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return
-		}
-		for _, line := range strings.SplitAfter(string(data), "\n") {
-			ref, ok := parseInstructionInclude(line)
-			if !ok {
-				continue
-			}
-			resolved, ok := resolveSourceInstructionInclude(ref, filepath.Dir(path), sourceDir)
-			if !ok {
-				continue
-			}
-			if !pathExists(resolved) {
-				rel, relErr := filepath.Rel(sourceDir, resolved)
-				if relErr != nil {
-					rel = resolved
-				}
-				missing = append(missing, fmt.Sprintf("%s (included by %s)", filepath.ToSlash(rel), filepath.ToSlash(ref)))
-				continue
-			}
-			walk(resolved)
-		}
-	}
-	for _, entrypoint := range instructionEntrypoints {
-		walk(filepath.Join(sourceDir, entrypoint))
-	}
 	return missing
-}
-
-// resolveSourceInstructionInclude maps one @include reference onto the source
-// tree. It reports false for references that name host state rather than an
-// asset the source is expected to ship.
-func resolveSourceInstructionInclude(ref, baseDir, sourceDir string) (string, bool) {
-	const agentsHomePrefix = "~/.agents/"
-	switch {
-	case strings.HasPrefix(ref, agentsHomePrefix):
-		return filepath.Join(sourceDir, filepath.FromSlash(strings.TrimPrefix(ref, agentsHomePrefix))), true
-	case strings.HasPrefix(ref, "~/"), filepath.IsAbs(ref):
-		return "", false
-	default:
-		resolved := filepath.Join(baseDir, filepath.FromSlash(ref))
-		if !dirContains(sourceDir, resolved) {
-			return "", false
-		}
-		return resolved, true
-	}
 }
 
 // SourceDirRequest describes one source-tree resolution for a setup run.

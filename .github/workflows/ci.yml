@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    # gate/** carries the throwaway snapshots scripts/remote-gate.sh pushes
+    # for the task-board landing gate; the branch is deleted after the run.
+    branches: [main, 'gate/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # actions/setup-go only began forcing GOTOOLCHAIN=local in v6.0.0; this
+  # workflow pins @v5, so without these two lines a job may download a
+  # toolchain or read a per-user go env file.
+  GOTOOLCHAIN: "local"
+  # Quoted deliberately: bare `off` is a YAML 1.1 boolean and would reach the
+  # runner as "false", which is a real per-user go env file path, not "off".
+  GOENV: "off"
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/agents-infra/go.mod
+
+      - name: gofmt check
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l tools/agents-infra)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt: files need formatting:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: build, vet, test
+        shell: bash
+        run: cd tools/agents-infra && go build ./... && go vet ./... && go test ./... -count=1 -timeout 20m

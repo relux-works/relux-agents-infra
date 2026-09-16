@@ -195,11 +195,31 @@ func TestPiLifecycleDeleteRecoveryPreservesSubstitutedChildAuthority(t *testing.
 			}
 		},
 		"log-inode-substituted": func(t *testing.T, path string) {
+			// Hold the original inode open across the unlink+recreate: on
+			// Linux the freed inode is otherwise immediately recyclable, the
+			// replacement lands on the same identity production recorded, and
+			// the fixture substitutes nothing.
+			held, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
+			var before unix.Stat_t
+			if err := unix.Stat(path, &before); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.Remove(path); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(path, []byte("substituted\n"), 0o600); err != nil {
 				t.Fatal(err)
+			}
+			var after unix.Stat_t
+			if err := unix.Stat(path, &after); err != nil {
+				t.Fatal(err)
+			}
+			if before.Dev == after.Dev && before.Ino == after.Ino {
+				t.Fatal("test did not substitute the log.jsonl inode")
 			}
 		},
 		"active-type-substituted": func(t *testing.T, path string) {

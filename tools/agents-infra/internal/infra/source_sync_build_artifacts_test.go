@@ -102,3 +102,43 @@ func TestShouldSkipKeepsPathsNamedLikeDerivedData(t *testing.T) {
 		}
 	}
 }
+
+// Instruction, skill, and bundled MCP registry distribution moved to Curator.
+// Sync leaves those source trees behind in every setup mode, while the rest of
+// the residual config tree still installs.
+func TestShouldSkipExcludesMigratedDistributionTrees(t *testing.T) {
+	skipped := []struct {
+		rel   string
+		isDir bool
+	}{
+		{".instructions", true},
+		{".instructions/AGENTS.md", false},
+		{".instructions/INSTRUCTIONS_WORKFLOW.md", false},
+		{".skills", true},
+		{".skills/pdf/SKILL.md", false},
+		{".configs/codex-mcp-servers.toml", false},
+	}
+	for _, entry := range skipped {
+		if !shouldSkip(entry.rel, entry.isDir) {
+			t.Fatalf("shouldSkip(%q, %v) = false, want true", entry.rel, entry.isDir)
+		}
+	}
+}
+
+func TestShouldSkipKeepsResidualConfigTrees(t *testing.T) {
+	kept := []struct {
+		rel   string
+		isDir bool
+	}{
+		{".configs", true},
+		{".configs/claude-settings.json", false},
+		{".configs/codex-config.toml", false},
+		{".rules", true},
+		{".rules/default.rules", false},
+	}
+	for _, entry := range kept {
+		if shouldSkip(entry.rel, entry.isDir) {
+			t.Fatalf("shouldSkip(%q, %v) = true, want false", entry.rel, entry.isDir)
+		}
+	}
+}

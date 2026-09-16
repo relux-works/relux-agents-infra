@@ -110,9 +110,17 @@ func PreparePrimarySession(
 	report.LocalRuntimePresent = true
 	report.RuntimeProjectDir = runtimeProjectDir
 
+	// The v1 compatibility renderer needs project-owned instruction inputs. A
+	// fresh residual runtime carries none — setup no longer distributes them —
+	// so prepare creates the missing scaffold entrypoints first. Existing
+	// project inputs are never overwritten.
+	if err := ensureLocalInstructionScaffold(layout, nil); err != nil {
+		return report, fmt.Errorf("prepare instruction scaffold: %w", err)
+	}
+
 	switch provider {
 	case "codex":
-		if err := setupCodexSurface(layout, nil); err != nil {
+		if err := prepareCodexProjectSurface(layout, nil); err != nil {
 			return report, fmt.Errorf("prepare Codex project surface: %w", err)
 		}
 		configPath := filepath.Join(layout.CodexDir, "config.toml")
@@ -140,7 +148,7 @@ func PreparePrimarySession(
 			return report, fmt.Errorf("Codex project surface verification failed")
 		}
 	case "claude":
-		if err := setupClaude(layout, nil); err != nil {
+		if err := prepareClaudeProjectSurface(layout, nil); err != nil {
 			return report, fmt.Errorf("prepare Claude project surface: %w", err)
 		}
 		report.ClaudeEntrypointRendered = isGeneratedClaudeEntrypointFile(filepath.Join(layout.ClaudeDir, "CLAUDE.md"))

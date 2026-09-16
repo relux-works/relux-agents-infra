@@ -489,8 +489,8 @@ func TestSetupRefusesToMintAReceiptForARuntimeItDidNotFinishInstalling(t *testin
 	if err != nil {
 		t.Fatalf("LocalLayout: %v", err)
 	}
-	// A stale destination: instructions, configs and rules are there, the module
-	// the generated launcher builds is not.
+	// A stale destination: configs, rules, and leftover retired markers are
+	// there, the module the generated launcher builds is not.
 	mustMkdir(t, filepath.Join(layout.AgentsDir, ".instructions"))
 	mustMkdir(t, filepath.Join(layout.AgentsDir, ".configs"))
 	mustMkdir(t, filepath.Join(layout.AgentsDir, ".rules"))

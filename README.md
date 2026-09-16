@@ -1,10 +1,23 @@
 # relux-agents-infra
 
-Source repo for shared AI agent configurations, instructions, skills, and rules.
+Source repo for the residual local agent runtime: Pi local-model operation,
+Codex/Claude config and rules state, attachments, and the task-board
+compose/prepare contracts. Instruction/context materialization, skills, and
+managed proprietary-provider launches moved to Curator-managed homes.
 
 Works with:
-- **Claude Code** (`~/.claude/`)
-- **Codex CLI** (`~/.codex/`)
+- **Managed Pi runtime** (`pi-infra`, `qwen-infra`)
+- **Codex CLI config/rules state** (`~/.codex/`, project `.codex/`)
+- **Claude Code settings state** (`~/.claude/`, project `.claude/`)
+- **Curator** for `codex_cli` / `claude_code` launches, contexts, and skills
+
+> **Deprecation notice.** `agents-infra codex|claude`,
+> `openai-infra|anthropic-infra`, `openai-dange|anthropic-dange`, and the local
+> `.local/bin/codex-local` shim no longer launch anything. Each prints a
+> one-line migration notice to stderr and exits 1. Use
+> `curator run codex_cli -- <args>` or `curator run claude_code -- <args>`
+> instead. These entrypoints will be removed in the next release. The
+> non-launching `compose` and `prepare` contracts below are unaffected.
 
 ## Quick Start
 
@@ -25,11 +38,14 @@ agents-infra setup local /path/to/project
 agents-infra doctor global
 agents-infra doctor local /path/to/project
 agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json
-openai-infra --print-config
 pi-infra --print-config
 qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m
 agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check
 agents-infra version
+
+# Proprietary-provider launches moved to Curator (separate install and auth)
+curator run codex_cli -- --version
+curator run claude_code -- --version
 ```
 
 `setup.sh` and `setup.ps1` are bootstrap wrappers. They delegate into
@@ -50,10 +66,8 @@ The canonical interface after bootstrap is:
 - `agents-infra compose --agent codex|claude --project DIR --schema-version 1 --json`
 - `agents-infra compose --mode primary-session --agent codex|claude|pi --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
 - `agents-infra compose --mode primary-session --entrypoint openai-infra|anthropic-infra|qwen-infra --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]`
-- `agents-infra target openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
+- `agents-infra target qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
 - `agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json`
-- `agents-infra codex [--print-config] [-d] [CODEX_ARGS...]`
-- `agents-infra claude [--print-config] [-d] [CLAUDE_ARGS...]`
 - `agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
 - `agents-infra pi spawn --profile EXACT --prompt TEXT --deadline DURATION --result-schema 1`
 - `agents-infra pi spawn --prompt TEXT [--profile EXACT] [--deadline DURATION] [--print-config]` (legacy raw JSONL/operator surface)
@@ -62,13 +76,19 @@ The canonical interface after bootstrap is:
 - `agents-infra runtime quarantine [--project DIR] [--profile NAME]`
 - `agents-infra runtime unquarantine [--project DIR] [--profile NAME]`
 - `pi-infra [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]`
-- `openai-infra|anthropic-infra|qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
+- `qwen-infra [--print-config] [-- PROVIDER_ARGS...]`
 - `qwen-infra spawn --prompt TEXT [--deadline DURATION] [--print-config]`
 - `agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]`
 - `agents-infra version`
 - `model-harness render PROFILE --host 127.0.0.1 --port PORT --json [--config PATH]`
 - `model-harness doctor PROFILE --host 127.0.0.1 --port PORT [--config PATH]`
 - `model-harness run PROFILE --host 127.0.0.1 --port PORT [--config PATH]`
+
+Retired entrypoints (kept one release as explicit exit-1 stubs, removed next):
+- `agents-infra codex|claude` → `curator run codex_cli|claude_code -- <args>`
+- `agents-infra target openai-infra|anthropic-infra` → `curator run codex_cli|claude_code -- <args>`
+- `openai-infra|anthropic-infra|openai-dange|anthropic-dange` wrappers → same Curator commands
+- `.local/bin/codex-local` project shim → `curator run codex_cli -- <args>`
 
 `model-check` exits `0` when the managed check and all expectations pass, `1`
 for launch, validation, or cleanup failure, `2` on deadline expiry, `3` for a
@@ -81,11 +101,14 @@ tool-execution approval policy, so this flag is not a yolo control; use only a
 reviewed target and a controlled prompt. See [Bounded model behavior checks](#bounded-model-behavior-checks)
 for the full evidence, timeout, and cleanup contract.
 
-Setup syncs the repo into `.agents`, treats `.skills/` as the authoritative
-source-managed skill tree, refreshes the managed links it owns inside `skills/`,
-and then refreshes symlinks in `.claude/`, `.codex/`, and `.local/bin`. Scratch
-`.temp/` trees are excluded at every source depth and removed from installed
-runtimes, so nested development artifacts cannot become runtime content.
+Setup syncs the residual repo content into `.agents` (config, rules, the Go
+module, the Pi catalog), then refreshes the residual symlinks it owns in
+`.claude/` (settings), `.codex/` (config, rules), and `.local/bin` (helper
+launchers). It distributes no instructions, no skills, and no bundled MCP
+registry — those moved to Curator-managed homes — and it neither creates nor
+deletes installed skill content. Scratch `.temp/` trees are excluded at every
+source depth and removed from installed runtimes, so nested development
+artifacts cannot become runtime content.
 
 ### Source tree resolution
 
@@ -119,18 +142,17 @@ recognisable file names. A usable source tree carries:
 
 | Asset | Needed by |
 | --- | --- |
-| `.instructions/INSTRUCTIONS.md` | Claude instructions entrypoint |
-| `.instructions/AGENTS.md` | rendered Codex instructions entrypoint |
 | `.configs` | linked agent config tree |
 | `.rules` | linked agent rules tree |
-| `SKILL.md`, `README.md` | materialized `relux-agents-infra` skill package and its reference |
 | `tools/agents-infra/go.mod`, `tools/agents-infra/main.go` | the Go module the generated local `agents-infra` launcher builds on every invocation |
 | `tools/agents-infra/internal/infra/pi-v0.84.2-darwin-arm64-tree-manifest.txt` | authoritative 217-record managed Pi release-tree catalog; exact SHA-256 `2f68ab1b3f28a9c4b8995f91984f8f47001a79735da7e57aa7fe6d223f90378b` |
 
-…plus every instruction module the entrypoints `@include`. That closure is
-resolved up front, so a tree that references modules it does not ship is
-refused before the destination is touched rather than failing half way through
-the render.
+Instruction entrypoints and skill packaging markers left this contract when
+distribution moved to Curator. The `.instructions/` sources stay in this repo
+as Curator's provenance byte source, but setup neither requires nor copies
+them. The v1 prepare compatibility renderer (see the preparation contract
+below) works from project-owned installed inputs instead, creating minimal
+scaffold entrypoints on runtimes that have none.
 
 The launcher backend is part of the contract for a concrete reason: a tree with
 only the instruction and config markers used to pass, and setup would exit 0,
@@ -174,27 +196,27 @@ Both setup modes install sibling-only `pi-infra`, `openai-infra`,
 `anthropic-infra`, `qwen-infra`, `openai-dange`, and `anthropic-dange`
 launchers: global setup writes them beside the bootstrap-owned `agents-infra`,
 and local setup writes them beside
-the generated project launcher. `pi-infra` delegates as `agents-infra pi`; the
-three vendor aliases delegate as `agents-infra target <exact-alias>` without
+the generated project launcher. `pi-infra` delegates as `agents-infra pi` and
+`qwen-infra` delegates as `agents-infra target qwen-infra`, both without
 changing the caller's working directory or argument bytes/order, including a
-literal wrapper delimiter and its following operands. It never searches `PATH`
-for a substitute target. `openai-dange` and `anthropic-dange` use the distinct
-sibling-binary `target-yolo` dispatch route with their matching canonical
-entrypoint, preserving every non-danger caller argument byte and its order.
-That route adds one YOLO selection and lets canonical target resolution deduplicate caller-leading
-`-d`, `--danger`, `--yolo`, or the native danger flag to exactly one
-provider-native flag. Ordinary provider flags such as `--model` also need no
-explicit `--` on the dange aliases. No argv token authenticates dange origin;
-forging the retired revision-5 marker on a canonical alias is an unknown flag
-and fails before provider launch. Implicit provider-flag forwarding is scoped
-to the distinct dange route: direct
-`openai-infra` and `anthropic-infra` retain their wrapper delimiter and
-unknown-flag refusal behavior, including refusal of a caller-leading `-d`.
+literal wrapper delimiter and its following operands. Neither ever searches
+`PATH` for a substitute target.
+`openai-infra`, `anthropic-infra`, `openai-dange`, and `anthropic-dange` are
+kept for one release as deprecated stubs: each refuses directly in the wrapper
+itself, printing the Curator migration notice to stderr and exiting 1 without
+launching, resolving, building, delegating, or writing anything — including
+when the cached wrapper build output is absent or the Go toolchain is broken —
+and each is removed in the next release. The local `agents-infra` launcher
+likewise refuses `codex`, `claude`, `target openai-infra|anthropic-infra`, and
+`target-yolo openai-infra|anthropic-infra` before it creates its build
+directory or invokes the toolchain.
 Setup
 repairs a drifted managed alias; setup's
-postcondition and `verify` refuse a missing alias, changed bytes or mode, a
-wrong embedded target, and a missing/non-regular/non-executable sibling target.
-The managed alias and sibling target must each be a regular file at its own
+postcondition and `verify` refuse a missing alias, changed bytes or mode, and
+(for the live `pi-infra`/`qwen-infra` aliases) a wrong embedded target and a
+missing/non-regular/non-executable sibling target. The deprecated stubs carry
+no embedded target and never touch a sibling. The managed alias and (for live
+aliases) sibling target must each be a regular file at its own
 pathname: setup replaces a symlinked alias even when its target has identical
 bytes, and verification rejects symlinks for either artifact instead of
 following them.
@@ -249,21 +271,21 @@ The installed `~/.agents/` copy is runtime state and should not keep git metadat
 
 For project-local installs, use `agents-infra setup local /abs/path/to/project`.
 That creates a local runtime layout under the project root:
-- `.agents/`: the installed runtime copy and project-owned instruction space
-- `.claude/`: thin Claude shim that points into `.agents`
-- `.codex/`: thin Codex shim that points into `.agents`
+- `.agents/`: the installed residual runtime copy (config, rules, Go module, Pi catalog)
+- `.claude/`: residual Claude settings link into `.agents`
+- `.codex/`: residual Codex config/rules links into `.agents`
 - `.local/bin/`: helper CLIs for the local setup, including `agents-infra`
 - `.local/bin/pi-infra`: managed sibling alias for `agents-infra pi`
-- `.local/bin/openai-infra`, `.local/bin/anthropic-infra`, `.local/bin/qwen-infra`: canonical target aliases
-- `.local/bin/openai-dange`, `.local/bin/anthropic-dange`: direct canonical-provider YOLO aliases
+- `.local/bin/qwen-infra`: managed sibling alias for `agents-infra target qwen-infra`
+- `.local/bin/openai-infra`, `.local/bin/anthropic-infra`, `.local/bin/openai-dange`, `.local/bin/anthropic-dange`: deprecated stubs (exit 1, removed next release)
 
-Local setup reproduces the global runtime topology, not the global instruction
-content. It does not copy source `.instructions/` modules into the project.
-Instead it creates `.agents/.instructions/AGENTS.md` and
-`.agents/.instructions/INSTRUCTIONS.md` as minimal project-owned entrypoints
-when they are missing. Existing local entrypoints and modules are never
-overwritten during resync. Add only project-specific guidance there; global
-policy continues to come from the global agent runtime.
+Local setup installs the residual runtime only. It copies no `.instructions/`,
+`.skills/`, or bundled MCP registry content into the project, and it creates
+no provider instruction files. Project-owned `.agents/.instructions/` inputs,
+when present, are left byte-identical across resyncs; the v1 `prepare`
+contract creates minimal scaffold entrypoints there only when an installed
+runtime needs them for its compatibility render. Managed instruction content
+for day-to-day launches comes from Curator profiles, not from this runtime.
 
 Project-local setup intentionally does not create `.codex/config.toml`. Codex
 model, reasoning effort, service tier, trusted projects, and TUI notices are
@@ -296,10 +318,10 @@ Use `--codex-config` when local setup should make an explicit decision:
   top-level `profiles` table while preserving all other valid TOML settings.
   Invalid installed TOML fails before the existing project config is replaced.
 
-These modes alone govern project Codex config state. A primary
-`agents-infra codex` launch—or an external owner using the preparation contract
-below—refreshes instructions, skills, and rules while preserving an absent,
-managed, custom, or linked `.codex/config.toml` exactly.
+These modes alone govern project Codex config state. An external owner using
+the preparation contract below refreshes instructions and rules — never skills —
+while preserving an absent, managed, custom, or linked `.codex/config.toml`
+exactly. (`agents-infra codex` itself is deprecated; see the notice above.)
 
 ### Child launch MCP composition contract
 
@@ -335,7 +357,12 @@ mismatch rather than partially applying its arguments.
 ### Primary-session project preparation contract
 
 Session owners that launch a primary provider outside the agents-infra process
-must refresh the same installed project surface as the direct launcher:
+refresh the installed project surface through this contract. It is a v1
+compatibility exception: ordinary setup no longer distributes instructions,
+but the schema-1 preparation report still requires real rendered artifacts
+with honest states and hashes, so `prepare` — and only `prepare` — renders
+them from project-owned installed inputs. Full removal of this renderer is
+gated on a coordinated consumer migration; see the CHANGELOG.
 
 ```bash
 agents-infra prepare --agent codex --project /abs/path/to/project --schema-version 1 --json
@@ -349,12 +376,12 @@ with a valid completed-install receipt. A config-only ancestor such as
 composition, but preparation skips it instead of treating it as an installed
 runtime. The user's global `~/.agents` runtime is never treated as a project.
 Codex preparation refreshes the managed `.codex/AGENTS.md`, project-root
-`AGENTS.md`, and skills/rules links. It never chooses a Codex config mode:
+`AGENTS.md`, and rules links; it never touches skills or Codex config state:
 an absent `.codex/config.toml` stays absent, while an existing managed, custom,
 or linked config is preserved byte-for-byte or target-for-target. The explicit
 `setup local --codex-config=preserve|global|local` operation remains the only
-owner of that choice. Claude preparation refreshes `.claude/CLAUDE.md`,
-instruction/settings links, and managed skill links. When no project-local
+owner of that choice. Claude preparation refreshes `.claude/CLAUDE.md` and the
+instruction/settings links; it never touches skills. When no project-local
 runtime is installed, the command succeeds as an explicit no-op so the
 provider-native/global surface remains authoritative.
 
@@ -370,12 +397,14 @@ existing preserved managed file and does not authorize rendering one.
 Unsupported schemas and render failures return nonzero with a safe error
 envelope.
 
-`agents-infra codex` and `agents-infra claude` call this same preparation
-function immediately before provider launch. `--print-config` remains a
-read-only inspection path. External session owners must call `prepare` after
-successful composition and before starting or connecting to their provider
-host; composition still supplies MCP and primary-session policy through the
-versioned launch plan.
+External session owners must call `prepare` after successful composition
+and before starting or connecting to their provider host; composition still
+supplies MCP and primary-session policy through the versioned launch plan.
+(`agents-infra codex` and `agents-infra claude` used to call this same
+preparation function before launch; they are now deprecated stubs with no
+`--print-config` exception. Non-launching inspection for Codex/Claude plans
+goes through the JSON `compose` output; `--print-config` survives only on
+the `pi`/`qwen` diagnostics.)
 
 ### Task-board Session Manager wrappers and shell aliases
 
@@ -396,8 +425,10 @@ alias codexD="task-board codex"
 alias claudeD="task-board claude"
 ```
 
-Use `agents-infra codex` / `agents-infra claude` directly only for a launch that
-must bypass the Session Manager (no board-goal binding, no managed session).
+Direct `agents-infra codex` / `agents-infra claude` launches are retired: both
+print the Curator migration notice and exit 1. A launch that must bypass the
+Session Manager (no board-goal binding, no managed session) now goes through
+`curator run codex_cli -- <args>` or `curator run claude_code -- <args>`.
 
 ### Provider-specific primary session policies
 
@@ -1727,15 +1758,18 @@ model/effort pair is compatible.
 `low`, `medium`, `high`, `xhigh`, or `max` (matched case-insensitively and
 stored lowercase) and composes as `--effort VALUE` unless the invocation
 already passes `--effort`; without it Claude reasoning remains provider-native.
-`yolo_mode` is an unquoted TOML boolean. Codex fields never configure `agents-infra claude`,
-and Claude fields never configure `agents-infra codex`; `[mcp]` remains the one
-intentional provider-shared project section.
+`yolo_mode` is an unquoted TOML boolean. Codex fields never configure Claude
+compositions, and Claude fields never configure Codex compositions; `[mcp]`
+remains the one intentional provider-shared project section.
 
 ### Canonical vendor target entrypoints
 
-Canonical targets are an additive, strict launch path for installed vendor
-aliases. They separate vendor identity from the provider harness and map each
-public entrypoint explicitly:
+Canonical targets are an additive, strict naming layer for vendor identity.
+`qwen-infra` remains a live launch alias; `openai-infra` and
+`anthropic-infra` survive only as compose identifiers (and as deprecated
+launch stubs for one release — see the deprecation notice). Targets separate
+vendor identity from the provider harness and map each public entrypoint
+explicitly:
 
 ```toml
 [agents.targets."openai-sol-high"]
@@ -1796,28 +1830,32 @@ before the legacy Pi composer can normalize it.
 Inspect or compose the selected target without launching it:
 
 ```bash
-openai-infra --print-config
-anthropic-infra --print-config
 qwen-infra --print-config
 qwen-infra spawn --prompt "Complete the bounded task" --print-config
+
+agents-infra compose --mode primary-session \
+  --entrypoint openai-infra --project "$PWD" --schema-version 1 --json
 
 agents-infra compose --mode primary-session \
   --entrypoint qwen-infra --project "$PWD" --schema-version 1 --json \
   -- --model 'local-qwen/Qwen3.8-27B-MLX-8bit:off'
 ```
 
+(`openai-infra --print-config` and `anthropic-infra --print-config` are gone
+with the deprecated launch stubs: non-launching inspection for those vendors
+goes through the JSON `compose` output.)
+
 Alias JSON plans retain schema version 1 and add `target`, plus Pi-only
 `resolved.profile_provider` and `resolved.endpoint` provenance. Legacy
-`compose --agent ...` plans omit those fields byte-for-byte. Direct
-`agents-infra codex`, `agents-infra claude`, `agents-infra pi`, and `pi-infra`
-keep their existing CLI/project/provider precedence; merely declaring targets
-does not change them. `doctor local` reports configured mappings and their
-resolved coordinates with sources.
+`compose --agent ...` plans omit those fields byte-for-byte. `agents-infra pi`
+and `pi-infra` keep their existing CLI/project/provider precedence; merely
+declaring targets does not change them. `doctor local` reports configured
+mappings and their resolved coordinates with sources.
 
-When launched from a project directory, `agents-infra codex` walks from the
+When composing for a project directory, the Codex plan builder walks from the
 filesystem root to the current directory and reads each
 `.agents/.configs/project-config.toml` it finds. It parses every discovered
-file once, retains absolute paths as provenance, and fails before launch when
+file once, retains absolute paths as provenance, and fails composition when
 any discovered file is invalid. `~/.agents/.configs/project-config.toml` is
 never a project-policy source. Each primary-session field composes
 independently: the nearest file that explicitly supplies that field wins. In
@@ -1862,9 +1900,9 @@ its own inherits the policy and reports an explicit preparation no-op rather
 than borrowing the ancestor's directory.
 
 A meta-config directory legitimately fails `agents-infra verify local` — it has
-no install receipt, no `.instructions`, no `.rules`, and no skills tree, because
-it was never meant to be a runtime. That report is a runtime check, not a
-verdict on the config.
+no install receipt, no rules tree, and no launcher backend, because it was
+never meant to be a runtime. That report is a runtime check, not a verdict on
+the config.
 
 Confirm what a nested project actually resolved with `doctor local`, whose
 `*_source` fields name the exact file each value came from:
@@ -1879,34 +1917,32 @@ For model and reasoning effort, the per-field launch precedence is:
 
 | Priority | Source | Notes |
 | --- | --- | --- |
-| 1 | Explicit Codex selection | `--model`/`-m`, top-level `-c model=...`, or top-level `-c model_reasoning_effort=...` passed through this launcher. |
+| 1 | Explicit Codex selection | `--model`/`-m`, top-level `-c model=...`, or top-level `-c model_reasoning_effort=...` passed on the composed plan. |
 | 2 | Effective project primary-session field | Emitted as a Codex CLI/config override only when selected. |
 | 3 | Codex native resolution | Project/profile/user/system/default configuration. |
 
 An explicit `--profile` or `-p` suppresses project model and project reasoning
 so the profile can resolve them; an explicit model or effort passed alongside a
 profile still wins for its own field. Equal duplicate explicit values collapse
-to one override; conflicting explicit values fail before Codex is executed.
-Model, reasoning, and profile wrapper arguments participate only before `--`.
+to one override; conflicting explicit values fail composition before any plan
+is emitted. Model, reasoning, and profile arguments participate only before `--`.
 
-Yolo is an independent safety decision per provider. For either launcher,
+Yolo is an independent safety decision per provider. For either provider, an
 explicit `-d`, `--danger`, `--yolo`, or its native dangerous flag wins over
 project policy; otherwise effective project `yolo_mode = true` enables it, and
 an explicit project `false` or an absent value emits no dangerous flag. Codex
 uses `--dangerously-bypass-approvals-and-sandbox`; Claude uses
-`--dangerously-skip-permissions`. Each launch emits that provider's native
-dangerous flag at most once, and `--print-config` records the effective source
-and whether project policy was suppressed by explicit CLI input. Persistent
-yolo applies only to its matching `agents-infra codex` or `agents-infra claude`
-primary launch; it never affects `task-board spawn`, task-board manifests, or
-child-run selection.
+`--dangerously-skip-permissions`. Each composed plan carries that provider's
+native dangerous flag at most once. Persistent yolo applies only to the
+matching provider's composed primary plan; it never affects
+`task-board spawn`, task-board manifests, or child-run selection.
 
-For Claude primary-session policy, `agents-infra claude` applies an effective
+For Claude primary-session policy, the Claude composition applies an effective
 project model through native `--model MODEL` and an effective yolo value through
 `--dangerously-skip-permissions`. An explicit Claude `--model` or
 `--model=MODEL` before `--` wins and suppresses only the project model for that
-launch; explicit Claude danger input suppresses only the project yolo policy.
-The Claude wrapper does not infer model or yolo values from Codex policy,
+plan; explicit Claude danger input suppresses only the project yolo policy.
+The Claude composition does not infer model or yolo values from Codex policy,
 profiles, or task-board settings.
 
 Use the supported local setup surface to update a project without replacing
@@ -1944,24 +1980,23 @@ Supported Unix targets use an atomic rename; Windows uses
 (`MoveFileExW` replace/write-through); unsupported replacement targets fail
 closed.
 
-Inspect either provider invocation without launching an agent:
+Inspect either provider plan without launching an agent:
 
 ```bash
 cd /abs/path/to/project
-agents-infra codex --print-config
-agents-infra codex --print-config --model gpt-5.6-terra -c 'model_reasoning_effort="xhigh"'
+agents-infra compose --mode primary-session --agent codex --project . --schema-version 1 --json
+agents-infra compose --mode primary-session --agent codex --project . --schema-version 1 --json -- --model gpt-5.6-terra -c 'model_reasoning_effort="xhigh"'
 
-agents-infra claude --print-config
-agents-infra claude --print-config --model claude-opus-4-6
-
-# Start an actual primary Codex session from the same project.
-agents-infra codex
+agents-infra compose --mode primary-session --agent claude --project . --schema-version 1 --json
+agents-infra compose --mode primary-session --agent claude --project . --schema-version 1 --json -- --model claude-opus-4-6
 ```
 
-`--print-config` prints every discovered project-config path; effective and
-project values with their sources; explicit-CLI/profile suppression state where
-applicable; wrapper yolo expansion; and the exact provider args to be executed.
-It is the first diagnostic when a launch does not use the expected values.
+The JSON plan is the first diagnostic when a composed launch does not use the
+expected values: it carries effective and project values with their sources,
+explicit-CLI/profile suppression state where applicable, and the exact provider
+args. (The retired `agents-infra codex|claude --print-config` diagnostics are
+gone with the deprecated launchers; `--print-config` survives only on the
+`pi`/`qwen` diagnostics.)
 
 `doctor local` uses the same resolver for persistent configuration evidence:
 
@@ -2007,16 +2042,18 @@ global config.
 
 Troubleshooting:
 
-- Unexpected model or effort: run `agents-infra codex --print-config`; check
+- Unexpected model or effort: run `agents-infra compose --mode primary-session
+  --agent codex --project PROJECT --schema-version 1 --json`; check
   `effective_source`, `project_application`, an explicit `-c`/`--model`, and
   profile suppression.
-- Unexpected danger flag: inspect that launcher's `wrapper_expansions` and
+- Unexpected danger flag: inspect the composed plan's `wrapper_expansions` and
   `yolo_mode`; set the nearest provider field explicitly to `false` to mask an
   inherited `true`.
-- Unexpected Claude model: run `agents-infra claude --print-config`; check its
+- Unexpected Claude model: run `agents-infra compose --mode primary-session
+  --agent claude --project PROJECT --schema-version 1 --json`; check its
   `effective_source`, `project_application`, and any explicit `--model`.
 - Invalid configuration: use unquoted strings for model/effort and an unquoted
-  boolean for yolo; the launcher reports the source path and field.
+  boolean for yolo; composition reports the source path and field.
 - Global model appears ignored: run `agents-infra doctor local PROJECT` and
   resolve any `codex_config_shadowing_global: true` state deliberately.
 
@@ -2084,13 +2121,13 @@ established. The benchmark-only profiles pin both runtimes to a live-reported
 | Tool | Purpose | Command | Outputs |
 |------|---------|---------|---------|
 | `./setup.sh` / `./setup.ps1` | Bootstrap the `agents-infra` and `model-harness` CLIs and sync the global runtime | `./setup.sh`, `.\setup.ps1` | `~/.local/bin/agents-infra`, `~/.local/bin/model-harness`, `~/.agents/`, `~/.claude/`, `~/.codex/`, install-state metadata |
-| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch isolated primary Codex, Claude, managed Pi, and standalone unattended Pi workers; inspect or explicitly retire legacy lifecycle evidence; inspect, stop, quarantine, or unquarantine shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL --claude-primary-reasoning-effort EFFORT`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra pi spawn --profile NAME --prompt "Complete the bounded task" --deadline 30m --result-schema 1`, `agents-infra pi turn --target qwen-infra --prompt "Complete the bounded task" --deadline 30m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra codex --print-config`, `agents-infra claude --print-config`, `agents-infra pi --print-config`, `agents-infra pi lifecycle status --project /path/to/project --profile NAME --json`, `agents-infra pi lifecycle retire-legacy --project /path/to/project --profile NAME --dry-run --json`, `agents-infra pi lifecycle retire-legacy --project /path/to/project --profile NAME --confirm PLAN_HASH --json`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30`, `agents-infra runtime quarantine --profile NAME`, `agents-infra runtime unquarantine --profile NAME` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose, lifecycle status/retirement, or standalone launch-plan JSON, one bounded schema-1 Pi turn result for machine consumers (or legacy raw JSONL for the operator surface), hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
+| `agents-infra` | Set up or inspect global/project-local agent runtimes; prepare provider project surfaces without launching; compose non-launching MCP-only or primary-session launch plans; launch managed Pi and standalone unattended Pi workers; inspect or explicitly retire legacy lifecycle evidence; inspect, stop, quarantine, or unquarantine shared local runtimes; run bounded managed local-model behavior checks; run the Go attachment helper | `agents-infra setup global`, `agents-infra setup local /path/to/project --codex-primary-model MODEL --codex-primary-reasoning-effort EFFORT --codex-yolo-mode=true\|false --claude-primary-model MODEL --claude-primary-reasoning-effort EFFORT`, `agents-infra setup local /path/to/project --clear-codex-primary-session`, `agents-infra setup local /path/to/project --clear-claude-primary-session`, `agents-infra doctor local /path/to/project`, `agents-infra prepare --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --agent codex --project /path/to/project --schema-version 1 --json`, `agents-infra compose --mode primary-session --agent pi --project /path/to/project --schema-version 1 --json`, `agents-infra pi spawn --profile NAME --prompt "Complete the bounded task" --deadline 30m --result-schema 1`, `agents-infra pi turn --target qwen-infra --prompt "Complete the bounded task" --deadline 30m`, `agents-infra model-check --target qwen-infra --prompt "Reply with READY" --output-dir .temp/model-check`, `agents-infra attachments list`, `agents-infra pi --print-config`, `agents-infra pi lifecycle status --project /path/to/project --profile NAME --json`, `agents-infra pi lifecycle retire-legacy --project /path/to/project --profile NAME --dry-run --json`, `agents-infra pi lifecycle retire-legacy --project /path/to/project --profile NAME --confirm PLAN_HASH --json`, `agents-infra runtime status --profile NAME --json`, `agents-infra runtime stop --profile NAME --force --timeout 30`, `agents-infra runtime quarantine --profile NAME`, `agents-infra runtime unquarantine --profile NAME` | Runtime directories and rendered provider artifacts under the target root; deterministic preparation/compose, lifecycle status/retirement, or standalone launch-plan JSON, one bounded schema-1 Pi turn result for machine consumers (or legacy raw JSONL for the operator surface), hash-contained Pi client and shared-runtime state under the user cache directory, mode-0600 model-check `events.jsonl`, `stderr.log`, `summary.json`, and `summary.txt` under the explicit output directory, attachment manifests/staged images, or printed diagnostics on stdout |
 | `model-harness` | Resolve and run machine-local or SSH-forwarded model server profiles, plus bounded local synthetic-prefill capacity checks, while keeping agent configuration separate from backend-specific lifecycle details; `doctor` additionally refuses an editable or commit-drifted backend install when a profile declares `pinned_distribution` | `model-harness render PROFILE --host 127.0.0.1 --port PORT --json`, `model-harness doctor PROFILE --host 127.0.0.1 --port PORT`, `model-harness run PROFILE --host 127.0.0.1 --port PORT`, `model-harness stress PROFILE --host 127.0.0.1 --port PORT --json` | Exact side-effect-free launch-plan JSON, readiness diagnostics, a foreground backend/SSH process owned by `agents-infra`, or a versioned stress report with observed prompt tokens, timing, and process RSS evidence |
 | `pipx` | Install an isolated, reproducibly pinned model-server runtime when a required upstream fix has not reached PyPI | `pipx install --suffix=-qwenfix --python python3.14 'git+https://github.com/ml-explore/mlx-lm.git@COMMIT'` | Isolated virtual environment under the pipx home and suffixed entry points under the pipx bin directory |
 | `mlx-swift-runtime-prototype` | Task-scoped MLX Swift LM prototype that serves the configured local Qwen model over the same OpenAI-compatible surface the Pi profile uses, so an MLX Swift migration can be measured without changing the default Python `mlx-lm` runtime | `cd tools/mlx-swift-runtime-prototype`, then `xcodebuild -downloadComponent MetalToolchain` once per host, `xcodebuild build -scheme mlx-swift-runtime-prototype -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath ./DerivedData -skipPackagePluginValidation -skipMacroValidation` (SwiftPM cannot compile mlx-swift's Metal shaders, so `swift build` yields a binary that refuses to start), `swift test -c release` for the contract suite, `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype serve --model /abs/model --host 127.0.0.1 --port PORT`, `HARNESS=... HARNESS_CONFIG=... scripts/smoke.sh`, `BINARY=... scripts/lifecycle-smoke.sh` and `BINARY=... scripts/metallib-gate-probe.sh` for the weight-free lifecycle and startup-gate probes, and `BINARY=... HARNESS=... MODEL=... scripts/dead-generation-smoke.sh` for the dead-generation-worker health regression (`/health` must answer 503 once the generation worker is condemned, `model-harness` must restart it on the `generation_worker_unavailable` marker, and a request-scoped failure must change neither), and `BINARY=... HARNESS=... MODEL=... scripts/generation-batch-recovery-smoke.sh` for the generation-batch failure recovery regression (a mid-batch failure must end its request with an explicit error rather than a truncated success, release the batch and any implicated cache state, and let the next request complete on the same unrestarted process, while an unrecoverable failure still reaches 503), plus `DerivedData/Build/Products/Release/mlx-swift-runtime-prototype benchmark-run --config ... --model ... --prompts examples/benchmark-prompts.json --thresholds examples/benchmark-thresholds.json --session ... --harness ... --baseline-runtime python-mlx-lm --baseline-profile ... --candidate-runtime mlx-swift --candidate-profile ... --python-bin ... --candidate-binary ...` for the Python-vs-Swift migration decision, with `BINARY=... scripts/benchmark-gate-smoke.sh` driving the decision and replay entry points through the real subcommands (ONE invocation spawns both runtimes through `model-harness`, drives every scenario against them, clocks first-to-last generated deltas across `content`, `reasoning`, and `reasoning_content`, seals per-scenario cached-token telemetry so one-sided reuse or unknown reuse is refused, and samples both runtimes over warm-up, scenario, soak and process windows with the same `peak_resident_memory_upper_bound_bytes`: exact Mach physical footprint plus a conservative upper edge for resident `vmmap` mapped-file bytes, sampling the cheap Mach component at 20 Hz, refreshing mapped-file residency at a bounded 0.2 Hz, and sampling synchronously at window boundaries; raw samples seal independent Mach and mapped-file timestamps, reused mapped values retain their original timestamp, and a scored scenario/process window must prove each component has no timestamp gap above 125 ms, while sparse, stale, untimestamped, absent, failed, partial or malformed series are refused; it seals the record it built with a transcript digest and judges the pair; the two runtimes are measured sequentially because a 64 GiB host cannot hold two copies of a 28 GB model; there is no `benchmark-attest` subcommand and no flag through which a caller can supply a measurement, because review obtained `accepted=true` three times by handing the previous gates documents about work nobody did — most recently two placeholder HTTP servers that answered only `GET /v1/models`; and admission refuses any pair whose pinned host, model, quantization, prompt suite, context policy — KV bound, prefill chunk *and* chat-template reasoning effort — output bound or sampler differs, whose wall-clock intervals overlap, which no attestation covers, which was observed by a different build than the one judging, whose measurements do not digest to what the observation sealed, whose scenarios carry no served completion, or that leaves a scored metric unmeasured; `benchmark-compare` replays an archived session and can never return an acceptance) | A release binary plus its `mlx-swift_Cmlx.bundle` shader bundle under `tools/mlx-swift-runtime-prototype/DerivedData/Build/Products/Release/` (both gitignored), one-line JSON lifecycle events on stdout carrying load time, physical footprint and MLX active bytes, smoke transcripts under the caller's `OUT` directory, and a benchmark session directory under the caller's `--session` path holding `records/`, `attest/`, `logs/`, `session.json` and `decision.json` |
 | `pi-infra` | Stable global/project-local alias for the managed Pi production entry point; preserves caller cwd and every argument and refuses a missing sibling target | `pi-infra --print-config`, `pi-infra --profile qwen-3.8-27b -- "ordinary prompt"`, `pi-infra` | Non-launching `agents-infra.primary-session-launch-plan` JSON or an isolated Pi/runtime session under the canonical user cache root |
-| `openai-infra`, `anthropic-infra`, `qwen-infra` | Strict sibling-only aliases for configured canonical vendor targets; preserve cwd/argv and lock target identity; `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `openai-infra --print-config`, `anthropic-infra --print-config`, `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use the exact schema-1 `agents-infra pi spawn` command emitted by the generic BuildLaunch graph | Alias launch, legacy standalone Pi JSONL for operators, bounded schema-1 turn results for generic consumers, or a non-launching plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
-| `openai-dange`, `anthropic-dange` | Direct sibling-only YOLO aliases for the matching canonical provider entrypoint; use a distinct non-argv-origin dispatcher, preserve caller cwd and argument bytes/order, and rely on canonical launch resolution to emit one provider-native danger flag; implicit leading provider-flag forwarding applies only to these aliases | `openai-dange`, `openai-dange --model gpt-5.6-sol exec "inspect this project"`, `anthropic-dange`, `anthropic-dange --print-config` | The same canonical provider launch or non-launching plan as `openai-infra` / `anthropic-infra`, with YOLO selected explicitly |
+| `openai-infra`, `anthropic-infra`, `qwen-infra` | Sibling-only vendor-target aliases; `qwen-infra` is live and preserves cwd/argv with locked target identity, while `openai-infra` and `anthropic-infra` are deprecated stubs (stderr notice, exit 1, removed next release); `qwen-infra` additionally exposes the explicit standalone unattended worker primitive | `qwen-infra --print-config`, `qwen-infra spawn --prompt "Complete the bounded task" --deadline 10m`; machine consumers use the exact schema-1 `agents-infra pi spawn` command emitted by the generic BuildLaunch graph | Alias launch, legacy standalone Pi JSONL for operators, bounded schema-1 turn results for generic consumers, or a non-launching plan with target and effective-coordinate provenance; no project-config mutation or task-board dependency |
+| `openai-dange`, `anthropic-dange` | Deprecated stubs for the retired direct YOLO aliases (stderr notice, exit 1, removed next release); they refuse directly without delegating, building, or forwarding danger flags | `curator run codex_cli -- <args>`, `curator run claude_code -- <args>` | One-line migration notice on stderr, exit 1, no launch and no filesystem writes |
 | `agents-attachments` | Backwards-compatible launcher for the Go attachment helper | `agents-attachments list`, `agents-attachments path screenshot.png`, `agents-attachments stage-images ./photo.heic --out-dir .temp/image-intake` | `.temp/agents-attachments-manifest.json`, `.temp/agents-attachments/`, staged images and `image-stage-map.json` under caller-selected `.temp/` |
 | `sips` / ImageMagick `magick` | Normalize HEIC/HEIF image inputs for staged inspection | `sips -s format png input.heic --out output.png`, `magick input.heic output.png` | Normalized staged images under caller-selected `.temp/` |
 | `go` | Build, test, and vet the Go CLI in `tools/agents-infra` | `cd tools/agents-infra && go test ./...`, `cd tools/agents-infra && go vet ./...` | Go test cache; task-scoped logs should be written under `.temp/` |
@@ -2165,69 +2202,38 @@ ADR's §2.4, §11.1 and §11.2.
 
 ## Structure
 
+An installed residual runtime (`~/.agents` global, `project/.agents` local):
+
 ```
-~/.agents/
-├── .instructions/          # Global instructions (modular .md files)
-│   ├── INSTRUCTIONS.md     # Entry point (loads all modules)
-│   ├── AGENTS.md           # Entry point for Codex CLI
-│   ├── INSTRUCTIONS_ATTACHMENTS.md
-│   ├── INSTRUCTIONS_BROWSER_AUTOMATION.md
-│   ├── INSTRUCTIONS_REMOTE_AGENTS.md
-│   ├── INSTRUCTIONS_PLATFORM.md
-│   ├── INSTRUCTIONS_STRUCTURE.md
-│   ├── INSTRUCTIONS_TOOLS.md
-│   ├── INSTRUCTIONS_SKILLS.md
-│   ├── INSTRUCTIONS_DIAGRAMS.md
-│   ├── INSTRUCTIONS_TESTING.md
-│   ├── INSTRUCTIONS_WORKFLOW.md
-│   ├── INSTRUCTIONS_DOCS.md
-│   └── INSTRUCTIONS_STYLE.md
-│
-├── .skills/                # Source-managed shared skills versioned in this repo
-│   ├── algorithmic-art/
-│   ├── architecture-diagrams/
-│   ├── brand-guidelines/
-│   ├── canvas-design/
-│   ├── doc-coauthoring/
-│   ├── docx/
-│   ├── frontend-design/
-│   ├── internal-comms/
-│   ├── ios-ui-validation/
-│   ├── mcp-builder/
-│   ├── pdf/
-│   ├── pptx/
-│   ├── skill-creator/
-│   ├── slack-gif-creator/
-│   ├── theme-factory/
-│   ├── web-artifacts-builder/
-│   ├── web-search/
-│   ├── webapp-testing/
-│   └── xlsx/
-│
-├── skills/                 # External skills/tooling area in installed runtime; not versioned by this repo
-│
-├── scripts/                # Cross-platform bootstrap entrypoints
+.agents/
+├── .agents-infra-install.json  # Completed-install receipt and source record
+├── .configs/                   # Tool configurations
+│   ├── claude-settings.json    # Claude Code settings (linked into .claude/)
+│   ├── codex-config.toml       # Codex CLI config (merged/linked into .codex/)
+│   └── project-config.toml     # Project policy: primary sessions, MCP opt-ins (local only)
+├── .rules/                     # Codex CLI rules
+│   └── default.rules           # Pre-approved commands (linked into .codex/rules/)
+├── .scripts/                   # Setup and utility scripts
+│   └── setup-symlinks.sh       # Internal compatibility wrapper over agents-infra
+├── scripts/                    # Cross-platform bootstrap entrypoints
 │   ├── setup.sh
 │   └── setup.ps1
-│
-├── .scripts/               # Setup and utility scripts
-│   └── setup-symlinks.sh   # Internal compatibility wrapper over agents-infra
-│
-├── .configs/               # Tool configurations
-│   ├── claude-settings.json    # Claude Code settings (reference)
-│   ├── codex-config.toml       # Codex CLI config
-│   └── codex-mcp-servers.toml  # Known Codex MCP server definitions
-│
-├── tools/
-│   └── agents-infra/       # Go CLI source
-│
-└── .rules/                 # Codex CLI rules
-    └── default.rules       # Pre-approved commands
+└── tools/
+    └── agents-infra/           # Go CLI source the local launcher builds
 ```
+
+The repo additionally carries `.instructions/` (modular instruction sources —
+Curator's provenance byte source, not setup input) and `.skills/`
+(source-managed shared skills, no longer distributed by setup). Setup copies
+neither into runtimes, and installs no bundled MCP registry: compose reads
+only caller-supplied global and project registries. Pre-existing installed
+instruction, skill, or registry files are preserved byte-identical because
+setup only writes paths it syncs from source.
 
 ## Instructions
 
-Modular instruction files in `.instructions/`:
+Modular instruction sources in `.instructions/` (Curator's provenance byte
+source; setup no longer distributes them):
 
 | File | Purpose |
 |------|---------|
@@ -2246,7 +2252,18 @@ Modular instruction files in `.instructions/`:
 | `INSTRUCTIONS_DOCS.md` | Documentation requirements |
 | `INSTRUCTIONS_STYLE.md` | Communication style |
 
+Curator profiles own instruction materialization into managed homes
+(`curator profile install …`, `curator run <env>`). The `@include`
+rendering that used to run during setup now runs only inside the v1
+`prepare` compatibility path, from project-owned installed inputs.
+
 ## Skills
+
+Skill distribution moved to Curator profile membership and managed-home
+links; setup no longer materializes, links, or validates skills. The
+`.skills/` sources below remain in this repo, and pre-existing installed
+skill content is preserved byte-identical — but nothing here reaches a
+provider through agents-infra anymore.
 
 Each skill follows the structure:
 
@@ -2369,44 +2386,30 @@ enabled_servers = ["figma"]
 ```
 
 There is one list per project, not one per agent — `enabled_servers` decides
-which servers are available regardless of whether you launch Codex or Claude
-Code. Known MCP server definitions live in `.configs/codex-mcp-servers.toml`
-and are synced into project runtimes. Definitions can describe streamable
-HTTP servers with `url` or stdio servers with `command` and optional `args`.
+which servers are available regardless of whether you target Codex or Claude
+Code. MCP server definitions come only from caller-supplied registries: the
+project `.agents/.configs/codex-mcp-servers.toml` plus the global registry at
+`~/.agents/.configs/codex-mcp-servers.toml`. Setup ships no bundled registry;
+an enabled server with no definition anywhere fails composition with an
+explicit missing-definition error naming the server and the requesting
+config — servers are never silently dropped. Definitions can describe
+streamable HTTP servers with `url` or stdio servers with `command` and
+optional `args`.
 
-Start Codex through `agents-infra codex` from inside the project tree. The
-launcher walks upward from the current directory, composes every discovered
-`.agents/.configs/project-config.toml`, resolves enabled MCP definitions from
-project registries plus the global registry, logs where each part came from,
-then starts Codex with the resulting `-c` overrides:
-
-```bash
-agents-infra codex
-agents-infra codex -d -
-agents-infra codex exec "check the Figma node"
-agents-infra codex --print-config
-```
-
-Start Claude Code the same way through `agents-infra claude` — same
-`enabled_servers` list, same registries, same ancestor walk — but rendered as
-a single Claude Code `--mcp-config` JSON payload instead of Codex `-c`
-overrides (streamable HTTP servers become `{"type":"http","url":...}`, with
-`bearer_token_env_var` mapped to an `Authorization: Bearer ${VAR}` header for
-Claude Code to expand at launch; stdio servers become
-`{"type":"stdio","command":...,"args":[...]}`). That payload is added on top
-of whatever MCP servers are already configured at the user/project level —
-the launcher does not pass `--strict-mcp-config`, so existing `.mcp.json` /
-`claude mcp add` servers keep working unchanged:
-
-```bash
-agents-infra claude
-agents-infra claude -d
-agents-infra claude --print-config
-```
+Day-to-day provider launches go through Curator (`curator run codex_cli`,
+`curator run claude_code`), which renders MCP from its own managed profiles.
+The contracts below are the non-launching composition surface agents-infra
+keeps for task-board consumers: both walk upward from the project, compose
+every discovered `.agents/.configs/project-config.toml`, resolve enabled MCP
+definitions from the caller-supplied registries, and report where each part
+came from. Codex plans render MCP as `-c` overrides; Claude plans render the
+same set as a single `--mcp-config` JSON payload (streamable HTTP servers
+become `{"type":"http","url":...}`, with `bearer_token_env_var` mapped to an
+`Authorization: Bearer ${VAR}` header for Claude Code to expand at launch;
+stdio servers become `{"type":"stdio","command":...,"args":[...]}`).
 
 For a child runner that already owns model, safety, prompt, and lifecycle
-arguments, use the non-launching composition contract instead of either primary
-launcher:
+arguments, use the non-launching composition contract:
 
 ```bash
 agents-infra compose --agent codex --project "$PWD" --schema-version 1 --json
@@ -2419,10 +2422,10 @@ Bearer token values are never read or emitted.
 
 For a session manager that wants to own the primary provider process itself
 (for example the task-board Session Manager), use the primary-session
-composition mode. It resolves exactly the launch plan `agents-infra codex`,
-`agents-infra claude`, or `agents-infra pi` would execute — same project-config precedence, same
-executable lookup, same argument ordering, including provider user args passed
-after `--` — but performs no launch and emits one machine-readable
+composition mode. It resolves the exact launch plan the provider composition
+would hand to a launcher — same project-config precedence, same executable
+lookup, same argument ordering, including provider user args passed after
+`--` — but performs no launch and emits one machine-readable
 `agents-infra.primary-session-launch-plan` schema v1 document:
 
 ```bash
@@ -2558,15 +2561,14 @@ like any other stdio server in its own
 command = "/absolute/path/to/lldb-mcp"
 ```
 
-Safari MCP is available as an opt-in stdio server backed by Safari Technology
-Preview's `safaridriver`:
+A Safari MCP opt-in backed by Safari Technology Preview's `safaridriver`
+is declared like any other caller-supplied stdio server — there is no
+bundled shared definition anymore:
 
 ```toml
 [mcp]
 enabled_servers = ["safari"]
 ```
-
-The shared definition launches:
 
 ```toml
 [servers.safari]
@@ -2584,12 +2586,12 @@ Safari remains project-local opt-in only. Do not add it to a global Codex or
 Claude Code MCP config unless the user explicitly wants a user-managed global
 server.
 
-During `agents-infra setup local`, a non-empty `enabled_servers` list also
-installs `.local/bin/codex-local` as a backward-compatible shim that delegates
-to `agents-infra codex`. The project-local `agents-infra` helper preserves the
-caller's working directory before it runs the source checkout with `go run`, so
-`codex-local --print-config` should report the directory where the user invoked
-it, not `.agents/tools/agents-infra`.
+During `agents-infra setup local`, a non-empty `enabled_servers` list still
+installs `.local/bin/codex-local`, but the shim is a deprecated stub: it
+refuses directly with the `agents-infra codex` migration notice on stderr and
+exit 1, without delegating to the launcher, building, or touching a sibling
+target, and it is removed in the next release. Without opt-ins, setup removes
+only the recognized generated shim and preserves unrelated user files.
 
 User-managed global MCP servers in the base Codex config, or in Claude Code's
 own user/project scopes, remain that agent's own responsibility, not
@@ -2647,98 +2649,79 @@ After running `agents-infra setup global`:
 
 ```
 ~/.agents/
-├── skills/
-│   ├── relux-agents-infra -> ~/.agents/.skills/relux-agents-infra
-│   ├── skill-creator -> ~/.agents/.skills/skill-creator
-│   └── ...
-├── .skills/
-│   └── relux-agents-infra/  # Materialized SKILL.md + README.md; no ancestor-link cycle
+├── .agents-infra-install.json   # Completed-install receipt and source record
+├── .configs/                    # Config tree (linked into providers)
+├── .rules/                      # Rules tree (linked into .codex/rules/)
+└── tools/agents-infra/          # Go CLI source for launchers to build
 
 ~/.claude/
-├── CLAUDE.md           # Loads @instructions/INSTRUCTIONS.md
-├── instructions/ -> ~/.agents/.instructions/
-└── skills/
-    ├── relux-agents-infra -> ~/.agents/skills/relux-agents-infra
-    ├── skill-creator/ -> ~/.agents/skills/skill-creator
-    └── ...
+└── settings.json -> ~/.agents/.configs/claude-settings.json
 
 ~/.codex/
-├── AGENTS.md           # Rendered from ~/.agents/.instructions/AGENTS.md
 ├── config.toml -> ~/.agents/.configs/codex-config.toml
-├── skills/
-│   └── ... -> ~/.agents/skills/...
 └── rules/
     └── default.rules -> ~/.agents/.rules/default.rules
 ```
 
 `~/.agents` is the installed runtime copy. It should not be used as a git checkout.
 
-Meaning of the two skill trees:
-- `.skills/` is the authoritative skill content that belongs to this repo, lives under its version control, and is synced into the installed runtime.
-- `skills/` is the external runtime area for public skills and tooling. It may contain content that does not belong to `relux-agents-infra`. `setup` only refreshes the managed links it owns there and must not treat that directory as repo-owned content.
-
-Before mutation, setup recursively validates every source-managed skill link it
-can materialize. Setup's postcondition and `verify` repeat that check across the
-managed installed surfaces. Links must remain contained, resolve successfully,
-and form an acyclic directory graph; multiple contained links may share a target
-when they form a DAG. Provider-owned top-level skill packages remain outside
-this ownership boundary unless setup manages their name, in both global and
-project-local runtimes.
+Setup owns only the residual surfaces above. It creates no instruction files,
+no skill links, and no MCP registry content; pre-existing instruction, skill,
+or registry files under native homes or installed runtimes are preserved
+byte-identical. The `claude_linked`, `codex_rendered`, and `infra_skill_link`
+doctor fields remain as legacy observations of that unmanaged state for
+external consumers — they are never residual health requirements.
 
 Project-local install example:
 
 ```
 project-root/
-├── .agents/
-│   ├── .instructions/       # Project-owned; not copied from global modules
-│   ├── .configs/
-│   ├── .scripts/
-│   ├── .skills/
-│   └── skills/
+├── .agents/                # Installed residual runtime copy
+│   ├── .agents-infra-install.json
+│   ├── .configs/           # Plus project-config.toml when configured
+│   ├── .rules/
+│   └── tools/agents-infra/
 ├── .claude/
-│   ├── CLAUDE.md
-│   ├── instructions/ -> .agents/.instructions/
-│   └── skills/ -> .agents/skills/...
+│   └── settings.json -> .agents/.configs/claude-settings.json
 ├── .codex/
-│   ├── AGENTS.md       # Rendered Codex instructions
-│   └── skills/ -> .agents/skills/...
-├── AGENTS.md           # Rendered project-root Codex instructions
+│   ├── config.toml         # Only in explicit --codex-config=local mode
+│   └── rules/ -> .agents/.rules/...
 └── .local/bin/
-    ├── agents-attachments # launcher for agents-infra attachments
-    └── agents-infra       # launcher for the Go CLI
+    ├── agents-attachments  # launcher for agents-infra attachments
+    ├── agents-infra        # launcher for the Go CLI
+    ├── pi-infra            # managed alias for agents-infra pi
+    └── qwen-infra          # managed alias for agents-infra target qwen-infra
 ```
 
-In local-project mode, treat `.agents/` as the installed source/runtime-common
-tree, with `.agents/.instructions/` reserved for project-owned guidance.
-`setup local` skips the source repo's global `.instructions/` tree, creates only
-missing local entrypoints, and preserves every existing local instruction file
-across resyncs. `.claude/` and `.codex/` are agent-specific runtime outputs.
-Codex does not expand Claude-style `@...` include indexes, so `setup`
-materializes `.codex/AGENTS.md` and project-root `AGENTS.md` as flattened
-markdown. If a hand-written project-root `AGENTS.md` exists, `setup local`
-preserves it as `.agents/.instructions/AGENTS.project.md` before rendering the
-Codex-visible file.
+In local-project mode, treat `.agents/` as the installed
+source/runtime-common tree. `.claude/` and `.codex/` are agent-specific
+residual outputs. The v1 `prepare` contract — not setup — renders provider
+instruction artifacts for installed runtimes from project-owned inputs:
+`.codex/AGENTS.md` and project-root `AGENTS.md` as flattened markdown (Codex
+does not expand Claude-style `@...` include indexes), preserving a
+hand-written project-root `AGENTS.md` as
+`.agents/.instructions/AGENTS.project.md` first; and `.claude/CLAUDE.md` plus
+the `instructions` link for Claude.
 
 ## Adding New Skills
 
-1. Create skill in `.skills/<skill-name>/`
-2. Add `SKILL.md` with frontmatter
-3. Run `agents-infra setup global` to propagate
-4. `setup` will refresh the managed link in the installed external `skills/` area without replacing unrelated external skills
+Skills are distributed through Curator profile membership now, not through
+this repo's setup. To publish a skill, add it to the owning Curator profile
+and install or refresh the profile (`curator profile install …`); managed
+homes pick it up from there. The `.skills/` sources in this repo are retained
+but inert: `setup` neither links nor validates them.
 
 Use `./setup.sh` only as bootstrap when the `agents-infra` launcher is missing
 or needs reinstalling. On Windows, use `.\setup.ps1` for the same bootstrap flow.
 
-Or use the `skill-creator` skill:
-
-```
-/skill-creator
-```
-
 ## Updating Instructions
 
-Edit files in this source repo, then run `agents-infra setup global` to sync them
-into `~/.agents` and refresh the installed runtime state.
+Instruction content for day-to-day launches is owned by Curator context
+packages. Edit the `.instructions/` sources in this repo (they remain the
+provenance byte source), then re-cut the owning profile package so managed
+homes pick the change up — `agents-infra setup` no longer syncs them anywhere.
+For the v1 `prepare` compatibility path, project-owned installed inputs under
+`.agents/.instructions/` are rendered on demand by `prepare` itself.
 
 ## Git
 

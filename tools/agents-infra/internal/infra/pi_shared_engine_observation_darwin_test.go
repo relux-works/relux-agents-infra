@@ -185,7 +185,7 @@ busy_action = "observe"
 	// while Process B and the independent Process-A-shaped lease are still
 	// held, then assert both survived untouched: broker still serving, same
 	// runtime PID, same lease count.
-	cancelDir, cancelEnv := fakeProcessA(t, "sleep 30\n")
+	cancelDir, cancelEnv := fakeProcessA(t, blockingProcessABody(t))
 	cancelRequest := graph.SpawnRequest([]byte("prompt"), cancelDir, cancelEnv)
 	cancelCtx, cancelNow := context.WithCancel(context.Background())
 	go func() {

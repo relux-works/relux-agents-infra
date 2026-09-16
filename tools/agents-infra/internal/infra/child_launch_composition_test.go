@@ -208,3 +208,30 @@ func TestBuildChildLaunchCompositionRejectsInvalidProjectConfiguration(t *testin
 		t.Fatal("BuildChildLaunchComposition succeeded with invalid project configuration")
 	}
 }
+
+// Removing the bundled registry distribution exposes project opt-ins with no
+// definition anywhere. Composition must fail closed with the explicit
+// missing-definition error — never silently drop the server or emit an empty
+// success.
+func TestBuildChildLaunchCompositionRejectsEnabledServerWithoutDefinition(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	configDir := filepath.Join(project, ".agents", ".configs")
+	mustMkdir(t, configDir)
+	configPath := filepath.Join(configDir, projectConfigFileName)
+	mustWrite(t, configPath, "[mcp]\nenabled_servers = [\"figma\"]\n")
+
+	for _, agent := range []string{"codex", "claude"} {
+		t.Run(agent, func(t *testing.T) {
+			_, err := BuildChildLaunchComposition(agent, project, home, ChildLaunchCompositionProducer{Version: "dev", Commit: "unknown"})
+			if err == nil {
+				t.Fatalf("BuildChildLaunchComposition(%s) succeeded with no figma definition", agent)
+			}
+			for _, want := range []string{`"figma"`, configPath, "no definition was found"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("missing-definition error = %q, want it to name %q", err, want)
+				}
+			}
+		})
+	}
+}

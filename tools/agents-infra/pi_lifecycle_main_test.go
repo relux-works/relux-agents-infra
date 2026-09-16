@@ -25,6 +25,10 @@ func TestRunPiLifecycleOperatorIsNonLaunchingAndProjectsExactPlan(t *testing.T) 
 	mustMkdir(t, filepath.Dir(configPath))
 	mustWrite(t, configPath, mainTestPiConfig("/definitely/not/a/runtime", 18021))
 	t.Setenv("HOME", home)
+	// The lifecycle CLI resolves the default cache dir: $HOME/Library/Caches
+	// on macOS but $XDG_CACHE_HOME (else $HOME/.cache) on Linux. Point Linux
+	// at the seeded tree; ignored on macOS.
+	t.Setenv("XDG_CACHE_HOME", cache)
 	t.Setenv("PATH", "/definitely/no/provider/bin")
 
 	canonical, err := infra.CanonicalProjectDir(project)
@@ -103,6 +107,10 @@ func TestRunPiLifecycleStatusRefusesForeignEvidence(t *testing.T) {
 	mustMkdir(t, filepath.Dir(configPath))
 	mustWrite(t, configPath, mainTestPiConfig("/definitely/not/a/runtime", 18021))
 	t.Setenv("HOME", home)
+	// The lifecycle CLI resolves the default cache dir: $HOME/Library/Caches
+	// on macOS but $XDG_CACHE_HOME (else $HOME/.cache) on Linux. Point Linux
+	// at the seeded tree; ignored on macOS.
+	t.Setenv("XDG_CACHE_HOME", cache)
 	t.Setenv("PATH", "/definitely/no/provider/bin")
 
 	canonical, err := infra.CanonicalProjectDir(project)
@@ -157,6 +165,10 @@ func TestRunPiLifecycleStatusPaginatesWithoutLaunching(t *testing.T) {
 	mustMkdir(t, filepath.Dir(configPath))
 	mustWrite(t, configPath, mainTestPiConfig("/definitely/not/a/runtime", 18021))
 	t.Setenv("HOME", home)
+	// The lifecycle CLI resolves the default cache dir: $HOME/Library/Caches
+	// on macOS but $XDG_CACHE_HOME (else $HOME/.cache) on Linux. Point Linux
+	// at the seeded tree; ignored on macOS.
+	t.Setenv("XDG_CACHE_HOME", cache)
 	t.Setenv("PATH", "/definitely/no/provider/bin")
 	canonical, err := infra.CanonicalProjectDir(project)
 	if err != nil {

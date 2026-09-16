@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -112,11 +113,26 @@ func TestConsumerRefusesExitDocumentDisagreementInsteadOfLaundering(t *testing.T
 	}
 }
 
+// blockingProcessABody returns a fake-Process-A script body that blocks until
+// signalled. The child environment carries only the fixture PATH, so the
+// blocker must be an absolute path resolved from the test process: a bare
+// `sleep` exits 127 before the test can cancel it on any host fast enough to
+// run the child within the cancel delay, and the classifier then reports
+// result-invalid instead of cancelled.
+func blockingProcessABody(t *testing.T) string {
+	t.Helper()
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("sleep binary unavailable on PATH")
+	}
+	return sleep + " 30\n"
+}
+
 // Cancellation after the child exists must reach the classifier as a recorded
 // consumer intervention with a bounded cleanup outcome, and must survive the
 // induced signal exit that carries no schema-1 document.
 func TestConsumerRecordsCancellationAfterChildStartAndKeepsItAuthoritative(t *testing.T) {
-	graph, request, _ := consumerFixture(t, "sleep 30\n")
+	graph, request, _ := consumerFixture(t, blockingProcessABody(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		time.Sleep(250 * time.Millisecond)

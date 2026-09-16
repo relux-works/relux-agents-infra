@@ -341,12 +341,12 @@ model = "gpt-fast"
 	return project
 }
 
-// An installed runtime that carries no skills tree still renders its provider
-// surface. Proves the fan-out treats an absent source tree as an empty skill
-// set rather than a failure, and that it invents no links to fill the gap.
-func TestPreparePrimarySessionRendersSurfaceWithoutManagedSkillsTree(t *testing.T) {
+// Prepare never fans out skills: it creates no provider skills surface on a
+// runtime without one, and leaves a pre-existing provider skills surface
+// byte- and target-identical on a runtime with one.
+func TestPreparePrimarySessionLeavesSkillSurfacesUntouched(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
-		t.Run(provider, func(t *testing.T) {
+		t.Run(provider+"/absent", func(t *testing.T) {
 			project := preparedRuntimeFixture(t)
 			if err := os.RemoveAll(filepath.Join(project, ".agents", "skills")); err != nil {
 				t.Fatal(err)
@@ -368,12 +368,99 @@ func TestPreparePrimarySessionRendersSurfaceWithoutManagedSkillsTree(t *testing.
 			if provider == "codex" {
 				providerDir = ".codex"
 			}
-			skillLinks, err := os.ReadDir(filepath.Join(project, providerDir, "skills"))
+			if _, err := os.Lstat(filepath.Join(project, providerDir, "skills")); !os.IsNotExist(err) {
+				t.Fatalf("prepare invented a provider skills surface: %v", err)
+			}
+		})
+		t.Run(provider+"/present", func(t *testing.T) {
+			project := preparedRuntimeFixture(t)
+			providerDir := ".claude"
+			if provider == "codex" {
+				providerDir = ".codex"
+			}
+			skillsDir := filepath.Join(project, providerDir, "skills")
+			if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			customSkill := filepath.Join(skillsDir, "custom", "SKILL.md")
+			if err := os.MkdirAll(filepath.Dir(customSkill), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(customSkill, []byte("custom skill\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			linkTarget := filepath.Join(project, ".agents", "skills", "example")
+			if err := os.Symlink(linkTarget, filepath.Join(skillsDir, "example")); err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := PreparePrimarySession(
+				provider,
+				project,
+				ChildLaunchCompositionProducer{Version: "test", Commit: "abc123"},
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(skillLinks) != 0 {
-				t.Fatalf("prepare invented skill links with no source tree: %#v", skillLinks)
+			if !report.LocalRuntimePresent {
+				t.Fatalf("report = %#v", report)
+			}
+			data, err := os.ReadFile(customSkill)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != "custom skill\n" {
+				t.Fatalf("prepare rewrote provider skill content: %q", string(data))
+			}
+			target, err := os.Readlink(filepath.Join(skillsDir, "example"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if target != linkTarget {
+				t.Fatalf("prepare rewrote provider skill link: got %q, want %q", target, linkTarget)
+			}
+		})
+	}
+}
+
+// A fresh residual runtime carries no instruction inputs — setup no longer
+// distributes them — so prepare creates the missing scaffold entrypoints
+// itself and still reports real artifacts.
+func TestPreparePrimarySessionCreatesMissingInstructionScaffold(t *testing.T) {
+	for _, provider := range []string{"codex", "claude"} {
+		t.Run(provider, func(t *testing.T) {
+			project := preparedRuntimeFixture(t)
+			if err := os.RemoveAll(filepath.Join(project, ".agents", ".instructions")); err != nil {
+				t.Fatal(err)
+			}
+
+			report, err := PreparePrimarySession(
+				provider,
+				project,
+				ChildLaunchCompositionProducer{Version: "test", Commit: "abc123"},
+			)
+			if err != nil {
+				t.Fatalf("prepare failed on a runtime with no instruction inputs: %v", err)
+			}
+			if !report.LocalRuntimePresent || len(report.Artifacts) == 0 {
+				t.Fatalf("report = %#v", report)
+			}
+			for _, name := range []string{"AGENTS.md", "INSTRUCTIONS.md"} {
+				data, err := os.ReadFile(filepath.Join(project, ".agents", ".instructions", name))
+				if err != nil {
+					t.Fatalf("prepare did not create scaffold %s: %v", name, err)
+				}
+				if len(data) == 0 {
+					t.Fatalf("prepare created an empty scaffold %s", name)
+				}
+			}
+			for _, artifact := range report.Artifacts {
+				if artifact.State == "absent" {
+					continue
+				}
+				if artifact.Target == "" && artifact.SHA256 == "" {
+					t.Fatalf("scaffolded artifact carries no evidence: %#v", artifact)
+				}
 			}
 		})
 	}

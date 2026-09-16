@@ -174,7 +174,6 @@ func runtimeArtifactFailures(layout Layout) []string {
 	if failure := piCatalogManifestFailure(agentsDir); failure != "" {
 		failures = append(failures, failure)
 	}
-	failures = append(failures, managedSkillLinkFailures(layout)...)
 	failures = append(failures, piInfraLauncherFailures(layout)...)
 	failures = append(failures, canonicalTargetLauncherFailures(layout)...)
 	failures = append(failures, directProviderYoloLauncherFailures(layout)...)

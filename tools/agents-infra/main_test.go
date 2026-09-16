@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -132,7 +133,10 @@ func TestAgentsInfraModuleHasNoTaskBoardDependency(t *testing.T) {
 	}
 }
 
-func TestRunCodexPrintConfigUsesCallerCWDEnv(t *testing.T) {
+// The direct codex launcher is deprecated, but its launch-plan builder and
+// renderer remain production code behind primary-session compose. These tests
+// exercise that pure path directly instead of the retired entrypoint.
+func TestCodexLaunchPlanBuilderRendersCallerProjectMCP(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
 	appDir := filepath.Join(project, "apps", "mobile", "app")
@@ -142,13 +146,12 @@ func TestRunCodexPrintConfigUsesCallerCWDEnv(t *testing.T) {
 	mustWrite(t, filepath.Join(appDir, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.figma]\nurl = \"https://mcp.figma.com/mcp\"\n")
 
 	t.Setenv("HOME", home)
-	t.Setenv(callerCWDEnv, appDir)
 
-	output := captureStdout(t, func() {
-		if err := runCodex([]string{"--print-config"}); err != nil {
-			t.Fatalf("runCodex: %v", err)
-		}
-	})
+	plan, err := infra.BuildCodexLaunchPlan(appDir, home, []string{"--print-config"})
+	if err != nil {
+		t.Fatalf("BuildCodexLaunchPlan: %v", err)
+	}
+	output := infra.RenderCodexLaunchPlan(plan)
 
 	for _, want := range []string{
 		"cwd: " + appDir,
@@ -163,7 +166,7 @@ func TestRunCodexPrintConfigUsesCallerCWDEnv(t *testing.T) {
 	}
 }
 
-func TestRunCodexPrintConfigEmitsSafariMCPCommandAndArgs(t *testing.T) {
+func TestCodexLaunchPlanBuilderEmitsSafariMCPCommandAndArgs(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
 	appDir := filepath.Join(project, "apps", "web")
@@ -174,13 +177,12 @@ func TestRunCodexPrintConfigEmitsSafariMCPCommandAndArgs(t *testing.T) {
 	mustWrite(t, filepath.Join(appDir, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.safari]\ncommand = \""+safariCommand+"\"\nargs = [\"--mcp\"]\n")
 
 	t.Setenv("HOME", home)
-	t.Setenv(callerCWDEnv, appDir)
 
-	output := captureStdout(t, func() {
-		if err := runCodex([]string{"--print-config"}); err != nil {
-			t.Fatalf("runCodex: %v", err)
-		}
-	})
+	plan, err := infra.BuildCodexLaunchPlan(appDir, home, []string{"--print-config"})
+	if err != nil {
+		t.Fatalf("BuildCodexLaunchPlan: %v", err)
+	}
+	output := infra.RenderCodexLaunchPlan(plan)
 
 	for _, want := range []string{
 		"cwd: " + appDir,
@@ -197,7 +199,7 @@ func TestRunCodexPrintConfigEmitsSafariMCPCommandAndArgs(t *testing.T) {
 	}
 }
 
-func TestRunCodexPrintConfigReportsPrimarySessionDiagnosticsWithoutLaunching(t *testing.T) {
+func TestCodexLaunchPlanBuilderReportsPrimarySessionDiagnostics(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
 	parent := filepath.Join(root, "parent")
@@ -218,19 +220,18 @@ model = "child-model"
 yolo_mode = false
 `)
 	t.Setenv("HOME", home)
-	t.Setenv(callerCWDEnv, child)
 
-	output := captureStdout(t, func() {
-		if err := runCodex([]string{
-			"--print-config",
-			"--model", "cli-model",
-			"--profile", "fast",
-			"--yolo",
-			"exec", "inspect",
-		}); err != nil {
-			t.Fatalf("runCodex: %v", err)
-		}
+	plan, err := infra.BuildCodexLaunchPlan(child, home, []string{
+		"--print-config",
+		"--model", "cli-model",
+		"--profile", "fast",
+		"--yolo",
+		"exec", "inspect",
 	})
+	if err != nil {
+		t.Fatalf("BuildCodexLaunchPlan: %v", err)
+	}
+	output := infra.RenderCodexLaunchPlan(plan)
 
 	for _, want := range []string{
 		"project_configs:\n  - " + parentConfig,
@@ -250,7 +251,7 @@ yolo_mode = false
 	}
 }
 
-func TestRunClaudePrintConfigReportsIndependentPrimarySessionDiagnostics(t *testing.T) {
+func TestClaudeLaunchPlanBuilderReportsIndependentPrimarySessionDiagnostics(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
 	parent := filepath.Join(root, "parent")
@@ -278,13 +279,12 @@ model = "claude-child"
 yolo_mode = false
 `)
 	t.Setenv("HOME", home)
-	t.Setenv(callerCWDEnv, child)
 
-	output := captureStdout(t, func() {
-		if err := runClaude([]string{"--print-config", "--model", "claude-cli", "-p", "inspect"}); err != nil {
-			t.Fatalf("runClaude: %v", err)
-		}
-	})
+	plan, err := infra.BuildClaudeLaunchPlan(child, home, []string{"--print-config", "--model", "claude-cli", "-p", "inspect"})
+	if err != nil {
+		t.Fatalf("BuildClaudeLaunchPlan: %v", err)
+	}
+	output := infra.RenderClaudeLaunchPlan(plan)
 	for _, want := range []string{
 		"project_configs:\n  - " + filepath.Join(parent, ".agents", ".configs", "project-config.toml"),
 		"  - " + childConfig,
@@ -1201,71 +1201,80 @@ func TestRunPrepareUnsupportedSchemaVersionEmitsSafeErrorEnvelope(t *testing.T) 
 	}
 }
 
-func TestDirectLaunchAndPrepareCommandRenderIdenticalProviderArtifacts(t *testing.T) {
+// Direct codex/claude launchers are deprecated; the prepare contract is the
+// only producer of provider artifacts now. It must render real,
+// deterministic artifacts: two independent fixtures produce identical relative
+// surfaces, and every reported artifact matches the bytes on disk.
+func TestPrepareCommandRendersDeterministicRealProviderArtifacts(t *testing.T) {
 	home := t.TempDir()
-	binDir := t.TempDir()
-	mustWrite(t, filepath.Join(binDir, "codex"), "#!/bin/sh\nexit 0\n")
-	mustWrite(t, filepath.Join(binDir, "claude"), "#!/bin/sh\nexit 0\n")
 	t.Setenv("HOME", home)
-	t.Setenv("PATH", binDir)
 
 	for _, provider := range []string{"codex", "claude"} {
 		t.Run(provider, func(t *testing.T) {
-			launchProject := preparedRuntimeFixtureMain(t)
-			prepareProject := preparedRuntimeFixtureMain(t)
-			t.Setenv(callerCWDEnv, launchProject)
-			var launchErr error
-			if provider == "codex" {
-				launchErr = runCodex(nil)
-			} else {
-				launchErr = runClaude(nil)
-			}
-			if launchErr != nil {
-				t.Fatalf("direct launch: %v", launchErr)
-			}
+			firstProject := preparedRuntimeFixtureMain(t)
+			secondProject := preparedRuntimeFixtureMain(t)
 
-			output := captureStdout(t, func() {
-				if err := runPrepare([]string{
-					"--agent", provider,
-					"--project", prepareProject,
-					"--schema-version", "1",
-					"--json",
-				}); err != nil {
-					t.Fatalf("prepare: %v", err)
-				}
-			})
-			var report infra.PrimarySessionPreparationReport
-			decodeSingleJSONDocument(t, output, &report)
-			canonicalLaunchProject, err := filepath.EvalSymlinks(launchProject)
+			runPrepareJSON := func(project string) infra.PrimarySessionPreparationReport {
+				t.Helper()
+				output := captureStdout(t, func() {
+					if err := runPrepare([]string{
+						"--agent", provider,
+						"--project", project,
+						"--schema-version", "1",
+						"--json",
+					}); err != nil {
+						t.Fatalf("prepare: %v", err)
+					}
+				})
+				var report infra.PrimarySessionPreparationReport
+				decodeSingleJSONDocument(t, output, &report)
+				return report
+			}
+			firstReport := runPrepareJSON(firstProject)
+			secondReport := runPrepareJSON(secondProject)
+
+			canonicalFirst, err := filepath.EvalSymlinks(firstProject)
 			if err != nil {
 				t.Fatal(err)
 			}
-			canonicalPrepareProject := report.ProjectDir
-			for _, artifact := range report.Artifacts {
-				relative, err := filepath.Rel(canonicalPrepareProject, artifact.Path)
+			if firstReport.ProjectDir != canonicalFirst {
+				t.Fatalf("project dir = %q, want %q", firstReport.ProjectDir, canonicalFirst)
+			}
+			if len(firstReport.Artifacts) == 0 || len(firstReport.Artifacts) != len(secondReport.Artifacts) {
+				t.Fatalf("artifact counts differ: %#v vs %#v", firstReport.Artifacts, secondReport.Artifacts)
+			}
+			for index, artifact := range firstReport.Artifacts {
+				other := secondReport.Artifacts[index]
+				if artifact.Kind != other.Kind || artifact.State != other.State {
+					t.Fatalf("artifact %d differs: %#v vs %#v", index, artifact, other)
+				}
+				relative, err := filepath.Rel(firstReport.ProjectDir, artifact.Path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				otherPath := filepath.Join(canonicalLaunchProject, relative)
+				otherRelative, err := filepath.Rel(secondReport.ProjectDir, other.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if relative != otherRelative {
+					t.Fatalf("artifact %d relative path differs: %q vs %q", index, relative, otherRelative)
+				}
 				if artifact.State == "absent" {
-					if _, err := os.Lstat(otherPath); !os.IsNotExist(err) {
-						t.Fatalf("%s direct launch changed absent artifact %s: %v", provider, relative, err)
-					}
 					if _, err := os.Lstat(artifact.Path); !os.IsNotExist(err) {
 						t.Fatalf("%s prepare changed absent artifact %s: %v", provider, relative, err)
 					}
 					continue
 				}
 				if artifact.Target != "" {
-					otherTarget, err := os.Readlink(otherPath)
+					otherTarget, err := os.Readlink(other.Path)
 					if err != nil {
 						t.Fatal(err)
 					}
-					wantRelativeTarget, err := filepath.Rel(canonicalPrepareProject, artifact.Target)
+					wantRelativeTarget, err := filepath.Rel(firstReport.ProjectDir, artifact.Target)
 					if err != nil {
 						t.Fatal(err)
 					}
-					gotRelativeTarget, err := filepath.Rel(canonicalLaunchProject, otherTarget)
+					gotRelativeTarget, err := filepath.Rel(secondReport.ProjectDir, otherTarget)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -1274,28 +1283,54 @@ func TestDirectLaunchAndPrepareCommandRenderIdenticalProviderArtifacts(t *testin
 					}
 					continue
 				}
-				other, err := os.ReadFile(otherPath)
+				// Rendered bytes embed their absolute source path, so hashes
+				// legitimately differ across fixtures. The property under test
+				// is that each reported hash matches its own file's bytes.
+				for _, check := range []struct {
+					name     string
+					artifact infra.PrimarySessionArtifact
+				}{
+					{name: "first", artifact: artifact},
+					{name: "second", artifact: other},
+				} {
+					if check.artifact.SHA256 == "" {
+						t.Fatalf("%s %s artifact %s carries no hash", provider, check.name, relative)
+					}
+					data, err := os.ReadFile(check.artifact.Path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					sum := sha256.Sum256(data)
+					if got := fmt.Sprintf("%x", sum[:]); got != check.artifact.SHA256 {
+						t.Fatalf("%s %s artifact hash mismatch for %s: report %q, file %q", provider, check.name, relative, check.artifact.SHA256, got)
+					}
+				}
+				firstBytes, err := os.ReadFile(artifact.Path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				prepared, err := os.ReadFile(artifact.Path)
+				secondBytes, err := os.ReadFile(other.Path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				normalizedOther := strings.ReplaceAll(string(other), canonicalLaunchProject, "$PROJECT")
-				normalizedPrepared := strings.ReplaceAll(string(prepared), canonicalPrepareProject, "$PROJECT")
-				if normalizedOther != normalizedPrepared {
+				normalizedFirst := strings.ReplaceAll(string(firstBytes), firstReport.ProjectDir, "$PROJECT")
+				normalizedSecond := strings.ReplaceAll(string(secondBytes), secondReport.ProjectDir, "$PROJECT")
+				if normalizedFirst != normalizedSecond {
 					t.Fatalf("%s artifact differs for %s", provider, relative)
 				}
 			}
-			launchSurface := normalizedProviderSurface(t, canonicalLaunchProject, provider)
-			preparedSurface := normalizedProviderSurface(t, canonicalPrepareProject, provider)
-			if !reflect.DeepEqual(launchSurface, preparedSurface) {
+			firstSurface := normalizedProviderSurface(t, canonicalFirst, provider)
+			canonicalSecond, err := filepath.EvalSymlinks(secondProject)
+			if err != nil {
+				t.Fatal(err)
+			}
+			secondSurface := normalizedProviderSurface(t, canonicalSecond, provider)
+			if !reflect.DeepEqual(firstSurface, secondSurface) {
 				t.Fatalf(
-					"%s full provider surface differs:\ndirect=%#v\nprepare=%#v",
+					"%s full provider surface differs:\nfirst=%#v\nsecond=%#v",
 					provider,
-					launchSurface,
-					preparedSurface,
+					firstSurface,
+					secondSurface,
 				)
 			}
 		})

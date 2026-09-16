@@ -2,7 +2,6 @@ package infra
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,15 +14,11 @@ import (
 )
 
 const (
-	modelAvailabilityPolicyFixture        = "retry the preferred model before choosing an autonomous fallback"
-	forcedFitPolicyFixture                = "do not fake an impossible platform model with flags, stubs, or mocks"
-	imageIntakeWorkflowFixture            = "agents-attachments stage-images"
-	dirtyCheckoutPolicyFixture            = "validate in a task-scoped worktree before integrating a reviewed patch"
-	externalCILocalMirrorExclusiveTrigger = "Use a local mirror only when hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair."
-	externalCIWorkflowClaudeInclude       = "@~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md"
-	externalCIExpectedClaudeEntrypoint    = "# Claude Instructions\n\nLoad all instructions from the Claude runtime instructions directory:\n\n@instructions/INSTRUCTIONS.md\n"
-	externalCILocalMirrorPolicyHeading    = "### External-CI local mirror fallback"
-	externalCILocalMirrorPolicySection    = `### External-CI local mirror fallback
+	modelAvailabilityPolicyFixture     = "retry the preferred model before choosing an autonomous fallback"
+	forcedFitPolicyFixture             = "do not fake an impossible platform model with flags, stubs, or mocks"
+	imageIntakeWorkflowFixture         = "agents-attachments stage-images"
+	dirtyCheckoutPolicyFixture         = "validate in a task-scoped worktree before integrating a reviewed patch"
+	externalCILocalMirrorPolicySection = `### External-CI local mirror fallback
 
 * Use a local mirror only when hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair. Establish the cause from hosted provider evidence; an absent, failed, partial, malformed, or inconclusive status read is not proof of an external failure and does not authorize the fallback.
 * Reproduce every affected hosted job from an exact, clean checkout of the PR-head commit. Run the matching commands with the same toolchain versions, environment variables and non-secret configuration, dependent services, and target platform, architecture, device, or runtime. When an exact match is objectively unavailable, document the difference and why the chosen substitute is equivalent for the behavior under test; otherwise report the job as unverified.
@@ -77,6 +72,32 @@ func TestCLIWrapperBodyForWindows(t *testing.T) {
 	if !strings.Contains(body, "exit /b %ERRORLEVEL%") {
 		t.Fatalf("windows wrapper body missing exit-code propagation: %q", body)
 	}
+	// The deprecation guard must run before any build step, or a deprecated
+	// `agents-infra codex` invocation would write the build output before the
+	// Go dispatcher could refuse it.
+	for _, entrypoint := range []string{"codex", "claude", "openai-infra", "anthropic-infra", "openai-dange", "anthropic-dange"} {
+		message, ok := DeprecatedProviderMessage(entrypoint)
+		if !ok {
+			t.Fatalf("DeprecatedProviderMessage(%q) missing", entrypoint)
+		}
+		if !strings.Contains(body, escapeCmdEcho(message)) {
+			t.Fatalf("windows wrapper body missing deprecation message for %s: %q", entrypoint, body)
+		}
+	}
+	for _, want := range []string{`if "%~1"=="codex"`, `if "%~1"=="claude"`, `if "%~1"=="target"`, `if "%~1"=="target-yolo"`, `if "%~2"=="openai-infra"`, `if "%~2"=="anthropic-infra"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("windows wrapper body missing deprecation guard %q: %q", want, body)
+		}
+	}
+	if strings.Contains(body, "qwen-infra") {
+		t.Fatalf("windows wrapper body must not intercept the live qwen-infra entrypoint: %q", body)
+	}
+	guard := strings.Index(body, `if "%~1"=="codex"`)
+	mkdir := strings.Index(body, "mkdir")
+	build := strings.Index(body, "go build")
+	if guard < 0 || mkdir < 0 || build < 0 || guard > mkdir || guard > build {
+		t.Fatalf("windows deprecation guard must precede mkdir/go build (guard=%d mkdir=%d build=%d): %q", guard, mkdir, build, body)
+	}
 }
 
 func TestCLIWrapperBodyForUnixPreservesCallerCWD(t *testing.T) {
@@ -98,6 +119,31 @@ func TestCLIWrapperBodyForUnixPreservesCallerCWD(t *testing.T) {
 	}
 	if !strings.Contains(body, `go build -o "$AGENTS_INFRA_BINARY" .`) || !strings.Contains(body, `exec "$AGENTS_INFRA_BINARY" "$@"`) {
 		t.Fatalf("unix wrapper body should build and execute the Go binary: %q", body)
+	}
+	// The deprecation guard must run before mkdir/go build, or a deprecated
+	// subcommand would write the build output before refusing.
+	for _, entrypoint := range []string{"codex", "claude", "openai-infra", "anthropic-infra", "openai-dange", "anthropic-dange"} {
+		message, ok := DeprecatedProviderMessage(entrypoint)
+		if !ok {
+			t.Fatalf("DeprecatedProviderMessage(%q) missing", entrypoint)
+		}
+		if !strings.Contains(body, posixShellQuote(message)) {
+			t.Fatalf("unix wrapper body missing deprecation message for %s: %q", entrypoint, body)
+		}
+	}
+	for _, want := range []string{`case "${1:-}" in`, "codex)", "claude)", "target)", "target-yolo)", "openai-infra)", "anthropic-infra)"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("unix wrapper body missing deprecation guard %q: %q", want, body)
+		}
+	}
+	if strings.Contains(body, "qwen-infra") {
+		t.Fatalf("unix wrapper body must not intercept the live qwen-infra entrypoint: %q", body)
+	}
+	guard := strings.Index(body, `case "${1:-}" in`)
+	mkdir := strings.Index(body, "mkdir -p")
+	build := strings.Index(body, "go build")
+	if guard < 0 || mkdir < 0 || build < 0 || guard > mkdir || guard > build {
+		t.Fatalf("unix deprecation guard must precede mkdir/go build (guard=%d mkdir=%d build=%d): %q", guard, mkdir, build, body)
 	}
 }
 
@@ -193,20 +239,95 @@ func TestPiInfraWrapperBodyForWindowsUsesExactSiblingTarget(t *testing.T) {
 	}
 }
 
-func TestDirectProviderYoloWrapperBodyForWindowsUsesDistinctDispatcherOnce(t *testing.T) {
-	launcher := directProviderYoloLauncher{name: "openai-dange", canonicalTarget: "openai-infra"}
-	body := directProviderYoloWrapperBody(launcher, "windows", "agents-infra.cmd")
-	for _, want := range []string{
-		`if not exist "%DIR%agents-infra.cmd"`,
-		`"%DIR%agents-infra.cmd" target-yolo openai-infra %*`,
-		"exit /b %ERRORLEVEL%",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("windows direct provider YOLO wrapper missing %q:\n%s", want, body)
+func TestDeprecatedCanonicalWrappersRefuseWithoutDelegation(t *testing.T) {
+	for _, entrypoint := range []string{"openai-infra", "anthropic-infra"} {
+		message, ok := DeprecatedProviderMessage(entrypoint)
+		if !ok {
+			t.Fatalf("DeprecatedProviderMessage(%q) missing", entrypoint)
+		}
+		for _, goos := range []string{"darwin", "windows"} {
+			t.Run(entrypoint+"/"+goos, func(t *testing.T) {
+				body := canonicalTargetWrapperBody(entrypoint, goos, "agents-infra")
+				if goos == "windows" {
+					if !strings.Contains(body, escapeCmdEcho(message)) || !strings.Contains(body, "1>&2") || !strings.Contains(body, "exit /b 1") {
+						t.Fatalf("windows %s wrapper must print the exact message to stderr and exit 1:\n%s", entrypoint, body)
+					}
+				} else {
+					if !strings.Contains(body, posixShellQuote(message)) || !strings.Contains(body, ">&2") || !strings.Contains(body, "exit 1") {
+						t.Fatalf("unix %s wrapper must print the exact message to stderr and exit 1:\n%s", entrypoint, body)
+					}
+				}
+				for _, unwanted := range []string{"TARGET", "exec ", "go build", "mkdir", "target " + entrypoint, "127"} {
+					if strings.Contains(body, unwanted) {
+						t.Fatalf("deprecated %s wrapper must not delegate, build, or check a sibling (found %q):\n%s", entrypoint, unwanted, body)
+					}
+				}
+			})
 		}
 	}
-	if strings.Count(body, ` target-yolo openai-infra `) != 1 {
-		t.Fatalf("windows direct provider YOLO wrapper must select the distinct dispatcher exactly once:\n%s", body)
+}
+
+func TestLiveCanonicalWrapperStillDelegates(t *testing.T) {
+	posix := canonicalTargetWrapperBody("qwen-infra", "darwin", "agents-infra")
+	if !strings.Contains(posix, `exec "$TARGET" target qwen-infra "$@"`) {
+		t.Fatalf("unix qwen-infra wrapper must still delegate:\n%s", posix)
+	}
+	if strings.Contains(posix, "deprecated") {
+		t.Fatalf("unix qwen-infra wrapper must not carry a deprecation notice:\n%s", posix)
+	}
+	windows := canonicalTargetWrapperBody("qwen-infra", "windows", "agents-infra.cmd")
+	if !strings.Contains(windows, `"target qwen-infra`) && !strings.Contains(windows, `target qwen-infra`) {
+		t.Fatalf("windows qwen-infra wrapper must still delegate:\n%s", windows)
+	}
+	if strings.Contains(windows, "deprecated") {
+		t.Fatalf("windows qwen-infra wrapper must not carry a deprecation notice:\n%s", windows)
+	}
+}
+
+func TestDeprecatedDirectProviderYoloWrappersRefuseWithoutDelegation(t *testing.T) {
+	for _, launcher := range directProviderYoloLaunchers {
+		message, ok := DeprecatedProviderMessage(launcher.name)
+		if !ok {
+			t.Fatalf("DeprecatedProviderMessage(%q) missing", launcher.name)
+		}
+		for _, goos := range []string{"darwin", "windows"} {
+			t.Run(launcher.name+"/"+goos, func(t *testing.T) {
+				body := directProviderYoloWrapperBody(launcher, goos, "agents-infra")
+				if goos == "windows" {
+					if !strings.Contains(body, escapeCmdEcho(message)) || !strings.Contains(body, "exit /b 1") {
+						t.Fatalf("windows %s wrapper must print the exact message and exit 1:\n%s", launcher.name, body)
+					}
+				} else {
+					if !strings.Contains(body, posixShellQuote(message)) || !strings.Contains(body, "exit 1") {
+						t.Fatalf("unix %s wrapper must print the exact message and exit 1:\n%s", launcher.name, body)
+					}
+				}
+				for _, unwanted := range []string{"TARGET", "exec ", "go build", "target-yolo", "127"} {
+					if strings.Contains(body, unwanted) {
+						t.Fatalf("deprecated %s wrapper must not delegate or build (found %q):\n%s", launcher.name, unwanted, body)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCodexLocalLauncherRefusesWithoutDelegation(t *testing.T) {
+	message, ok := DeprecatedProviderMessage("codex")
+	if !ok {
+		t.Fatal("DeprecatedProviderMessage(codex) missing")
+	}
+	body := codexLocalLauncherBody()
+	if !strings.Contains(body, generatedCodexConfigMarker) {
+		t.Fatalf("codex-local shim must keep its generated marker for the opt-out lifecycle:\n%s", body)
+	}
+	if !strings.Contains(body, posixShellQuote(message)) || !strings.Contains(body, "exit 1") {
+		t.Fatalf("codex-local shim must print the CLI codex message and exit 1:\n%s", body)
+	}
+	for _, unwanted := range []string{"exec ", "agents-infra\" codex", "DIR=", "go build"} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("codex-local shim must not delegate or build (found %q):\n%s", unwanted, body)
+		}
 	}
 }
 
@@ -275,25 +396,20 @@ func TestSetupLocalCreatesInstalledRuntime(t *testing.T) {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	assertExists(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS.md"))
+	// Retired distribution surfaces stay absent even though the source carries
+	// them: instructions, skills, and the bundled MCP registry.
+	assertNoPath(t, filepath.Join(project, ".agents", ".instructions"))
+	assertNoPath(t, filepath.Join(project, ".agents", ".skills"))
+	assertNoPath(t, filepath.Join(project, ".agents", "skills"))
+	assertNoPath(t, filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml"))
+	assertNoPath(t, filepath.Join(project, ".claude", "instructions"))
+	assertNoPath(t, filepath.Join(project, ".claude", "CLAUDE.md"))
+	assertNoPath(t, filepath.Join(project, ".codex", "AGENTS.md"))
+	assertNoPath(t, filepath.Join(project, "AGENTS.md"))
 	assertNoPath(t, filepath.Join(project, ".agents", ".git"))
-	assertSymlink(t, filepath.Join(project, ".agents", "skills", "pdf"), filepath.Join(project, ".agents", ".skills", "pdf"))
-	assertSymlink(t, filepath.Join(project, ".claude", "instructions"), filepath.Join(project, ".agents", ".instructions"))
-	assertSymlink(t, filepath.Join(project, ".claude", "skills", "pdf"), filepath.Join(project, ".agents", "skills", "pdf"))
-	assertRenderedInstructions(t, filepath.Join(project, ".codex", "AGENTS.md"))
-	assertRenderedInstructions(t, filepath.Join(project, "AGENTS.md"))
-	assertFileContains(t, filepath.Join(project, ".agents", ".instructions", "AGENTS.md"), "# Project Instructions")
-	assertFileContains(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS.md"), "# Project Instructions")
-	assertNoPath(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_PLATFORM.md"))
-	assertNoPath(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"))
-	assertNoPath(t, filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"))
-	assertFileNotContains(t, filepath.Join(project, ".codex", "AGENTS.md"), modelAvailabilityPolicyFixture)
-	assertFileNotContains(t, filepath.Join(project, "AGENTS.md"), modelAvailabilityPolicyFixture)
-	assertFileNotContains(t, filepath.Join(project, ".codex", "AGENTS.md"), imageIntakeWorkflowFixture)
-	assertFileNotContains(t, filepath.Join(project, "AGENTS.md"), imageIntakeWorkflowFixture)
-	assertFileNotContains(t, filepath.Join(project, ".codex", "AGENTS.md"), dirtyCheckoutPolicyFixture)
-	assertFileNotContains(t, filepath.Join(project, "AGENTS.md"), dirtyCheckoutPolicyFixture)
-	assertSymlink(t, filepath.Join(project, ".codex", "skills", "pdf"), filepath.Join(project, ".agents", "skills", "pdf"))
+	// Residual surfaces install.
+	assertSymlink(t, filepath.Join(project, ".claude", "settings.json"), filepath.Join(project, ".agents", ".configs", "claude-settings.json"))
+	assertSymlink(t, filepath.Join(project, ".codex", "rules", "default.rules"), filepath.Join(project, ".agents", ".rules", "default.rules"))
 	assertNoPath(t, filepath.Join(project, ".agents", ".scripts", "agents-attachments"))
 	assertRegularFile(t, filepath.Join(project, ".local", "bin", "agents-attachments"))
 	assertFileContains(t, filepath.Join(project, ".local", "bin", "agents-attachments"), `"$TARGET" attachments "$@"`)
@@ -312,18 +428,12 @@ func TestSetupLocalCreatesInstalledRuntime(t *testing.T) {
 	if !strings.Contains(string(data), source) {
 		t.Fatalf("launcher does not reference source repo: %q", string(data))
 	}
-
-	claudeEntry := filepath.Join(project, ".claude", "CLAUDE.md")
-	entry, err := os.ReadFile(claudeEntry)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", claudeEntry, err)
-	}
-	if !strings.Contains(string(entry), "@instructions/INSTRUCTIONS.md") {
-		t.Fatalf("CLAUDE.md should reference Claude runtime instructions: %q", string(entry))
+	if err := VerifyInstalledRuntime(layout); err != nil {
+		t.Fatalf("VerifyInstalledRuntime: %v", err)
 	}
 }
 
-func TestSetupLocalPreservesProjectInstructionSpaceAcrossResync(t *testing.T) {
+func TestSetupLocalLeavesProjectInstructionSpaceUntouched(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
 	instructionsDir := filepath.Join(project, ".agents", ".instructions")
@@ -337,22 +447,37 @@ func TestSetupLocalPreservesProjectInstructionSpaceAcrossResync(t *testing.T) {
 		t.Fatalf("LocalLayout: %v", err)
 	}
 
+	before := map[string]string{}
+	for _, name := range []string{"AGENTS.md", "INSTRUCTIONS.md", "PROJECT.md", "INSTRUCTIONS_WORKFLOW.md"} {
+		data, err := os.ReadFile(filepath.Join(instructionsDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[name] = string(data)
+	}
+
 	for i := 0; i < 2; i++ {
 		if err := Setup(Options{Layout: layout}); err != nil {
 			t.Fatalf("Setup run %d: %v", i+1, err)
 		}
 	}
 
-	assertFileContains(t, filepath.Join(instructionsDir, "AGENTS.md"), "# Local Codex Instructions")
-	assertFileContains(t, filepath.Join(instructionsDir, "INSTRUCTIONS.md"), "# Local Claude Instructions")
-	assertFileContains(t, filepath.Join(instructionsDir, "PROJECT.md"), "project-owned instructions")
-	assertFileContains(t, filepath.Join(instructionsDir, "INSTRUCTIONS_WORKFLOW.md"), "project-owned workflow override")
-	assertFileNotContains(t, filepath.Join(instructionsDir, "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture)
-	assertFileContains(t, filepath.Join(project, ".codex", "AGENTS.md"), "project-owned instructions")
-	assertFileContains(t, filepath.Join(project, "AGENTS.md"), "project-owned instructions")
+	for name, want := range before {
+		data, err := os.ReadFile(filepath.Join(instructionsDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want {
+			t.Fatalf("setup rewrote project instruction file %s", name)
+		}
+	}
+	assertNoPath(t, filepath.Join(project, ".codex", "AGENTS.md"))
+	assertNoPath(t, filepath.Join(project, "AGENTS.md"))
+	assertNoPath(t, filepath.Join(project, ".claude", "CLAUDE.md"))
+	assertNoPath(t, filepath.Join(project, ".claude", "instructions"))
 }
 
-func TestSetupRemovesStaleRepoSkillSelfLinks(t *testing.T) {
+func TestSetupAndRefreshLinksLeaveSkillSurfacesUntouched(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
 	layout, err := LocalLayout(source, project)
@@ -360,6 +485,9 @@ func TestSetupRemovesStaleRepoSkillSelfLinks(t *testing.T) {
 		t.Fatalf("LocalLayout: %v", err)
 	}
 
+	// Pre-seed user- and Curator-owned skill surfaces, including the stale
+	// self-link shape setup used to garbage-collect. Setup owns none of them
+	// now and must leave every byte and link target identical.
 	staleLink := filepath.Join(project, ".agents", "skills", "legacy-agents-infra")
 	mustMkdir(t, filepath.Dir(staleLink))
 	if err := os.Symlink(layout.AgentsDir, staleLink); err != nil {
@@ -375,55 +503,52 @@ func TestSetupRemovesStaleRepoSkillSelfLinks(t *testing.T) {
 	if err := os.Symlink(staleLink, staleCodexLink); err != nil {
 		t.Fatalf("Symlink(%s): %v", staleCodexLink, err)
 	}
+	managedLooking := filepath.Join(project, ".agents", ".skills", "pdf", "SKILL.md")
+	mustMkdir(t, filepath.Dir(managedLooking))
+	mustWrite(t, managedLooking, "user-owned skill content\n")
 
-	if err := Setup(Options{Layout: layout}); err != nil {
-		t.Fatalf("Setup: %v", err)
+	snapshot := map[string]string{}
+	for _, link := range []string{staleLink, staleClaudeLink, staleCodexLink} {
+		target, err := os.Readlink(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot[link] = target
 	}
-
-	assertNoPath(t, staleLink)
-	assertNoPath(t, staleClaudeLink)
-	assertNoPath(t, staleCodexLink)
-	assertSymlink(t, filepath.Join(project, ".agents", "skills", repoSkillName), filepath.Join(project, ".agents", ".skills", repoSkillName))
-	assertFileContains(t, filepath.Join(project, ".agents", ".skills", repoSkillName, "SKILL.md"), "relux-agents-infra")
-}
-
-func TestRefreshLinksKeepsCanonicalRepoSkillWhenStaleSelfLinkCannotBeRemoved(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("chmod-based permission smoke is Unix-only")
-	}
-	source := seedSourceRepo(t)
-	project := t.TempDir()
-	layout, err := LocalLayout(source, project)
+	skillBytes, err := os.ReadFile(managedLooking)
 	if err != nil {
-		t.Fatalf("LocalLayout: %v", err)
+		t.Fatal(err)
 	}
+
 	if err := Setup(Options{Layout: layout}); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
-
-	skillsDir := filepath.Join(project, ".agents", "skills")
-	staleLink := filepath.Join(skillsDir, "legacy-agents-infra")
-	if err := os.Symlink(layout.AgentsDir, staleLink); err != nil {
-		t.Fatalf("Symlink(%s): %v", staleLink, err)
-	}
-	if err := os.Chmod(skillsDir, 0o555); err != nil {
-		t.Fatalf("Chmod(%s): %v", skillsDir, err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chmod(skillsDir, 0o755)
-	})
-
-	var logs bytes.Buffer
-	if err := RefreshLinks(Options{Layout: layout, Stdout: &logs}); err != nil {
-		t.Fatalf("RefreshLinks should tolerate permission-denied stale cleanup: %v\nlogs:\n%s", err, logs.String())
+	if err := RefreshLinks(Options{Layout: layout}); err != nil {
+		t.Fatalf("RefreshLinks: %v", err)
 	}
 
-	assertSymlink(t, filepath.Join(skillsDir, repoSkillName), filepath.Join(project, ".agents", ".skills", repoSkillName))
-	assertSymlink(t, staleLink, filepath.Join(project, ".agents"))
-	assertNoPath(t, filepath.Join(project, ".claude", "skills", "legacy-agents-infra"))
-	assertNoPath(t, filepath.Join(project, ".codex", "skills", "legacy-agents-infra"))
-	if !strings.Contains(logs.String(), "Skipped stale repo skill link") {
-		t.Fatalf("expected stale-link skip log, got:\n%s", logs.String())
+	for link, want := range snapshot {
+		target, err := os.Readlink(link)
+		if err != nil {
+			t.Fatalf("Readlink(%s): %v", link, err)
+		}
+		if target != want {
+			t.Fatalf("skill link %s changed: got %q, want %q", link, target, want)
+		}
+	}
+	after, err := os.ReadFile(managedLooking)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(skillBytes) {
+		t.Fatalf("installed skill content changed")
+	}
+	assertNoPath(t, filepath.Join(project, ".agents", "skills", repoSkillName))
+	assertNoPath(t, filepath.Join(project, ".agents", ".skills", repoSkillName))
+	assertNoPath(t, filepath.Join(project, ".claude", "skills", repoSkillName))
+	assertNoPath(t, filepath.Join(project, ".codex", "skills", repoSkillName))
+	if err := VerifyInstalledRuntime(layout); err != nil {
+		t.Fatalf("VerifyInstalledRuntime: %v", err)
 	}
 }
 
@@ -547,7 +672,11 @@ func TestDoctor(t *testing.T) {
 	}
 
 	report := mustDoctor(t, layout)
-	if !report.AgentsGitFree || !report.ClaudeLinked || report.CodexLinked || !report.CodexRendered || !report.CodexProjectRendered || report.CodexConfigPresent || report.CodexConfigLinked || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" || len(report.CodexMCPEnabled) != 0 || !report.CodexPrimaryConfigValid || report.CodexPrimarySession.Model.Present || report.CodexPrimarySession.ReasoningEffort.Present || report.CodexPrimarySession.YoloMode.Present || !report.HelpersLinked || !report.InfraSkillLink {
+	// Setup installs the residual runtime only. The instruction and skill
+	// link booleans are legacy observations of native-home state setup no
+	// longer manages, so they report false on a fresh residual install while
+	// helpers and config policy keep reporting healthy.
+	if !report.AgentsGitFree || report.ClaudeLinked || report.CodexLinked || report.CodexRendered || report.CodexProjectRendered || report.CodexConfigPresent || report.CodexConfigLinked || report.CodexConfigGenerated || report.CodexConfigShadowsGlobal || report.CodexConfigEffective != "global" || len(report.CodexMCPEnabled) != 0 || !report.CodexPrimaryConfigValid || report.CodexPrimarySession.Model.Present || report.CodexPrimarySession.ReasoningEffort.Present || report.CodexPrimarySession.YoloMode.Present || !report.HelpersLinked || report.InfraSkillLink {
 		t.Fatalf("unexpected doctor report: %+v", report)
 	}
 }
@@ -707,182 +836,46 @@ func TestSetupGlobalDoesNotInstallCLIWrapper(t *testing.T) {
 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "qwen-infra"))
 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "openai-dange"))
 	assertRegularFile(t, filepath.Join(home, ".local", "bin", "anthropic-dange"))
-	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), modelAvailabilityPolicyFixture)
-	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), modelAvailabilityPolicyFixture)
-	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_ATTACHMENTS.md"), imageIntakeWorkflowFixture)
-	assertFileContains(t, filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"), dirtyCheckoutPolicyFixture)
-	assertFileContains(t, filepath.Join(home, ".codex", "AGENTS.md"), dirtyCheckoutPolicyFixture)
+	assertNoPath(t, filepath.Join(home, ".agents", ".instructions"))
+	assertNoPath(t, filepath.Join(home, ".agents", ".skills"))
+	assertNoPath(t, filepath.Join(home, ".codex", "AGENTS.md"))
+	assertSymlink(t, filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".agents", ".configs", "claude-settings.json"))
+	assertSymlink(t, filepath.Join(home, ".codex", "rules", "default.rules"), filepath.Join(home, ".agents", ".rules", "default.rules"))
+	if err := VerifyInstalledRuntime(layout); err != nil {
+		t.Fatalf("VerifyInstalledRuntime: %v", err)
+	}
 }
 
-func TestSetupGlobalPublishesExternalCILocalMirrorPolicyToClaudeAndCodex(t *testing.T) {
-	_, testFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve infra test source path")
-	}
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", "..", "..", ".."))
+func TestSetupGlobalDistributesNoInstructionsSkillsOrRegistry(t *testing.T) {
+	source := seedSourceRepo(t)
 	home := t.TempDir()
-	layout, err := GlobalLayout(repoRoot, home)
+	layout, err := GlobalLayout(source, home)
 	if err != nil {
 		t.Fatalf("GlobalLayout: %v", err)
 	}
 	seedGlobalAgentsInfraTarget(t, layout)
 
-	sourcePath := filepath.Join(repoRoot, ".instructions", "INSTRUCTIONS_WORKFLOW.md")
-	sourceBody, err := os.ReadFile(sourcePath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", sourcePath, err)
-	}
-	sourceClaudeInstructionIndexPath := filepath.Join(repoRoot, ".instructions", "INSTRUCTIONS.md")
-	sourceClaudeInstructionIndex, err := os.ReadFile(sourceClaudeInstructionIndexPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", sourceClaudeInstructionIndexPath, err)
-	}
-
 	if err := Setup(Options{Layout: layout}); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	claudeEntrypointPath := filepath.Join(home, ".claude", "CLAUDE.md")
-	claudeEntrypoint, err := os.ReadFile(claudeEntrypointPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", claudeEntrypointPath, err)
-	}
-	if !bytes.Equal(claudeEntrypoint, []byte(externalCIExpectedClaudeEntrypoint)) {
-		t.Fatalf("generated Claude entrypoint %s does not load the managed instruction index", claudeEntrypointPath)
-	}
-
-	claudeInstructionsPath := filepath.Join(home, ".claude", "instructions")
-	assertSymlink(t, claudeInstructionsPath, filepath.Join(home, ".agents", ".instructions"))
-	claudeInstructionIndexPath := filepath.Join(claudeInstructionsPath, "INSTRUCTIONS.md")
-	claudeInstructionIndex, err := os.ReadFile(claudeInstructionIndexPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", claudeInstructionIndexPath, err)
-	}
-	if !bytes.Equal(claudeInstructionIndex, sourceClaudeInstructionIndex) {
-		t.Fatalf("installed Claude instruction index %s does not match versioned source", claudeInstructionIndexPath)
-	}
-	if !bytes.Contains(claudeInstructionIndex, []byte(externalCIWorkflowClaudeInclude)) {
-		t.Fatalf("installed Claude instruction index does not include the external-CI workflow source through %q", externalCIWorkflowClaudeInclude)
-	}
-
-	for _, installedPath := range []string{
-		filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"),
-		filepath.Join(home, ".claude", "instructions", "INSTRUCTIONS_WORKFLOW.md"),
+	for _, distributed := range []string{
+		filepath.Join(home, ".agents", ".instructions"),
+		filepath.Join(home, ".agents", ".skills"),
+		filepath.Join(home, ".agents", "skills"),
+		filepath.Join(home, ".agents", ".configs", "codex-mcp-servers.toml"),
+		filepath.Join(home, ".claude", "CLAUDE.md"),
+		filepath.Join(home, ".claude", "instructions"),
+		filepath.Join(home, ".codex", "AGENTS.md"),
 	} {
-		installedBody, err := os.ReadFile(installedPath)
-		if err != nil {
-			t.Fatalf("ReadFile(%s): %v", installedPath, err)
-		}
-		if !bytes.Equal(installedBody, sourceBody) {
-			t.Fatalf("installed Claude workflow %s does not match versioned source", installedPath)
-		}
-		assertExternalCILocalMirrorPolicyClauses(t, installedPath, installedBody)
+		assertNoPath(t, distributed)
 	}
-
-	codexPath := filepath.Join(home, ".codex", "AGENTS.md")
-	codexBody, err := os.ReadFile(codexPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", codexPath, err)
+	assertSymlink(t, filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".agents", ".configs", "claude-settings.json"))
+	assertSymlink(t, filepath.Join(home, ".codex", "config.toml"), filepath.Join(home, ".agents", ".configs", "codex-config.toml"))
+	assertSymlink(t, filepath.Join(home, ".codex", "rules", "default.rules"), filepath.Join(home, ".agents", ".rules", "default.rules"))
+	if err := VerifyInstalledRuntime(layout); err != nil {
+		t.Fatalf("VerifyInstalledRuntime: %v", err)
 	}
-	if !bytes.Contains(codexBody, sourceBody) {
-		t.Fatalf("rendered Codex instructions %s do not contain the versioned workflow source", codexPath)
-	}
-	assertExternalCILocalMirrorPolicyClauses(t, codexPath, codexBody)
-}
-
-func TestSetupGlobalRejectsBroadenedExternalCIMirrorTriggers(t *testing.T) {
-	broadenedReplacement := "Use a local mirror for any repairable or merely inconvenient CI disruption; this includes cases where hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair."
-	if !strings.Contains(broadenedReplacement, "hosted CI cannot execute repository steps for a verified external cause that the agent cannot repair") {
-		t.Fatal("broadened replacement does not retain the formerly asserted interior phrase")
-	}
-	additiveBypass := "* A local mirror is also allowed for any repairable or merely inconvenient hosted-CI disruption."
-
-	for _, testCase := range []struct {
-		name    string
-		mutate  func([]byte) []byte
-		witness string
-	}{
-		{
-			name: "replacement",
-			mutate: func(body []byte) []byte {
-				return bytes.Replace(body, []byte(externalCILocalMirrorExclusiveTrigger), []byte(broadenedReplacement), 1)
-			},
-			witness: broadenedReplacement,
-		},
-		{
-			name: "additive_contradiction",
-			mutate: func(body []byte) []byte {
-				return bytes.Replace(body, []byte(externalCILocalMirrorExclusiveTrigger), []byte(externalCILocalMirrorExclusiveTrigger+"\n"+additiveBypass), 1)
-			},
-			witness: additiveBypass,
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			source := seedSourceRepo(t)
-			workflowPath := filepath.Join(source, ".instructions", "INSTRUCTIONS_WORKFLOW.md")
-			workflowBody, err := os.ReadFile(workflowPath)
-			if err != nil {
-				t.Fatalf("ReadFile(%s): %v", workflowPath, err)
-			}
-			mutatedWorkflow := testCase.mutate(workflowBody)
-			if bytes.Equal(mutatedWorkflow, workflowBody) {
-				t.Fatal("broadened trigger mutant did not alter the workflow fixture")
-			}
-			mustWrite(t, workflowPath, string(mutatedWorkflow))
-
-			home := t.TempDir()
-			layout, err := GlobalLayout(source, home)
-			if err != nil {
-				t.Fatalf("GlobalLayout: %v", err)
-			}
-			seedGlobalAgentsInfraTarget(t, layout)
-			if err := Setup(Options{Layout: layout}); err != nil {
-				t.Fatalf("Setup: %v", err)
-			}
-
-			for _, installedPath := range []string{
-				filepath.Join(home, ".agents", ".instructions", "INSTRUCTIONS_WORKFLOW.md"),
-				filepath.Join(home, ".claude", "instructions", "INSTRUCTIONS_WORKFLOW.md"),
-				filepath.Join(home, ".codex", "AGENTS.md"),
-			} {
-				installedBody, err := os.ReadFile(installedPath)
-				if err != nil {
-					t.Fatalf("ReadFile(%s): %v", installedPath, err)
-				}
-				if !bytes.Contains(installedBody, []byte(testCase.witness)) {
-					t.Fatalf("production Setup did not publish the broadened trigger to %s", installedPath)
-				}
-				if err := validateExternalCILocalMirrorPolicyClauses(installedBody); err == nil {
-					t.Fatalf("broadened trigger passed external-CI policy validation at %s", installedPath)
-				}
-			}
-		})
-	}
-}
-
-func assertExternalCILocalMirrorPolicyClauses(t *testing.T, path string, body []byte) {
-	t.Helper()
-	if err := validateExternalCILocalMirrorPolicyClauses(body); err != nil {
-		t.Fatalf("external-CI policy at %s: %v", path, err)
-	}
-}
-
-func validateExternalCILocalMirrorPolicyClauses(body []byte) error {
-	heading := []byte(externalCILocalMirrorPolicyHeading)
-	if count := bytes.Count(body, heading); count != 1 {
-		return fmt.Errorf("expected exactly one %q heading, found %d", externalCILocalMirrorPolicyHeading, count)
-	}
-	start := bytes.Index(body, heading)
-	section := body[start:]
-	if next := bytes.Index(section[len(heading):], []byte("\n## ")); next >= 0 {
-		section = section[:len(heading)+next]
-	}
-	actual := strings.TrimSpace(string(section))
-	expected := strings.TrimSpace(externalCILocalMirrorPolicySection)
-	if actual != expected {
-		return fmt.Errorf("external-CI policy section mismatch\nexpected:\n%s\nactual:\n%s", expected, actual)
-	}
-	return nil
 }
 
 func TestSetupGlobalRemovesStaleProjectConfig(t *testing.T) {
@@ -1031,6 +1024,8 @@ hide_rate_limit_model_nudge = true
 	mustWrite(t, filepath.Join(source, ".configs", "codex-mcp-servers.toml"), `[servers.updated]
 url = "https://example.test/mcp"
 `)
+	callerRegistry := filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml")
+	mustWrite(t, callerRegistry, "[servers.caller]\nurl = \"https://caller.example/mcp\"\n")
 
 	if err := Setup(Options{Layout: layout, CodexConfigMode: CodexConfigModeLocal}); err != nil {
 		t.Fatalf("second Setup: %v", err)
@@ -1048,7 +1043,8 @@ url = "https://example.test/mcp"
 	assertFileContains(t, claudeSettings, "claude-sonnet-5")
 	assertFileContains(t, claudeSettings, "bypassPermissions")
 	assertFileNotContains(t, claudeSettings, "source-default-overwrite")
-	assertFileContains(t, filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml"), "[servers.updated]")
+	assertFileContains(t, callerRegistry, "[servers.caller]")
+	assertFileNotContains(t, callerRegistry, "[servers.updated]")
 	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "source-default-overwrite")
 	assertFileNotContains(t, filepath.Join(project, ".codex", "config.toml"), "[profiles.custom]")
 	assertSymlink(t, filepath.Join(project, ".claude", "settings.json"), claudeSettings)
@@ -1082,8 +1078,14 @@ func TestSetupLocalProjectMCPOptInInstallsCodexLocalLauncher(t *testing.T) {
 
 	assertNoPath(t, filepath.Join(project, ".codex", "config.toml"))
 	launcherPath := filepath.Join(project, ".local", "bin", "codex-local")
+	codexMessage, ok := DeprecatedProviderMessage("codex")
+	if !ok {
+		t.Fatal("DeprecatedProviderMessage(codex) missing")
+	}
 	assertFileContains(t, launcherPath, generatedCodexConfigMarker)
-	assertFileContains(t, launcherPath, "exec \"$DIR/agents-infra\" codex \"$@\"")
+	assertFileContains(t, launcherPath, posixShellQuote(codexMessage))
+	assertFileContains(t, launcherPath, "exit 1")
+	assertFileNotContains(t, launcherPath, "exec \"$DIR/agents-infra\" codex")
 	assertFileNotContains(t, launcherPath, "mcp_servers.figma.url")
 
 	report := mustDoctor(t, layout)
@@ -1095,9 +1097,12 @@ func TestSetupLocalProjectMCPOptInInstallsCodexLocalLauncher(t *testing.T) {
 	}
 }
 
-func TestSetupSyncsSafariMCPRegistryDefinition(t *testing.T) {
+func TestSetupDoesNotSyncBundledMCPRegistryDefinition(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
+	callerRegistry := filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml")
+	mustMkdir(t, filepath.Dir(callerRegistry))
+	mustWrite(t, callerRegistry, "[servers.caller]\nurl = \"https://caller.example/mcp\"\n")
 	layout, err := LocalLayout(source, project)
 	if err != nil {
 		t.Fatalf("LocalLayout: %v", err)
@@ -1107,10 +1112,14 @@ func TestSetupSyncsSafariMCPRegistryDefinition(t *testing.T) {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	registryPath := filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml")
-	assertFileContains(t, registryPath, "[servers.safari]")
-	assertFileContains(t, registryPath, "command = \"/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver\"")
-	assertFileContains(t, registryPath, "args = [\"--mcp\"]")
+	// The source carries a safari definition; it must not reach the install.
+	data, err := os.ReadFile(callerRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "[servers.caller]") || strings.Contains(string(data), "[servers.safari]") {
+		t.Fatalf("caller registry not preserved byte-identical: %q", string(data))
+	}
 }
 
 func TestSetupLocalRemovesGeneratedCodexConfigAndLauncherWhenMCPOptInRemoved(t *testing.T) {
@@ -1154,7 +1163,12 @@ func TestSetupLocalMCPOptInPreservesCustomCodexConfig(t *testing.T) {
 	}
 
 	assertFileContains(t, filepath.Join(project, ".codex", "config.toml"), "model = \"custom\"")
-	assertFileContains(t, filepath.Join(project, ".local", "bin", "codex-local"), "agents-infra\" codex")
+	codexRefusal, ok := DeprecatedProviderMessage("codex")
+	if !ok {
+		t.Fatal("DeprecatedProviderMessage(codex) missing")
+	}
+	assertFileContains(t, filepath.Join(project, ".local", "bin", "codex-local"), posixShellQuote(codexRefusal))
+	assertFileNotContains(t, filepath.Join(project, ".local", "bin", "codex-local"), "agents-infra\" codex")
 	assertFileNotContains(t, filepath.Join(project, ".local", "bin", "codex-local"), "mcp_servers.figma.url")
 	data, err := os.ReadFile(filepath.Join(project, ".codex", "config.toml"))
 	if err != nil {
@@ -1165,7 +1179,7 @@ func TestSetupLocalMCPOptInPreservesCustomCodexConfig(t *testing.T) {
 	}
 }
 
-func TestSetupLocalUnknownMCPOptInDefersValidationToLaunchTime(t *testing.T) {
+func TestSetupLocalUnknownMCPOptInDefersValidationToComposeTime(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
 	mustMkdir(t, filepath.Join(project, ".agents", ".configs"))
@@ -1176,7 +1190,7 @@ func TestSetupLocalUnknownMCPOptInDefersValidationToLaunchTime(t *testing.T) {
 	}
 
 	if err := Setup(Options{Layout: layout}); err != nil {
-		t.Fatalf("Setup should defer unknown MCP validation to launch time: %v", err)
+		t.Fatalf("Setup should defer unknown MCP validation to compose time: %v", err)
 	}
 	report := mustDoctor(t, layout)
 	if len(report.CodexMCPEnabled) != 1 || report.CodexMCPEnabled[0] != "missing" {
@@ -1371,7 +1385,7 @@ func TestSetupGlobalLinksCodexConfig(t *testing.T) {
 	assertFileNotContains(t, filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.figma]")
 }
 
-// Production call site: Setup -> setupCodexWithConfig -> syncManagedCodexConfig.
+// Production call site: Setup -> setupCodex -> syncManagedCodexConfig.
 // This binds the repository-managed Codex config to the installed native config
 // that an openai-board parent session reads when no explicit project pin wins.
 func TestSetupGlobalPreservesRepositorySolFallbackWithReasoningEffort(t *testing.T) {
@@ -1496,7 +1510,7 @@ func TestSetupGlobalRejectsMalformedExistingCodexConfigWithoutReplacingIt(t *tes
 	}
 }
 
-func TestSetupPreservesExistingPublicSkillsRegistryEntries(t *testing.T) {
+func TestSetupPreservesExistingSkillsContentWithoutManagingIt(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
 	layout, err := LocalLayout(source, project)
@@ -1506,13 +1520,21 @@ func TestSetupPreservesExistingPublicSkillsRegistryEntries(t *testing.T) {
 
 	mustMkdir(t, filepath.Join(project, ".agents", "skills", "public-skill"))
 	mustWrite(t, filepath.Join(project, ".agents", "skills", "public-skill", "SKILL.md"), "public")
+	mustMkdir(t, filepath.Join(project, ".agents", ".skills", "pdf"))
+	mustWrite(t, filepath.Join(project, ".agents", ".skills", "pdf", "SKILL.md"), "user-owned pdf skill")
 
 	if err := Setup(Options{Layout: layout}); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	assertExists(t, filepath.Join(project, ".agents", "skills", "public-skill", "SKILL.md"))
-	assertSymlink(t, filepath.Join(project, ".agents", "skills", "pdf"), filepath.Join(project, ".agents", ".skills", "pdf"))
+	assertFileContains(t, filepath.Join(project, ".agents", "skills", "public-skill", "SKILL.md"), "public")
+	assertFileContains(t, filepath.Join(project, ".agents", ".skills", "pdf", "SKILL.md"), "user-owned pdf skill")
+	assertNoPath(t, filepath.Join(project, ".agents", "skills", repoSkillName))
+	assertNoPath(t, filepath.Join(project, ".claude", "skills"))
+	assertNoPath(t, filepath.Join(project, ".codex", "skills"))
+	if err := VerifyInstalledRuntime(layout); err != nil {
+		t.Fatalf("VerifyInstalledRuntime: %v", err)
+	}
 }
 
 func TestSetupScrubsStaleNestedGitMetadataFromInstalledRuntime(t *testing.T) {
@@ -1538,12 +1560,13 @@ func TestSetupScrubsStaleNestedGitMetadataFromInstalledRuntime(t *testing.T) {
 	assertNoPath(t, filepath.Join(project, ".agents", ".skills", "pdf", "vendor", ".git"))
 }
 
-func TestSetupLocalPreservesProjectAgentsSourceBeforeRendering(t *testing.T) {
+func TestSetupLeavesProjectAgentsSourceUntouchedAndPrepareRendersIt(t *testing.T) {
 	source := seedSourceRepo(t)
 	project := t.TempDir()
 	mustMkdir(t, filepath.Join(project, ".agents", ".instructions"))
 	mustWrite(t, filepath.Join(project, ".agents", ".instructions", "PROJECT.md"), "project instructions\n")
-	mustWrite(t, filepath.Join(project, "AGENTS.md"), "# Project\n\n@./.agents/.instructions/PROJECT.md\n\nlocal body\n")
+	projectDoc := "# Project\n\n@./.agents/.instructions/PROJECT.md\n\nlocal body\n"
+	mustWrite(t, filepath.Join(project, "AGENTS.md"), projectDoc)
 	layout, err := LocalLayout(source, project)
 	if err != nil {
 		t.Fatalf("LocalLayout: %v", err)
@@ -1553,6 +1576,23 @@ func TestSetupLocalPreservesProjectAgentsSourceBeforeRendering(t *testing.T) {
 		t.Fatalf("Setup: %v", err)
 	}
 
+	assertNoPath(t, filepath.Join(project, ".agents", ".instructions", "AGENTS.project.md"))
+	assertNoPath(t, filepath.Join(project, ".codex", "AGENTS.md"))
+	data, err := os.ReadFile(filepath.Join(project, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != projectDoc {
+		t.Fatalf("setup rewrote the hand-written project AGENTS.md: %q", string(data))
+	}
+
+	report, err := PreparePrimarySession("codex", project, ChildLaunchCompositionProducer{Version: "test", Commit: "abc123"})
+	if err != nil {
+		t.Fatalf("PreparePrimarySession: %v", err)
+	}
+	if !report.CodexProjectRendered {
+		t.Fatalf("report = %#v", report)
+	}
 	assertExists(t, filepath.Join(project, ".agents", ".instructions", "AGENTS.project.md"))
 	assertRenderedInstructions(t, filepath.Join(project, "AGENTS.md"))
 	assertFileContains(t, filepath.Join(project, "AGENTS.md"), "project instructions")

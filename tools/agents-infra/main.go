@@ -433,62 +433,28 @@ func claudePrimaryBoolSource(value infra.ClaudePrimarySessionBoolValue) string {
 	return "default"
 }
 
-func runCodex(args []string) error {
-	plan, err := infra.BuildCodexLaunchPlan(os.Getenv(callerCWDEnv), "", args)
-	if err != nil {
-		return err
+// deprecatedProviderError is the single dispatch point for retired
+// proprietary-provider launch entrypoints. It performs no parsing, no config
+// reads, no provider resolution, and no filesystem changes: the caller returns
+// it before any side effect, the main error path prints it to stderr, and the
+// process exits 1. There is no --print-config exception on these entrypoints;
+// non-launching diagnostics remain available through compose --mode
+// primary-session and prepare, which this guard never intercepts. Messages come
+// from infra.DeprecatedProviderMessage so the compiled binary and the
+// generated shell wrappers cannot drift apart.
+func deprecatedProviderError(entrypoint string) error {
+	if message, ok := infra.DeprecatedProviderMessage(entrypoint); ok {
+		return errors.New(message)
 	}
-	rendered := infra.RenderCodexLaunchPlan(plan)
-	if plan.PrintConfig {
-		fmt.Fprint(os.Stdout, rendered)
-		return nil
-	}
-	if _, err := infra.PreparePrimarySession(
-		"codex",
-		plan.StartDir,
-		infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit},
-	); err != nil {
-		return fmt.Errorf("prepare Codex project surface: %w", err)
-	}
-	fmt.Fprint(os.Stderr, rendered)
-	codexPath, err := exec.LookPath("codex")
-	if err != nil {
-		return fmt.Errorf("find codex executable: %w", err)
-	}
-	cmd := exec.Command(codexPath, plan.Args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return fmt.Errorf("unknown deprecated provider entrypoint %q", entrypoint)
 }
 
-func runClaude(args []string) error {
-	plan, err := infra.BuildClaudeLaunchPlan(os.Getenv(callerCWDEnv), "", args)
-	if err != nil {
-		return err
-	}
-	rendered := infra.RenderClaudeLaunchPlan(plan)
-	if plan.PrintConfig {
-		fmt.Fprint(os.Stdout, rendered)
-		return nil
-	}
-	if _, err := infra.PreparePrimarySession(
-		"claude",
-		plan.StartDir,
-		infra.ChildLaunchCompositionProducer{Version: Version, Commit: Commit},
-	); err != nil {
-		return fmt.Errorf("prepare Claude project surface: %w", err)
-	}
-	fmt.Fprint(os.Stderr, rendered)
-	claudePath, err := exec.LookPath("claude")
-	if err != nil {
-		return fmt.Errorf("find claude executable: %w", err)
-	}
-	cmd := exec.Command(claudePath, plan.Args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+func runCodex(_ []string) error {
+	return deprecatedProviderError("codex")
+}
+
+func runClaude(_ []string) error {
+	return deprecatedProviderError("claude")
 }
 
 func runPi(args []string) error {
@@ -930,6 +896,9 @@ func runTarget(args []string) error {
 		return errors.New("target requires an entrypoint name")
 	}
 	entrypoint := args[0]
+	if entrypoint == "openai-infra" || entrypoint == "anthropic-infra" {
+		return deprecatedProviderError(entrypoint)
+	}
 	if len(args) > 1 && args[1] == "spawn" {
 		return runPiStandaloneCLI(entrypoint, args[2:])
 	}
@@ -947,11 +916,17 @@ func runDirectProviderYoloTarget(args []string) error {
 		return errors.New("target-yolo requires an entrypoint name")
 	}
 	entrypoint := args[0]
-	if entrypoint != "openai-infra" && entrypoint != "anthropic-infra" {
+	// The installed openai-dange/anthropic-dange wrappers reach this dispatcher
+	// with their matching canonical entrypoint name, so the dange surface name
+	// is reported here rather than the canonical alias.
+	switch entrypoint {
+	case "openai-infra":
+		return deprecatedProviderError("openai-dange")
+	case "anthropic-infra":
+		return deprecatedProviderError("anthropic-dange")
+	default:
 		return fmt.Errorf("target-yolo does not support entrypoint %q", entrypoint)
 	}
-	printConfig, providerArgs := parseDirectProviderYoloTargetArgs(args[1:])
-	return runCanonicalTarget(entrypoint, providerArgs, printConfig)
 }
 
 func runCanonicalTarget(entrypoint string, providerArgs []string, printConfig bool) error {
@@ -991,33 +966,6 @@ func runCanonicalTarget(entrypoint string, providerArgs []string, printConfig bo
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
-}
-
-// parseDirectProviderYoloTargetArgs reserves only --print-config for the
-// distinct target-yolo dispatcher. Every other token before the first -- is
-// provider input, so the direct aliases accept native options without changing
-// the canonical target dispatcher's ordinary parsing contract.
-// The first -- remains the wrapper boundary and is consumed exactly as it was
-// by flag.FlagSet; later delimiters belong to the provider and are preserved.
-func parseDirectProviderYoloTargetArgs(args []string) (bool, []string) {
-	printConfig := false
-	providerArgs := make([]string, 1, len(args)+1)
-	providerArgs[0] = "-d"
-	wrapperBoundarySeen := false
-	for _, arg := range args {
-		if !wrapperBoundarySeen {
-			switch arg {
-			case "--print-config":
-				printConfig = true
-				continue
-			case "--":
-				wrapperBoundarySeen = true
-				continue
-			}
-		}
-		providerArgs = append(providerArgs, arg)
-	}
-	return printConfig, providerArgs
 }
 
 func runCompose(args []string) error {
@@ -1289,8 +1237,8 @@ func usageText() string {
   agents-infra compose --mode primary-session --entrypoint openai-infra|anthropic-infra|qwen-infra --project DIR --schema-version 1 --json [-- PROVIDER_ARGS...]
   agents-infra prepare --agent codex|claude --project DIR --schema-version 1 --json
   agents-infra attachments list|show|path|materialize|stage-images [...]
-  agents-infra codex [--print-config] [-d|--danger|--yolo] [--] [CODEX_ARGS...]
-  agents-infra claude [--print-config] [-d|--danger|--yolo] [--] [CLAUDE_ARGS...]
+  agents-infra codex [ARGS...] (deprecated: exits 1; use 'curator run codex_cli -- <args>')
+  agents-infra claude [ARGS...] (deprecated: exits 1; use 'curator run claude_code -- <args>')
   agents-infra pi [--print-config] [--profile NAME] [PI_ARGS...] [-- MESSAGE...]
   agents-infra pi spawn --prompt TEXT [--deadline DURATION] [--print-config]
   agents-infra pi turn --target ENTRYPOINT --prompt TEXT [--deadline DURATION]
@@ -1299,6 +1247,7 @@ func usageText() string {
   agents-infra runtime status [--project DIR] [--profile NAME] [--json]
   agents-infra runtime stop [--project DIR] [--profile NAME] [--force] [--timeout SECONDS]
   agents-infra target ENTRYPOINT [--print-config] [-- PROVIDER_ARGS...]
+  agents-infra target openai-infra|anthropic-infra [ARGS...] (deprecated: exits 1; use 'curator run codex_cli|claude_code -- <args>')
   agents-infra target qwen-infra spawn --prompt TEXT [--deadline DURATION] [--print-config]
   agents-infra model-check --target ENTRYPOINT --prompt TEXT --output-dir DIR [--deadline DURATION] [--expect-tool NAME] [--expect-text TEXT]
 
@@ -1308,5 +1257,11 @@ Source tree resolution for setup (first usable wins):
   3. repoPath from the installer's machine-scoped install.json
   4. the installed ~/.agents runtime
 An explicit --source-dir or ` + infra.SourceDirEnv + ` is never replaced by a
-discovered fallback; an unusable one fails and names what is missing.`
+discovered fallback; an unusable one fails and names what is missing.
+
+Deprecated proprietary-provider launch entrypoints (agents-infra codex|claude,
+openai-infra|anthropic-infra, openai-dange|anthropic-dange, and the local
+codex-local shim) print a one-line migration notice to stderr and exit 1
+without launching, resolving, or writing anything. They will be removed in the
+next release. Non-launching compose and prepare contracts are unaffected.`
 }

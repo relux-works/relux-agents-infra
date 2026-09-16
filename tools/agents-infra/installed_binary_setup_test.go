@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,12 +88,24 @@ func TestInstalledBinarySetupLocalResolvesSourceFromInstallState(t *testing.T) {
 		t.Fatalf("installed binary setup local: %v\n%s", err, output)
 	}
 	for _, want := range []string{
-		filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS.md"),
-		filepath.Join(project, ".claude", "instructions"),
-		filepath.Join(project, "AGENTS.md"),
+		filepath.Join(project, ".agents", ".agents-infra-install.json"),
+		filepath.Join(project, ".agents", ".configs", "claude-settings.json"),
+		filepath.Join(project, ".agents", ".rules", "default.rules"),
+		filepath.Join(project, ".claude", "settings.json"),
+		filepath.Join(project, ".local", "bin", "agents-infra"),
 	} {
 		if _, statErr := os.Lstat(want); statErr != nil {
 			t.Fatalf("installed binary setup did not produce %s: %v\n%s", want, statErr, output)
+		}
+	}
+	for _, absent := range []string{
+		filepath.Join(project, ".agents", ".instructions"),
+		filepath.Join(project, ".agents", ".skills"),
+		filepath.Join(project, ".claude", "instructions"),
+		filepath.Join(project, "AGENTS.md"),
+	} {
+		if _, statErr := os.Lstat(absent); !os.IsNotExist(statErr) {
+			t.Fatalf("installed binary setup distributed retired surface %s: %v\n%s", absent, statErr, output)
 		}
 	}
 }
@@ -220,7 +233,10 @@ func TestInstalledBinarySetupLocalRefusesRecursiveSourceBeforeFilesystemMutation
 	}
 }
 
-func TestInstalledBinarySetupLocalScrubsLiteralSourceDirAndAvoidsRepoSkillCycle(t *testing.T) {
+// Setup scrubs legacy artifacts and distributes no skills: source .skills
+// content — including hostile links that the old validator refused — is left
+// behind entirely, while the residual runtime still installs and verifies.
+func TestInstalledBinarySetupLocalScrubsLegacyArtifactsAndDistributesNoSkills(t *testing.T) {
 	binary := buildInstalledBinary(t)
 	home := t.TempDir()
 	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
@@ -230,24 +246,15 @@ func TestInstalledBinarySetupLocalScrubsLiteralSourceDirAndAvoidsRepoSkillCycle(
 	nestedScratch := filepath.Join(source, "tools", "agents-infra", ".temp", "legacy-runtime")
 	mustMkdir(t, nestedScratch)
 	mustWrite(t, filepath.Join(nestedScratch, "stale"), "must not materialize")
+
 	safeSkillTarget := filepath.Join(source, ".skills", "safe-target")
 	mustMkdir(t, safeSkillTarget)
 	mustWrite(t, filepath.Join(safeSkillTarget, "SKILL.md"), "# safe target\n")
 	if err := os.Symlink("safe-target", filepath.Join(source, ".skills", "safe-link")); err != nil {
-		t.Skipf("cannot create narrowing-control skill symlink: %v", err)
+		t.Skipf("cannot create control skill symlink: %v", err)
 	}
-	nestedSafeTarget := filepath.Join(source, ".skills", "nested-safe", "target")
-	mustMkdir(t, nestedSafeTarget)
-	mustWrite(t, filepath.Join(nestedSafeTarget, "SKILL.md"), "# nested safe target\n")
-	if err := os.Symlink("target", filepath.Join(source, ".skills", "nested-safe", "link")); err != nil {
-		t.Skipf("cannot create nested narrowing-control skill symlink: %v", err)
-	}
-	dagDir := filepath.Join(source, ".skills", "contained-dag")
-	mustMkdir(t, dagDir)
-	for _, name := range []string{"left", "right"} {
-		if err := os.Symlink(filepath.Join("..", "safe-target"), filepath.Join(dagDir, name)); err != nil {
-			t.Skipf("cannot create contained DAG skill symlink: %v", err)
-		}
+	if err := os.Symlink(t.TempDir(), filepath.Join(source, ".skills", "escape-probe")); err != nil {
+		t.Skipf("cannot create hostile source skill symlink: %v", err)
 	}
 	configDir := filepath.Join(home, "config")
 	writeInstallState(t, configDir, source)
@@ -267,277 +274,71 @@ func TestInstalledBinarySetupLocalScrubsLiteralSourceDirAndAvoidsRepoSkillCycle(
 	}
 
 	agentsDir := filepath.Join(project, ".agents")
-	repoSkillLink := filepath.Join(agentsDir, "skills", "relux-agents-infra")
-	wantTarget := filepath.Join(agentsDir, ".skills", "relux-agents-infra")
-	rawTarget, err := os.Readlink(repoSkillLink)
-	if err != nil {
-		t.Fatalf("Readlink(%s): %v", repoSkillLink, err)
-	}
-	if !filepath.IsAbs(rawTarget) {
-		rawTarget = filepath.Join(filepath.Dir(repoSkillLink), rawTarget)
-	}
-	if got, want := filepath.Clean(rawTarget), filepath.Clean(wantTarget); got != want {
-		t.Fatalf("repository skill target = %s, want %s", got, want)
-	}
-	assertContainedAcyclicSymlinks(t, agentsDir)
-	if _, err := os.Stat(filepath.Join(agentsDir, ".skills", "safe-link", "SKILL.md")); err != nil {
-		t.Fatalf("safe contained source skill link did not survive setup: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(agentsDir, ".skills", "nested-safe", "link", "SKILL.md")); err != nil {
-		t.Fatalf("nested safe contained source skill link did not survive setup: %v", err)
-	}
-	for _, name := range []string{"left", "right"} {
-		if _, err := os.Stat(filepath.Join(agentsDir, ".skills", "contained-dag", name, "SKILL.md")); err != nil {
-			t.Fatalf("contained DAG skill link %s did not survive setup: %v", name, err)
+	for _, distributed := range []string{
+		filepath.Join(agentsDir, ".skills"),
+		filepath.Join(agentsDir, "skills"),
+		filepath.Join(agentsDir, ".skills", "relux-agents-infra"),
+	} {
+		if _, statErr := os.Lstat(distributed); !os.IsNotExist(statErr) {
+			t.Fatalf("setup distributed skill surface %s: %v", distributed, statErr)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(repoSkillLink, "SKILL.md")); err != nil {
-		t.Fatalf("materialized repository skill is not readable through production link: %v", err)
-	}
-
-	find := exec.Command("find", "-L", agentsDir, "-maxdepth", "8", "-print")
-	findOutput, findErr := find.CombinedOutput()
-	if findErr != nil {
-		t.Fatalf("recursive-safe inspection failed: %v\n%s", findErr, findOutput)
-	}
-	if strings.Contains(string(findOutput), "skills/relux-agents-infra/skills/relux-agents-infra") {
-		t.Fatalf("recursive inspection re-entered the repository skill through itself:\n%s", findOutput)
+	if output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project); err != nil {
+		t.Fatalf("verify local: %v\n%s", err, output)
 	}
 }
 
-func TestInstalledBinarySetupLocalRefusesContainedTransitiveSourceSkillCycleBeforeDestinationMutation(t *testing.T) {
+// Setup distributes no instructions and no bundled MCP registry even when the
+// source carries them, while residual config, rules, and helpers install and
+// verify. A pre-existing caller registry is preserved byte-identical: sync
+// only writes paths it walks from source.
+func TestInstalledBinarySetupLocalDistributesNoInstructionsOrBundledRegistry(t *testing.T) {
 	binary := buildInstalledBinary(t)
 	home := t.TempDir()
 	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
-	mustMkdir(t, filepath.Join(source, ".skills"))
-	cycleTarget := filepath.Join(source, "cycle-target")
-	mustMkdir(t, cycleTarget)
-	probe := filepath.Join(source, ".skills", "transitive-cycle-probe")
-	if err := os.Symlink(filepath.Join("..", "cycle-target"), probe); err != nil {
-		t.Skipf("cannot create transitive source skill link: %v", err)
-	}
-	if err := os.Symlink(filepath.Join("..", ".skills", "transitive-cycle-probe"), filepath.Join(cycleTarget, "back")); err != nil {
-		t.Skipf("cannot close transitive source skill cycle: %v", err)
-	}
+	mustWrite(t, filepath.Join(source, ".instructions", "AGENTS.md"), "# Source instructions marker\n")
+	mustWrite(t, filepath.Join(source, ".configs", "codex-mcp-servers.toml"), "[servers.bundled]\nurl = \"https://bundled.example/mcp\"\n")
+	mustWrite(t, filepath.Join(source, ".configs", "claude-settings.json"), "{}\n")
+	mustWrite(t, filepath.Join(source, ".rules", "default.rules"), "allow\n")
 	configDir := filepath.Join(home, "config")
 	writeInstallState(t, configDir, source)
 	project := t.TempDir()
-	preserved := filepath.Join(project, ".agents", "destination-must-remain-untouched")
-	mustMkdir(t, filepath.Dir(preserved))
-	mustWrite(t, preserved, "sentinel")
+	callerRegistry := filepath.Join(project, ".agents", ".configs", "codex-mcp-servers.toml")
+	mustMkdir(t, filepath.Dir(callerRegistry))
+	mustWrite(t, callerRegistry, "[servers.caller]\nurl = \"https://caller.example/mcp\"\n")
 
 	output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project)
-	if err == nil || !strings.Contains(output, "source skill links are not safe to materialize") || !strings.Contains(output, "transitive symlink cycle") {
-		t.Fatalf("setup local accepted contained transitive source skill cycle: %v\n%s", err, output)
-	}
-	if got := string(mustReadFile(t, preserved)); got != "sentinel" {
-		t.Fatalf("setup mutated destination before refusing transitive source cycle: %q", got)
-	}
-}
-
-func TestInstalledBinarySetupLocalRefusesUnsafeSourceSkillLinksBeforeDestinationMutation(t *testing.T) {
-	binary := buildInstalledBinary(t)
-	for _, test := range []struct {
-		name       string
-		probe      string
-		target     func(source, outside string) string
-		wantOutput string
-	}{
-		{
-			name:  "absolute escape",
-			probe: "unsafe-probe",
-			target: func(_, outside string) string {
-				return outside
-			},
-			wantOutput: "absolute and would escape",
-		},
-		{
-			name:  "ancestor cycle",
-			probe: "unsafe-probe",
-			target: func(_, _ string) string {
-				return ".."
-			},
-			wantOutput: "points to itself or an ancestor",
-		},
-		{
-			name:  "nested absolute escape",
-			probe: filepath.Join("nested-probe", "unsafe-probe"),
-			target: func(_, outside string) string {
-				return outside
-			},
-			wantOutput: "absolute and would escape",
-		},
-		{
-			name:  "nested ancestor cycle",
-			probe: filepath.Join("nested-probe", "unsafe-probe"),
-			target: func(_, _ string) string {
-				return filepath.Join("..", "..")
-			},
-			wantOutput: "points to itself or an ancestor",
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			home := t.TempDir()
-			source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
-			skillsDir := filepath.Join(source, ".skills")
-			mustMkdir(t, skillsDir)
-			outside := filepath.Join(t.TempDir(), "outside-runtime")
-			mustMkdir(t, outside)
-			probe := filepath.Join(skillsDir, test.probe)
-			mustMkdir(t, filepath.Dir(probe))
-			if err := os.Symlink(test.target(source, outside), probe); err != nil {
-				t.Skipf("cannot create source skill symlink: %v", err)
-			}
-			configDir := filepath.Join(home, "config")
-			writeInstallState(t, configDir, source)
-			project := t.TempDir()
-			preserved := filepath.Join(project, ".agents", "destination-must-remain-untouched")
-			mustMkdir(t, filepath.Dir(preserved))
-			mustWrite(t, preserved, "sentinel")
-
-			output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project)
-			if err == nil || !strings.Contains(output, "source skill links are not safe to materialize") || !strings.Contains(output, test.wantOutput) {
-				t.Fatalf("setup local did not refuse unsafe source skill link: %v\n%s", err, output)
-			}
-			if got := string(mustReadFile(t, preserved)); got != "sentinel" {
-				t.Fatalf("setup mutated destination before refusing unsafe source link: %q", got)
-			}
-		})
-	}
-}
-
-func TestInstalledBinaryVerifyLocalRefusesUnsafeManagedSkillLinkDrift(t *testing.T) {
-	binary := buildInstalledBinary(t)
-	for _, test := range []struct {
-		name       string
-		probe      string
-		target     func(project, outside string) string
-		wantOutput string
-	}{
-		{
-			name:  "absolute escape",
-			probe: "unsafe-probe",
-			target: func(_, outside string) string {
-				return outside
-			},
-			wantOutput: "escapes runtime containment",
-		},
-		{
-			name:  "ancestor cycle",
-			probe: "unsafe-probe",
-			target: func(_, _ string) string {
-				return ".."
-			},
-			wantOutput: "points to itself or an ancestor",
-		},
-		{
-			name:  "nested absolute escape",
-			probe: filepath.Join("nested-probe", "unsafe-probe"),
-			target: func(_, outside string) string {
-				return outside
-			},
-			wantOutput: "escapes runtime containment",
-		},
-		{
-			name:  "nested ancestor cycle",
-			probe: filepath.Join("nested-probe", "unsafe-probe"),
-			target: func(_, _ string) string {
-				return filepath.Join("..", "..")
-			},
-			wantOutput: "points to itself or an ancestor",
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			home := t.TempDir()
-			source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
-			configDir := filepath.Join(home, "config")
-			writeInstallState(t, configDir, source)
-			project := t.TempDir()
-			if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
-				t.Fatalf("setup local control: %v\n%s", err, output)
-			}
-			outside := filepath.Join(t.TempDir(), "outside-runtime")
-			mustMkdir(t, outside)
-			probe := filepath.Join(project, ".agents", ".skills", test.probe)
-			mustMkdir(t, filepath.Dir(probe))
-			if err := os.Symlink(test.target(project, outside), probe); err != nil {
-				t.Skipf("cannot create installed skill symlink: %v", err)
-			}
-
-			output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
-			if err == nil || !strings.Contains(output, test.wantOutput) {
-				t.Fatalf("verify local accepted unsafe managed skill link: %v\n%s", err, output)
-			}
-		})
-	}
-}
-
-func TestInstalledBinaryVerifyLocalRefusesContainedTransitiveManagedSkillCycle(t *testing.T) {
-	binary := buildInstalledBinary(t)
-	home := t.TempDir()
-	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
-	configDir := filepath.Join(home, "config")
-	writeInstallState(t, configDir, source)
-	project := t.TempDir()
-	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
-		t.Fatalf("setup local control: %v\n%s", err, output)
+	if err != nil {
+		t.Fatalf("installed binary setup local: %v\n%s", err, output)
 	}
 	agentsDir := filepath.Join(project, ".agents")
-	cycleTarget := filepath.Join(agentsDir, "cycle-target")
-	mustMkdir(t, cycleTarget)
-	probe := filepath.Join(agentsDir, ".skills", "transitive-cycle-probe")
-	if err := os.Symlink(filepath.Join("..", "cycle-target"), probe); err != nil {
-		t.Skipf("cannot create transitive installed skill link: %v", err)
-	}
-	if err := os.Symlink(filepath.Join("..", ".skills", "transitive-cycle-probe"), filepath.Join(cycleTarget, "back")); err != nil {
-		t.Skipf("cannot close transitive installed skill cycle: %v", err)
-	}
-
-	output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
-	if err == nil || !strings.Contains(output, "transitive symlink cycle") {
-		t.Fatalf("verify local accepted contained transitive managed skill cycle: %v\n%s", err, output)
-	}
-}
-
-func TestInstalledBinaryVerifyLocalInspectsEveryManagedSkillSurface(t *testing.T) {
-	binary := buildInstalledBinary(t)
-	const managedRepoSkillName = "relux-agents-infra"
-	home := t.TempDir()
-	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
-	configDir := filepath.Join(home, "config")
-	writeInstallState(t, configDir, source)
-	project := t.TempDir()
-	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
-		t.Fatalf("setup local control: %v\n%s", err, output)
-	}
-	outside := filepath.Join(t.TempDir(), "outside-runtime")
-	mustMkdir(t, outside)
-	for _, surface := range []struct {
-		root string
-		name string
-	}{
-		{root: filepath.Join(project, ".agents", ".skills"), name: "surface-escape-probe"},
-		{root: filepath.Join(project, ".agents", "skills"), name: managedRepoSkillName},
-		{root: filepath.Join(project, ".claude", "skills"), name: managedRepoSkillName},
-		{root: filepath.Join(project, ".codex", "skills"), name: managedRepoSkillName},
+	for _, distributed := range []string{
+		filepath.Join(agentsDir, ".instructions"),
+		filepath.Join(project, ".codex", "AGENTS.md"),
+		filepath.Join(project, "AGENTS.md"),
+		filepath.Join(project, ".claude", "CLAUDE.md"),
 	} {
-		probe := filepath.Join(surface.root, surface.name)
-		if err := os.Remove(probe); err != nil && !os.IsNotExist(err) {
-			t.Fatalf("remove existing managed skill link %s: %v", probe, err)
+		if _, statErr := os.Lstat(distributed); !os.IsNotExist(statErr) {
+			t.Fatalf("setup distributed instruction surface %s: %v", distributed, statErr)
 		}
-		if err := os.Symlink(outside, probe); err != nil {
-			t.Skipf("cannot create installed skill symlink: %v", err)
+	}
+	if data, err := os.ReadFile(callerRegistry); err != nil || !strings.Contains(string(data), "servers.caller") || strings.Contains(string(data), "servers.bundled") {
+		t.Fatalf("caller registry not preserved byte-identical: err=%v data=%q", err, data)
+	}
+	for _, residual := range []string{
+		filepath.Join(agentsDir, ".configs", "claude-settings.json"),
+		filepath.Join(agentsDir, ".rules", "default.rules"),
+		filepath.Join(project, ".claude", "settings.json"),
+		filepath.Join(project, ".codex", "rules", "default.rules"),
+		filepath.Join(project, ".local", "bin", "agents-attachments"),
+		filepath.Join(project, ".local", "bin", "agents-infra"),
+	} {
+		if _, statErr := os.Lstat(residual); statErr != nil {
+			t.Fatalf("residual surface %s missing: %v\n%s", residual, statErr, output)
 		}
-		output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
-		if err == nil || !strings.Contains(output, probe) || !strings.Contains(output, "escapes runtime containment") {
-			t.Fatalf("verify local did not inspect managed surface %s: %v\n%s", surface.root, err, output)
-		}
-		if err := os.Remove(probe); err != nil {
-			t.Fatalf("remove surface probe %s: %v", probe, err)
-		}
-		if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
-			t.Fatalf("setup local did not restore managed skill surface %s: %v\n%s", surface.root, err, output)
-		}
+	}
+	if output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project); err != nil {
+		t.Fatalf("verify local: %v\n%s", err, output)
 	}
 }
 
@@ -580,93 +381,6 @@ func TestInstalledBinarySetupAndVerifyLocalPreserveUnmanagedProviderSkillLinks(t
 		if target != externalSkill {
 			t.Fatalf("provider-owned skill link %s changed: got %q, want %q", link, target, externalSkill)
 		}
-	}
-}
-
-func TestInstalledBinaryVerifyLocalRecursesEveryManagedSkillPackage(t *testing.T) {
-	binary := buildInstalledBinary(t)
-	home := t.TempDir()
-	source := seedRuntimeSource(t, filepath.Join(home, ".agents"))
-	configDir := filepath.Join(home, "config")
-	writeInstallState(t, configDir, source)
-	project := t.TempDir()
-	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
-		t.Fatalf("setup local control: %v\n%s", err, output)
-	}
-	out := filepath.Join(t.TempDir(), "outside-runtime")
-	mustMkdir(t, out)
-	for _, packageDir := range []string{
-		filepath.Join(project, ".agents", ".skills", "relux-agents-infra"),
-		filepath.Join(project, ".agents", "skills", "relux-agents-infra"),
-		filepath.Join(project, ".claude", "skills", "relux-agents-infra"),
-		filepath.Join(project, ".codex", "skills", "relux-agents-infra"),
-	} {
-		info, err := os.Lstat(packageDir)
-		if err != nil {
-			t.Fatalf("Lstat(%s): %v", packageDir, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			if err := os.Remove(packageDir); err != nil {
-				t.Fatalf("remove managed package link %s: %v", packageDir, err)
-			}
-			mustMkdir(t, packageDir)
-		}
-		probe := filepath.Join(packageDir, "nested-probe", "escape")
-		mustMkdir(t, filepath.Dir(probe))
-		if err := os.Symlink(out, probe); err != nil {
-			t.Skipf("cannot create nested installed skill symlink: %v", err)
-		}
-		output, err := runInstalledBinary(t, binary, home, configDir, "verify", "local", project)
-		if err == nil || !strings.Contains(output, probe) || !strings.Contains(output, "escapes runtime containment") {
-			t.Fatalf("verify local did not recurse through managed package %s: %v\n%s", packageDir, err, output)
-		}
-		if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
-			t.Fatalf("setup local did not restore managed package after drift probe: %v\n%s", err, output)
-		}
-	}
-}
-
-func assertContainedAcyclicSymlinks(t *testing.T, root string) {
-	t.Helper()
-	root, err := filepath.Abs(root)
-	if err != nil {
-		t.Fatalf("Abs(%s): %v", root, err)
-	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(%s): %v", root, err)
-	}
-	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.Type()&os.ModeSymlink == 0 {
-			return nil
-		}
-		target, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return err
-		}
-		target, err = filepath.Abs(target)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, target)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-			t.Fatalf("managed skill symlink escapes runtime: %s -> %s", path, target)
-		}
-		pathAbs, err := filepath.Abs(path)
-		if err != nil {
-			return err
-		}
-		pathRel, err := filepath.Rel(target, pathAbs)
-		if err == nil && pathRel != ".." && !strings.HasPrefix(pathRel, ".."+string(os.PathSeparator)) {
-			t.Fatalf("managed skill symlink points to its own ancestor: %s -> %s", path, target)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("inspect managed symlinks under %s: %v", root, err)
 	}
 }
 
@@ -806,12 +520,13 @@ func TestInstalledBinarySetupLocalPiInfraRepairsModeAndSymlinkDrift(t *testing.T
 	}
 }
 
-// Production call sites: setup local installs dange -> generated agents-infra
-// target-yolo -> runDirectProviderYoloTarget -> provider exec. This matrix
-// fails against revision 2's caller-flag rejection, revision 3's leading--d
-// origin inference, and revision 5's forgeable argv marker: dange routes accept
-// the matrix, while canonical target aliases refuse danger and forged markers.
-func TestInstalledLocalProviderAliasesScopeImplicitFlagForwardingToDangeChain(t *testing.T) {
+// Installed canonical and dange wrappers still exist for one release as
+// direct-refusal stubs: every wrapper reports its exact migration message,
+// exits 1, and never reaches the provider — without building, delegating, or
+// touching a sibling target. The fixture deletes the cached wrapper build
+// output and shadows `go` with a failing stub, so a wrapper that still built
+// would exit 73 instead of 1.
+func TestInstalledProviderAliasesReportDeprecationWithoutLaunching(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX installed alias production test")
 	}
@@ -824,12 +539,19 @@ func TestInstalledLocalProviderAliasesScopeImplicitFlagForwardingToDangeChain(t 
 		t.Fatalf("installed binary setup local: %v\n%s", err, output)
 	}
 	writeMainCanonicalConfig(t, project, mainCanonicalHostedTOML())
+	if err := os.RemoveAll(filepath.Join(project, ".local", "bin", ".agents-infra-build")); err != nil {
+		t.Fatalf("remove cached wrapper build output: %v", err)
+	}
 
 	fakeBin := t.TempDir()
 	recordDir := t.TempDir()
 	for _, provider := range []string{"codex", "claude"} {
 		record := filepath.Join(recordDir, provider)
 		mustWrite(t, filepath.Join(fakeBin, provider), "#!/bin/sh\nprintf '%s\\0' \"$@\" > \""+record+"\"\n")
+	}
+	mustWrite(t, filepath.Join(fakeBin, "go"), "#!/bin/sh\necho unexpected-build >&2\nexit 73\n")
+	if err := os.Chmod(filepath.Join(fakeBin, "go"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	installedAliasEnv := func() []string {
 		environ := append(os.Environ(),
@@ -842,100 +564,51 @@ func TestInstalledLocalProviderAliasesScopeImplicitFlagForwardingToDangeChain(t 
 		return append(environ, sharedGoCacheEnv(t)...)
 	}
 	tests := []struct {
-		name       string
-		alias      string
-		provider   string
-		nativeFlag string
-		args       []string
-		wantCaller []string
-	}{
-		{name: "openai caller short danger", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"-d", "exec", "space value", "Հայերեն"}, wantCaller: []string{"exec", "space value", "Հայերեն"}},
-		{name: "openai caller danger", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"--danger", "exec", "line 1\nline 2"}, wantCaller: []string{"exec", "line 1\nline 2"}},
-		{name: "openai caller yolo", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"--yolo", "exec", "tab\tvalue"}, wantCaller: []string{"exec", "tab\tvalue"}},
-		{name: "openai caller model", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"--model", "gpt-5.6-sol", "exec", "", "inspect token"}, wantCaller: []string{"--model", "gpt-5.6-sol", "exec", "", "inspect token"}},
-		{name: "openai redundant danger", alias: "openai-dange", provider: "codex", nativeFlag: "--dangerously-bypass-approvals-and-sandbox", args: []string{"-d", "--danger", "--yolo", "--dangerously-bypass-approvals-and-sandbox", "exec", "all danger"}, wantCaller: []string{"exec", "all danger"}},
-		{name: "anthropic caller short danger", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"-d", "space value", "Հայերեն"}, wantCaller: []string{"space value", "Հայերեն"}},
-		{name: "anthropic caller danger", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"--danger", "line 1\nline 2"}, wantCaller: []string{"line 1\nline 2"}},
-		{name: "anthropic caller yolo", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"--yolo", "tab\tvalue"}, wantCaller: []string{"tab\tvalue"}},
-		{name: "anthropic caller model", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"--model", "claude-opus-5", "", "inspect token"}, wantCaller: []string{"--model", "claude-opus-5", "", "inspect token"}},
-		{name: "anthropic redundant danger", alias: "anthropic-dange", provider: "claude", nativeFlag: "--dangerously-skip-permissions", args: []string{"-d", "--danger", "--yolo", "--dangerously-skip-permissions", "all danger"}, wantCaller: []string{"all danger"}},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			command := exec.Command(filepath.Join(project, ".local", "bin", testCase.alias), testCase.args...)
-			command.Dir = project
-			command.Env = installedAliasEnv()
-			if output, err := command.CombinedOutput(); err != nil {
-				t.Fatalf("installed %s: %v\n%s", testCase.alias, err, output)
-			}
-			data, err := os.ReadFile(filepath.Join(recordDir, testCase.provider))
-			if err != nil {
-				t.Fatal(err)
-			}
-			args := strings.Split(strings.TrimSuffix(string(data), "\x00"), "\x00")
-			count := 0
-			for _, arg := range args {
-				if arg == testCase.nativeFlag {
-					count++
-				}
-				if arg == revision5DirectProviderYoloCallSiteMarker {
-					t.Fatalf("retired revision-5 marker reached provider argv: %#v", args)
-				}
-			}
-			if count != 1 {
-				t.Fatalf("provider argv danger count = %d, want 1: %#v", count, args)
-			}
-			if !orderedSubsequence(args, testCase.wantCaller) {
-				t.Fatalf("provider argv did not preserve caller non-danger bytes/order: got %#v want subsequence %#v", args, testCase.wantCaller)
-			}
-		})
-	}
-
-	canonicalCases := []struct {
 		alias    string
 		provider string
+		want     string
 	}{
-		{alias: "openai-infra", provider: "codex"},
-		{alias: "anthropic-infra", provider: "claude"},
+		{alias: "openai-infra", provider: "codex", want: "openai-infra is deprecated and no longer launches Codex. Use 'curator run codex_cli -- <args>'. This entrypoint will be removed in the next release."},
+		{alias: "anthropic-infra", provider: "claude", want: "anthropic-infra is deprecated and no longer launches Claude Code. Use 'curator run claude_code -- <args>'. This entrypoint will be removed in the next release."},
+		{alias: "openai-dange", provider: "codex", want: "openai-dange is deprecated and no longer launches Codex. Use 'curator run codex_cli -- <args>'. This entrypoint will be removed in the next release."},
+		{alias: "anthropic-dange", provider: "claude", want: "anthropic-dange is deprecated and no longer launches Claude Code. Use 'curator run claude_code -- <args>'. This entrypoint will be removed in the next release."},
 	}
-	for _, testCase := range canonicalCases {
-		refusals := []struct {
-			name string
-			args []string
-		}{
-			{name: "caller leading d", args: []string{"-d", "--model", "caller-model"}},
-			{name: "forged revision 5 marker", args: []string{revision5DirectProviderYoloCallSiteMarker, "--model", "caller-model"}},
-			{name: "forged marker-like assignment", args: []string{revision5DirectProviderYoloCallSiteMarker + "=forged", "--model", "caller-model"}},
-		}
-		for _, refusal := range refusals {
-			t.Run(testCase.alias+" refuses "+refusal.name, func(t *testing.T) {
+	argShapes := [][]string{
+		nil,
+		{"--print-config"},
+		{"-d", "--danger", "--yolo", "--model", "caller-model"},
+		{revision5DirectProviderYoloCallSiteMarker, "--model", "caller-model"},
+	}
+	for _, testCase := range tests {
+		for _, args := range argShapes {
+			t.Run(testCase.alias+"/"+fmt.Sprint(args), func(t *testing.T) {
 				record := filepath.Join(recordDir, testCase.provider)
 				if err := os.Remove(record); err != nil && !os.IsNotExist(err) {
 					t.Fatal(err)
 				}
-				command := exec.Command(filepath.Join(project, ".local", "bin", testCase.alias), refusal.args...)
+				command := exec.Command(filepath.Join(project, ".local", "bin", testCase.alias), args...)
 				command.Dir = project
 				command.Env = installedAliasEnv()
-				output, err := command.CombinedOutput()
-				if err == nil || !strings.Contains(string(output), "flag provided but not defined") {
-					t.Fatalf("installed canonical alias accepted %s: err=%v\n%s", refusal.name, err, output)
+				var stdout, stderr strings.Builder
+				command.Stdout = &stdout
+				command.Stderr = &stderr
+				runErr := command.Run()
+				exitErr, ok := runErr.(*exec.ExitError)
+				if !ok || exitErr.ExitCode() != 1 {
+					t.Fatalf("installed %s %q exit = %v, want exit 1 (stdout=%q stderr=%q)", testCase.alias, args, runErr, stdout.String(), stderr.String())
+				}
+				if stdout.String() != "" {
+					t.Fatalf("installed %s %q stdout = %q, want empty", testCase.alias, args, stdout.String())
+				}
+				if stderr.String() != testCase.want+"\n" {
+					t.Fatalf("installed %s %q stderr = %q, want exactly %q", testCase.alias, args, stderr.String(), testCase.want+"\n")
 				}
 				if _, statErr := os.Stat(record); !os.IsNotExist(statErr) {
-					t.Fatalf("canonical refusal reached provider side effect: %v", statErr)
+					t.Fatalf("installed %s reached provider side effect: %v", testCase.alias, statErr)
 				}
 			})
 		}
 	}
-}
-
-func orderedSubsequence(got, want []string) bool {
-	next := 0
-	for _, arg := range got {
-		if next < len(want) && arg == want[next] {
-			next++
-		}
-	}
-	return next == len(want)
 }
 
 // Production call sites: the bootstrap-installed global pi-infra alias and the
@@ -1099,10 +772,11 @@ func mustReadFile(t *testing.T, path string) []byte {
 	return data
 }
 
-// seedRuntimeSource writes a complete agents-infra source tree: the instruction
-// entrypoints, the config and rules trees, and the Go module the generated
-// launcher builds. Anything less is not a source tree, it is a tree that looks
-// like one — see the marker-valid negatives below.
+// seedRuntimeSource writes a complete agents-infra source tree: the config and
+// rules trees, the retained instruction sources, and the Go module the
+// generated launcher builds. Anything less than the residual contract is not a
+// source tree, it is a tree that looks like one — see the marker-valid
+// negatives below.
 func seedRuntimeSource(t *testing.T, dir string) string {
 	t.Helper()
 	mustMkdir(t, filepath.Join(dir, ".instructions"))
@@ -1155,7 +829,7 @@ func TestInstalledBinarySetupLocalResolvesInstalledRuntimeWithoutInstallState(t 
 	if err != nil {
 		t.Fatalf("installed binary setup local: %v\n%s", err, output)
 	}
-	marker := filepath.Join(project, ".agents", ".instructions", "INSTRUCTIONS.md")
+	marker := filepath.Join(project, ".agents", ".agents-infra-install.json")
 	if _, statErr := os.Lstat(marker); statErr != nil {
 		t.Fatalf("installed binary setup did not sync the installed runtime: %v\n%s", statErr, output)
 	}
@@ -1166,11 +840,11 @@ func TestInstalledBinarySetupLocalResolvesInstalledRuntimeWithoutInstallState(t 
 	}
 }
 
-// Negative: the source tree carries every historical marker — both instruction
-// entrypoints, .configs, .rules — but not the Go module the generated launcher
-// builds. Setup used to exit zero here, print a full install log, and mint a
-// launcher that failed on first use. It must now refuse, and must not leave a
-// runtime behind for a caller to mistake for a working one.
+// Negative: the source tree carries every residual marker — .configs, .rules —
+// but not the Go module the generated launcher builds. Setup used to exit
+// zero here, print a full install log, and mint a launcher that failed on
+// first use. It must now refuse, and must not leave a runtime behind for a
+// caller to mistake for a working one.
 func TestInstalledBinarySetupLocalRefusesMarkerValidSourceWithoutLauncherBackend(t *testing.T) {
 	binary := buildInstalledBinary(t)
 	home := t.TempDir()
@@ -1340,11 +1014,11 @@ func seedLauncherBackendThatBuildsButDoesNotStart(t *testing.T, source string) {
 	}
 }
 
-// Negative: a tree whose instruction entrypoint pulls in modules it does not
-// ship passes every file-existence marker and then fails half way through the
-// render, after the destination has already been rewritten. The include closure
-// has to be proven up front.
-func TestInstalledBinarySetupLocalRefusesSourceWithUnshippedInstructionInclude(t *testing.T) {
+// Setup no longer renders instructions, so a source tree with an unshipped
+// include is accepted. The failure it used to prove up front now belongs to
+// the v1 prepare compatibility path: prepare fails honestly on an installed
+// instruction input it cannot render, naming the missing module.
+func TestInstalledBinaryPrepareFailsHonestlyOnUnrenderableInstalledInclude(t *testing.T) {
 	binary := buildInstalledBinary(t)
 	home := t.TempDir()
 	source := seedRuntimeSource(t, t.TempDir())
@@ -1354,20 +1028,20 @@ func TestInstalledBinarySetupLocalRefusesSourceWithUnshippedInstructionInclude(t
 	writeInstallState(t, configDir, source)
 	project := t.TempDir()
 
-	output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project)
+	if output, err := runInstalledBinary(t, binary, home, configDir, "setup", "local", project); err != nil {
+		t.Fatalf("setup local refused a source whose instruction closure it no longer validates: %v\n%s", err, output)
+	}
+	installedAgents := filepath.Join(project, ".agents", ".instructions", "AGENTS.md")
+	mustMkdir(t, filepath.Dir(installedAgents))
+	mustWrite(t, installedAgents, "# Project\n\n@~/.agents/.instructions/INSTRUCTIONS_MISSING.md\n")
+
+	output, err := runInstalledBinary(t, binary, home, configDir, "prepare", "--agent", "codex", "--project", project, "--schema-version", "1", "--json")
 	if err == nil {
-		t.Fatalf("installed binary accepted a source with an unshipped instruction include\n%s", output)
+		t.Fatalf("prepare accepted an installed instruction input it cannot render\n%s", output)
 	}
 	if !strings.Contains(output, "INSTRUCTIONS_MISSING.md") {
-		t.Fatalf("failure output does not name the missing instruction module:\n%s", output)
+		t.Fatalf("prepare failure does not name the missing instruction module:\n%s", output)
 	}
-	// Failing eventually is not the property under test — the render would do
-	// that on its own, after the destination had already been rewritten. The
-	// closure has to be proven before anything is written.
-	if _, statErr := os.Lstat(filepath.Join(project, ".agents")); !os.IsNotExist(statErr) {
-		t.Fatalf("setup rewrote the destination before rejecting an unshippable include: %v", statErr)
-	}
-	assertNoFalselyUsableRuntime(t, binary, home, configDir, project, output)
 }
 
 // Negative: a destination that carries a complete-looking tree but was never
@@ -1439,7 +1113,7 @@ func TestInstalledBinarySetupLocalRefusesWrongExplicitSourceDir(t *testing.T) {
 	if err == nil {
 		t.Fatalf("installed binary accepted a wrong --source-dir\n%s", output)
 	}
-	for _, want := range []string{wrong, ".instructions/INSTRUCTIONS.md", ".configs"} {
+	for _, want := range []string{wrong, ".configs", ".rules", "tools/agents-infra/go.mod"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("failure output missing %q:\n%s", want, output)
 		}
