@@ -1,0 +1,12 @@
+# Brief — TASK-260916-38vqh4 (B6 inventory and deprecation plan, research)
+
+Control root: /Users/administrator/Developer/ReluxWorks/relux-agents-infra-main (origin/main 459742e; the installed `agents-infra` on this host is main-7a0a24c). Read-only; write the report to /tmp and attach it as `TASK-260916-38vqh4_report.md`.
+
+Context: Curator (installed `curator` main-04550e2 + `curator-run`) now provisions managed homes for claude_code, codex_cli and pi from the profile relux-root-context-ivan and launches tools from them with MCP and skills composed (evidence: curator board resource /Users/administrator/Developer/ReluxWorks/curator/curator/.task-board/.resources/TASK-260908-yl5x3k/TASK-260908-yl5x3k_onboarding-evidence-rev2.md; `agents-infra doctor global` on this host reports claude_linked=false codex_linked=false — the native homes are no longer agents-infra-managed). Operator decision: DEPRECATE the launchers (keep `agents-infra claude|codex` printing a deprecation that points at `curator run claude_code|codex_cli`, retire next release).
+
+Deliver TASK-260916-38vqh4_report.md with:
+1. Inventory of tools/agents-infra (every subcommand from README/`agents-infra` usage: setup global/local, refresh-links, doctor, verify, compose, prepare, attachments, codex, claude, pi, target, model-check, runtime, version) and scripts/setup.sh/setup.ps1 steps and .configs/.instructions inputs, each classified REMOVE / DEPRECATE / KEEP with file:line and rationale. Keep set (from the migration goal): claude-settings.json linking, codex config.toml merge, .rules, pi local-model runtime (broker, profiles, targets, harness, runtime status/stop), lldb-mcp wrapper, attachments manifest contract, and the child-launch composition/prepare contracts consumed by task-board (`agents-infra compose|prepare --agent … --schema-version 1 --json`) — verify whether those contracts share code with the MCP composition you are removing and how to keep them intact.
+2. For each REMOVE item the Curator replacement with the evidence line.
+3. Exact deprecation behaviour: message text, exit code, whether `--print-config` survives, whether the primary-session entrypoints openai-infra|anthropic-infra are the same surface.
+4. Edit plan for the implementation task: files/functions to delete or change, tests to delete/add, README sections (what remains and why), CHANGELOG/version bump, risks (e.g. task-board contracts, SKILL.md of relux-agents-infra).
+Tick the checklist; `task-board handoff TASK-260916-38vqh4 --role developer`.
