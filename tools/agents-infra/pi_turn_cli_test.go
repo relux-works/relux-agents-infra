@@ -33,7 +33,7 @@ func TestRunPiTurnCLIRefusesInvalidArgumentsBeforeAnyGraphResolution(t *testing.
 		{"positional argument", []string{"--target", "qwen-infra", "--prompt", "hi", "extra"}},
 		{"zero deadline", []string{"--target", "qwen-infra", "--prompt", "hi", "--deadline", "0s"}},
 		{"negative deadline", []string{"--target", "qwen-infra", "--prompt", "hi", "--deadline", "-1m"}},
-		{"deadline over the 30m ceiling", []string{"--target", "qwen-infra", "--prompt", "hi", "--deadline", "31m"}},
+		{"deadline over the 24h ceiling", []string{"--target", "qwen-infra", "--prompt", "hi", "--deadline", "24h1ns"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

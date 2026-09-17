@@ -145,7 +145,7 @@ func TestStandaloneCLIAcceptsExactDeadlineBounds(t *testing.T) {
 	t.Setenv(callerCWDEnv, project)
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", mainTestOfficialPiAsset(t))
-	for _, deadline := range []string{"1ns", "30m"} {
+	for _, deadline := range []string{"1ns", "30m", "6h", "24h"} {
 		t.Run(deadline, func(t *testing.T) {
 			if err := runTarget([]string{"qwen-infra", "spawn", "--prompt", "safe prompt", "--deadline", deadline, "--print-config"}); err != nil {
 				t.Fatalf("exact standalone deadline bound %s refused: %v", deadline, err)
@@ -159,7 +159,7 @@ func TestStandaloneCLIAcceptsExactDeadlineBounds(t *testing.T) {
 // only the typed code rather than the prompt or caller-supplied duration.
 func TestStandaloneCLIRefusesOutOfRangeDeadlineWithSanitizedFailure(t *testing.T) {
 	secretPrompt := "deadline prompt secret"
-	for _, deadline := range []string{"-1ns", "0", "30m1ns"} {
+	for _, deadline := range []string{"-1ns", "0", "24h1ns"} {
 		t.Run(deadline, func(t *testing.T) {
 			err := runTarget([]string{"qwen-infra", "spawn", "--prompt", secretPrompt, "--deadline", deadline, "--print-config"})
 			var failure *infra.PiStandaloneFailure

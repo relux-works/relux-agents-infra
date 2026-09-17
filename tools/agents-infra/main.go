@@ -457,6 +457,14 @@ func runClaude(_ []string) error {
 	return deprecatedProviderError("claude")
 }
 
+// piDeadlineBound is the sanity ceiling on a Process-A deadline. The former
+// 30m ceiling was the turn budget of the first standalone workers; it became
+// the fence that cut a local model's long turn regardless of the caller's own
+// deadline (task-board's planned/hard fence never reached the child). The
+// caller owns the budget: it enforces its own fence on the process, and this
+// bound only refuses a duration no worker could mean.
+const piDeadlineBound = 24 * time.Hour
+
 func runPi(args []string) error {
 	if len(args) > 0 && args[0] == "spawn" {
 		return runPiStandaloneCLI("", args[1:])
@@ -574,15 +582,15 @@ func runPiStandaloneCLI(entrypoint string, args []string) error {
 	prompt := fs.String("prompt", "", "single unattended worker prompt")
 	profile := fs.String("profile", "", "exact resolved managed Pi profile assertion")
 	printConfig := fs.Bool("print-config", false, "resolve and print the standalone launch plan without launching")
-	deadline := fs.Duration("deadline", 30*time.Minute, "total standalone worker deadline (maximum 30m)")
+	deadline := fs.Duration("deadline", 30*time.Minute, "total standalone worker deadline (maximum 24h)")
 	if err := fs.Parse(args); err != nil {
 		return &infra.PiStandaloneFailure{Code: "pi_standalone_cli_invalid", Err: err}
 	}
 	if len(fs.Args()) != 0 {
 		return &infra.PiStandaloneFailure{Code: "pi_standalone_cli_invalid", Err: errors.New("standalone Pi does not accept positional arguments")}
 	}
-	if *deadline <= 0 || *deadline > 30*time.Minute {
-		return &infra.PiStandaloneFailure{Code: "pi_standalone_deadline_invalid", Err: errors.New("standalone Pi deadline must be within (0, 30m]")}
+	if *deadline <= 0 || *deadline > piDeadlineBound {
+		return &infra.PiStandaloneFailure{Code: "pi_standalone_deadline_invalid", Err: errors.New("standalone Pi deadline must be within (0, 24h]")}
 	}
 	startDir := callerProjectDir()
 	request := infra.PiStandaloneRequest{Prompt: *prompt, Entrypoint: entrypoint, ExpectedProfile: *profile}
@@ -632,7 +640,7 @@ func runPiTurnSchema1CLI(entrypoint string, args []string) error {
 	if err := fs.Parse(args); err != nil || len(fs.Args()) != 0 || repeatedPiTurnFlags(args) {
 		return infra.WritePiTurnRefusal(os.Stdout, managementpi.TurnCodeRequestInvalid)
 	}
-	if *resultSchema != managementpi.TurnResultSchemaVersion || *deadline <= 0 || *deadline > 30*time.Minute {
+	if *resultSchema != managementpi.TurnResultSchemaVersion || *deadline <= 0 || *deadline > piDeadlineBound {
 		return infra.WritePiTurnRefusal(os.Stdout, managementpi.TurnCodeRequestInvalid)
 	}
 	if *profile == "" {
@@ -709,15 +717,15 @@ func runPiTurn(args []string, deps piTurnDependencies) error {
 	fs.SetOutput(os.Stderr)
 	target := fs.String("target", "", "configured canonical entrypoint, for example qwen-infra")
 	prompt := fs.String("prompt", "", "single unattended worker prompt")
-	deadline := fs.Duration("deadline", 30*time.Minute, "total turn deadline (maximum 30m)")
+	deadline := fs.Duration("deadline", 30*time.Minute, "total turn deadline (maximum 24h)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if len(fs.Args()) != 0 {
 		return errors.New("pi turn does not accept positional arguments")
 	}
-	if *deadline <= 0 || *deadline > 30*time.Minute {
-		return errors.New("pi turn deadline must be within (0, 30m]")
+	if *deadline <= 0 || *deadline > piDeadlineBound {
+		return errors.New("pi turn deadline must be within (0, 24h]")
 	}
 	if repeatedPiTurnTargetFlag(args) {
 		return errors.New("pi turn --target must be selected exactly once; conflicting selections are refused")

@@ -55,7 +55,7 @@ func TestSchemaOneOuterRequestRefusalsAreExactAndSanitized(t *testing.T) {
 		exit int
 	}{
 		{"trailing operand", []string{"spawn", "--profile", "p", "--prompt", secret, "--deadline", "30m", "--result-schema", "1", "leftover"}, managementpi.TurnCodeRequestInvalid, 1},
-		{"deadline over the bound", []string{"spawn", "--profile", "p", "--prompt", secret, "--deadline", "30m1ns", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid, 1},
+		{"deadline over the bound", []string{"spawn", "--profile", "p", "--prompt", secret, "--deadline", "24h1ns", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid, 1},
 		{"deadline at zero", []string{"spawn", "--profile", "p", "--prompt", secret, "--deadline", "0", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid, 1},
 		{"unknown inner flag", []string{"spawn", "--profile", "p", "--prompt", secret, "--tools", "bash", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid, 1},
 		{"repeated result schema", []string{"spawn", "--profile", "p", "--prompt", secret, "--result-schema", "1", "--result-schema", "1"}, managementpi.TurnCodeRequestInvalid, 1},
