@@ -64,7 +64,6 @@ func TestBuildStandalonePiArgumentsOwnsExactAuthorizationAndMediumReasoning(t *t
 		"--mode", "json",
 		"--no-session",
 		"--print",
-		"--",
 		"write the requested sentinel",
 	}
 	if !reflect.DeepEqual(plan.Argv, want) {
@@ -170,10 +169,21 @@ func TestStandalonePiNamedPromptAllowsLeadingFlagAndFileMarkers(t *testing.T) {
 		YoloMode:      PiPolicyBoolValue{Value: true, Present: true},
 		ToolAllowlist: PiPolicyStringListValue{Value: []string{"read"}, Present: true},
 	}
-	for _, prompt := range []string{"--approve", "@/tmp/injected-prompt"} {
-		plan, err := BuildStandalonePiArguments(nil, profile, policy, prompt)
-		if err != nil || plan.Argv[len(plan.Argv)-1] != prompt || plan.Argv[len(plan.Argv)-2] != "--" {
-			t.Fatalf("named prompt %q was not preserved behind --: plan=%#v err=%v", prompt, plan, err)
+	// Pi v0.84.2 has no `--` delimiter: an option- or file-shaped prompt is refused, never
+	// forwarded where Pi would parse it as an option or an @file reference.
+	for _, prompt := range []string{"--approve", "@/tmp/injected-prompt", "-p"} {
+		if _, err := BuildStandalonePiArguments(nil, profile, policy, prompt); piErrorCode(err) != "pi_standalone_prompt_invalid" {
+			t.Fatalf("option-shaped prompt %q was not refused: err=%v", prompt, err)
+		}
+	}
+	// The final argv carries the prompt as the last bare operand and never a `--` token.
+	plan, err := BuildStandalonePiArguments(nil, profile, policy, "audit the tree")
+	if err != nil || plan.Argv[len(plan.Argv)-1] != "audit the tree" {
+		t.Fatalf("prompt operand not last: plan=%#v err=%v", plan, err)
+	}
+	for _, token := range plan.Argv {
+		if token == "--" {
+			t.Fatalf("argv forwards the wrapper delimiter Pi rejects: %#v", plan.Argv)
 		}
 	}
 	for _, prompt := range []string{"safe\x00suffix", "   "} {

@@ -150,6 +150,13 @@ func validatePiStandaloneRequest(request PiStandaloneRequest, callerArgs []strin
 	if strings.IndexByte(request.Prompt, 0) >= 0 {
 		return piError("pi_standalone_prompt_invalid", errors.New("standalone Pi prompt cannot contain NUL"))
 	}
+	// Pi v0.84.2 has no `--` operand delimiter (`pi [options] [@files...] [messages...]`),
+	// so the prompt travels as a bare message operand and a leading `-` or `@` would be
+	// read as an option or a file reference. Refuse those shapes instead of forwarding a
+	// delimiter Pi rejects with "Unknown option: --".
+	if strings.HasPrefix(request.Prompt, "-") || strings.HasPrefix(request.Prompt, "@") {
+		return piError("pi_standalone_prompt_invalid", errors.New("standalone Pi prompt must not start with '-' or '@'"))
+	}
 	if request.Entrypoint != "" && request.Entrypoint != "qwen-infra" {
 		return piError("pi_standalone_entrypoint_invalid", errors.New("standalone Pi admits only the qwen-infra canonical entrypoint"))
 	}
@@ -181,7 +188,7 @@ func BuildStandalonePiArguments(callerArgs []string, profile PiProfile, policy P
 	if len(plan.Argv) == 0 || len(plan.DiagnosticArgv) == 0 || plan.Argv[len(plan.Argv)-1] != promptSlot || plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] != promptSlot {
 		return PiArgumentPlan{}, piError("pi_standalone_argument_invariant_failed", errors.New("standalone Pi prompt operand was not composed canonically"))
 	}
-	plan.Argv = append(plan.Argv[:len(plan.Argv)-1], "--", prompt)
+	plan.Argv = append(plan.Argv[:len(plan.Argv)-1], prompt)
 	plan.DiagnosticArgv[len(plan.DiagnosticArgv)-1] = "<prompt>"
 	return plan, nil
 }
