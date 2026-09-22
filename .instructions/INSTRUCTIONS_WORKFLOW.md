@@ -186,10 +186,39 @@ isolation does not make foreign diffs part of the current task automatically.
 * Perform at most one successful requirement-actualization write (`set-primary` or a materially changed `update`) per user turn. Skip status questions, confirmations, tool chatter, wording-only corrections, semantic no-ops, and other turns that do not change the goal.
 * On `primary_goal_revision_conflict`, re-read the active goal, merge the complete objective, and retry once with the new observed revision. Do not narrate routine successful synchronization; report only a persistent failure or conflict, or answer an explicit user request for goal state.
 * Never mutate the primary goal from a spawned run. Spawned owners use `task-board spawn goal`; a primary-goal update never silently expands, cancels, completes, or clears a spawned goal. When materially changed delivery scope must reach an existing owner, use the explicit spawn-goal upsert or reroute contract.
-* Before declaring the exact board primary objective delivered, read `task-board goal get` and verify every requirement against persisted delivery evidence. Required review, checks, and landing must already be satisfied. Producer-only `to-review`, a running child, pending review/check/landing, blocked work, a human wait, an interrupted session, or a native completion banner does not qualify and issues no clear.
-* On that same completion turn, run `task-board goal clear --if-revision N --reason "Objective delivered; <task/review/check/landing or deliverable refs>"`, then run a fresh `task-board goal get` and verify no active primary goal plus the expected cleared successor, predecessor, reason, and immutable previous revision. Do not describe the ledger as cleared before successful readback. A read error is not absence; surface native-clear acknowledgement, storage, CAS, and readback failures truthfully and preserve the active head and recovery evidence.
-* On a clear CAS conflict, re-read and reassess the whole changed objective instead of blindly clearing the new revision. If another actor already cleared the same delivered objective, verify that recorded transition and append no duplicate successor. Native condition completion, turn end, detach, stop, usage limit, interruption, and cancellation never trigger this clear on their own. Clearing the primary goal accepts neither a board task nor a spawned-run goal.
-* The evidenced completion clear is explicitly permitted in addition to the at-most-one requirement-actualization write per user turn, including when one turn creates or updates and then delivers the objective. A wording-only restatement does not clear anything. Session exit alone still never clears a goal.
+<!-- primary-goal-completion-turn-contract:v1:start -->
+A primary parent with no `TASK_BOARD_RUN_ID`, before declaring the exact board
+primary objective delivered, reads `task-board goal get`. It verifies every
+requirement of that exact objective against persisted delivery evidence, and
+required review, check, and landing obligations must already be satisfied.
+Producer-only `to-review`, a running child, pending review/check/landing,
+blocked remaining work, a human wait, an interrupted session, or a native
+completion banner does not qualify and issues no clear.
+
+On that same completion turn, it runs `task-board goal clear --if-revision N
+--reason "Objective delivered; <evidence refs>"`, then runs a separate fresh
+`task-board goal get`. Readback must verify no active primary goal, the expected
+cleared successor carrying the delivery-evidence reason and predecessor, and
+the immutable previous revision.
+
+The ledger is never described as cleared before successful readback. A read
+error is not absence. Read, native-clear acknowledgement, storage, CAS, and
+readback failures are surfaced truthfully with the active head and recovery
+evidence preserved. On a CAS conflict, the parent rereads and reassesses the
+whole changed objective instead of blindly clearing the new revision. If
+another actor already cleared the same delivered objective, it verifies that
+recorded transition and appends no duplicate successor.
+
+Native condition completion, turn end, detach, stop, usage limit, interruption,
+and cancellation never trigger this clear on their own. A primary-goal clear
+accepts neither a board task nor a spawned-run goal.
+
+This evidenced completion clear is permitted in addition to the existing
+at-most-one-requirement-actualization-write-per-user-turn cap, including when
+one turn creates or updates and then delivers the objective. A wording-only
+restatement does not clear anything. Session exit alone still never clears a
+goal.
+<!-- primary-goal-completion-turn-contract:v1:end -->
 * Version 1 does not invoke native Codex or Claude goal APIs and never clears the primary goal automatically when a session exits.
 * This is an instruction-only integration: agents-infra stores no task-board state and adds no task-board library dependency. The eligible primary parent calls the external `task-board` CLI.
 
