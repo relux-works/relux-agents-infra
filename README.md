@@ -2087,9 +2087,27 @@ The parent reads `task-board goal get`, then uses `goal set-primary` when no
 record is active or `goal update --if-revision N` when the complete objective
 materially changes. Later goal-changing turns replace the complete objective
 while retaining unresolved prior requirements. The policy permits at most one
-successful write per user turn, skips chatter and semantic no-ops, and retries
-one revision conflict after re-reading. Routine successful synchronization is
-silent.
+successful requirement-actualization write per user turn, skips chatter and
+semantic no-ops, and retries one revision conflict after re-reading. Routine
+successful synchronization is silent.
+
+Before declaring the exact objective delivered, the eligible primary parent
+verifies every requirement against persisted delivery evidence; required
+review, checks, and landing must already be satisfied. Running children,
+pending obligations, blocked work, human waits, interruption, and provider
+completion banners do not qualify. On the same completion turn the parent runs
+`task-board goal clear --if-revision N` with the evidence references in the
+reason, then runs a fresh `task-board goal get`. It claims a cleared ledger only
+after readback shows no active goal and the expected cleared successor,
+predecessor, reason, and immutable previous revision. Read failure is not
+absence; a CAS conflict requires reassessing the whole changed objective, and
+an already-recorded clear is verified rather than duplicated.
+
+That evidenced completion clear is permitted in addition to the one
+requirement-actualization write, so one turn may create or update, deliver, and
+clear the objective. Native condition completion, turn end, detach, stop,
+usage limit, interruption, cancellation, and session exit never trigger it on
+their own. A clear accepts neither a board task nor a spawned-run goal.
 
 Spawned owners never mutate this record; they continue to use
 `task-board spawn goal`. A primary update does not alter a spawned delivery
