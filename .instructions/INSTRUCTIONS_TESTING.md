@@ -59,6 +59,29 @@
   authorize damaging user data, resetting live devices, weakening permissions,
   or violating the state-preservation rules below.
 
+## Run Every Lane Before Judging, Then Fix In Context
+
+* A test run reports the state of the whole suite. Do not stop a multi-lane,
+  multi-suite, or matrix run at the first red lane: one failure then hides the
+  state of every lane behind it, and the next fix is chosen without knowing
+  whether it was the only problem.
+* Run every selected lane, then report one verdict per lane and a non-zero
+  overall result when any of them failed. Name every red lane, not only the
+  first. Keep a lane that could not start at all distinct from a lane that ran
+  and failed; they call for different work.
+* This applies to the harness as much as to the run. A runner whose documented
+  behaviour is "stops at the first red run" is a defect to fix at its source,
+  not a constraint to work around, and its fix needs a negative control: with a
+  deliberately red first lane, the remaining lanes still run and report their
+  real verdicts.
+* Diagnose and fix the failures together, as one picture. A fix derived from a
+  single failure read out of context tends to be local and wrong: unrelated
+  lanes often fail from one cause, and several causes often hide behind one
+  symptom. Decide what to change after the full result is in front of you.
+* Shared setup cost stays shared: a container, emulator, device, or stand
+  started for the run is started once and torn down once, including on the run
+  where a lane failed early.
+
 ## Android App State Preservation
 
 * Preserve the currently installed app, its data, granted permissions, active
