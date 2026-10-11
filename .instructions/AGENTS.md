@@ -14,6 +14,7 @@ This document loads all instruction modules automatically.
 @~/.agents/.instructions/INSTRUCTIONS_SKILL_TRIGGERS.md
 @~/.agents/.instructions/INSTRUCTIONS_DIAGRAMS.md
 @~/.agents/.instructions/INSTRUCTIONS_TESTING.md
+@~/.agents/.instructions/INSTRUCTIONS_DEV_FLOW.md
 @~/.agents/.instructions/INSTRUCTIONS_WORKFLOW.md
 @~/.agents/.instructions/INSTRUCTIONS_DOCS.md
 @~/.agents/.instructions/INSTRUCTIONS_STYLE.md
