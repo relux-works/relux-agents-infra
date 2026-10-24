@@ -2,23 +2,26 @@
 
 ## Deprecation notice: replacement owners
 
-`relux-agents-infra` is being retired in favor of the owners below. Use their
-documentation for new setups. This notice is a draft until the remaining
-releases are available; versions marked **pending** are not released migration
-targets.
+`relux-agents-infra` is retired in favor of the owners below. Use their
+documentation for new setups; the switchover procedure is the
+[switchover runbook](https://github.com/relux-works/skill-project-management/blob/main/references/switchover-runbook.md)
+in `skill-project-management`. Every release below is a signed tag whose
+peeled commit is also signed; on a hardened Curator machine the source-signer
+list holds only the current agent signing key (`SHA256:rE/sRlfd…`) and the
+Curator release key (`SHA256:H9oEmLBN…`).
 
-| Responsibility | Replacement owner | Version / status |
+| Responsibility | Replacement owner | Version |
 | --- | --- | --- |
-| Instruction bytes | `relux-root-context` | `v1.4.0` |
-| Attachments contract and helper | `skill-agents-attachments` | `v0.1.1` |
-| Settings and MCP opt-ins | [Curator profiles](https://github.com/relux-works/curator) | `v0.15.0-rc.8` — **pending** |
-| Launch orchestration | `task-board` (`skill-project-management`) plus [skill-agents-management](https://github.com/relux-works/skill-agents-management/tree/v0.5.69) | task-board release tag: **pending**; agents-management: `v0.5.69` |
-| Launcher runtime | [curator-agent-launcher](https://github.com/relux-works/curator-agent-launcher) | `v0.4.0` — **pending** |
+| Instruction bytes | `relux-root-context` | `v1.5.0` |
+| Attachments contract and helper | `skill-agents-attachments` | `v0.1.2` (re-signed `v0.1.1`) |
+| Settings and MCP opt-ins | [Curator profiles](https://github.com/relux-works/curator) | `v0.15.0-rc.9` |
+| Launch orchestration | `task-board` (`skill-project-management`) plus [skill-agents-management](https://github.com/relux-works/skill-agents-management/tree/v0.5.69) | task-board `0.29.1` (embeds agents-management `v0.5.69`) |
+| Launcher runtime | [curator-agent-launcher](https://github.com/relux-works/curator-agent-launcher) | `v0.4.0` |
 | `pi_shared` engine broker | `curator-inference-manager` / `curator-engines` | `v0.4.0` |
 
-Some replacement repositories require organization access. Fill the pending
-versions after the Gate A releases. Archiving this repository remains the
-operator's decision. The setup instructions below describe the legacy runtime.
+Some replacement repositories require organization access. Archiving this
+repository remains the operator's decision. The setup instructions below
+describe the legacy runtime.
 
 Source repo for the residual local agent runtime: Pi local-model operation,
 Codex/Claude config and rules state, attachments, and the task-board
